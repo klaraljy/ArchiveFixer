@@ -69,6 +69,18 @@ namespace ArchiveFixer.Security
 
         public IReadOnlyList<UnsafeArchiveEntry> UnsafeEntries { get; init; } = Array.Empty<UnsafeArchiveEntry>();
 
+        /// <summary>
+        /// **命名类危险**（Windows 保留设备名 / 结尾点或空格 / 备用数据流）：不影响解压、**不拒绝整包**，
+        /// 交给引擎落盘时自动改名（实测 7z：`CON` ⇒ `_CON`、`结尾点.txt.` ⇒ `结尾点.txt_`）。
+        ///
+        /// <para>用户 2026-10-24 口径：这一类是「清洗后再落盘」，⛔ 不许升级成整包拒绝
+        /// （一条怪名字不该让整包其他文件都拿不到）。</para>
+        /// </summary>
+        public IReadOnlyList<UnsafeArchiveEntry> NamingHazards { get; init; } = Array.Empty<UnsafeArchiveEntry>();
+
+        /// <summary>命名类警告的一句话结论（没有就是空串）。</summary>
+        public string NamingSummary { get; init; } = string.Empty;
+
         /// <summary>实际检查过的条目数（含目录条目）。</summary>
         public int CheckedEntryCount { get; init; }
 
@@ -226,6 +238,7 @@ namespace ArchiveFixer.Security
             }
 
             var unsafeEntries = new List<UnsafeArchiveEntry>();
+            var namingHazards = new List<UnsafeArchiveEntry>();
             int checkedCount = 0;
 
             foreach (ArchiveEntry? entry in entries)
@@ -239,7 +252,21 @@ namespace ArchiveFixer.Security
                  */
                 UnsafeArchiveEntry? risk = CheckEntry(entry?.Path);
 
-                if (risk != null)
+                if (risk == null)
+                {
+                    continue;
+                }
+
+                /*
+                 * ⚠ 2026-10-24（用户拍板 = ①）：**命名类**（保留名 / 结尾点或空格 / 备用数据流）
+                 * 只记警告、不拒绝整包 —— 引擎落盘时会把它们改成安全名；
+                 * **越界类**（`..` / 绝对路径 / 盘符 / UNC / `\\?\` / 控制字符 / 空条目）照旧整包拒绝。
+                 */
+                if (IsNamingHazard(risk.Kind))
+                {
+                    namingHazards.Add(risk);
+                }
+                else
                 {
                     unsafeEntries.Add(risk);
                 }
@@ -251,8 +278,10 @@ namespace ArchiveFixer.Security
                 {
                     IsSafe = true,
                     UnsafeEntries = Array.Empty<UnsafeArchiveEntry>(),
+                    NamingHazards = Array.Empty<UnsafeArchiveEntry>(),
                     CheckedEntryCount = 0,
-                    Summary = NoEntrySummary
+                    Summary = NoEntrySummary,
+                    NamingSummary = string.Empty
                 };
             }
 
@@ -260,8 +289,13 @@ namespace ArchiveFixer.Security
             {
                 IsSafe = unsafeEntries.Count == 0,
                 UnsafeEntries = unsafeEntries,
+                NamingHazards = namingHazards,
                 CheckedEntryCount = checkedCount,
-                Summary = BuildSummary(checkedCount, unsafeEntries)
+                Summary = BuildSummary(checkedCount, unsafeEntries),
+                NamingSummary = namingHazards.Count == 0
+                    ? string.Empty
+                    : $"{checkedCount} 个条目里有 {namingHazards.Count} 个名字不规范（Windows 会改写它们），"
+                      + "已交给引擎落盘时自动改成安全名：" + BuildSamples(namingHazards)
             };
         }
 
@@ -500,6 +534,45 @@ namespace ArchiveFixer.Security
             };
         }
 
+        /// <summary>
+        /// **命名类危险**（Windows 保留名 / 结尾点或空格 / 备用数据流）：引擎落盘时会自动改名，
+        /// 只记警告、不拒绝整包（用户 2026-10-24 拍板）。
+        /// </summary>
+        private static bool IsNamingHazard(PathRiskKind kind) => kind is
+            PathRiskKind.DeviceName or
+            PathRiskKind.TrailingDotOrSpace or
+            PathRiskKind.AlternateDataStream;
+
+        /// <summary>拼样例串：最多 3 条「名字（原因）」，多出来的写"另有 N 条未列出"。</summary>
+        private static string BuildSamples(List<UnsafeArchiveEntry> entries)
+        {
+            var builder = new StringBuilder();
+
+            int sampleCount = Math.Min(MaxSampleCountInSummary, entries.Count);
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append('；');
+                }
+
+                builder.Append(entries[i].EntryPath)
+                       .Append('（')
+                       .Append(entries[i].Reason)
+                       .Append('）');
+            }
+
+            if (entries.Count > sampleCount)
+            {
+                builder.Append("；另有 ")
+                       .Append(entries.Count - sampleCount)
+                       .Append(" 条未列出");
+            }
+
+            return builder.ToString();
+        }
+
         /// <summary>拼一句话结论：带总数、危险条数和最多 3 条样例。</summary>
         private static string BuildSummary(int checkedCount, List<UnsafeArchiveEntry> unsafeEntries)
         {
@@ -517,29 +590,8 @@ namespace ArchiveFixer.Security
             builder.Append(checkedCount)
                    .Append(" 个条目中有 ")
                    .Append(unsafeEntries.Count)
-                   .Append(" 个不安全：");
-
-            int sampleCount = Math.Min(MaxSampleCountInSummary, unsafeEntries.Count);
-
-            for (int i = 0; i < sampleCount; i++)
-            {
-                if (i > 0)
-                {
-                    builder.Append('；');
-                }
-
-                builder.Append(unsafeEntries[i].EntryPath)
-                       .Append('（')
-                       .Append(unsafeEntries[i].Reason)
-                       .Append('）');
-            }
-
-            if (unsafeEntries.Count > sampleCount)
-            {
-                builder.Append("；另有 ")
-                       .Append(unsafeEntries.Count - sampleCount)
-                       .Append(" 条未列出");
-            }
+                   .Append(" 个不安全：")
+                   .Append(BuildSamples(unsafeEntries));
 
             return builder.ToString();
         }

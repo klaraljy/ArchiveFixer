@@ -118,7 +118,7 @@ $samples = @(
     @{ Id = 'G01'; Family = '安全'; Title = 'zip 里有 ../ 路径穿越条目（不许落到父目录）'
        Build = 'traversal'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Failed'; Content = @(); ForbidOutside = $true } },
 
-    @{ Id = 'G02'; Family = '安全'; Title = 'zip 里有 CON / 结尾空格与点（清洗后落盘）'
+    @{ Id = 'G02'; Family = '安全'; Title = 'zip 里有 CON / 结尾空格与点（引擎改名后照常落盘）'
        Build = 'reserved'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'G03'; Family = '安全'; Title = 'APK（必须拒绝解压）'

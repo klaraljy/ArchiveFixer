@@ -1249,6 +1249,15 @@ namespace ArchiveFixer.ViewModels
 
                 PathSafetyReport pathReport = ArchivePathGuard.CheckEntries(preflightList.Entries);
 
+                /*
+                 * 命名类（保留名 / 结尾点或空格 / 备用数据流）：只记一条 WARN 照常解压 ——
+                 * 引擎落盘时会把它们改成安全名（用户 2026-10-24 口径：清洗后再落盘，⛔ 不整包拒绝）。
+                 */
+                if (pathReport.NamingHazards.Count > 0)
+                {
+                    AppendLog("WARN", $"{task.LogName}：{pathReport.NamingSummary}");
+                }
+
                 if (!pathReport.IsSafe)
                 {
                     /*

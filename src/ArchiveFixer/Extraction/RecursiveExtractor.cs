@@ -3598,6 +3598,15 @@ namespace ArchiveFixer.Extraction
 
             PathSafetyReport report = ArchivePathGuard.CheckEntries(list.Entries);
 
+            /*
+             * 命名类（保留名 / 结尾点或空格 / 备用数据流）：只记 WARN、照常解压 ——
+             * 引擎落盘时会自动改成安全名（用户 2026-10-24 口径：清洗后再落盘，⛔ 不整包拒绝）。
+             */
+            if (report.NamingHazards.Count > 0)
+            {
+                _log?.Invoke("WARN", "这一层：" + report.NamingSummary);
+            }
+
             return (report.IsSafe ? null : report.Summary, list);
         }
 
