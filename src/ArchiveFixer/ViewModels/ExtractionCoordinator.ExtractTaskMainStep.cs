@@ -86,7 +86,8 @@ namespace ArchiveFixer.ViewModels
                 if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
                     || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
                 {
-                    RegisterVolumeHandoff(task, entryCard);
+                    ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
+
                     task.Status = StatusText.Skipped;
                     task.Outcome = TaskOutcome.Skipped;
                     task.ProgressText = StatusText.ProgressSkipped;
@@ -96,12 +97,33 @@ namespace ArchiveFixer.ViewModels
                         ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                         : "-";
 
+                    /*
+                     * 交接日志必须带**底层识别事实**（用户 2026-10-24：第二大步要用的判据要能看到）：
+                     * 族 / 内容身份 / 成员三档判定 / 卷号（含原始字段与读不出的原因）/ 首卷标记 /
+                     * 7z 自述的整包字节数与片数 / 所在层 / 来源 —— 全部由交接单 `Describe()` 一处给出。
+                     */
                     AppendLog(
                         "WARN",
-                        $"{task.LogName}：这一份是分卷成员（{entryCard.BodyKind}）—— 第一大步不解它，只登记交接事实、原地不动，交给第二大步。");
+                        $"{task.LogName}：这一份是分卷成员 —— 第一大步不解它，只登记交接事实、原地不动，交给第二大步。"
+                        + $"底层识别：{handoff.Describe()}");
 
                     return;
                 }
+
+                /*
+                 * 放行的这一档也把内容卡事实写一行（用户 2026-10-24「文件的信息有没有记录」）：
+                 * 后面"解压 / 闸门"的判定都读这一组事实，事后只看日志就能复核。
+                 */
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：内容卡 —— 格式={entryCard.Format}，内容身份={entryCard.BodyKind}，"
+                    + $"{entryCard.Size} 字节，成员判定={entryCard.Membership}，"
+                    + $"卷号={(entryCard.VolumeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
+                    + $"（原始字段={(entryCard.RawVolumeField?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
+                    + $"；读不出原因={entryCard.ContentFail}），"
+                    + $"首卷={(entryCard.FirstVolumeFlag ? "是" : "否")}，"
+                    + $"自述整包={(entryCard.DeclaredTotalBytes > 0 ? entryCard.DeclaredTotalBytes + " 字节" : "判不出")}，"
+                    + $"自述片数={(entryCard.DeclaredVolumeCount > 0 ? entryCard.DeclaredVolumeCount + " 片" : "判不出")}。");
 
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
             }

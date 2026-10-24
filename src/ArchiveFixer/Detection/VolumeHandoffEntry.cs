@@ -40,15 +40,39 @@ namespace ArchiveFixer.Detection
         /// <summary>首卷标记（RAR4 主头 / RAR5 卷号=1）。</summary>
         public bool FirstVolumeFlag { get; init; }
 
+        /// <summary>
+        /// 内容证据的三档结论（`VolumeMember` / `ProvablyNotVolumeMember` / `Unknown`）——
+        /// 第二大步判断"要不要收、能不能证伪"的第一判据（用户 2026-10-24：底层识别事实要随交接单过来）。
+        /// </summary>
+        public VolumeNumberFromContent.VolumeMembershipVerdict Membership { get; init; }
+
+        /// <summary>读不出卷号时是哪一档（给日志与第二大步的判据输入用；成功时 = None）。</summary>
+        public VolumeNumberFail ContentFail { get; init; }
+
+        /// <summary>**7z 起始头自述的整包字节数**；判不出 = 0（⛔ 不编）。</summary>
+        public long DeclaredTotalBytes { get; init; }
+
+        /// <summary>**按内容算出来的片数**（只有 VolumeFirstPiece 档算得出）；判不出 = 0。</summary>
+        public int DeclaredVolumeCount { get; init; }
+
+        /// <summary>RAR 那一族卷号字段的原始值（RAR4 基数锚点用）；判不出 = null。</summary>
+        public int? RawVolumeField { get; init; }
+
         /// <summary>它在盘上哪一层（第二大步按这里定入口层）。</summary>
         public string SourceLayer { get; init; } = string.Empty;
 
         public VolumeHandoffSource Source { get; init; }
 
-        /// <summary>给人看的一行（日志与判据输入共用）。</summary>
+        /// <summary>给人看的一行（日志与判据输入共用；⛔ 不猜，判不出的字段如实写"判不出"）。</summary>
         public string Describe() =>
             $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 内容身份={BodyKind}"
+            + $" ｜ 成员判定={Membership}"
             + $" ｜ 卷号={(VolumeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
-            + $" ｜ 首卷={(FirstVolumeFlag ? "是" : "否")} ｜ 层={SourceLayer} ｜ 来源={Source}";
+            + $"（原始字段={(RawVolumeField?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
+            + $"；读不出原因={ContentFail}）"
+            + $" ｜ 首卷={(FirstVolumeFlag ? "是" : "否")}"
+            + $" ｜ 自述整包={(DeclaredTotalBytes > 0 ? DeclaredTotalBytes + " 字节" : "判不出")}"
+            + $" ｜ 自述片数={(DeclaredVolumeCount > 0 ? DeclaredVolumeCount + " 片" : "判不出")}"
+            + $" ｜ 层={SourceLayer} ｜ 来源={Source}";
     }
 }

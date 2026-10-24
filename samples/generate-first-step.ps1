@@ -80,7 +80,7 @@ $samples = @(
        Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'C02'; Family = '负对照'; Title = '内容是分卷首卷、名字被改成 .7z（闸门拦下 → 跳过 + 交接）'
-       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：', '分卷成员'); LogForbids = @('解压成功') } },
+       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：', '底层识别', '分卷成员'); LogForbids = @('解压成功') } },
 
     @{ Id = 'C03'; Family = '负对照'; Title = '纯文本改名 .zip（判不出 ⇒ 跳过，不算失败）'
        Build = 'textzip'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：'); LogForbids = @('解压成功') } },
@@ -460,7 +460,7 @@ foreach ($s in $samples) {
     }
 
     # 断言默认值：日志里必须记下"文件的信息"（检测行）；⛔ 用户可见文本不许出现 Markdown 加粗
-    if (-not $s.Expect.ContainsKey('LogContains')) { $s.Expect.LogContains = @('格式：') }
+    if (-not $s.Expect.ContainsKey('LogContains')) { $s.Expect.LogContains = if ($s.Expect.Outcome -eq 'Skipped') { @('格式：') } else { @('格式：', '内容卡') } }
     if (-not $s.Expect.ContainsKey('LogForbids')) { $s.Expect.LogForbids = @() }
 
     # recipe.json（断言随样本走）

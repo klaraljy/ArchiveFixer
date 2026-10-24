@@ -31,7 +31,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
 
-        private void RegisterVolumeHandoff(ArchiveTask task, ArchiveFixer.Detection.FileNatureCard card)
+        private ArchiveFixer.Detection.VolumeHandoffEntry RegisterVolumeHandoff(
+            ArchiveTask task,
+            ArchiveFixer.Detection.FileNatureCard card)
         {
             string path = task.CurrentPath ?? string.Empty;
 
@@ -39,11 +41,11 @@ namespace ArchiveFixer.ViewModels
             {
                 if (string.Equals(existing.Path, path, StringComparison.OrdinalIgnoreCase))
                 {
-                    return;
+                    return existing;
                 }
             }
 
-            _volumeHandoffEntries.Add(new ArchiveFixer.Detection.VolumeHandoffEntry
+            var entry = new ArchiveFixer.Detection.VolumeHandoffEntry
             {
                 Path = path,
                 BaseName = FileNameHelper.SecondStepBaseName(path),
@@ -52,11 +54,20 @@ namespace ArchiveFixer.ViewModels
                 BodyKind = card.BodyKind,
                 VolumeNumber = card.VolumeNumber,
                 FirstVolumeFlag = card.FirstVolumeFlag,
+                /* 底层识别事实（用户 2026-10-24：第二大步要用的判据必须随交接单过来） */
+                Membership = card.Membership,
+                ContentFail = card.ContentFail,
+                DeclaredTotalBytes = card.DeclaredTotalBytes,
+                DeclaredVolumeCount = card.DeclaredVolumeCount,
+                RawVolumeField = card.RawVolumeField,
                 SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
                 Source = task.IsContinuationTask
                     ? ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced
                     : ArchiveFixer.Detection.VolumeHandoffSource.UserImported
-            });
+            };
+
+            _volumeHandoffEntries.Add(entry);
+            return entry;
         }
 
         /// <summary>
