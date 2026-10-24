@@ -224,6 +224,36 @@ namespace ArchiveFixer.Services
         /// <c>222.zip</c> 当过程物、把另一卷当"名字不标准的残组"⇒ 整层定稿作废，678 MB 产物没落地）。
         /// 传 null（预检那一档）⇒ 退回老判据，一个字不变。
         /// </param>
+        /// <summary>
+        /// 这一组是不是“下一轮还要解的内层归档组”：看**第 1 卷的内容自证**（归档首片/可识别格式）。
+        /// ⛔ 只读内容卡，不看名字；判不出 ⇒ false（照旧老口径，不改变别人的去向）。
+        /// </summary>
+        private static bool IsVolumeGroupStartArchive(StageVolumeGroupView group)
+        {
+            string? firstVolumePath = group.Resolution.Volumes
+                .FirstOrDefault(volume => volume.Index == 1)?.Path
+                ?? group.Resolution.GroupFilePaths.FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(firstVolumePath))
+            {
+                return false;
+            }
+
+            try
+            {
+                FileNatureCard card = FileNature.Inspect(firstVolumePath);
+
+                return card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
+                    || card.Format is VolumeContentFormat.Rar
+                        or VolumeContentFormat.Zip
+                        or VolumeContentFormat.SevenZip;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
@@ -397,6 +427,16 @@ namespace ArchiveFixer.Services
                     if (stageGroup.FilePaths.All(
                             member => renamedVolumeMembers.Contains(SafePathHelper.GetFullPathSafe(member))))
                     {
+                        isProcessArtifact = false;
+                    }
+                    else if (IsVolumeGroupStartArchive(stageGroup))
+                    {
+                        /*
+                         * 这一组是**下一轮还要解的内层分卷组**（首卷内容自证是归档/分卷首片）
+                         * ⇒ 它是内容物，不是待清理的其余物：落在成品树里，下一轮第二大步接手。
+                         * ⛔ 真机 8888 的病灶：3 片 `.7z.001/.002/.003` 被当过程物搬进其余物
+                         * ⇒ 组入口在其余物里、产物落回原包树，① ② ③ 全红。
+                         */
                         isProcessArtifact = false;
                     }
                     else

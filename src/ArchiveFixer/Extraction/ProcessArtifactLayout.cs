@@ -53,6 +53,12 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         SourceIsOurOwnContent,
 
+        /// <summary>
+        /// 源是**分卷成员**（内容自证）—— 其余物永远不能当第二大步入口：这一片必须原地留着，
+        /// 由第二大步组认领/收片；⛔ 不搬进其余物。
+        /// </summary>
+        VolumeGroupMemberLeaveInPlace,
+
         /// <summary>没有给出目标目录，整批无法规划。</summary>
         TargetDirectoryMissing
     }
@@ -1245,6 +1251,35 @@ namespace ArchiveFixer.Extraction
                     });
 
                     continue;
+                }
+
+                /*
+                 * ⛔ **分卷成员不搬进其余物**（真机 8888：`111-L1.7z.001` 在其余物里 ⇒ 第二大步
+                 * 组入口落在其余物、产物落进原包树，① ② ③ 全红）。
+                 * 判据只读内容事实（`FileNatureCard`）：其它一概不猜；判不出 ⇒ 照旧老口径。
+                 * 留在原地后由第二大步组认领/收片（Delete 档也在组成功后由既有收片出口处理）。
+                 */
+                try
+                {
+                    FileNatureCard sourceCard = FileNature.Inspect(source);
+
+                    if (sourceCard.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                        || sourceCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece
+                        || sourceCard.BodyKind == ArchiveBodyKind.VolumePiece)
+                    {
+                        skipped.Add(new ArtifactSkip
+                        {
+                            SourcePath = source,
+                            Reason = ArtifactSkipReason.VolumeGroupMemberLeaveInPlace,
+                            Message = "这一份是分卷成员（内容自证）：其余物不能当第二大步入口，原样留在原地等组认领"
+                        });
+
+                        continue;
+                    }
+                }
+                catch
+                {
+                    // 卡读不出 ⇒ 判不出 ⇒ 照旧老口径（不拦）。
                 }
 
                 if (IsAlreadyInsideRest(source, artifactRoot, out string restDirectory))
