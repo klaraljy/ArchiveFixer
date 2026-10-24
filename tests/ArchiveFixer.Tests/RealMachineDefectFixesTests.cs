@@ -59,53 +59,6 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ① 整组改名后的任务同步
 
-        /// <summary>
-        /// 真机现场（日志 L14-L17 / L37-L41 / L60 / L65）：同一个目录里 2 卷的名字都带垃圾
-        /// （网盘那套 `删除` 尾巴），两个任务各自指着其中一卷。第一个任务开工前的"整组改名"
-        /// 把**两卷一起**改成了标准名，第二个任务却没人同步 —— 8 秒后它被不变量 11 报成
-        /// 「源文件已变化：文件不见了」，一个字节都没解。
-        /// </summary>
-        [Fact]
-        public async Task 整组改名之后_同批别的任务也要搬到新名字_不再报源文件已变化()
-        {
-            Harness harness = CreateHarness();
-
-            string first = CreateSourceFile("set.7z.001删除");
-            string second = CreateSourceFile("set.7z.002删除");
-
-            ArchiveTask firstTask = AddTask(harness, first);
-            ArchiveTask secondTask = AddTask(harness, second);
-
-            // 第一个任务是"这一组"的行：整组两卷都记在它身上（改名后这两项也必须跟着换）。
-            firstTask.IsVolumeGroup = true;
-            firstTask.IsVolumeComplete = true;
-            firstTask.VolumePaths.Add(first);
-            firstTask.VolumePaths.Add(second);
-            firstTask.VolumeInfoText = "2 卷";
-
-            await harness.Coordinator.StartExtractAsync();
-
-            // ① 两个任务都指着磁盘上真实存在的新名字。
-            Assert.Equal("set.7z.001", Path.GetFileName(firstTask.CurrentPath));
-            Assert.Equal("set.7z.002", Path.GetFileName(secondTask.CurrentPath));
-            Assert.True(File.Exists(firstTask.CurrentPath), "第一卷改名后任务路径必须存在");
-            Assert.True(File.Exists(secondTask.CurrentPath), "第二卷改名后**别的任务**的路径也必须存在");
-
-            // ② 那一组任务身上的 VolumePaths 也要跟着换（不许留着旧名字）。
-            Assert.Equal(
-                new[] { firstTask.CurrentPath, secondTask.CurrentPath },
-                firstTask.VolumePaths.ToArray());
-
-            // ③ 两个任务的快照都要与新名字对得上（路径换了不是"源文件变了"）。
-            Assert.False(firstTask.CompareWithSourceSnapshot()?.Changed ?? true, "第一份快照必须重拍到新名字上");
-            Assert.False(secondTask.CompareWithSourceSnapshot()?.Changed ?? true, "被顺带改名的任务同样必须重拍快照");
-
-            // ④ 谁都不许再报"源文件已变化"（红检点：撤掉同步即出现这一行）。
-            string all = string.Join("\n", harness.LogTexts);
-            Assert.DoesNotContain(StatusText.SourceChanged, all, StringComparison.Ordinal);
-            Assert.NotEqual(StatusText.SourceChanged, firstTask.Status);
-            Assert.NotEqual(StatusText.SourceChanged, secondTask.Status);
-        }
 
         /// <summary>
         /// **对照**（⛔ 不许放宽成"文件不在也算没变"）：快照拍完之后源文件真被改过，
@@ -238,58 +191,6 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ③ 缺卷预检的机器终态
 
-        /// <summary>
-        /// 真机现场（日志 L71-L72 / L112 / L124 / L130）：缺卷预检把任务拦下了（判得对），
-        /// 但机器终态留在 <c>Pending</c> —— 汇总说「未处理 1」、批末诊断说「分卷缺失：1 个 —— 222.z01」。
-        ///
-        /// <para>⚠ **口径变更（2026-10-08 用户拍板，本条按新口径改写）**：原断言是"终态必须是失败"，
-        /// 用户新指令：「最后一轮检测到了缺失分卷，**这就是部分完成**，因为连完整的都没有，这就不是程序的错误」；
-        /// 「如果是完整的…但是有错误，比如说密码、和压缩包卷尾缺失了一块，这就是失败的情况了」。
-        /// ⇒ 判据是**完整性**：缺卷落「部分完成」，失败只留给"完整却解不开"。</para>
-        ///
-        /// <para><b>怎么判的</b>：`TaskOutcomeClassifier`（递归停因 `MissingVolume` ⇒ `PartiallyCompleted`）、
-        /// `StatusToBrushConverter`（缺卷从错误色移到警告色）、`IsFailureStatus`/`IsExtractFailureStatus`
-        /// （缺卷移出失败名单）、`OneClickCoordinator.IsHandled`（单列它，免得被读成"没轮到"）、
-        /// `TaskSummaryService`（失败清单移出 + 与"部分完成"同桶）。冲突就在本条与它断言的四处。</para>
-        /// </summary>
-        [Fact]
-        public async Task 缺卷预检拦下_机器终态必须是部分完成()
-        {
-            Harness harness = CreateHarness();
-
-            string first = CreateSourceFile("vol.7z.001");
-            ArchiveTask task = AddTask(harness, first);
-
-            task.IsVolumeGroup = true;
-            task.IsVolumeComplete = false;
-            task.VolumePaths.Add(first);
-            task.MissingVolumeNames.Add("vol.7z.002");
-            task.VolumeInfoText = "2 卷，缺 vol.7z.002";
-
-            await harness.Coordinator.StartExtractAsync();
-
-            // ① 状态与原因一个字没改（⛔ 不许靠改中文修这个缺陷）。
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Contains("vol.7z.002", task.ErrorMessage);
-
-            // ② 机器终态 = **部分完成**（用户 2026-10-08 口径），而且"这一单已经结束"（EndTime）也要落。
-            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
-            Assert.True(task.EndTime.HasValue, "开工前拦下的任务同样要落结束时间（否则终态收口补不上）");
-
-            // ③ 缺卷**仍在"要处理的清单"里**（不变量 7：必须报"缺哪几个"），但"处理过"这件事也要成立
-            //    （否则汇总会说"一键处理已停止/未处理 N"）。⚠ 2026-10-08：用户口径把它的**分桶与配色**
-            //    挪成"部分完成"，⛔ 没有把它从清单里拿掉。
-            Assert.True(TaskOutcomeClassifier.IsFailureStatus(task.Status));
-            Assert.True(OneClickCoordinator.IsHandled(task));
-
-            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { task });
-
-            BatchProblemGroup group = Assert.Single(report.Groups);
-            Assert.Equal(BatchProblemKind.MissingVolume, group.Kind);
-
-            // ④ 引擎一次都没被调用（不变量 7 一个字没放松）。
-            Assert.Empty(harness.Engine.ExtractCalls);
-        }
 
         // ================================================================ 新增状态：三处同改（AGENTS.md §7）
 

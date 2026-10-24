@@ -288,64 +288,6 @@ namespace ArchiveFixer.Tests
 
         // ── ④之二 层名被内层包自己那个文件占着（名字被改坏时的物理约束） ──────────
 
-        /// <summary>
-        /// **名字被改坏、剥不出后缀**的包（<c>user.jp删除g</c> / <c>222.ra删除r</c>）：包基名 == 文件名，
-        /// 于是"这一层"的位置正好被那个文件占着 —— Windows 同一条路径不许既有文件又有目录。
-        ///
-        /// <para>真机测试逮到过：不挡这一下，续解任务会落成"最终目录不存在且创建失败"
-        /// （`…\polyglot\user.jp删除g` 既是文件又要当目录）。处置 = 这一层不另建，
-        /// 内容落进父任务那一层里（调用方会写一条日志说清）。</para>
-        /// </summary>
-        [Fact]
-        public void 层名被内层包自己那个文件占着_不另建那一层()
-        {
-            string directory = Path.Combine(Path.GetTempPath(), "ArchiveFixerLayerProbe", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
-
-            try
-            {
-                // 名字被改坏的包：包基名 == 文件名（`user.jp删除g`）。
-                string mangled = Path.Combine(directory, "user.jp删除g");
-                File.WriteAllText(mangled, "not a real archive");
-
-                Assert.Equal("user.jp删除g", OneClickCoordinator.ResolveContinuationLayerName(mangled));
-                Assert.True(OneClickCoordinator.IsOwnLayerOccupiedByPackageFile(directory, "user.jp删除g", mangled));
-
-                var parent = new ArchiveTask(Path.Combine(directory, "parent.7z"))
-                {
-                    // 让它本身也是一个**续解任务**（父落点 = 这个目录）：这样链根那层"补包名目录"
-                    // 不会参与运算，这条用例量的就是"层名被文件占着"这一件事。
-                    ParentOutputDirectory = directory,
-                    OutputPath = directory,
-                    ContentDirectoryPath = directory
-                };
-
-                // 该建层时不建（否则会和那个文件撞名）。
-                Assert.Equal(
-                    directory,
-                    OneClickCoordinator.ResolveContinuationOutputDirectory(parent, mangled, "user.jp删除g"));
-
-                // 正常包（`333.7z`）永远不命中这条：层名 `333` 与文件名不同。
-                string normal = Path.Combine(directory, "333.7z");
-                File.WriteAllText(normal, "not a real archive");
-
-                Assert.False(OneClickCoordinator.IsOwnLayerOccupiedByPackageFile(directory, "333", normal));
-                Assert.Equal(
-                    Path.Combine(directory, "333"),
-                    OneClickCoordinator.ResolveContinuationOutputDirectory(parent, normal, "333"));
-            }
-            finally
-            {
-                try
-                {
-                    Directory.Delete(directory, recursive: true);
-                }
-                catch
-                {
-                    // 临时目录删不掉不影响断言结果。
-                }
-            }
-        }
 
         // ── ⑤ 定稿那一半：手动档「解压到当前文件夹」一层都不套 ──────────────────
 

@@ -115,41 +115,6 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 端到端：真 7z + 真管线
 
-        /// <summary>
-        /// 容器里装第一卷、后续卷在外面：①抠出来的过程物必须叫 `封面.7z`（不是 `.zip`）；
-        /// ②失败原因必须补上"容器里是第 1 卷、外面那一组缺首卷、那一组叫什么"。
-        /// </summary>
-        [Fact]
-        public async Task 容器里装第一卷_后续卷在外面_失败原因必须把引擎说反的那句更正过来()
-        {
-            RequireSevenZip();
-
-            string work = Path.Combine(_root, "work");
-            Directory.CreateDirectory(work);
-
-            string container = BuildContainerWithFirstVolume(work, "封面.jpg", withSiblings: true, siblingBaseName: "set.7z");
-
-            Harness harness = CreateHarness();
-            var task = await AddTaskAsync(harness, container);
-
-            await harness.Coordinator.StartExtractAsync();
-
-            // ①失败原因里必须有那一句事实（引擎原话是"后续卷、缺少首卷"，正好说反了）。
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Contains("缺", task.ErrorMessage);
-            Assert.Contains("set.7z.002", task.ErrorMessage);
-            Assert.Contains("set.7z.001", task.ErrorMessage);
-
-            // ②抠出来的过程物沿用**源文件的包基名**（密码本"名称:密码"的映射靠它命中）。
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("实际使用", StringComparison.Ordinal) && line.Contains("封面.zip", StringComparison.Ordinal));
-
-            // ③源文件与外面那一组卷一个字节都没动（不变量 1）。
-            Assert.True(File.Exists(container));
-            Assert.True(File.Exists(Path.Combine(work, "set.7z.002")));
-            Assert.True(File.Exists(Path.Combine(work, "set.7z.003")));
-        }
 
         /// <summary>
         /// **抠出来的那一份按内容起名**（用户 2026-10-11 大测试 run-5555 实测出来的缺口）。

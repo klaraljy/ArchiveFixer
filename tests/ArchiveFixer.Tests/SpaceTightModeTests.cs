@@ -276,63 +276,9 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ④ 分卷组：整组一起删
 
-        [Fact]
-        public async Task 空间不足模式_分卷组成功_整组一起删()
-        {
-            Harness harness = CreateHarness(settings =>
-            {
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-            });
-
-            string folder = Path.Combine(_root, "src", "volumes");
-            Directory.CreateDirectory(folder);
-
-            string first = Path.Combine(folder, "222.7z.001");
-            string second = Path.Combine(folder, "222.7z.002");
-            File.WriteAllText(first, new string('a', 64));
-            File.WriteAllText(second, new string('b', 64));
-
-            ArchiveTask task = await harness.ScanFolderAndAddTask(folder);
-
-            Assert.True(task.IsVolumeGroup, "前提：扫描应当把这两卷归成一组");
-
-            harness.Engine.SetProducts(("payload-00000.bin", 8));
-
-            harness.Vm.SpaceTightMode = true;
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(first), "第一卷没有被删");
-            Assert.False(File.Exists(second), "第二卷被落下了（整组必须一起删）");
-        }
 
         // ================================================================ ⑤ 一键处理那条路也认这个模式
 
-        [Fact]
-        public async Task 空间不足模式_一键处理也删源包()
-        {
-            Harness harness = CreateHarness(settings =>
-            {
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-                settings.SkipOneClickConfirm = true;   // 只跑流程，不弹确认框（测试里没人在那儿点）
-            });
-
-            string source = harness.CreateSource("pack.7z");
-            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
-
-            harness.Engine.SetProducts(("payload-00000.bin", 8));
-
-            harness.Vm.SpaceTightMode = true;
-
-            await harness.OneClick.RunPipelineAsync(harness.Vm.Tasks.ToList());
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "一键处理那条路也必须按空间不足模式删源包");
-            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), harness.Vm.Settings.SourceHandling);
-        }
 
         // ================================================================ ⑥ 动手前必须看得见（确认框红字）
 

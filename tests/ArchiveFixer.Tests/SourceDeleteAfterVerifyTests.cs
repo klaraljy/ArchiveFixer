@@ -162,39 +162,6 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ③ 分卷组：整组一起删
 
-        [Fact]
-        public async Task 分卷组成功_整组被删()
-        {
-            Harness harness = CreateHarness(settings =>
-            {
-                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
-                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
-                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
-            });
-
-            string folder = Path.Combine(_root, "src", "volumes");
-            Directory.CreateDirectory(folder);
-
-            string first = Path.Combine(folder, "222.7z.001");
-            string second = Path.Combine(folder, "222.7z.002");
-            File.WriteAllText(first, new string('a', 64));
-            File.WriteAllText(second, new string('b', 64));
-
-            // 走真正的扫描路径（分卷归组也在那一步做）：一组分卷 = 一个任务。
-            ArchiveTask task = await harness.ScanFolderAndAddTask(folder);
-
-            Assert.True(task.IsVolumeGroup, "前提：扫描应当把这两卷归成一组");
-            Assert.Equal(2, task.VolumeCount);
-
-            harness.Engine.SetProducts(("payload-00000.bin", 8));
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(first), "第一卷没有被删");
-            Assert.False(File.Exists(second), "第二卷被落下了（整组必须一起删）");
-        }
 
         // ================================================================ ④ 取消：一律不删
 

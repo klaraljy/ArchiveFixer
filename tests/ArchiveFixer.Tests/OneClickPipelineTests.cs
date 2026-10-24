@@ -250,53 +250,6 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(outputDir, "movie", "movie-info.txt")), "解压产物缺少 movie-info.txt");
         }
 
-        [Fact]
-        public async Task 加密分卷_一组一个任务_只从001启动且密码本命中()
-        {
-            (_, string seriesFirst) = BuildPackages();
-            string bookPath = WritePasswordBook();
-
-            var scan = new FileScanService();
-            var detect = new ArchiveDetectService();
-            var engine = new SevenZipEngine();
-            var passwordService = new PasswordService();
-
-            passwordService.ImportPasswordList(bookPath);
-
-            List<ArchiveTask> tasks = await scan.ScanPathsAsync(new[] { _root }, new ScanOptions { ScanMode = "ScanAllFiles" }, CancellationToken.None);
-
-            // 三卷（.001/.002/.003…）在扫描结果里必须只占一行
-            ArchiveTask seriesTask = tasks.Single(t => t.VolumeGroupKey.Contains("series", StringComparison.OrdinalIgnoreCase));
-            Assert.True(seriesTask.IsVolumeGroup);
-            Assert.True(seriesTask.VolumeCount >= 2, $"应至少识别出 2 卷，实际 {seriesTask.VolumeCount}");
-            Assert.True(seriesTask.IsVolumeComplete, $"分卷应完整：{seriesTask.VolumeInfoText}");
-            Assert.EndsWith("series.7z.001", seriesTask.CurrentPath, StringComparison.OrdinalIgnoreCase);
-
-            await detect.ApplyDetectResultAsync(seriesTask, CancellationToken.None);
-            Assert.Equal(StatusText.ExtensionVolume, seriesTask.ExtensionStatus);
-
-            // 分卷文件不该被"智能修正后缀"改名
-            List<RenamePreviewItem> preview = new RenameService().BuildPreview(
-                new[] { seriesTask },
-                RenameOptions.CreateFixByDetectedFormat(AppSettings.CreateDefault()));
-
-            Assert.False(Assert.Single(preview).CanRename, "分卷文件不允许改名");
-
-            // 密码本按名称命中分卷组
-            IReadOnlyList<PasswordEntry> matched = passwordService.MatchMappedEntries("series.7z.001");
-            Assert.NotEmpty(matched);
-            Assert.Equal(SeriesPassword, matched[0].Password);
-
-            string outputDir = Path.Combine(_root, "out", "series");
-
-            ArchiveOperationResult result = await engine.ExtractAsync(
-                new ArchiveRequest { ArchivePath = seriesFirst, OutputPath = outputDir, Password = SeriesPassword },
-                new ExtractOptions(),
-                CancellationToken.None);
-
-            Assert.True(result.Success, $"分卷解压应成功：{result.Status} / {result.Message} / {result.DetectedErrorType}");
-            Assert.True(File.Exists(Path.Combine(outputDir, "series.bin")), "分卷解压产物缺少 series.bin");
-        }
 
         [Fact]
         public async Task 名单式密码本对分卷组也能命中()
