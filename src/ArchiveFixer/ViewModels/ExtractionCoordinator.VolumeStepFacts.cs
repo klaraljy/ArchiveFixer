@@ -303,23 +303,18 @@ namespace ArchiveFixer.ViewModels
         internal void RememberVolumeStepTaskForRound(ArchiveTask task) => RememberVolumeStepTask(task);
 
 
-        /// <summary>这一批是不是单层模式（递归模式下第 0 层要交给引擎，见 <see cref="DirectReadAppliesTo"/>）。</summary>
-        private bool IsSingleLayerRecursion() =>
-            false; // 递归三档已删除（默认全展开）；重建中
-
         /// <summary>
         /// **这一单这一趟是不是"第二大步"**（用户 2026-10-11 定的轮次模型，见 `RoundProductClassifier` 的说明）：
         /// 第二大步 = **分卷**的解压、**只解一层** —— 解出来的东西一律交回**轮判定**，
         /// 里面又有分卷也**不就地接着解**（下一轮从第二大步再来一遍）。
         ///
-        /// <para>为什么必须是"任务级的事实位"而不是改用户的设置：递归档
-        /// （<c>AppSettings</c>）是**用户选的**，⛔ 这一档不许动它；
-        /// 而"这一单是第二大步"是**程序自己在批末判出来的**（那一组齐了 ⇒ 照常跑这一组，见 `toRun` 那一处）。</para>
+        /// <para>⛔ 这**不是**用户的"单层/递归档位"（那两个档位已经删除，产品只有完全递归）；
+        /// 它只是程序在批末点出来的"这一单是分卷第二大步"这个任务级事实位。</para>
         ///
-        /// <para>⚠ 没点名 / 传 null ⇒ 与改动前**逐字相同**（只看设置档）。</para>
+        /// <para>⚠ 没点名 / 传 null ⇒ false（第一大步）。</para>
         /// </summary>
-        private bool IsSingleLayerRecursion(ArchiveTask? task) =>
-            (task != null && _volumeStepTasks.Contains(task)) || IsSingleLayerRecursion();
+        private bool IsSecondStepTask(ArchiveTask? task) =>
+            task != null && _volumeStepTasks.Contains(task);
 
 
         /// <summary>产出方那条链最多追几层（防环、防病态输入；真机这一条链是 3 层）。</summary>

@@ -14,8 +14,8 @@ namespace ArchiveFixer.ViewModels
     /// <summary>
     /// **第二大步（组入口那一单）开工前的检查**（从第一大步入口整段搬出来；判据一个字没改）。
     ///
-    /// <para>谁调它：`ExtractTaskMainStep` 里只对**第二大步任务**（`IsSingleLayerRecursion(task)` = 这一单被点成
-    /// "只解一层"）调一次；⛔ 第一大步自己不再判分卷。</para>
+    /// <para>谁调它：`ExtractTaskMainStep` 里只对**第二大步任务**（`IsSecondStepTask(task)` = 这一单被点成
+    /// “第二大步、只解这一层”）调一次；⛔ 第一大步自己不再判分卷。</para>
     ///
     /// <para>内容 = 原来挂在第一大步入口上的那四件事：缺卷不开工（先给用户一次补救机会）/ 现读一次盘上事实、
     /// 齐了就照常跑 / 缺卷不许在批首判死（记延期账，批末再判）/ 最后一遍仍缺才如实报缺卷。</para>

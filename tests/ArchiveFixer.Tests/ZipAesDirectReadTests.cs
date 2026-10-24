@@ -425,7 +425,7 @@ namespace ArchiveFixer.Tests
         /// 否则密码再对也到不了读取器手里（这正是修法里最容易漏的一步）。</para>
         /// </summary>
         [Fact]
-        public async Task 端到端_加密双面文件_递归档按偏移取出后仍解出内容()
+        public async Task 端到端_加密双面文件走真管线_中文密码直接解开且不抠副本()
         {
             byte[] payload = Encoding.UTF8.GetBytes(PayloadText);
             byte[] zip = ZipAesTestWriter.Build(
@@ -465,11 +465,8 @@ namespace ArchiveFixer.Tests
                 Assert.Empty(Directory.GetFiles(harness.WorkRoot, "*.zip", SearchOption.AllDirectories));
             }
 
-            /*
-             * 递归档（默认）第 0 层必须交给引擎逐层展开 ⇒ 这里断言的是**如实走了取出的那条路**，
-             * 不是直读。直读本身仍由本文件上面的读取器级用例覆盖（AES/UTF-8/deflate）。
-             */
-            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
+            Assert.DoesNotContain(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
+            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("AES", StringComparison.Ordinal));
         }
 
         // ================================================================ 器材：真 7z

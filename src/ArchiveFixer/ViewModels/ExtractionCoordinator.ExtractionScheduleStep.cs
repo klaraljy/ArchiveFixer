@@ -341,9 +341,9 @@ namespace ArchiveFixer.ViewModels
         /// <para>两个条件缺一不可：</para>
         /// <list type="number">
         /// <item><description>识别阶段探过、结论是"能直读"（<see cref="ArchiveTask.EmbeddedDirectReadSupported"/>）；</description></item>
-        /// <item><description>这一批是**单层模式**：递归模式下第 0 层必须交给引擎逐层展开
-        /// （<c>RecursiveExtractor</c> 拿的是"一个归档路径"，直读解出来的是散文件，没有对应的入口），
-        /// 所以那条路上照旧抠取 —— 空间核算也必须跟着记那笔副本，否则账面就是假的。</description></item>
+        /// <item><description>这一单是**第一大步**（不是第二大步的分卷组任务）：直读只针对
+        /// “单一完整压缩包（含媒体前缀的双面文件）”，而那是第一大步的工作；第二大步只解一层分卷，
+        /// 不在这里做直读，空间核算也按实抠取记账。</description></item>
         /// </list>
         ///
         /// <para>它只回答"空间账面上要不要预留那份副本"，不决定解压怎么做；解压那一刻会再探一次，
@@ -358,7 +358,7 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            return IsSingleLayerRecursion(task);
+            return !IsSecondStepTask(task);
         }
 
         /// <summary>
@@ -580,7 +580,7 @@ namespace ArchiveFixer.ViewModels
         /// 手动档还多一条"递归模式没关"（手动路径的递归走 <c>RecursiveExtractor</c>）。
         /// </summary>
         private bool IsMultiLayerPossibleForBatch() =>
-            ResolveMaxLayersForBatch() > 1 || !IsSingleLayerRecursion();
+            ResolveMaxLayersForBatch() > 1;
 
         /// <summary>
         /// 「多层解压可能中途空间不足」的判据（**唯一出口**，批首日志与确认框都走它）。

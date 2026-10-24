@@ -493,8 +493,8 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// **这一批里哪些单是"第二大步"**（分卷阶段，只解一层 —— 用户 2026-10-11 轮次模型）。
         /// 写点唯一 = 批末那一组齐了、交 `toRun` 照常跑这一组的那一刻（见 `RememberVolumeStepTask`）；
-        /// 读点唯一 = <see cref="IsSingleLayerRecursion(ArchiveTask?)"/>（三处递归档判据）。
-        /// ⛔ 不改用户的 `递归档位（已删除）` 设置；本批结束随其它账一起清。
+        /// 读点唯一 = <see cref="IsSecondStepTask(ArchiveTask?)"/>（三处第二大步判据）。
+        /// ⛔ 不存在“单层/递归档设置”；产品只有完全递归，这里只是第二大步任务位。
         /// </summary>
         private readonly HashSet<ArchiveTask> _volumeStepTasks = new();
         /// <summary>

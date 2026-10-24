@@ -91,7 +91,7 @@ namespace ArchiveFixer.ViewModels
                  * （`_volumeStepTasks` 里有它）放行，只解这一层。⛔ 放行不放宽任何判据：
                  * 它仍然是"内容卡证明的入口卷 + 第二大步点名"两个事实同时成立。
                  */
-                bool isSecondStepEntry = IsSingleLayerRecursion(task);
+                bool isSecondStepEntry = IsSecondStepTask(task);
 
                 AppendLog(
                     "INFO",
@@ -798,11 +798,11 @@ namespace ArchiveFixer.ViewModels
             /*
              * ⚠ 2026-10-16（困难批 `21212121`，运行期实测）：**交给引擎的那一份，名字得是它自己的规范名**。
              *
-             * <para>位置说明（⚠ 用词：这一档**不是**被删掉的那个用户档位 —— 那个是"三档递归模式"里的
-             * 「只解当前这一层」，用户 2026-10-14 拍板删掉、出厂钉死为"展开所有分支"，见
-             * <c>AppSettings.递归档位（已删除）</c> 那段说明。这里是 <c>ExtractSingleTaskAsync</c>：**把一份包交给引擎解**
-             * 那一段；默认档解完接着走递归核心（下面那两处 `IsSingleLayerRecursion(task)` 闸门），
-             * 而"第二大步"（分卷组只解一层）是**任务级事实位** `_volumeStepTasks` 让它只解这一层。）</para>
+             * <para>位置说明（⚠ 用词：这一档**不是**用户可选的档位 —— 那三个"递归模式"档位
+             * 用户 2026-10-14 已拍板删除，产品只有完全递归。这里是 <c>ExtractSingleTaskAsync</c>：
+             * **把一份包交给引擎解**那一段；第一大步解完接着走递归核心（下面那两处
+             * `IsSecondStepTask(task)` 闸门），而"第二大步"（分卷组只解一层）是**任务级事实位**
+             * `_volumeStepTasks` 让它只解这一层。）</para>
              *
              * <para>现场逐字（那一批日志）：批末补判已经判出「这一组现在齐了（共 3 卷）」并把这一单重跑，
              * 可引擎拿到的仍是伪装名 ⇒ `7z x … aaa-L2.part0788839中文1.rar` ⇒ 引擎原话
@@ -890,21 +890,16 @@ namespace ArchiveFixer.ViewModels
                     // 量不出大小不影响能不能抠，只是日志与空间预检里少个数字。
                 }
 
-                if (!IsSingleLayerRecursion(task))
+                if (IsSecondStepTask(task))
                 {
                     /*
-                     * 递归展开：第 0 层必须交给引擎（见 DirectReadAppliesTo 的说明），照旧抠取。
-                     * 这一行是**如实说明**，免得用户看到"直读"两个字却发现空间没省下来。
-                     *
-                     * ⚠ 2026-10-15：这里原来打印**用户设置里那一档**（真机日志逐字：
-                     * `递归模式（SingleChain）下第 0 层要交给 7-Zip 逐层展开…`）—— 屏幕上不该再出现
-                     * 那个档位名（用户口径：「我不是将单层路给删掉了吗，现在就是全面解压所有分路」），
-                     * 而这句本身要说的只是"没有走 ZIP 直读"，于是改成那句白话。
+                     * 第二大步（分卷组）只解一层：直读是**第一大步**的动作，这里不做。
+                     * 这一行如实说明为什么没走直读，免得用户看到"直读"两个字却发现空间没省下来。
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.LogName}：递归展开（有压缩包就解压）下第 0 层要交给 7-Zip 逐层展开，"
-                        + $"本次不走 ZIP 直读，仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
+                        $"{task.LogName}：第二大步只解这一层，不在这里做 ZIP 直读；"
+                        + $"仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
                 }
                 else
                 {
@@ -1520,7 +1515,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 这条分支里的第 0 层同样受不变量 11 保护：递归核心**每一层**开工之前都会回头问一次
              * "源文件还是原来那一份吗"（见 CheckRootSourceUnchangedAsync），不必在这里再写一遍。
              */
-            if (!IsSingleLayerRecursion(task))
+            if (!IsSecondStepTask(task))
             {
 
                 RecursionResult? recursion;
