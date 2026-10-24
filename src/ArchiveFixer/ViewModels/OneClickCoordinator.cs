@@ -2737,7 +2737,8 @@ namespace ArchiveFixer.ViewModels
                      * 内容可证是单卷 ⇒ 名字不算数，照旧按内容分类进续解链。
                      */
                     if (IsVolumeContinuationPart(file)
-                        && !ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(file))
+                        && !ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(file)
+                        && !ContentProvesFirstVolumePiece(file))
                     {
                         skippedLines.Add($"{file}（是分卷的后续卷，起点在第一卷上）");
                         continue;
@@ -2762,6 +2763,17 @@ namespace ArchiveFixer.ViewModels
                     {
                         isArchive = true;
                         how = "按分卷尺子认出：这一组的第一卷（引擎按内容打不开是因为名字脏，交给第二大步）";
+                    }
+
+                    /*
+                     * 内容自证是“某一组的第一片”（7z 起始头自述整包/片数）⇒ 名字像后续卷也不算数：
+                     * 真机 19191919：`.0!601` 是首片，名字尾巴 601 被当成“后续卷”跳过，整组就永远缺卷。
+                     * ⛔ 只认内容事实，不改名、不猜格式。
+                     */
+                    if (!isArchive && ContentProvesFirstVolumePiece(file))
+                    {
+                        isArchive = true;
+                        how = "按内容认出：分卷首片（起始头自述整包/片数），交给第二大步";
                     }
 
 
@@ -3049,6 +3061,24 @@ namespace ArchiveFixer.ViewModels
              * 所以规则必须落在两边都能读的 `Helpers` 里 —— ⛔ 不许在那边再写第二份。
              */
             return FileNameHelper.IsVolumeContinuationPart(filePath);
+        }
+
+        /// <summary>
+        /// 内容自证“我是某一组的第一片”（7z `VolumeFirstPiece`：起始头自述整包字节/片数）。
+        /// 用来压过**名字**的“像后续卷”判断（真机 19191919：`.0!601` 是首片，却被名字尾巴 601 跳过）。
+        /// 判不出/读不到 ⇒ false（⛔ 不猜）。
+        /// </summary>
+        internal static bool ContentProvesFirstVolumePiece(string filePath)
+        {
+            try
+            {
+                return ArchiveFixer.Detection.FileNature.Inspect(filePath).BodyKind
+                    == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>

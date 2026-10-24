@@ -26,6 +26,15 @@ namespace ArchiveFixer.Extraction
             @"^(?<stem>.*?)(?<ext>\.rar|\.r\d{2})$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+        /*
+         * 脏卷标记：`pa删除rt1.rar` 这类“part 中间被塞了字”的名字，正则找不到连续的 `part`。
+         * 引擎按**它眼前那个名字**找兄弟卷（真机 1111：`aaa-L2.pa删除rt1.rar` ⇒ 要 `…pa删除rt2.rar`）
+         * ⇒ 规范名必须保留同一个前缀，只换末尾那个卷号；⛔ 不把前缀“洗干净”。
+         */
+        private static readonly Regex DirtyPartPattern = new(
+            @"^(?<prefix>.*?)(?<num>\d+)(?<suffix>\.[^.]+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
         public VolumeNamingFamily Family => VolumeNamingFamily.RarPart;
 
         public FamilyResult Evaluate(VolumeGroupUnit unit)
@@ -141,7 +150,7 @@ namespace ArchiveFixer.Extraction
             string sourceLayer = unit.SourceLayer;
 
             List<string>? targets = null;
-            string namingEvidence;
+            string namingEvidence = "RAR 入口名认不出卷标记 ⇒ 不出规范名计划";
 
             Match part = PartPattern.Match(entryName);
 
@@ -166,6 +175,33 @@ namespace ArchiveFixer.Extraction
                 namingEvidence = $"RAR 新编号（{prefix}partN{suffix}，宽度 {width}）";
             }
             else
+            {
+                Match dirty = DirtyPartPattern.Match(entryName);
+
+                if (dirty.Success
+                    && dirty.Groups["prefix"].Value.IndexOf("pa", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    string dirtyPrefix = dirty.Groups["prefix"].Value;
+                    string dirtySuffix = dirty.Groups["suffix"].Value;
+                    int dirtyWidth = dirty.Groups["num"].Value.Length;
+
+                    targets = new List<string>();
+
+                    for (int index = 1; index <= numbered.Count; index++)
+                    {
+                        targets.Add(
+                            dirtyPrefix
+                            + index.ToString(
+                                "D" + dirtyWidth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                System.Globalization.CultureInfo.InvariantCulture)
+                            + dirtySuffix);
+                    }
+
+                    namingEvidence = $"RAR 脏卷标记（保留前缀 {dirtyPrefix}，只换末尾卷号）";
+                }
+            }
+
+            if (targets == null)
             {
                 Match legacy = LegacyPattern.Match(entryName);
 
