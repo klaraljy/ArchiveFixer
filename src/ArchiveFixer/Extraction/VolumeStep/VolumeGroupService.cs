@@ -122,19 +122,39 @@ namespace ArchiveFixer.Extraction
             if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
             {
                 /*
-                 * 先建组、后建任务那一档：任务出现后只**补写一次** owner（⛔ 不换 owner、不重置状态）。
-                 * 组事实/规范名计划早就定了，不因为任务晚到而重算。
+                 * Unknown / Missing 不是终态；Complete / OwnerAssigned 在**还没链接/解压之前**
+                 * 也不是终态 —— 候选事实会变（改名、补片、首卷标记后到）。
+                 * 真机 21212121：第一轮事实把伪装片认成第 1 卷，建成 Complete；第二轮真首卷的
+                 * 首卷标记才到，缓存挡住 ⇒ owner 永远指着错的那一片。
+                 * ⛔ 已经 Linked/Extracting/Succeeded/Failed 的组不重算（那才是定局）。
                  */
-                if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
-                    && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
-                    && (existing.State == VolumeGroupState.Complete
-                        || existing.State == VolumeGroupState.OwnerAssigned))
-                {
-                    existing.OwnerTaskFileName = ownerTaskFileName;
-                    existing.State = VolumeGroupState.OwnerAssigned;
-                }
+                bool factsChanged = !SamePieces(existing.Pieces, pieces);
+                bool beforeLink = existing.State == VolumeGroupState.Complete
+                    || existing.State == VolumeGroupState.OwnerAssigned;
 
-                return existing;
+                if (existing.State == VolumeGroupState.Unknown
+                    || existing.State == VolumeGroupState.Missing
+                    || (beforeLink && factsChanged))
+                {
+                    _units.Remove(key);
+                }
+                else
+                {
+                    /*
+                     * 先建组、后建任务那一档：任务出现后只**补写一次** owner（⛔ 不换 owner、不重置状态）。
+                     * 组事实/规范名计划早就定了，不因为任务晚到而重算。
+                     */
+                    if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
+                        && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
+                        && (existing.State == VolumeGroupState.Complete
+                            || existing.State == VolumeGroupState.OwnerAssigned))
+                    {
+                        existing.OwnerTaskFileName = ownerTaskFileName;
+                        existing.State = VolumeGroupState.OwnerAssigned;
+                    }
+
+                    return existing;
+                }
             }
 
             var unit = new VolumeGroupUnit(baseName, family, sourceLayer, entryPath)
@@ -199,6 +219,43 @@ namespace ArchiveFixer.Extraction
             {
                 unit.Verdict = verdict;
             }
+        }
+
+        /// <summary>两组候选的“原始事实”是否逐片相同（路径/卷号/首卷/内容身份/ZIP 首末片证据）。</summary>
+        private static bool SamePieces(
+            IReadOnlyList<GroupPieceFact> left,
+            IReadOnlyList<GroupPieceFact> right)
+        {
+            if (left.Count != right.Count)
+            {
+                return false;
+            }
+
+            List<GroupPieceFact> orderedLeft = left
+                .OrderBy(piece => piece.Path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            List<GroupPieceFact> orderedRight = right
+                .OrderBy(piece => piece.Path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            for (int index = 0; index < orderedLeft.Count; index++)
+            {
+                GroupPieceFact a = orderedLeft[index];
+                GroupPieceFact b = orderedRight[index];
+
+                if (!string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase)
+                    || a.VolumeNumber != b.VolumeNumber
+                    || a.FirstVolumeFlag != b.FirstVolumeFlag
+                    || a.BodyKind != b.BodyKind
+                    || a.HasZipEndRecord != b.HasZipEndRecord
+                    || a.ZipEndRecordMeansSplit != b.ZipEndRecordMeansSplit
+                    || a.HasZipLocalHeader != b.HasZipLocalHeader)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static string BuildKey(string baseName, VolumeNamingFamily family) =>

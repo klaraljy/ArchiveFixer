@@ -1318,10 +1318,20 @@ namespace ArchiveFixer.ViewModels
                          * 重跑只会把终态重置成 Pending，一路撞轮数上限、最后连"失败"都没了
                          * （真机 V04：密码错 ⇒ 每次都被重新点名，7 轮后停在 Pending）。
                          * 片原样留着，结论由收片账那一行给。
+                         *
+                         * 例外（真机 21212121）：这一组的事实刚被**重算成新 Unit**（owner 还空着、
+                         * 状态 Complete），说明上一轮的终态是“拿错片当入口”留下的 ⇒ 允许这一新版跑一次；
+                         * 已经是 Failed/Linked/Succeeded 的 Unit 不走这里（⛔ 不形成重跑环）。
                          */
-                        if (entryTask.Outcome == TaskOutcome.Failed
-                            || entryTask.Outcome == TaskOutcome.Cancelled
-                            || entryTask.Outcome == TaskOutcome.PartiallyCompleted)
+                        bool freshUnitAfterFactsChanged =
+                            preUnit != null
+                            && preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
+                            && string.IsNullOrWhiteSpace(preUnit.OwnerTaskFileName);
+
+                        if (!freshUnitAfterFactsChanged
+                            && (entryTask.Outcome == TaskOutcome.Failed
+                                || entryTask.Outcome == TaskOutcome.Cancelled
+                                || entryTask.Outcome == TaskOutcome.PartiallyCompleted))
                         {
                             AppendLog(
                                 "INFO",

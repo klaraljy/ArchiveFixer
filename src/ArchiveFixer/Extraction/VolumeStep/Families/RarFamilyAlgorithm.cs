@@ -57,9 +57,16 @@ namespace ArchiveFixer.Extraction
                 int? number = piece.VolumeNumber;
 
                 /*
-                 * 名字卷标记只作**补缺**：内容读不出卷号的片（RAR4 老编号的首卷锚点/断片）才用；
-                 * ⛔ 内容能读出的号一个都不改（不许两套编号合流，之前踩过假缺卷）。
+                 * **内容自证“我是第 1 卷”压过一切名字线索**（真机 21212121：真首卷
+                 * `资源222-L2.part1.rar` 的首卷标记被忽略，名字更“像 1”的 `.txt-176` 抢了入口）。
+                 * 然后再用名字补“内容读不出卷号”的片；⛔ 两套编号不合流。
                  */
+                if (piece.FirstVolumeFlag
+                    || piece.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    number = 1;
+                }
+
                 if (number == null)
                 {
                     number = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
@@ -146,7 +153,19 @@ namespace ArchiveFixer.Extraction
             VolumeGroupUnit unit,
             List<(GroupPieceFact Fact, int Number)> numbered)
         {
-            string entryName = Path.GetFileName(unit.EntryPath);
+            /*
+             * 规范名必须按**族算法认出来的第 1 卷**那条名字来推，⛔ 不能用 unit.EntryPath：
+             * 组分析按名字挑入口，可能挑到内容卷号是 2 的伪装片（真机 21212121：
+             * 入口被挑成 `.txt`，真首卷是 `…part1.rar`，按 `.txt` 推不出任何规范名）。
+             */
+            string entryName = Path.GetFileName(
+                numbered.FirstOrDefault(item => item.Number == 1).Fact?.Path ?? unit.EntryPath);
+
+            if (string.IsNullOrWhiteSpace(entryName))
+            {
+                entryName = Path.GetFileName(unit.EntryPath);
+            }
+
             string sourceLayer = unit.SourceLayer;
 
             List<string>? targets = null;
