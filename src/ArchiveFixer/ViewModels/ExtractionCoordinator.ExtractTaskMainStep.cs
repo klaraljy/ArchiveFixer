@@ -1228,15 +1228,22 @@ namespace ArchiveFixer.ViewModels
                           + "也可以自己改完右键「重新扫描此文件」。"
                         : $"这一步没给出改名建议：{repair.Reason}。";
 
-                    task.Status = StatusText.VolumeMissing;
-                    task.ErrorMessage =
+                    /*
+                     * ⚠ 2026-10-24（第一大步造包器当场逮到）：这一支原来只写中文状态、不落机器终态 ⇒
+                     * 批末汇总把它算进「未处理」。⇒ 走统一收口（`MarkStoppedBeforeExtract` +
+                     * `FinalizeOutcomeIfPending`）：状态仍是「分卷缺失」，终态按既有口径（缺卷 ⇒ 部分完成）。
+                     */
+                    string volumeMissingMessage =
                         "分卷缺失：这一卷是「一组分卷的第一卷」，但它的名字被改坏了 —— "
                         + "引擎按名字找不到同组的后续卷，只会把它当成一段通用分片"
                         + "（那样「解出来」的是一个与它等大的垃圾文件，不是包里的内容），所以不开始。"
                         + siblingText + advice
                         + "程序不会自己改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
 
-                    AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                    MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, volumeMissingMessage);
+                    FinalizeOutcomeIfPending(task);
+
+                    AppendLog("ERROR", $"{task.LogName}：{volumeMissingMessage}");
                     return;
                 }
 
@@ -1244,8 +1251,14 @@ namespace ArchiveFixer.ViewModels
 
                 if (!pathReport.IsSafe)
                 {
-                    task.Status = StatusText.ExtractFailed;
-                    task.ErrorMessage = "归档里有不安全的条目，已拒绝解压：" + pathReport.Summary;
+                    /*
+                     * ⚠ 2026-10-24（造包器 G01/G02 当场逮到）：同上 —— 只写状态不落终态会让这一单停在
+                     * `Pending`（批末汇总报「未处理」）。⇒ 统一收口；状态是「解压失败」⇒ 终态 `Failed`。
+                     */
+                    string unsafeMessage = "归档里有不安全的条目，已拒绝解压：" + pathReport.Summary;
+
+                    MarkStoppedBeforeExtract(task, StatusText.ExtractFailed, unsafeMessage);
+                    FinalizeOutcomeIfPending(task);
 
                     AppendLog("ERROR", $"{task.LogName}：路径预检未通过 —— {pathReport.Summary}");
                     return;

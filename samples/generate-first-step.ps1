@@ -39,37 +39,37 @@ foreach ($tool in @($sevenZip, $rarExe)) {
 $samples = @(
     # A 识别 / 还原（5）
     @{ Id = 'A01'; Family = '识别'; Title = '干净的 zip'
-       Build = 'zip'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt', '内容/数据.bin') } },
+       Build = 'zip'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'A02'; Family = '识别'; Title = '干净的 7z'
-       Build = '7z'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt', '内容/数据.bin') } },
+       Build = '7z'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'A03'; Family = '识别'; Title = '干净的 tar.gz（复合后缀不许被破坏）'
-       Build = 'targz'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'GZip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Build = 'targz'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'GZip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'A04'; Family = '识别'; Title = '伪装成 .jpg 的 zip'
        Build = 'zip'; Disguise = '数据.备份.jpg'
-       Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt', '内容/数据.bin') } },
+       Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'A05'; Family = '识别'; Title = '多重伪装 .pdf.jpg + 中文混入后缀（7z）'
        Build = '7z'; Disguise = '资料.zi删除p.pdf'
-       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt', '内容/数据.bin') } },
+       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     # B 加密（6）
     @{ Id = 'B01'; Family = '加密'; Title = '7z 文件名也加密（-mhe=on），密码本命中'
-       Build = '7zmhe'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pw; Content = @('内容/说明.txt') } },
+       Build = '7zmhe'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pw; Content = @('说明.txt') } },
 
     @{ Id = 'B02'; Family = '加密'; Title = '7z 只加密数据（名字可列），密码本命中'
-       Build = '7zdata'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pw; Content = @('内容/说明.txt') } },
+       Build = '7zdata'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pw; Content = @('说明.txt') } },
 
     @{ Id = 'B03'; Family = '加密'; Title = 'ZIP AES-256，密码本命中'
-       Build = 'zipaes'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Password = $pw; Content = @('内容/说明.txt') } },
+       Build = 'zipaes'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Password = $pw; Content = @('说明.txt') } },
 
     @{ Id = 'B04'; Family = '加密'; Title = 'ZIP ZipCrypto，密码本命中'
-       Build = 'zipcrypto'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Password = $pw; Content = @('内容/说明.txt') } },
+       Build = 'zipcrypto'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Password = $pw; Content = @('说明.txt') } },
 
     @{ Id = 'B05'; Family = '加密'; Title = '7z 中文密码（-mhe=on）'
-       Build = '7zcn'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pwCn; Content = @('内容/说明.txt') } },
+       Build = '7zcn'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Password = $pwCn; Content = @('说明.txt') } },
 
     @{ Id = 'B06'; Family = '加密'; Title = '7z 密码全错（密码本里没有正确密码）'
        Build = '7zwrong'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Failed'; Password = $pwWrong; Content = @() } },
@@ -77,7 +77,7 @@ $samples = @(
     # C 负对照：名字骗人（3）
     @{ Id = 'C01'; Family = '负对照'; Title = '内容是单卷、名字被改成 .7z.001（按内容照解）'
        Build = '7z'; Disguise = 'C01.7z.001'
-       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt', '内容/数据.bin') } },
+       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'C02'; Family = '负对照'; Title = '内容是分卷首卷、名字被改成 .7z（闸门拦下 → 跳过 + 交接）'
        Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @() } },
@@ -88,11 +88,11 @@ $samples = @(
     # D 双面文件（3）
     @{ Id = 'D01'; Family = '双面'; Title = 'mp4 前缀 + 尾部 zip'
        Build = 'zip'; Media = 'mp4'; Disguise = 'D01.mp4'
-       Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'D02'; Family = '双面'; Title = 'jpg 前缀 + 尾部 7z'
        Build = '7z'; Media = 'jpg'; Disguise = 'D02.jpg'
-       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'D03'; Family = '双面'; Title = '纯媒体、尾部没有归档（不许当包）'
        Build = 'puremedia'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @() } },
@@ -101,38 +101,38 @@ $samples = @(
     @{ Id = 'E01'; Family = '损坏'; Title = '7z 头完好、数据段被改坏（损坏包 ⇒ 部分完成）'
        Build = '7zcrc'; SizeKb = 2048; Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'PartiallyCompleted'; Content = @() } },
 
-    @{ Id = 'E02'; Family = '损坏'; Title = '7z 被截断（失败，不许报成功）'
-       Build = '7ztrunc'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Failed'; Content = @() } },
+    @{ Id = 'E02'; Family = '损坏'; Title = '7z 被截断（内容上与分卷首卷不可分 ⇒ 预期跳过、交给第二大步）'
+       Build = '7ztrunc'; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @() } },
 
     # F 递归（3）
     @{ Id = 'F01'; Family = '递归'; Title = 'zip 里套一层 7z（单链 1 层）'
-       Build = 'nested1'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Build = 'nested1'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'F02'; Family = '递归'; Title = 'zip → 7z → zip 三层单链'
-       Build = 'nested3'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Build = 'nested3'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'F03'; Family = '递归'; Title = '外层一个包里两个内层包（分支）'
-       Build = 'nestedbranch'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Build = 'nestedbranch'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     # G 安全（3）
     @{ Id = 'G01'; Family = '安全'; Title = 'zip 里有 ../ 路径穿越条目（不许落到父目录）'
-       Build = 'traversal'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt'); ForbidOutside = $true } },
+       Build = 'traversal'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Failed'; Content = @(); ForbidOutside = $true } },
 
     @{ Id = 'G02'; Family = '安全'; Title = 'zip 里有 CON / 结尾空格与点（清洗后落盘）'
-       Build = 'reserved'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt') } },
+       Build = 'reserved'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'G03'; Family = '安全'; Title = 'APK（必须拒绝解压）'
        Build = 'apk'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Skipped'; Content = @() } },
 
     # H 落点 / 收尾（3）
     @{ Id = 'H01'; Family = '落点'; Title = '普通落点：包名目录 + 内容物层'
-       Build = 'zip'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt'); Landing = '包名目录' } },
+       Build = 'zip'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '包名目录' } },
 
     @{ Id = 'H02'; Family = '落点'; Title = '同名冲突：两份同名包（(1) 让位，绝不覆盖）'
-       Build = 'zip-duplicate'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt'); Landing = '让位' } },
+       Build = 'zip-duplicate'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '让位' } },
 
     @{ Id = 'H03'; Family = '落点'; Title = '指定位置模式（落点 = 指定根 / 包名 / 内容物）'
-       Build = 'zip'; Mode = 'custom'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('内容/说明.txt'); Landing = '指定位置' } }
+       Build = 'zip'; Mode = 'custom'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '指定位置' } }
 )
 
 if ($List) {
@@ -149,7 +149,7 @@ function Run-7z {
 
 function New-Content {
     param([string]$Dir, [int]$SizeKb = 512, [switch]$ManyFiles)
-    $inner = Join-Path $Dir '内容'
+    $inner = $Dir
     New-Item -ItemType Directory -Path $inner -Force | Out-Null
 
     # 固定文本（每份都不一样 ⇒ 能证明"解的是这一份"）
@@ -314,9 +314,9 @@ foreach ($s in $samples) {
     if (Test-Path $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-    $contentDir = Join-Path $dir '内容'
+    $contentDir = Join-Path $dir '.content'
     $sizeKb = if ($s.ContainsKey('SizeKb')) { $s.SizeKb } else { 512 }
-    New-Content -Dir $dir -SizeKb $sizeKb
+    New-Content -Dir $contentDir -SizeKb $sizeKb
 
     $build = $s.Build
 
@@ -414,15 +414,15 @@ foreach ($s in $samples) {
             break
         }
         'traversal' {
-            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('内容/说明.txt', '../逃出去.txt', '..\..\再逃一层.txt')
+            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('说明.txt', '../逃出去.txt', '..\..\再逃一层.txt')
             break
         }
         'reserved' {
-            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('内容/说明.txt', 'CON', '名字带空格 .txt', '结尾点.txt.')
+            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('说明.txt', 'CON', '名字带空格 .txt', '结尾点.txt.')
             break
         }
         'apk' {
-            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('AndroidManifest.xml', 'classes.dex', '内容/说明.txt')
+            New-SafeZip -OutFile $outFile -ContentDir $contentDir -Entries @('AndroidManifest.xml', 'classes.dex', '说明.txt')
             $newName = Join-Path $dir '样本包.apk'
             Move-Item -LiteralPath $outFile -Destination $newName
             $outFile = $newName
