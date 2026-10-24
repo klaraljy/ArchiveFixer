@@ -145,7 +145,11 @@ $samples = @(
 
     @{ Id = 'V03'; Family = '第二大步'; Title = '7z 三卷组散在两个目录（用户原件 ⇒ 入口层只建硬链接、成功后只收链接）'
        Build = 'volscatter'; SizeKb = 3072
-       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '硬链接', '第二大步·收片', '第二大步·结论') } }
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '硬链接', '第二大步·收片', '第二大步·结论') } },
+
+    @{ Id = 'V04'; Family = '第二大步'; Title = '完整 7z 三卷组但密码不在本里（失败 ⇒ 片全部留在入口层）'
+       Build = 'volenc'; SizeKb = 3072
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Failed'; Content = @(); LogContains = @('格式：', '第二大步·收片', '片全部留着', '第二大步·结论') } }
 )
 
 if ($List) {
@@ -337,6 +341,7 @@ foreach ($s in $samples) {
     $ext = switch -Wildcard ($build) {
         'volfirst' { '7z' }
         'volcomplete' { '7z' }
+        'volenc' { '7z' }
         'nested*' { 'zip' }
         'textzip' { 'zip' }
         'traversal' { 'zip' }
@@ -444,6 +449,18 @@ foreach ($s in $samples) {
                 $pieceIndex++
             }
             $outFile = Join-Path $dirA '组.7z.001'
+            break
+        }
+        'volenc' {
+            # 完整 7z 三卷组，但密码不在密码本里 ⇒ 第二大步接住后解不开，片必须全部留在入口层
+            $volBase = Join-Path $dir '.vol.7z'
+            Run-7z @('a', '-t7z', '-mx=1', '-v1m', '-pNotInBook!42', '-mhe=on', $volBase, (Join-Path $contentDir '*'))
+            $pieceIndex = 1
+            foreach ($piece in Get-ChildItem -LiteralPath $dir -Filter '.vol.7z.*' | Sort-Object Name) {
+                Move-Item -LiteralPath $piece.FullName -Destination (Join-Path $dir ("样本包.7z.{0:D3}" -f $pieceIndex))
+                $pieceIndex++
+            }
+            $outFile = Join-Path $dir '样本包.7z.001'
             break
         }
         'textzip' {

@@ -154,16 +154,21 @@ namespace ArchiveFixer.ViewModels
 
             if (task.Outcome != TaskOutcome.Succeeded)
             {
+                /*
+                 * ⚠ 这里不能写 `task.Outcome`：收片紧跟在解压之后，失败那一档的机器终态要到
+                 * `RunScheduledTaskAsync` 的收尾才落（此刻常是 `Pending`）⇒ 写出来会像"没结论"。
+                 * 按事实说"本次没成功"，具体原因由任务自己的失败行给。
+                 */
                 AppendLog(
                     "INFO",
-                    $"[第二大步·收片] {task.LogName}：{task.Outcome} ⇒ 入口层里的片全部留着"
+                    $"[第二大步·收片] {task.LogName}：本次没成功 ⇒ 入口层里的片全部留着"
                     + "（失败 / 密码错 / 缺卷不删，等补密码）。");
 
                 MarkVolumeHandoffVerdict(
                     work.Pieces,
-                    $"没成功（{task.Outcome}），片全部留在入口层");
+                    "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
 
-                _volumeStepGroupVerdicts[work.BaseName] = $"没成功（{task.Outcome}），片全部留在入口层";
+                _volumeStepGroupVerdicts[work.BaseName] = "没成功（密码错 / 缺卷 / 失败），片全部留在入口层";
 
                 return;
             }
