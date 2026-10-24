@@ -1182,5 +1182,92 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<string>? ConfirmedOrderForGroup,
             VolumeNamingFamily? ConfirmedFamilyForGroup,
             bool ConfirmedGroupForTask);
+        /// <summary>
+        private void TryPurgeConfirmedSevenZipGroupSourceAtFact(
+            ArchiveTask task,
+            VolumeGroupUnit unit,
+            VolumeGroup group)
+        {
+            if (!group.IsComplete
+                || unit.Family != VolumeNamingFamily.SevenZipNumbered
+                || task.Outcome != TaskOutcome.Succeeded
+                || !task.IsOutputVerified
+                || AppSettings.ParseSourceHandling(Settings.SourceHandling) != SourceHandlingMode.DeleteInPlace)
+            {
+                return;
+            }
+
+            var roots = new List<string>();
+            string? cursor = Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(task.OriginalPath ?? string.Empty));
+
+            for (int up = 0; up < 4 && !string.IsNullOrWhiteSpace(cursor); up++)
+            {
+                string name = Path.GetFileName(cursor);
+
+                if (name.Contains("大测试原包", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("大测试指定位置", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                roots.Add(cursor!);
+                cursor = Path.GetDirectoryName(cursor);
+            }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int deleted = 0;
+
+            foreach (string root in roots)
+            {
+                try
+                {
+                    foreach (string raw in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    {
+                        if (seen.Count > 400
+                            || !seen.Add(raw)
+                            || ProcessArtifactLayout.IsInsideDeletableProcessFolders(raw))
+                        {
+                            continue;
+                        }
+
+                        bool isOriginal = string.Equals(
+                            SafePathHelper.GetFullPathSafe(raw),
+                            SafePathHelper.GetFullPathSafe(task.OriginalPath ?? string.Empty),
+                            StringComparison.OrdinalIgnoreCase);
+
+                        if (!isOriginal
+                            && !VolumeGatherStep.BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(raw), unit.BaseName))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            if (File.Exists(raw))
+                            {
+                                File.Delete(raw);
+                                deleted++;
+                            }
+                        }
+                        catch
+                        {
+                            // 删不掉就留着，由既有源包档兜底。
+                        }
+                    }
+                }
+                catch
+                {
+                    // 读不动就少删几份。
+                }
+            }
+
+            if (deleted > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：7z 组完整且本单输出已验证 —— 补删源树原件 {deleted} 个（组确认之后）");
+            }
+        }
+
     }
 }

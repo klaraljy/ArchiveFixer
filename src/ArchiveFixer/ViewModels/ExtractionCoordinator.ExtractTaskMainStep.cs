@@ -255,34 +255,6 @@ namespace ArchiveFixer.ViewModels
             // 第一大步不改分卷名（改名归第二大步）
 
             /*
-             * ===== 一组分卷 = 一个任务 = 只从**首卷**启动 =====
-             *
-             * 用户 2026-10-01 真机（`AAA` 那批）：盘上出现三棵一模一样的产物树，外加
-             * `111(1)` / `333-Rar4(1)`。根因不在解压，在**归组只做过一次** ——
-             * 扫描期 `FileScanService` → `VolumeGroupingService.ApplyVolumeGrouping` 按
-             * **文件名**把同组的多卷合成一行，可这一批的名字是被网盘改坏的
-             *（`111.parts1.racr` / `111.part删2.ra除r`），那次归组认不出来 ⇒ 同一个包的两卷各占一行。
-             * 等开工前的自动改名把它们改成标准名（`111.part1.rar` / `111.part2.rar`）之后，
-             * **没有任何一处重新归组** —— 于是两行都去解压：
-             *
-             *   ① 后续卷那一单必然失败（7-Zip：`Missing volume` / 引擎：`这是分卷压缩包的后续卷`）；
-             *   ② 它失败以后，整组的**链尾处理**被"链上有任务没成功"拦住 ⇒ 源包一个都不删；
-             *   ③ 两个任务各自算落点 ⇒ 第二棵产物树落成 `名字(1)`（"绝不覆盖"那条路是给
-             *      **不同来源**准备的，同一个包的两卷不该走到那里）。
-             *
-             * 这里落的口径与手动档「我手动指定缺失卷所在目录」那一段**完全相同**
-             *（同样是 `ApplyGroupInfo` + 起点用 `group.FirstVolumePath`）：
-             * 一组分卷 = 一个任务 = 从首卷启动，其余卷跟着整组一起被处理。
-             *
-             * 位置：改名之后（名字才是判据）、快照与任何引擎调用之前（跳过的这一单不拍快照、
-             * 不碰盘、不产生任何结论）。
-             */
-            if (SkipWhenAnotherTaskOwnsThisVolumeGroup(task))
-            {
-                return;
-            }
-
-            /*
              * ===== 不变量 11 的**第一道**（也是唯一收口的那一道）：源文件变化 = 立刻停下 =====
              *
              * 位置刻意放在本方法**最前面**，理由有三条，缺一条都会漏：
@@ -303,139 +275,15 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 分卷缺失时**不许开始**（AGENTS.md §6 第 7 条）。
-             * 理由：分卷包里每一卷都是必需的数据片，缺一卷 7z 必然失败，
-             * 让它跑一遍只会浪费用户时间、还可能留下半截输出目录；
-             * 直接说清"缺哪几个卷"才是用户能行动的信息。
-             *
-             * 「我手动指定缺失卷所在目录」（WinRAR 参考 §2 G 组 / §3 第 2 条采纳项）：
-             * 先给用户**一次**补救机会 —— 卷常常就散在隔壁文件夹或另一个盘，
-             * 选中那个目录后重新归组再判定。
-             * ⛔ 不变量 7 **一个字都不放松**：重新归组之后仍然缺，就仍然**不启动**。
-             * 出口只是"帮你把卷找齐"，绝不是"缺卷也允许开始"。
+             * ===== 第二大步（组入口那一单）的开工前检查 =====
+             * 缺卷不开工 / 现读盘上事实、齐了就照常跑 / 缺卷不许在批首判死（记延期账、批末再判）/
+             * 最后一遍仍缺才如实报缺卷 —— 判据与执行体全在分卷侧（唯一出口
+             * `TryStopVolumeStepBeforeStartAsync`）；第一大步这里只调一次，⛔ 自己不再判分卷。
              */
-            if (task.IsVolumeGroup && !task.IsVolumeComplete)
+            if (IsSingleLayerRecursion(task)
+                && await TryStopVolumeStepBeforeStartAsync(task, oneClickRun, cancellationToken).ConfigureAwait(true))
             {
-                /*
-                 * 一键处理期间**不问**"缺失卷在哪个目录"（用户 2026-09-27：一键解压不许弹窗）。
-                 * 手动档问一次（用户就在旁边），一键档直接按"不问"往下走 ——
-                 * ⚠ 但结论**不再当场落死**了，见下面那两段（用户 2026-10-05 口径 2）。
-                 */
-                bool repaired = !oneClickRun
-                    && await TryRepairMissingVolumesAsync(task, cancellationToken);
-
-                if (!repaired)
-                {
-                    /*
-                     * ===== 补齐了就先跑（用户 2026-10-05：「补齐了就收拢 + 正常跑这一组」）=====
-                     *
-                     * `task.IsVolumeComplete` 是**扫描期**（或者上一轮）算出来的账，可能已经过期：
-                     * 同一批里另一个包刚把缺的那一卷解出来、或者开工前那次跨目录收卷刚把整组收齐 ——
-                     * 那种时候照旧报"缺卷"就是拿一份过期读数把本来能解的包挡下来。
-                     * 所以这里**现读一次盘上事实**（既有出口 `RebuildVolumeGroup`）：
-                     * 真齐了就把账更新掉、照常往下解（⛔ 不变量 7 没被绕过 —— 这一组现在真的齐了）。
-                     */
-                    VolumeGroup? regrouped = ResolveCompleteGroupFromDisk(task);
-
-                    if (regrouped != null)
-                    {
-                        string regroupedFirst = regrouped.FirstVolumePath;
-
-                        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, regrouped);
-
-                        if (!string.Equals(
-                                SafePathHelper.GetFullPathSafe(task.CurrentPath),
-                                SafePathHelper.GetFullPathSafe(regroupedFirst),
-                                StringComparison.OrdinalIgnoreCase))
-                        {
-                            // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
-                            task.CurrentPath = regroupedFirst;
-
-                            // ⛔ 同上：起点改了，列表那一行仍旧显示"用户自己那个文件"（只改显示）。
-                            task.ShowUserFileIdentity(regroupedFirst, FindUserOwnFileBesideItsDirectory(task, regroupedFirst));
-                        }
-
-                        task.CaptureSourceSnapshot();
-
-                        AppendLog(
-                            "INFO",
-                            string.Format(
-                                System.Globalization.CultureInfo.CurrentCulture,
-                                StatusText.VolumeDeficitRecheckResolvedFormat,
-                                task.FileName,
-                                task.VolumeInfoText));
-
-                        // 补齐了 ⇒ **照常往下解**（不 return：下面还有快照重拍与真正的解压）。
-                    }
-                    else
-                    {
-                        /*
-                         * ===== 缺卷**不许在批首一次判死**（用户 2026-10-05 口径 2）=====
-                         *
-                         * 旧写法在这里当场写一句"分卷不完整 …… 本次不开始"并把这一单落成失败 —— 真机上
-                         * `.002` 就是这么在 16:29:33（批首那一刻）被判死的，而它的 `.001` 正躺在同一棵树里、
-                         * 由同一批的另一个包解出来。
-                         *
-                         * 现在的口径：这一单**现在确实没有开始解压**（一个字节都没动，不变量 7 一个字节没放松），
-                         * 但"还缺哪几卷"这句话留到最后再说 —— 先记进名单，等这一批的解压都跑完之后由
-                         * `RecheckDeferredVolumeDeficits` 再判一次（那时缺的那几卷可能已经被解出来 / 收拢到位）。
-                         *
-                         * ⚠ 兜底：批末补判**必须**给名单里每一条一个结论（补齐 ⇒ 跑；仍然缺 ⇒ 如实报缺卷）。
-                         * 唯一"没有结论"的出口是"整条链跑到一半被用户停下 / 撞上轮数上限" —— 那时它留在
-                         * 「未处理」那一档，如实反映"这一批没轮到它"。
-                         */
-                        if (!_volumeDeficitFinalPass.Contains(task))
-                        {
-                            RecordDeferredVolumeDeficit(task, DescribeMissingVolumeNames(task));
-                            return;
-                        }
-
-                        /*
-                         * ===== ① 解前预检：**缺卷就别开解，而且要直接说清缺哪一卷 / 为什么这样判** =====
-                         *
-                         * 走到这里 = 批末补判已经跑过它一遍、盘上仍然凑不齐 ⇒ **这才如实报缺卷**。
-                         *
-                         * 判据走唯一出口 <see cref="VolumeGroupResolver"/>（分卷组装判定器）：
-                         * 它把六条证据（基名 / 卷号 / 体积 / 位置 / 物理同一性 / 试开）收在一处，
-                         * 只吐一个结论。试开那一档在**这里**做（有引擎、且是只读的硬链接试开）——
-                         * 于是"末卷被改名成 一只顶美.z删除ip"这种情形能被认出来是**齐的**，
-                         * 而不是像老判据那样一律报「分卷缺失」把用户指去满盘找卷。
-                         *
-                         * ⛔ 不管判出什么，**都不改变"这一单开不开"**：名字不标准 ⇒ 7-Zip 按原名打不开 ⇒
-                         * 照旧不开始（不变量 7）。这里换掉的只是**诊断**：说得对不对、依据在不在。
-                         */
-                        VolumeGroupResolution volumeVerdict = await ResolveVolumeGroupAsync(task, cancellationToken)
-                            .ConfigureAwait(true);
-
-                        string diagnosis = BuildVolumeVerdictMessage(task, volumeVerdict);
-
-                        /*
-                         * 判据走**开工前拦下的统一收口**（与"源文件已变化"同一个出口）：
-                         * 状态照旧是「分卷缺失」（中文一个字不改），但"这一单已经结束"这件事必须一起落 ——
-                         * 少了结束时间，机器终态的唯一收口补不了 Failed，它就一直停在 Pending：
-                         * 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，两处口径当场打架
-                         * （2026-09-30 真机 `222.z01`）。
-                         */
-                        MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
-
-                        AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
-                        LogVolumeGroupEvidence(task, volumeVerdict);
-                        return;
-                    }
-                }
-
-                /*
-                 * 用户刚把缺的卷找回来了（或者刚由"现读一次盘上事实"确认它已经齐了）：
-                 * 基准必须**跟着重拍**（不变量 11 与这条补救出口的和解）。
-                 *
-                 * 不重拍的话，新找回来的那一卷不在快照里，比对时它会被算成"新出现的文件" →
-                 * 用户按提示把卷补齐了，反而被"源文件已变化"拦下，而且再补多少次都一样 ——
-                 * 那句提示就成了死循环。补齐分卷是**改变源文件组**的正当操作，
-                 * 所以基准从这里重新开始（与"重新扫描"同一条道理）。
-                 */
-                task.CaptureSourceSnapshot();
-
-                AppendLog("INFO", $"{task.LogName}：分卷已补齐，源文件快照重新记录（{task.VolumeCount} 卷）。");
+                return;
             }
 
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
@@ -470,54 +318,12 @@ namespace ArchiveFixer.ViewModels
                     else
                     {
                         /*
-                         * ⚠ 2026-10-14（官方环台 `10101010` / `19191919` 逐字，第二大步那一层）：
-                         * **"7-Zip 打不开"不等于"它是垃圾"** —— 它可能是某个分卷组的一片。
-                         *
-                         * <para>现场逐字：`跳过：pack111-L2.7z —— 不是压缩包：7-Zip 打不开（7-Zip 无法识别或不支持该格式）`，
-                         * 那一单落「已跳过」、**从没进过分卷那一套** ⇒ 组 `pack111-L2.7z.001` 永远凑不齐 ⇒ 判据 ① 红。
-                         * 为什么既有的两道尺子都瞎：这一份**内容判不出**（7z 族的中间片/末片按定义没有魔数，
-                         * 卡上 `格式=Unknown 分卷身份=Unknown`）、**名字也不像后续卷**
-                         * （`pack111-L2.7z` = 卷标记被伪装吃掉，正刑"伪装成单一包"那一法）。</para>
-                         *
-                         * <para>判据（⛔ 只用既有事实，⛔ 不猜卷号、⛔ 不动盘上任何东西）：**同批任务里有同族的入口包 + 体积规律**
-                         * —— ① 有另一单的名字读得出"第 1 卷"（`TryGetVolumeIndex == 1`）；
-                         * ② 它的基名（唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>）与这一份**相同或互为前缀**；
-                         * ③ 这一份的体积 ≤ 那一份的体积（"除末卷外等大"⇒ 任何一片都不会比满片还大）。
-                         * 命中 ⇒ 结论是**缺卷**（`VolumeMissing`），⛔ 不是「跳过」、⛔ 不是「失败」；片原样留着，
-                         * 交给批末/跨链那一套去凑 —— 与单层路那两处**同一个结论口径**（只是证据多了一档）。</para>
+                         * 第一大步只做一件事：**7-Zip 打不开 ⇒ 这一单按「跳过」收场**（终态收口的理由见下）。
+                         * "它是不是某个分卷组的一片"是**第二大步**的判定 —— 登记与批末升级都在分卷侧
+                         * （`RegisterUnrecognizedSuspect` / `UpgradeUnrecognizedMaybePieceVerdicts`），
+                         * 判据 = 同族第 1 卷 + 基名相同或互为前缀 + 体积 ≤ 满片。
                          */
-
-                        /*
-                         * ⛔ 2026-10-16 **这条判据终于落地**（它 2026-10-14 只写了注释、没进代码 —— 见上面那段）：
-                         * 现场复核逐字（`10101010`，`result.json` + 盘面）：那一单落「已跳过 / Skipped」、
-                         * 输出层 `…\pack111(3)\pack111(3)\pack111(3)\pack111-L2`，而它的三个兄弟片
-                         * （`.001` / `.002` 载荷）分别在另外两条链的产出层里 ⇒ 组永远凑不齐 ⇒ 判据 ① 红。
-                         */
-                        /*
-                         * ⛔⛔ 2026-10-16 实测纠正（探针逐字）：「批首就用同族入口包当判据」**判不出来** ——
-                         * 那一刻批里**还没有 `.001` 那一单**（它由同批另一条链稍后才产出），
-                         * 于是判据只看到 `pack111-W1-0.zip`（基名不同）⇒ 门不开 ⇒ 照旧落「已跳过」。
-                         *
-                         * 用户口径本来就写着这一步该怎么办（2026-10-09 逐字）：
-                         * 「分卷和其他**未识别的东西统统跳过**到了最后再重新检验一步」——
-                         * 也就是说**第一趟不判死**：先记名单，等这一批的解压都跑完（那时同族入口包要么已经产出、
-                         * 要么已经收拢到位）**再判一次**；批末才用严格判据落结论。
-                         *
-                         * ⇒ 与缺卷预检**同一条口径、同一个事实位**（`_volumeDeficitFinalPass`）。
-                         */
-                        /*
-                         * ⚠ 2026-10-16 **第二版**（第一版被既有守门纠正过，如实记）：
-                         * 第一版把"未识别"塞进了**缺卷名单**（`RecordDeferredVolumeDeficit`），
-                         * 于是批末把一个纯文本文件改判成「分卷缺失」——
-                         * `DeferredVolumeStatusTests.未识别的东西_只跳过_机器终态必须收口不许算未处理`
-                         * 当场逮住（逐字 `Expected: "已跳过" / Actual: "分卷缺失"`）。
-                         * ⇒ 正确形状（两个契约都要守）：
-                         *   ① 当场**照旧落「已跳过」+ 机器终态收口**（那条契约一个字不改）；
-                         *   ② 只**另记一笔**（`_unrecognizedMaybePiece`），批末再用**严格判据**
-                         *      （同族第 1 卷 + 基名相同或互为前缀 + 体积 ≤ 满片）把"确实是某组一片"的
-                         *      那种**升级**成缺卷 —— 那时同批该产出的都产出了，判据才看得见。
-                         */
-                        _unrecognizedMaybePiece.Add(task);
+                        RegisterUnrecognizedSuspect(task);
 
                         task.Status = StatusText.Skipped;
                         task.Operation = StatusText.OpSkip;
@@ -661,38 +467,13 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"，而且他点名了现场：
-             * "你又把 `111.zip` 移到 `111(4)`，然后你当时又在 `111(4)` 里面解压的"）。
-             *
-             * 只在"这一组第 1 卷与这一单自己的文件不在同一层"时补这一行 —— 那一档正是用户会问
-             * "为什么解到这里"的形状（真机 `CCCC`：第 1 片 `111.z0删除1` 在 `111(2)\`，而这一单自己的文件
-             * 还散在别处；产物因此落在 `111(2)\111`）。判据与落点推导共用同一个出口
-             * （`PathService.ResolveOutputPlacement` → `Detection.GroupVolumeDirectory`），⛔ 这里不另算一遍。
+             * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"）——
+             * 这是第二大步的落点解释：判据与日志都在分卷侧（唯一出口 `LogVolumeGroupFirstVolumeLanding`），
+             * ⛔ 第一大步不自己读整组事实、不另算一遍落点。
              */
-            if (task.IsVolumeGroup
-                && placement.Success
-                && !string.IsNullOrWhiteSpace(outputPath))
+            if (placement.Success)
             {
-                var groupMembers = new List<string> { task.CurrentPath };
-                groupMembers.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
-
-                Detection.GroupVolumeDirectory.Entry entry =
-                    Detection.GroupVolumeDirectory.Resolve(groupMembers);
-
-                if (entry.Path.Length > 0
-                    && entry.Directory.Length > 0
-                    && !SafePathHelper.PathEquals(entry.Directory, FileNameHelper.GetDirectoryName(task.CurrentPath)))
-                {
-                    AppendLog(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.VolumeGroupFirstVolumeLandingFormat,
-                            task.FileName,
-                            outputPath,
-                            Path.GetFileName(entry.Path),
-                            Path.GetFileName(entry.Directory)));
-                }
+                LogVolumeGroupFirstVolumeLanding(task, outputPath);
             }
 
             /*

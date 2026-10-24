@@ -351,5 +351,53 @@ namespace ArchiveFixer.ViewModels
             return builder.ToString();
         }
 
+        /// <summary>
+        /// 第一大步"7-Zip 打不开"那一支**只登记、不判定**：这一份有没有可能是某个分卷组的一片，
+        /// 由批末的 <see cref="UpgradeUnrecognizedMaybePieceVerdicts"/> 用严格判据回答
+        /// （同族第 1 卷 + 基名相同或互为前缀 + 体积 ≤ 满片）。
+        ///
+        /// <para>为什么登记放在第一大步：只有它当场知道"引擎打不开这一份"这个事实；
+        /// ⛔ 判据、结论与账本全部留在第二大步侧（第一大步不判分卷）。</para>
+        /// </summary>
+        private void RegisterUnrecognizedSuspect(ArchiveTask task)
+        {
+            _unrecognizedMaybePiece.Add(task);
+        }
+
+        /// <summary>
+        /// 落点解释那一行（用户 2026-10-05 口径："落在**第一卷的位置**"）：这一组的第 1 卷与这一单
+        /// 自己的文件不在同一层时，把"为什么解到这里"写进日志。⛔ 只写日志、不动盘。
+        ///
+        /// <para>判据与落点推导共用同一个出口（`PathService.ResolveOutputPlacement` →
+        /// `Detection.GroupVolumeDirectory`），这里不另算一遍；⛔ 第一大步不再自己读整组事实。</para>
+        /// </summary>
+        private void LogVolumeGroupFirstVolumeLanding(ArchiveTask task, string outputPath)
+        {
+            if (!task.IsVolumeGroup || string.IsNullOrWhiteSpace(outputPath))
+            {
+                return;
+            }
+
+            var groupMembers = new List<string> { task.CurrentPath };
+            groupMembers.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
+
+            Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(groupMembers);
+
+            if (entry.Path.Length > 0
+                && entry.Directory.Length > 0
+                && !SafePathHelper.PathEquals(entry.Directory, FileNameHelper.GetDirectoryName(task.CurrentPath)))
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGroupFirstVolumeLandingFormat,
+                        task.FileName,
+                        outputPath,
+                        Path.GetFileName(entry.Path),
+                        Path.GetFileName(entry.Directory)));
+            }
+        }
+
     }
 }
