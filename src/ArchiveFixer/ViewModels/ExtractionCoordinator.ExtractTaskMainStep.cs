@@ -355,8 +355,20 @@ namespace ArchiveFixer.ViewModels
                      *   · 列得出来 → 就是能解的容器（自解压安装器、签名表里没有的格式都算），继续处理；
                      *   · 列不出来 → 才跳过，并把"7-Zip 也打不开"写进原因，而不是含糊的"格式未知"。
                      */
+                    /*
+                     * 第二大步已把这一组按规范名链接好时，交给引擎的入口是 `.zip`/`7z.001`
+                     * 那个**链接名**，不是任务账上的入口片原路径（真机 960 的 8888：owner 是
+                     * 内容卷号 3 的片，直接拿它去探测必然 Headers Error）。这里必须先认 override，
+                     * 否则“未知格式先探一次”会在链接生效前把整组判死。
+                     */
+                    string unknownProbePath =
+                        !string.IsNullOrWhiteSpace(task.EngineEntryPathOverride)
+                        && File.Exists(task.EngineEntryPathOverride)
+                            ? task.EngineEntryPathOverride
+                            : task.CurrentPath;
+
                     ArchiveListResult probe = await _archiveEngine.ListAsync(
-                        ArchiveRequest.For(task.CurrentPath, string.Empty),
+                        ArchiveRequest.For(unknownProbePath, string.Empty),
                         cancellationToken);
 
                     if (probe.Success && probe.FileCount > 0)

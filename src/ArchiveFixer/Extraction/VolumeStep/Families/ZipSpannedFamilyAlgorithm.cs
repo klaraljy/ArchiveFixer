@@ -160,7 +160,16 @@ namespace ArchiveFixer.Extraction
                     $"跨盘 ZIP 末片盘号说 {total} 片；卷标记只找到 {string.Join(",", indices)}（缺 {string.Join(",", missing)}）");
             }
 
-            string stem = ZipName.Replace(Path.GetFileName(zipPiece.Path), string.Empty);
+            string zipName = Path.GetFileName(zipPiece.Path);
+            string stem = ZipName.IsMatch(zipName)
+                ? ZipName.Replace(zipName, string.Empty)
+                : unit.BaseName;
+
+            if (string.IsNullOrWhiteSpace(stem))
+            {
+                return Unknown("跨盘 ZIP：末片名字不是 .zip，且组基名判不出 ⇒ 规范名无法定");
+            }
+
             var planItems = new List<CanonicalNamePlanItem>();
 
             foreach ((GroupPieceFact fact, int index) in named.OrderBy(item => item.Index))

@@ -902,6 +902,37 @@ namespace ArchiveFixer.ViewModels
             return null;
         }
 
+        /// <summary>
+        /// 这一份源包的内容证据是否**可证不是分卷成员**（只有这一档才让“半套分卷”闸门不适用）。
+        /// 文件读不出 / 没有内容证据 ⇒ false（照旧过闸门，⛔ 不因判不出而放宽）。
+        /// </summary>
+        private static bool IsProvablyNotVolumeMemberSource(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return false;
+            }
+
+            foreach (string? path in new[] { task.CurrentPath, task.OriginalPath })
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    return !FileNature.Inspect(path).ParticipatesInVolumeHandling;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
         /// 这一层准备删的那一份是不是**半套分卷**（同组还有一片留在成品目录树里）？
         /// 返回非 null = **拦下的理由**（调用方写一行 WARN、一个字节都不删）。
         ///
@@ -914,6 +945,17 @@ namespace ArchiveFixer.ViewModels
             string? reclaimWorkspaceDirectory = null,
             bool requireRecognizedCandidates = true)
         {
+            /*
+             * 内容卡已经**可证不是分卷成员**（SingleComplete / ProvablyNotVolumeMember）⇒ 它不可能是
+             * 半套分卷的一半，这道闸门根本不适用。真机 960 批 `27272727`：源包是一份完整 ZIP，
+             * 成品目录里恰好有同基名的内层分卷片 `aaa-L2.中文z02`，旧判据只按基名+族就把它拦下，
+             * 导致 DeleteInPlace 该删的源包没删。判据只读内容卡，⛔ 不按名字猜。
+             */
+            if (IsProvablyNotVolumeMemberSource(task))
+            {
+                return null;
+            }
+
             List<string> candidates = SourceCleanupService.BuildTargetList(task);
 
             if (candidates.Count == 0)

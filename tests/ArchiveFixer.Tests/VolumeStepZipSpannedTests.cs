@@ -38,6 +38,29 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 末片名字不是zip但内容说它是末片_规范名仍按组基名定()
+        {
+            string layer = NewLayer();
+            string malformedTail = Path.Combine(layer, "组.mp4-572");
+
+            var unit = NewUnit(
+                "组",
+                layer,
+                malformedTail,
+                Fact(Path.Combine(layer, "组.z01"), null),
+                Fact(Path.Combine(layer, "组.z02"), null),
+                Fact(malformedTail, 3, declaredVolumeCount: 3));
+
+            FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "组.z01", "组.z02", "组.zip" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+            Assert.True(result.NamePlan.Items[2].IsEntry);
+        }
+
+        [Fact]
         public void 末片盘号3但缺z02_判缺片_点名2()
         {
             string layer = NewLayer();
@@ -146,7 +169,7 @@ namespace ArchiveFixer.Tests
             params GroupPieceFact[] pieces) =>
             new(baseName, VolumeNamingFamily.ZipSpanned, layer, entry) { Pieces = pieces };
 
-        private static GroupPieceFact Fact(string path, int? volumeNumber) =>
+        private static GroupPieceFact Fact(string path, int? volumeNumber, int declaredVolumeCount = 0) =>
             new(
                 path,
                 10,
@@ -157,7 +180,7 @@ namespace ArchiveFixer.Tests
                 VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
                 VolumeNumberFail.None,
                 0,
-                0,
+                declaredVolumeCount,
                 null,
                 Path.GetDirectoryName(path) ?? string.Empty,
                 VolumeHandoffSource.UserImported,
