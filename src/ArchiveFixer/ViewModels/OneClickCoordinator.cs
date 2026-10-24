@@ -1394,6 +1394,12 @@ namespace ArchiveFixer.ViewModels
              */
             _extractionCoordinator.HarvestRememberedGroupVolumesForBatch();
 
+            /*
+             * **交界处批末对账**（2026-10-24）：本批第一大步交出去多少份、第二大步接手了多少份 ——
+             * 没有交接事实的批次一行都不写（普通单包批次不受影响）。
+             */
+            _extractionCoordinator.AppendVolumeHandoffBatchSummary();
+
             string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 
             AppendLog("INFO", summary);

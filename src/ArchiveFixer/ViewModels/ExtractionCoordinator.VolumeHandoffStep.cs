@@ -71,6 +71,93 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **批首清空交接账**（与其它批内账本同一处调用）。
+        /// ⛔ 不许把上一批的交接单带进下一批：账本原来是只 Add、从不处理的 List，
+        /// 跨批残留会让轮边界组分析拿着上一批的路径做判定（2026-10-24 记账的缺口）。
+        /// </summary>
+        internal void ClearVolumeHandoffLedger()
+        {
+            _volumeHandoffEntries.Clear();
+        }
+
+        /// <summary>
+        /// 第二大步**取用**交接单后打点（幂等：已有时间的条目不再改）。
+        /// 消费方按路径点名；判不出的路径不影响其它条目。
+        /// </summary>
+        internal void MarkVolumeHandoffConsumed(IEnumerable<string> paths, string by)
+        {
+            if (paths == null)
+            {
+                return;
+            }
+
+            var wanted = new HashSet<string>(
+                paths.Where(path => !string.IsNullOrWhiteSpace(path)),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (wanted.Count == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _volumeHandoffEntries)
+            {
+                if (entry.ConsumedAt.HasValue || !wanted.Contains(entry.Path))
+                {
+                    continue;
+                }
+
+                entry.ConsumedBy = by;
+                entry.ConsumedAt = DateTime.Now;
+            }
+        }
+
+        /// <summary>
+        /// 批末一行：本批交接 N 份（在盘 / 已不在）｜已消费 M 份｜待处理 K 份。
+        /// ⛔ 只在有交接事实时写；没有交接就不打这一行（普通单包批次不受影响）。
+        /// </summary>
+        internal void AppendVolumeHandoffBatchSummary()
+        {
+            if (_volumeHandoffEntries.Count == 0)
+            {
+                return;
+            }
+
+            int onDisk = 0;
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _volumeHandoffEntries)
+            {
+                try
+                {
+                    if (File.Exists(entry.Path))
+                    {
+                        onDisk++;
+                    }
+                }
+                catch
+                {
+                    // 读不动就按"不在盘上"计（不影响总数与消费数的口径）。
+                }
+            }
+
+            int consumed = _volumeHandoffEntries.Count(entry => entry.ConsumedAt.HasValue);
+
+            string consumers = string.Join(
+                "、",
+                _volumeHandoffEntries
+                    .Where(entry => entry.ConsumedBy.Length > 0)
+                    .Select(entry => entry.ConsumedBy)
+                    .Distinct(StringComparer.Ordinal));
+
+            AppendLog(
+                "INFO",
+                $"[第二大步·交接] 本批交接 {_volumeHandoffEntries.Count} 份"
+                + $"（在盘 {onDisk} / 已不在 {_volumeHandoffEntries.Count - onDisk}）"
+                + $"｜已消费 {consumed} 份｜待处理 {_volumeHandoffEntries.Count - consumed} 份"
+                + (consumers.Length > 0 ? $"｜消费方：{consumers}" : string.Empty));
+        }
+
+        /// <summary>
         /// **开工前就拦下这一单**的统一收尾（唯一出口）。
         ///
         /// <para>谁走它：不变量 11 的"源文件已变化"、不变量 7 的"缺卷预检"、以及"源文件不在了 /

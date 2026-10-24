@@ -63,6 +63,15 @@ namespace ArchiveFixer.Detection
 
         public VolumeHandoffSource Source { get; init; }
 
+        /// <summary>
+        /// 第二大步**取用**这一份时打点（谁消费的、什么时候）；没消费 = 空串 / null。
+        /// 批末汇总读它算「已消费 N / 待处理 M」；⛔ 不是"已处理完"，只代表交接单已被接手。
+        /// </summary>
+        public string ConsumedBy { get; set; } = string.Empty;
+
+        /// <summary>取用时间（批末汇总与日志用）。</summary>
+        public DateTime? ConsumedAt { get; set; }
+
         /// <summary>给人看的一行（日志与判据输入共用；⛔ 不猜，判不出的字段如实写"判不出"）。</summary>
         public string Describe() =>
             $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 内容身份={BodyKind}"
