@@ -1214,8 +1214,11 @@ namespace ArchiveFixer.ViewModels
 
                     foreach (GroupAnalysis.GroupCandidate group in handoffGroups)
                     {
-                        if (group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete
-                            || string.IsNullOrWhiteSpace(group.EntryPath))
+                        /*
+                         * ⛔ 这里不再用候选 Verdict 当闸门（那只是交界处的“建议”）：
+                         * 已接线的族由族算法判完整性；未接线的族仍要求候选 Complete（在下面兜住）。
+                         */
+                        if (string.IsNullOrWhiteSpace(group.EntryPath))
                         {
                             continue;
                         }
@@ -1326,6 +1329,16 @@ namespace ArchiveFixer.ViewModels
                             AppendLog(
                                 "INFO",
                                 $"[第二大步·组] {group.BaseName}：{committedUnit.State} ⇒ 不点名、不链接（{committedUnit.Verdict}）。");
+                            continue;
+                        }
+
+                        /*
+                         * 未接线/未建组的族：交界处仍按“候选必须 Complete”兜底，
+                         * 不允许把“候选 Missing/Unknown”的组交给旧路径。
+                         */
+                        if (committedUnit == null
+                            && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
+                        {
                             continue;
                         }
 

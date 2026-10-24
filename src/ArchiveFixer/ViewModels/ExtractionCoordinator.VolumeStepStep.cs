@@ -35,7 +35,6 @@ namespace ArchiveFixer.ViewModels
         {
             if (group == null
                 || ownerTask == null
-                || group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete
                 || string.IsNullOrWhiteSpace(entryLayer))
             {
                 return null;
@@ -56,6 +55,19 @@ namespace ArchiveFixer.ViewModels
             if (family == null)
             {
                 AppendLog("INFO", $"[第二大步·组] {group.BaseName}：族判不出 ⇒ 不建组（判不出就不动）。");
+                return null;
+            }
+
+            /*
+             * 已接线的族：**由族算法判完整性**，候选日志只是建议（交界处不再当判据）。
+             * 未接线的族：仍按“候选必须 Complete”走 P0 行为，避免把未验证的组放进来。
+             */
+            bool familyWired = family is VolumeNamingFamily.RarPart
+                or VolumeNamingFamily.ZipSpanned
+                or VolumeNamingFamily.ZipNumbered;
+
+            if (!familyWired && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
+            {
                 return null;
             }
 
@@ -127,8 +139,17 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
+            /*
+             * 成功收片 = 本组建出来的链接名 + 本组消费掉的**链内产出片**。
+             * ⛔ 用户原件（任务源）不删；⛔ 还是别的任务源的也不删（避免把别的单的唯一源拿走）。
+             */
+            var consumed = unit.Pieces
+                .Select(piece => piece.Path)
+                .Where(path => !IsUserImportedSourcePath(path) && !IsAnyTaskSourcePath(path))
+                .ToList();
+
             int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
-                unit.LinkedNames,
+                unit.LinkedNames.Concat(consumed),
                 path => IsUserImportedSourcePath(path),
                 (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
 

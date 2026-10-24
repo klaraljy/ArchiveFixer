@@ -29,7 +29,8 @@ namespace ArchiveFixer.Extraction
         private readonly Dictionary<VolumeNamingFamily, IVolumeFamilyAlgorithm> _algorithms =
             new()
             {
-                [VolumeNamingFamily.RarPart] = new RarFamilyAlgorithm()
+                [VolumeNamingFamily.RarPart] = new RarFamilyAlgorithm(),
+                [VolumeNamingFamily.ZipSpanned] = new ZipSpannedFamilyAlgorithm()
             };
 
         /// <summary>本批/本链已经登记的组（只读视图）。</summary>
