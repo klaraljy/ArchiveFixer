@@ -135,6 +135,9 @@ namespace ArchiveFixer.ViewModels
                     VolumeGroupState.Failed,
                     "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
                 MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
+                AppendLog(
+                    "WARN",
+                    $"[第二大步·收片] {unit.BaseName}：没成功 ⇒ 入口层里的片全部留着（一个字节没动）");
                 AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
                 return true;
             }
