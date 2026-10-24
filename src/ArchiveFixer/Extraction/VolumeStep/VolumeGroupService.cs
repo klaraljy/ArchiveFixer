@@ -130,7 +130,8 @@ namespace ArchiveFixer.Extraction
                  */
                 bool factsChanged = !SamePieces(existing.Pieces, pieces);
                 bool beforeLink = existing.State == VolumeGroupState.Complete
-                    || existing.State == VolumeGroupState.OwnerAssigned;
+                    || existing.State == VolumeGroupState.OwnerAssigned
+                    || existing.State == VolumeGroupState.Linked;
 
                 if (existing.State == VolumeGroupState.Unknown
                     || existing.State == VolumeGroupState.Missing

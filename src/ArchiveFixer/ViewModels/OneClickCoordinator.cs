@@ -1309,10 +1309,19 @@ namespace ArchiveFixer.ViewModels
                                     || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
                                 && File.Exists(entryPath))
                             {
+                                /*
+                                 * ⛔ 父目录必须取**这一片自己所在的那一层**，不能取组分析入口那一层的目录：
+                                 * 同一基名可能同时有“原包树那份”和“产出层那份”，组分析的入口可能是原包树那份，
+                                 * 而这一片（如 `.0Bs401`/`111-L2.zip`）实际在产出层 —— 取错层就把这一单的
+                                 * OutputPath 写进原包树（真机 8888：内容全部落到原包树、判据树里没有）。
+                                 */
+                                string entryTaskLayer =
+                                    Path.GetDirectoryName(entryPath) ?? entryLayer;
+
                                 secondStepEntryCandidates.Add(new InnerArchiveCandidate
                                 {
                                     Path = entryPath,
-                                    ParentOutputDirectory = entryLayer,
+                                    ParentOutputDirectory = entryTaskLayer,
                                     ParentTaskName = group.BaseName,
                                     RootSourcePath = entryPath
                                 });
@@ -1336,6 +1345,12 @@ namespace ArchiveFixer.ViewModels
 
                         if (entryTask.Outcome == TaskOutcome.Succeeded || entryTask.IsOutputVerified)
                         {
+                            /*
+                             * 入口已经解成功过：这一组不会再点名，但它其余的片仍是本组的过程物
+                             * ⇒ 按“已被消费”收掉（⛔ 用户原件不删；真机 8888 的 `.00!~2` 就留在这里）。
+                             */
+                            _extractionCoordinator.SettleExtractedVolumeGroup(preUnit);
+
                             AppendLog(
                                 "INFO",
                                 $"[第二大步·接住] {group.BaseName}：入口已经解成功过 ⇒ 不再点名（⛔ 不重跑）。");

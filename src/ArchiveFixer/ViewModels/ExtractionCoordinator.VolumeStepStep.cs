@@ -114,6 +114,35 @@ namespace ArchiveFixer.ViewModels
         /// **收尾（P1）**：owner 任务跑完后按 Unit 收片/留片、回写结论。
         /// 返回 false = 这一单不是某组的 owner（交回旧收片账处理）。
         /// </summary>
+        /// <summary>
+        /// 入口任务**已经解成功过**的组：不再点名，但把它其余的片按“已被消费”收掉
+        /// （⛔ 用户原件不删；真机 8888 的 `.zip.00!~2` 就属于这一档）。
+        /// </summary>
+        internal void SettleExtractedVolumeGroup(VolumeGroupUnit? unit)
+        {
+            if (unit == null)
+            {
+                return;
+            }
+
+            var consumed = unit.Pieces
+                .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
+                .Select(piece => piece.Path)
+                .Where(path => !IsUserImportedSourcePath(path))
+                .ToList();
+
+            int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
+                unit.LinkedNames.Concat(consumed).Distinct(StringComparer.OrdinalIgnoreCase),
+                path => IsUserImportedSourcePath(path),
+                (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
+
+            _volumeGroupService.MarkState(
+                unit,
+                VolumeGroupState.Succeeded,
+                $"入口已解成功，收片 {deleted} 片（用户原件不删）");
+            AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
+        }
+
         internal bool TrySettleVolumeGroup(ArchiveTask? task)
         {
             if (task == null)
