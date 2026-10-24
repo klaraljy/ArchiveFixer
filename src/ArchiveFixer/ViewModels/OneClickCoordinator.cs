@@ -1232,6 +1232,37 @@ namespace ArchiveFixer.ViewModels
                             }
                         }
 
+                        /*
+                         * 入口不一定在任务表里：跨盘 ZIP 的入口是 `.z01`，任务却是末片 `.zip`；
+                         * V02 那种"片由上一轮解出来"的组也可能只有第一片成了任务。
+                         * ⇒ 只要任务表里有**这一组的任意一片**，就把它当这一组的执行单
+                         * （引擎自己会按族的入口打开；⛔ 不改名、不搬）。
+                         */
+                        if (entryTask == null)
+                        {
+                            foreach (ArchiveTask candidate in Tasks)
+                            {
+                                if (candidate == null || string.IsNullOrWhiteSpace(candidate.CurrentPath))
+                                {
+                                    continue;
+                                }
+
+                                foreach (string piece in group.Pieces)
+                                {
+                                    if (SafePathHelper.PathEquals(candidate.CurrentPath, piece))
+                                    {
+                                        entryTask = candidate;
+                                        break;
+                                    }
+                                }
+
+                                if (entryTask != null)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+
                         if (entryTask == null)
                         {
                             AppendLog(
@@ -1278,10 +1309,11 @@ namespace ArchiveFixer.ViewModels
 
                         /*
                          * ===== C 段：把片放进入口层，**一律只建硬链接** =====
-                         * ⛔ 不搬、不复制、不删：用户原件与下一轮内层包都必须原地不动；
-                         * 目标名被占/跨卷 ⇒ 跳过并写清原因（引擎可能因此报缺卷，那是第二大步的事，不许甩给第一大步）。
+                         * ⛔ 不搬、不复制、不删：用户原件与下一轮内层包都必须原地不动。
+                         * ⛔ 规范卷名/改名是**第二大步自己的算法**，不在这里做（用户 2026-10-24 拍板：
+                         * 交界处只负责把片送到入口层；"名字该怎么写"属第二大步）。
                          */
-                        string entryLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+                        string entryLayer = Path.GetDirectoryName(entryTask.CurrentPath ?? string.Empty) ?? string.Empty;
 
                         if (entryLayer.Length > 0)
                         {

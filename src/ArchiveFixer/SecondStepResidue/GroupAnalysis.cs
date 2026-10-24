@@ -244,6 +244,26 @@ namespace ArchiveFixer.Extraction
             long declaredTotalBytes = items.Select(item => item.DeclaredTotalBytes).DefaultIfEmpty(0).Max();
             long receivedBytes = items.Sum(item => item.Size);
 
+            /*
+             * ===== ⓪ 跨盘 ZIP 先按名字定序（用户 2026-10-11 口径：那一族"头尾在名字编号里是反的"）=====
+             * `x.z01/.z02/……/x.zip`：名字里 `.zip` 是末片、`.z01` 才是第 1 片；
+             * 而内容的 EOCD 盘号只有 `.zip` 那个末片带得出来（`.z01/.z02` 读不出）。
+             * ⇒ 这一族**只按名字**定序（`z01`→1、`z02`→2、`.zip`→N），内容卷号不参与，
+             *   否则两套编号混在一起会得出"缺 1"这种假缺卷（真机 `10101010` 的 `222-L1`）。
+             */
+            if (TryOrderSpannedZip(items, out List<PieceFacts> spannedOrder, out List<int> spannedNumbers))
+            {
+                return Judge(
+                    baseName,
+                    format,
+                    spannedOrder,
+                    spannedNumbers,
+                    "跨盘 ZIP 名字定序",
+                    declaredPieceCount,
+                    declaredTotalBytes,
+                    receivedBytes);
+            }
+
             // ① 内容卷号（能读出来的最有分量；交接单里的卷号也算"内容卷号"）。
             List<int> contentNumbers = items
                 .Select(item => item.VolumeNumber)
@@ -255,7 +275,41 @@ namespace ArchiveFixer.Extraction
 
             if (contentNumbers.Count > 0)
             {
-                return Judge(baseName, format, items, contentNumbers, "内容卷号", declaredPieceCount, declaredTotalBytes, receivedBytes);
+                /*
+                 * 内容卷号优先，但**内容读不出的那几片**用名字卷标记补齐：
+                 * 跨盘 ZIP 只有末片 `.zip` 的 EOCD 带盘号，`.z01/.z02` 内容判不出 ⇒
+                 * 只看内容会误判"缺 1,2"（真机 10101010 的 `222-L1` 就是这一档）。
+                 * ⛔ 不把名字当主判据：内容能读出来的号一个都不改，只补"读不出"的那些片。
+                 */
+                var merged = new SortedSet<int>(contentNumbers);
+
+                foreach (PieceFacts item in items)
+                {
+                    if (item.VolumeNumber.HasValue)
+                    {
+                        continue;
+                    }
+
+                    int? nameIndex = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path));
+
+                    if (nameIndex.HasValue)
+                    {
+                        merged.Add(nameIndex.Value);
+                    }
+                }
+
+                string source = merged.Count > contentNumbers.Count ? "内容卷号+名字补缺" : "内容卷号";
+
+                return Judge(
+                    baseName,
+                    format,
+                    items,
+                    merged.ToList(),
+                    source,
+                    declaredPieceCount,
+                    declaredTotalBytes,
+                    receivedBytes);
             }
 
             // ② 名字里的卷标记（7z 中间/末片、ZIP 裸切中间片在内容上判不出，名字常常还读得出来）。
@@ -424,6 +478,14 @@ namespace ArchiveFixer.Extraction
                 .FirstOrDefault(item => item.IsFirstPiece || item.VolumeNumber == 1)
                 ?.Path ?? string.Empty;
 
+            if (entry.Length == 0)
+            {
+                entry = items
+                    .FirstOrDefault(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path)) == 1)
+                    ?.Path ?? string.Empty;
+            }
+
             return new GroupCandidate
             {
                 BaseName = baseName,
@@ -440,6 +502,77 @@ namespace ArchiveFixer.Extraction
                     ? $"{evidenceSource}连成 1..{expected}{declaredNote}"
                     : $"{evidenceSource}只找到 {string.Join(",", numbers)}（1..{expected} 里缺 {string.Join(",", missing)}）{declaredNote}"
             };
+        }
+
+        /// <summary>
+        /// 跨盘 ZIP 名字定序：`x.z01`..`x.zNN` + 末片 `x.zip` ⇒ 第 1..N 片。
+        /// ⛔ 只要有一份不是这个形状（或 z 号不连续）⇒ 返回 false，交给别的判据。
+        /// </summary>
+        private static bool TryOrderSpannedZip(
+            List<PieceFacts> items,
+            out List<PieceFacts> ordered,
+            out List<int> numbers)
+        {
+            ordered = new List<PieceFacts>();
+            numbers = new List<int>();
+
+            if (items.Count < 2)
+            {
+                return false;
+            }
+
+            var disks = new List<(int Disk, PieceFacts Item)>();
+            PieceFacts? tailZip = null;
+
+            foreach (PieceFacts item in items)
+            {
+                string extension = Path.GetExtension(Path.GetFileName(item.Path));
+
+                if (string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (tailZip != null)
+                    {
+                        return false;
+                    }
+
+                    tailZip = item;
+                    continue;
+                }
+
+                if (extension.Length == 4
+                    && (extension[1] == 'z' || extension[1] == 'Z')
+                    && char.IsAsciiDigit(extension[2])
+                    && char.IsAsciiDigit(extension[3]))
+                {
+                    disks.Add((int.Parse(extension.Substring(2, 2), System.Globalization.CultureInfo.InvariantCulture), item));
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (tailZip == null || disks.Count == 0)
+            {
+                return false;
+            }
+
+            disks.Sort((left, right) => left.Disk.CompareTo(right.Disk));
+
+            for (int index = 0; index < disks.Count; index++)
+            {
+                if (disks[index].Disk != index + 1)
+                {
+                    return false;
+                }
+
+                ordered.Add(disks[index].Item);
+                numbers.Add(index + 1);
+            }
+
+            ordered.Add(tailZip);
+            numbers.Add(disks.Count + 1);
+
+            return true;
         }
 
         /// <summary>一片的证据（交接单优先，盘上补片才回盘上读一次）。</summary>
