@@ -121,6 +121,19 @@ namespace ArchiveFixer.Extraction
 
             if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
             {
+                /*
+                 * 先建组、后建任务那一档：任务出现后只**补写一次** owner（⛔ 不换 owner、不重置状态）。
+                 * 组事实/规范名计划早就定了，不因为任务晚到而重算。
+                 */
+                if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
+                    && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
+                    && (existing.State == VolumeGroupState.Complete
+                        || existing.State == VolumeGroupState.OwnerAssigned))
+                {
+                    existing.OwnerTaskFileName = ownerTaskFileName;
+                    existing.State = VolumeGroupState.OwnerAssigned;
+                }
+
                 return existing;
             }
 

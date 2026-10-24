@@ -1211,6 +1211,9 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 这一版不搬片、不改名、不动盘；片进不进入口层由 C 段再做。
                      */
                     var volumeEntryTasks = new List<ArchiveTask>();
+                    var secondStepEntryCandidates = new List<InnerArchiveCandidate>();
+                    var secondStepEntryGroups =
+                        new List<(GroupAnalysis.GroupCandidate Group, ArchiveFixer.Extraction.VolumeGroupUnit Unit)>();
 
                     foreach (GroupAnalysis.GroupCandidate group in handoffGroups)
                     {
@@ -1268,10 +1271,44 @@ namespace ArchiveFixer.ViewModels
 
                         if (entryTask == null)
                         {
-                            AppendLog(
-                                "WARN",
-                                $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
-                                + $"（{FileNameHelper.GetFileName(group.EntryPath)}）⇒ 这一组不动。");
+                            /*
+                             * 入口任务还没建（典型：这一组的三片是上一轮刚产出的，扫描只把它们当“分卷片”
+                             * 记了交接事实，还没进任务表）。⇒ 用**组事实**先把 Unit 建出来（owner 先空着），
+                             * 再把入口片按正常“加任务”那条路补进表；下一轮由第二大步点名为 owner。
+                             * ⛔ 不在这里解压、不搬片、不改名；⛔ owner 只补写一次。
+                             */
+                            string orphanLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
+                            ArchiveFixer.Extraction.VolumeGroupUnit? orphanUnit =
+                                _extractionCoordinator.TryCommitVolumeGroup(group, null, orphanLayer);
+
+                            if (orphanUnit != null
+                                && (orphanUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
+                                    || orphanUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
+                                && File.Exists(orphanUnit.EntryPath))
+                            {
+                                secondStepEntryCandidates.Add(new InnerArchiveCandidate
+                                {
+                                    Path = orphanUnit.EntryPath,
+                                    ParentOutputDirectory = orphanLayer,
+                                    ParentTaskName = group.BaseName,
+                                    RootSourcePath = orphanUnit.EntryPath
+                                });
+                                secondStepEntryGroups.Add((group, orphanUnit));
+
+                                AppendLog(
+                                    "INFO",
+                                    $"[第二大步·组] {group.BaseName}：入口任务还没建 ⇒ 用组事实补建任务"
+                                    + "（下一轮点名，⛔ 不在边界解压）。");
+                            }
+                            else
+                            {
+                                AppendLog(
+                                    "WARN",
+                                    $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
+                                    + $"（{FileNameHelper.GetFileName(group.EntryPath)}）⇒ 这一组不动。");
+                            }
+
                             continue;
                         }
 
@@ -1367,6 +1404,12 @@ namespace ArchiveFixer.ViewModels
 
                                 AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{linked.Describe()}（{namePlan.Evidence}）");
                                 _extractionCoordinator.MarkVolumeGroupLinked(committedUnit, linked.LinkedNames);
+
+                                if (namePlan.Items.FirstOrDefault(item => item.IsEntry) is { } entryItem)
+                                {
+                                    entryTask.EngineEntryPathOverride =
+                                        Path.Combine(entryLayer, entryItem.TargetName);
+                                }
                             }
                             else
                             {
@@ -1410,6 +1453,81 @@ namespace ArchiveFixer.ViewModels
                      * 实现（`TryMarkHandoffGroupEntryTasks`、搬/链接片、记账）仍保留在
                      * `SecondStepResidue/ExtractionCoordinator.VolumeHandoffStep.cs`，重建第二大步时去那儿挑。
                      */
+                    /*
+                     * 第二大步的入口任务晚到（例如这一组的片是上一轮刚产出的）⇒ 走与续解同一条加任务路
+                     * 补进表；下一轮由第二大步点名成 owner。⛔ 不绕过任务表自己造一条执行路径。
+                     */
+                    if (secondStepEntryCandidates.Count > 0)
+                    {
+                        try
+                        {
+                            List<ArchiveTask> createdSecondStepTasks =
+                                await AddInnerTasksAsync(secondStepEntryCandidates);
+
+                            foreach (ArchiveTask createdTask in createdSecondStepTasks)
+                            {
+                                if (!volumeEntryTasks.Contains(createdTask))
+                                {
+                                    volumeEntryTasks.Add(createdTask);
+                                }
+                            }
+
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·组] 补建入口任务 {createdSecondStepTasks.Count} 个（下一轮点名）。");
+
+                            /*
+                             * 任务刚建出来就**当场点名并建好规范名链接**：
+                             * 不能等下一轮边界再点名 —— 下一轮一开工就按原文件名解压，
+                             * 7z 找不到 `.7z.001` 兄弟卷，直接把入口判成“无法识别”，
+                             * 之后又因“上一轮 Failed”永不重跑（真机 15151515 现场）。
+                             */
+                            foreach ((GroupAnalysis.GroupCandidate group, ArchiveFixer.Extraction.VolumeGroupUnit unit)
+                                     in secondStepEntryGroups)
+                            {
+                                ArchiveTask? createdTask = createdSecondStepTasks.FirstOrDefault(task =>
+                                    SafePathHelper.PathEquals(task.CurrentPath, unit.EntryPath));
+
+                                if (createdTask == null)
+                                {
+                                    continue;
+                                }
+
+                                string layer = Path.GetDirectoryName(unit.EntryPath) ?? string.Empty;
+
+                                ArchiveFixer.Extraction.VolumeGroupUnit? ownedUnit =
+                                    _extractionCoordinator.TryCommitVolumeGroup(group, createdTask, layer);
+
+                                if (ownedUnit?.NamePlan is { IsEmpty: false } plan)
+                                {
+                                    ArchiveFixer.Extraction.VolumeGroupEntryLayer.PlanLinkResult linked =
+                                        ArchiveFixer.Extraction.VolumeGroupEntryLayer.LinkByPlan(
+                                            plan,
+                                            layer,
+                                            (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"));
+
+                                    _extractionCoordinator.MarkVolumeGroupLinked(ownedUnit, linked.LinkedNames);
+                                    AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{linked.Describe()}");
+
+                                    if (plan.Items.FirstOrDefault(item => item.IsEntry) is { } entryItem)
+                                    {
+                                        createdTask.EngineEntryPathOverride =
+                                            Path.Combine(layer, entryItem.TargetName);
+                                    }
+                                }
+
+                                _extractionCoordinator.RememberVolumeStepTaskForRound(createdTask);
+                                _extractionCoordinator.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名（补建）");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog(
+                                "ERROR",
+                                $"一键处理：把第二大步入口任务补进列表失败 —— {ex.Message}（片在产物目录里，可以自己添加）");
+                        }
+                    }
+
                     if (innerArchives.Count == 0 && volumeEntryTasks.Count == 0)
                     {
                         /*

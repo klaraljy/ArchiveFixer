@@ -176,6 +176,12 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
+        /// 交给引擎的入口路径（第二大步按规范名建好链接后写入；空 = 用 <see cref="CurrentPath"/>）。
+        /// ⛔ 只影响“交给引擎的那一份”：任务账、源包档、快照与删除判据仍读 <see cref="CurrentPath"/>。
+        /// </summary>
+        public string EngineEntryPathOverride { get; set; } = string.Empty;
+
+        /// <summary>
         /// 当前真实处理路径。
         /// 改名成功后必须更新。
         /// </summary>

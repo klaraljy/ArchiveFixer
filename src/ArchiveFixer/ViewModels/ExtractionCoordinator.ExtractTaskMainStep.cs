@@ -2967,6 +2967,16 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string ResolveEngineArchivePath(ArchiveTask task, string engineArchivePath)
         {
+            /*
+             * 第二大步给了规范名入口（`X.7z.001` 这类硬链接别名）⇒ 引擎就用它。
+             * ⛔ 任务账/源包/删除判据仍读 task.CurrentPath；这里只换“交给引擎的那一份”。
+             */
+            if (!string.IsNullOrWhiteSpace(task.EngineEntryPathOverride)
+                && File.Exists(task.EngineEntryPathOverride))
+            {
+                return task.EngineEntryPathOverride;
+            }
+
             string resolved = TryRepairBrokenVolumeChainName(task, engineArchivePath);
 
             return RecursiveExtractor.PreferCanonicalSiblingName(resolved);

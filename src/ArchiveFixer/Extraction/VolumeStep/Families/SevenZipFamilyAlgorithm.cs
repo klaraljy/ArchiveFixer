@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
@@ -60,7 +61,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                int? index = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
+                int? index = ResolveTolerantIndex(Path.GetFileName(piece.Path), total);
 
                 if (index == null)
                 {
@@ -175,6 +176,33 @@ namespace ArchiveFixer.Extraction
                     Evidence = $"7z 首卷自述 {total} 片 / {first.DeclaredTotalBytes} 字节；已收字节和与自述整包相等"
                 },
                 $"7z 分卷连成 1..{total}（入口 = 首卷）");
+        }
+
+        /// <summary>
+        /// 7z 片名序号（容忍尾巴里夹垃圾）：先走统一卷名解析；解析出的号**越界**（`…068^02` 这种
+        /// 垃圾尾巴会被读成 68）⇒ 再取末尾 1–3 位数字，只要落在 2..total 就认。
+        /// 仍判不出 ⇒ 返回 null（交给“剩一个槽位/末片更小”那两条消去法，⛔ 不硬猜）。
+        /// </summary>
+        private static int? ResolveTolerantIndex(string fileName, int total)
+        {
+            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+
+            if (index is >= 2 && index.Value <= total)
+            {
+                return index;
+            }
+
+            Match tail = Regex.Match(fileName, @"(\d{1,3})$");
+
+            if (tail.Success
+                && int.TryParse(tail.Groups[1].Value, out int tailIndex)
+                && tailIndex >= 2
+                && tailIndex <= total)
+            {
+                return tailIndex;
+            }
+
+            return null;
         }
 
         private static CanonicalNamePlanItem BuildItem(

@@ -34,7 +34,6 @@ namespace ArchiveFixer.ViewModels
             string? entryLayer)
         {
             if (group == null
-                || ownerTask == null
                 || string.IsNullOrWhiteSpace(entryLayer))
             {
                 return null;
@@ -64,25 +63,34 @@ namespace ArchiveFixer.ViewModels
              */
             bool familyWired = family is VolumeNamingFamily.RarPart
                 or VolumeNamingFamily.ZipSpanned
-                or VolumeNamingFamily.ZipNumbered;
+                or VolumeNamingFamily.ZipNumbered
+                or VolumeNamingFamily.SevenZipNumbered;
 
             if (!familyWired && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
             {
                 return null;
             }
 
+            string? ownerName = ownerTask == null
+                ? null
+                : FileNameHelper.GetFileName(ownerTask.CurrentPath ?? string.Empty);
+
+            string outputLayer = ownerTask != null
+                ? Path.GetDirectoryName(ownerTask.CurrentPath ?? string.Empty) ?? string.Empty
+                : Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
             VolumeGroupUnit? unit = _volumeGroupService.TryCommit(
                 group.BaseName,
                 family,
                 entryLayer,
                 group.EntryPath,
-                FileNameHelper.GetFileName(ownerTask.CurrentPath ?? string.Empty),
+                ownerName,
                 group.PieceFacts,
                 group.MissingNumbers,
                 group.Evidence,
                 group.DeclaredPieceCount > 0 ? group.DeclaredPieceCount : null,
                 group.DeclaredTotalBytes > 0 ? group.DeclaredTotalBytes : null,
-                Path.GetDirectoryName(ownerTask.CurrentPath ?? string.Empty) ?? string.Empty);
+                outputLayer);
 
             if (unit == null)
             {
@@ -144,11 +152,13 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 成功收片 = 本组建出来的链接名 + 本组消费掉的**链内产出片**。
-             * ⛔ 用户原件（任务源）不删；⛔ 还是别的任务源的也不删（避免把别的单的唯一源拿走）。
+             * ⛔ 用户原件（Source=UserImported 或 IsUserImportedSourcePath）不删；
+             * 链内产出片即使还是某个任务的源（例如被闸门跳过的分卷片）也收掉 —— 组已解开，它没用了。
              */
             var consumed = unit.Pieces
+                .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
                 .Select(piece => piece.Path)
-                .Where(path => !IsUserImportedSourcePath(path) && !IsAnyTaskSourcePath(path))
+                .Where(path => !IsUserImportedSourcePath(path))
                 .ToList();
 
             int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
