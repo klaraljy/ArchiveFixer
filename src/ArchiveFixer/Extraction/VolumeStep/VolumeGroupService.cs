@@ -30,7 +30,8 @@ namespace ArchiveFixer.Extraction
             new()
             {
                 [VolumeNamingFamily.RarPart] = new RarFamilyAlgorithm(),
-                [VolumeNamingFamily.ZipSpanned] = new ZipSpannedFamilyAlgorithm()
+                [VolumeNamingFamily.ZipSpanned] = new ZipSpannedFamilyAlgorithm(),
+                [VolumeNamingFamily.ZipNumbered] = new ZipNumberedFamilyAlgorithm()
             };
 
         /// <summary>本批/本链已经登记的组（只读视图）。</summary>

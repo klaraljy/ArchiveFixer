@@ -58,6 +58,15 @@ namespace ArchiveFixer.Detection
         /// <summary>RAR 那一族卷号字段的原始值（RAR4 基数锚点用）；判不出 = null。</summary>
         public int? RawVolumeField { get; init; }
 
+        /// <summary>尾部有 zip 的 EOCD（通用分片族的末片证据）；判不出 = false。</summary>
+        public bool HasZipEndRecord { get; init; }
+
+        /// <summary>这个 EOCD 说明"我是分片的最后一片"（中央目录偏移 ≥ 本文件长度，或盘号 &gt; 0）。</summary>
+        public bool ZipEndRecordMeansSplit { get; init; }
+
+        /// <summary>开头是 zip 本地文件头（通用分片族第 1 片的证据）。</summary>
+        public bool HasZipLocalHeader { get; init; }
+
         /// <summary>它在盘上哪一层（第二大步按这里定入口层）。</summary>
         public string SourceLayer { get; init; } = string.Empty;
 

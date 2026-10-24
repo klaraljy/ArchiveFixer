@@ -23,5 +23,8 @@ namespace ArchiveFixer.Extraction
         int? RawVolumeField,
         string SourceLayer,
         VolumeHandoffSource? Source,
-        bool FromHandoff);
+        bool FromHandoff,
+        bool HasZipEndRecord = false,
+        bool ZipEndRecordMeansSplit = false,
+        bool HasZipLocalHeader = false);
 }

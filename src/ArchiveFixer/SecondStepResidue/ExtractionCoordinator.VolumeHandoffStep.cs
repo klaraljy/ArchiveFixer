@@ -60,6 +60,9 @@ namespace ArchiveFixer.ViewModels
                 DeclaredTotalBytes = card.DeclaredTotalBytes,
                 DeclaredVolumeCount = card.DeclaredVolumeCount,
                 RawVolumeField = card.RawVolumeField,
+                HasZipEndRecord = card.HasZipEndRecord,
+                ZipEndRecordMeansSplit = card.ZipEndRecordMeansSplit,
+                HasZipLocalHeader = card.HasZipLocalHeader,
                 SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
                 Source = task.IsContinuationTask
                     ? ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced

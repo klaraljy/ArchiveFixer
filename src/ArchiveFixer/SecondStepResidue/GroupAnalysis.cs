@@ -436,7 +436,10 @@ namespace ArchiveFixer.Extraction
                     BodyKind = handoff.BodyKind,
                     DeclaredTotalBytes = handoff.DeclaredTotalBytes,
                     DeclaredVolumeCount = handoff.DeclaredVolumeCount,
-                    RawVolumeField = handoff.RawVolumeField
+                    RawVolumeField = handoff.RawVolumeField,
+                    HasZipEndRecord = handoff.HasZipEndRecord,
+                    ZipEndRecordMeansSplit = handoff.ZipEndRecordMeansSplit,
+                    HasZipLocalHeader = handoff.HasZipLocalHeader
                 };
 
                 return new PieceFacts(
@@ -495,7 +498,10 @@ namespace ArchiveFixer.Extraction
                 item.Card.RawVolumeField,
                 item.Handoff?.SourceLayer ?? (Path.GetDirectoryName(item.Path) ?? string.Empty),
                 item.Handoff?.Source,
-                item.Handoff != null);
+                item.Handoff != null,
+                item.Card.HasZipEndRecord,
+                item.Card.ZipEndRecordMeansSplit,
+                item.Card.HasZipLocalHeader);
 
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
         private static GroupCandidate Judge(
