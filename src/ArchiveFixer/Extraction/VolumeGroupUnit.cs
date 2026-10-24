@@ -73,6 +73,30 @@ namespace ArchiveFixer.Extraction
         /// <summary>这一组每一片来自哪里；建组时写入，收场器只查这份账。</summary>
         public IReadOnlyList<VolumePieceFact> PieceOrigins { get; set; } = Array.Empty<VolumePieceFact>();
 
+        /// <summary>组状态（唯一写者 = <see cref="VolumeGroupService"/>；⛔ 交界处不许写）。</summary>
+        public VolumeGroupState State { get; set; } = VolumeGroupState.Candidate;
+
+        /// <summary>这一组的片（原始事实；卷号可为空，由族算法决定怎么用）。</summary>
+        public IReadOnlyList<GroupPieceFact> Pieces { get; set; } = Array.Empty<GroupPieceFact>();
+
+        /// <summary>已建好的链接名（收片按它删，⛔ 不按原片名）。</summary>
+        public IReadOnlyList<string> LinkedNames { get; set; } = Array.Empty<string>();
+
+        /// <summary>缺片卷号（能点名的才点名）。</summary>
+        public IReadOnlyList<int> MissingNumbers { get; set; } = Array.Empty<int>();
+
+        /// <summary>入口包自述片数（判不出 = null）。</summary>
+        public int? DeclaredPieceCount { get; set; }
+
+        /// <summary>入口包自述整包字节数（判不出 = null）。</summary>
+        public long? DeclaredTotalBytes { get; set; }
+
+        /// <summary>解压产物的落点层。</summary>
+        public string OutputLayer { get; set; } = string.Empty;
+
+        /// <summary>一句话结论（日志/批末读它；⛔ 不从日志反推）。</summary>
+        public string Verdict { get; set; } = string.Empty;
+
         public DateTime CreatedUtc { get; }
 
         /// <summary>同一基名下两族不许混算 ⇒ 键带族。</summary>

@@ -65,6 +65,13 @@ namespace ArchiveFixer.Extraction
             /// <summary>已收字节数合计（与自述整包对账用）。</summary>
             public long ReceivedBytes { get; init; }
 
+            /// <summary>每片的原始事实（第二大步建组用；卷号可为空，⛔ 不在这里补）。</summary>
+            public IReadOnlyList<GroupPieceFact> PieceFacts { get; set; } = Array.Empty<GroupPieceFact>();
+
+            /// <summary>每片的底层内容卡（族判定唯一出口要用它；已登记的片由交接单还原，⛔ 不重读盘）。</summary>
+            public IReadOnlyList<ArchiveFixer.Detection.FileNatureCard> Cards { get; set; } =
+                Array.Empty<ArchiveFixer.Detection.FileNatureCard>();
+
             public string Describe() =>
                 $"{BaseName} ｜ 族={Format} ｜ 找到 {Pieces.Count} 片 ｜ 结论={Verdict}"
                 + $" ｜ 入口={(EntryPath.Length == 0 ? "判不出" : Path.GetFileName(EntryPath))}"
@@ -244,6 +251,16 @@ namespace ArchiveFixer.Extraction
             long declaredTotalBytes = items.Select(item => item.DeclaredTotalBytes).DefaultIfEmpty(0).Max();
             long receivedBytes = items.Sum(item => item.Size);
 
+            List<GroupPieceFact> publicFacts = items.Select(ToPublicFact).ToList();
+            List<ArchiveFixer.Detection.FileNatureCard> cards = items.Select(item => item.Card).ToList();
+
+            GroupCandidate Finish(GroupCandidate candidate)
+            {
+                candidate.PieceFacts = publicFacts;
+                candidate.Cards = cards;
+                return candidate;
+            }
+
             /*
              * ===== ⓪ 跨盘 ZIP 先按名字定序（用户 2026-10-11 口径：那一族"头尾在名字编号里是反的"）=====
              * `x.z01/.z02/……/x.zip`：名字里 `.zip` 是末片、`.z01` 才是第 1 片；
@@ -253,7 +270,7 @@ namespace ArchiveFixer.Extraction
              */
             if (TryOrderSpannedZip(items, out List<PieceFacts> spannedOrder, out List<int> spannedNumbers))
             {
-                return Judge(
+                return Finish(Judge(
                     baseName,
                     format,
                     spannedOrder,
@@ -261,7 +278,7 @@ namespace ArchiveFixer.Extraction
                     "跨盘 ZIP 名字定序",
                     declaredPieceCount,
                     declaredTotalBytes,
-                    receivedBytes);
+                    receivedBytes));
             }
 
             // ① 内容卷号（能读出来的最有分量；交接单里的卷号也算"内容卷号"）。
@@ -301,7 +318,7 @@ namespace ArchiveFixer.Extraction
 
                 string source = merged.Count > contentNumbers.Count ? "内容卷号+名字补缺" : "内容卷号";
 
-                return Judge(
+                return Finish(Judge(
                     baseName,
                     format,
                     items,
@@ -309,7 +326,7 @@ namespace ArchiveFixer.Extraction
                     source,
                     declaredPieceCount,
                     declaredTotalBytes,
-                    receivedBytes);
+                    receivedBytes));
             }
 
             // ② 名字里的卷标记（7z 中间/末片、ZIP 裸切中间片在内容上判不出，名字常常还读得出来）。
@@ -324,7 +341,7 @@ namespace ArchiveFixer.Extraction
 
             if (nameNumbers.Count > 0)
             {
-                return Judge(baseName, format, items, nameNumbers, "名字卷标记", declaredPieceCount, declaredTotalBytes, receivedBytes);
+                return Finish(Judge(baseName, format, items, nameNumbers, "名字卷标记", declaredPieceCount, declaredTotalBytes, receivedBytes));
             }
 
             /*
@@ -337,7 +354,7 @@ namespace ArchiveFixer.Extraction
             {
                 bool complete = receivedBytes == declaredTotalBytes;
 
-                return new GroupCandidate
+                return Finish(new GroupCandidate
                 {
                     BaseName = baseName,
                     Format = format,
@@ -358,7 +375,7 @@ namespace ArchiveFixer.Extraction
                         : receivedBytes < declaredTotalBytes
                             ? $"自述整包 {declaredTotalBytes} 字节，只收到 {receivedBytes} 字节 ⇒ 缺片"
                             : $"已收 {receivedBytes} 字节 > 自述整包 {declaredTotalBytes} 字节 ⇒ 判不出（不猜）"
-                };
+                });
             }
 
             /*
@@ -376,7 +393,7 @@ namespace ArchiveFixer.Extraction
                 && bySize.Take(bySize.Count - 1).All(item => item.Size == bySize[0].Size)
                 && bySize[^1].Size <= bySize[0].Size;
 
-            return new GroupCandidate
+            return Finish(new GroupCandidate
             {
                 BaseName = baseName,
                 Format = format,
@@ -390,7 +407,7 @@ namespace ArchiveFixer.Extraction
                 Evidence = regularSizes
                     ? "卷号判不出：只能按大小定序（除末片外等大），⛔ 不猜缺哪几片"
                     : "卷号判不出、大小也不规律：只给候选清单，⛔ 什么都不做"
-            };
+            });
         }
 
         /// <summary>
@@ -403,6 +420,25 @@ namespace ArchiveFixer.Extraction
         {
             if (handoffByPath != null && handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? handoff))
             {
+                /*
+                 * ⛔ 不重读盘：交接单里的内容事实直接还原成一张卡（HasZip* 那几格交接单没有，
+                 * 保持默认 false；ZIP 族的判定在族算法里会结合名字/盘号，不靠这几格猜）。
+                 */
+                var handoffCard = new ArchiveFixer.Detection.FileNatureCard
+                {
+                    Path = handoff.Path,
+                    Size = handoff.Size,
+                    Format = handoff.Format,
+                    Membership = handoff.Membership,
+                    VolumeNumber = handoff.VolumeNumber,
+                    FirstVolumeFlag = handoff.FirstVolumeFlag,
+                    ContentFail = handoff.ContentFail,
+                    BodyKind = handoff.BodyKind,
+                    DeclaredTotalBytes = handoff.DeclaredTotalBytes,
+                    DeclaredVolumeCount = handoff.DeclaredVolumeCount,
+                    RawVolumeField = handoff.RawVolumeField
+                };
+
                 return new PieceFacts(
                     path,
                     handoff.Format,
@@ -410,7 +446,9 @@ namespace ArchiveFixer.Extraction
                     handoff.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece,
                     handoff.Size,
                     handoff.DeclaredVolumeCount,
-                    handoff.DeclaredTotalBytes);
+                    handoff.DeclaredTotalBytes,
+                    handoff,
+                    handoffCard);
             }
 
             ArchiveFixer.Detection.FileNatureCard card = ArchiveFixer.Detection.FileNature.Inspect(path);
@@ -436,8 +474,28 @@ namespace ArchiveFixer.Extraction
                 card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece,
                 size,
                 card.DeclaredVolumeCount,
-                card.DeclaredTotalBytes);
+                card.DeclaredTotalBytes,
+                null,
+                card);
         }
+
+        /// <summary>把内部证据折成第二大步拿得走的原始事实（⛔ 不补判不出的字段）。</summary>
+        private static GroupPieceFact ToPublicFact(PieceFacts item) =>
+            new(
+                item.Path,
+                item.Size,
+                item.Card.Format,
+                item.Card.BodyKind,
+                item.Card.VolumeNumber,
+                item.Card.FirstVolumeFlag,
+                item.Card.Membership,
+                item.Card.ContentFail,
+                item.Card.DeclaredTotalBytes,
+                item.Card.DeclaredVolumeCount,
+                item.Card.RawVolumeField,
+                item.Handoff?.SourceLayer ?? (Path.GetDirectoryName(item.Path) ?? string.Empty),
+                item.Handoff?.Source,
+                item.Handoff != null);
 
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
         private static GroupCandidate Judge(
@@ -583,7 +641,9 @@ namespace ArchiveFixer.Extraction
             bool IsFirstPiece,
             long Size,
             int DeclaredPieceCount,
-            long DeclaredTotalBytes);
+            long DeclaredTotalBytes,
+            ArchiveFixer.Detection.VolumeHandoffEntry? Handoff,
+            ArchiveFixer.Detection.FileNatureCard Card);
 
         private static IEnumerable<string> SafeEnumerate(string root)
         {

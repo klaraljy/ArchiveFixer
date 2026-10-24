@@ -293,6 +293,7 @@ namespace ArchiveFixer.ViewModels
                  * 不再在第一大步批首清理。
                  */
                 ClearVolumeHandoffLedger();
+                ResetVolumeGroupService();
             }
 
             try

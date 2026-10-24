@@ -1332,6 +1332,12 @@ namespace ArchiveFixer.ViewModels
                                 group.BaseName,
                                 entryLayer,
                                 group.Pieces);
+
+                            /*
+                             * P0：把候选提交成 VolumeGroupUnit（唯一建组出口）。
+                             * ⛔ 只登记组事实、打一行日志；链接/解压/收片仍走原路（行为与接线前一致）。
+                             */
+                            _extractionCoordinator.TryCommitVolumeGroup(group, entryTask, entryLayer);
                         }
 
                         if (!volumeEntryTasks.Contains(entryTask))
