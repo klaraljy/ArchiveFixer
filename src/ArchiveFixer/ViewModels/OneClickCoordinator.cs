@@ -1889,14 +1889,19 @@ namespace ArchiveFixer.ViewModels
             }
 
             string fileName = Path.GetFileName(currentPath);
-            int dot = fileName.IndexOf('.');
 
-            if (dot <= 0)
+            /*
+             * 基名 = **第二大步那一份**（唯一出口 `FileNameHelper.SecondStepBaseName`）。
+             * 原来这里自己按第一个点切了一份 —— 结论与收口后的规则相同，但那是第二份实现
+             * （用户 2026-10-23：「14 处以后统统删掉」）。
+             * 没有点 / 以点开头 ⇒ 判不出（与收口前同一结论：这一档按名字归组，名字给不出基名就不动）。
+             */
+            string stem = FileNameHelper.SecondStepBaseName(fileName);
+
+            if (stem.Length == 0 || stem.Length >= fileName.Length)
             {
                 return null;
             }
-
-            string stem = fileName[..dot];
 
             var volumes = new List<ArchiveFixer.Detection.VolumeCandidate>();
             int maxIndex = 0;
@@ -1904,15 +1909,16 @@ namespace ArchiveFixer.ViewModels
             foreach (string sibling in Directory.EnumerateFiles(directory))
             {
                 string siblingName = Path.GetFileName(sibling);
-                int siblingDot = siblingName.IndexOf('.');
+                string siblingStem = FileNameHelper.SecondStepBaseName(siblingName);
 
-                if (siblingDot <= 0
-                    || !string.Equals(siblingName[..siblingDot], stem, StringComparison.OrdinalIgnoreCase))
+                if (siblingStem.Length == 0
+                    || siblingStem.Length >= siblingName.Length
+                    || !string.Equals(siblingStem, stem, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                string segment = siblingName[(siblingDot + 1)..];
+                string segment = siblingName[(siblingStem.Length + 1)..];
                 int index;
 
                 if (segment.Equals("zip", StringComparison.OrdinalIgnoreCase))

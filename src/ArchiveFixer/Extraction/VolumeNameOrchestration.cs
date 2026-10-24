@@ -149,15 +149,19 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            int dot = fileName.IndexOf('.');
+            /*
+             * 基名 = **第二大步那一份**（唯一出口 `FileNameHelper.SecondStepBaseName`）；
+             * 原来这里自己按第一个点切了一份（用户 2026-10-23：「14 处以后统统删掉」）。
+             * 没有点 / 以点开头 ⇒ 判不出（与收口前同一结论）。
+             */
+            string stem = FileNameHelper.SecondStepBaseName(fileName);
 
-            if (dot <= 0)
+            if (stem.Length == 0 || stem.Length >= fileName.Length)
             {
                 return false;
             }
 
-            string stem = fileName[..dot];
-            string last = fileName[(dot + 1)..];
+            string last = fileName[(stem.Length + 1)..];
 
             // 脏本体名（`222.zi删除p`：还原出来是 `zip`）⇒ 它就是末片 `.zip`。
             if (ExtensionHelper.TryRecoverDisguisedArchiveBody(last, out string suffix, out _)
