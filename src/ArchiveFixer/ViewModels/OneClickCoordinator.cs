@@ -1168,8 +1168,8 @@ namespace ArchiveFixer.ViewModels
                      * 直接 `break` 跳过它（实测：EEE ③ 一点没变）。
                      */
                     /*
-                     * [第二大步·组分析]（2026-10-23，用户口径：「基名 + 大小分布」是基石）：
-                     * 种子 = 这一轮认出来的内层归档 **+ 第一大步登记的交接事实**；
+                     * [第二大步·组分析]（2026-10-23 用户口径：「基名 + 大小分布」是基石；2026-10-24 补：吃交接单）：
+                     * 种子 = 第一大步登记的交接事实 **+ 这一轮认出来的内层归档**；
                      * 根 = 全批产物根 **+ 用户源目录**（分卷散在不同文件夹是常态，⛔ 不许只看一个目录）。
                      *
                      * 本轮它仍然**只落事实行**：组事实 / 入口 / 缺片都如实写出来，
@@ -1177,13 +1177,6 @@ namespace ArchiveFixer.ViewModels
                      */
                     try
                     {
-                        List<string> groupSeeds = innerArchives
-                            .Select(candidate => candidate.Path)
-                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.Path))
-                            .Where(path => !string.IsNullOrWhiteSpace(path))
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-
                         List<string> groupRoots = innerArchives
                             .Select(candidate => candidate.ParentOutputDirectory)
                             .Concat(Tasks.Select(task => task.OutputPath))
@@ -1192,7 +1185,15 @@ namespace ArchiveFixer.ViewModels
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
 
-                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(groupSeeds, groupRoots))
+                        /*
+                         * 交接单 + 这一轮认出来的内层归档，合成**一次**组分析（用户 2026-10-24）：
+                         * 交接单里的片直接用交接单的底层事实（族 / 卷号 / 首卷 / 自述片数 / 自述整包），
+                         * ⛔ 不重读盘识别；内层归档不在交接单里，仍按盘上证据判。
+                         */
+                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
+                                     _extractionCoordinator.VolumeHandoffEntries,
+                                     groupRoots,
+                                     innerArchives.Select(candidate => candidate.Path)))
                         {
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
                         }

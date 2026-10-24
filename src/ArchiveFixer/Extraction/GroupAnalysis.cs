@@ -53,10 +53,28 @@ namespace ArchiveFixer.Extraction
             /// <summary>判不出时"缺口"是空的；判出缺卷时列出缺的卷号（1 起）。</summary>
             public IReadOnlyList<int> MissingNumbers { get; init; } = Array.Empty<int>();
 
+            /// <summary>自述片数（7z 首片起始头算出来的；随交接单过来）；判不出 = 0。</summary>
+            public int DeclaredPieceCount { get; init; }
+
+            /// <summary>已收片数（按物理身份去重后）。</summary>
+            public int ReceivedPieceCount { get; init; }
+
+            /// <summary>自述整包字节数（7z 硬证据）；判不出 = 0。</summary>
+            public long DeclaredTotalBytes { get; init; }
+
+            /// <summary>已收字节数合计（与自述整包对账用）。</summary>
+            public long ReceivedBytes { get; init; }
+
             public string Describe() =>
                 $"{BaseName} ｜ 族={Format} ｜ 找到 {Pieces.Count} 片 ｜ 结论={Verdict}"
                 + $" ｜ 入口={(EntryPath.Length == 0 ? "判不出" : Path.GetFileName(EntryPath))}"
                 + (MissingNumbers.Count == 0 ? string.Empty : $" ｜ 缺={string.Join(",", MissingNumbers)}")
+                + (DeclaredPieceCount > 0
+                    ? $" ｜ 片数来自自述 {DeclaredPieceCount} 片（已收 {ReceivedPieceCount}）"
+                    : string.Empty)
+                + (DeclaredTotalBytes > 0
+                    ? $" ｜ 自述整包 {DeclaredTotalBytes} 字节（已收 {ReceivedBytes}）"
+                    : string.Empty)
                 + $" ｜ {Evidence}";
         }
 
@@ -67,6 +85,54 @@ namespace ArchiveFixer.Extraction
         public static List<GroupCandidate> Analyze(
             IEnumerable<string>? seeds,
             IEnumerable<string>? scanRoots)
+            => AnalyzeCore(seeds, scanRoots, handoffByPath: null);
+
+        /// <summary>
+        /// **按交接单做全树组分析**（用户 2026-10-24：第二大步要吃交接单里的底层事实）：
+        /// 种子 = 交接单里有路径的那些；每片的族 / 卷号 / 首卷 / 自述片数 / 自述整包字节数**直接取交接单**，
+        /// ⛔ 不再对已经登记过的片重新 `FileNature.Inspect`；盘上只补“同基名但没登记过的兄弟片”，
+        /// 补到的那几片才回盘上读一次证据。
+        /// </summary>
+        public static List<GroupCandidate> Analyze(
+            IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry>? handoffs,
+            IEnumerable<string>? scanRoots,
+            IEnumerable<string>? extraSeeds = null)
+        {
+            var handoffByPath = new Dictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>(
+                StringComparer.OrdinalIgnoreCase);
+            var seeds = new List<string>();
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry
+                     in handoffs ?? Array.Empty<ArchiveFixer.Detection.VolumeHandoffEntry>())
+            {
+                if (entry == null || string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    continue;
+                }
+
+                handoffByPath[entry.Path] = entry;
+                seeds.Add(entry.Path);
+            }
+
+            /*
+             * 额外种子 = 这一轮认出来的内层归档（它们没被闸门拦下、所以不在交接单里）——
+             * 只加种子，不加事实：它们仍按盘上证据判。
+             */
+            foreach (string seed in extraSeeds ?? Enumerable.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(seed))
+                {
+                    seeds.Add(seed);
+                }
+            }
+
+            return AnalyzeCore(seeds, scanRoots, handoffByPath);
+        }
+
+        private static List<GroupCandidate> AnalyzeCore(
+            IEnumerable<string>? seeds,
+            IEnumerable<string>? scanRoots,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
         {
             var result = new List<GroupCandidate>();
             var roots = (scanRoots ?? Enumerable.Empty<string>())
@@ -92,7 +158,7 @@ namespace ArchiveFixer.Extraction
 
                 List<string> pieces = CollectPieces(seed, baseName, roots);
 
-                result.Add(Evaluate(baseName, pieces));
+                result.Add(Evaluate(baseName, pieces, handoffByPath));
             }
 
             return result;
@@ -161,19 +227,26 @@ namespace ArchiveFixer.Extraction
         /// 定序 + 判完整性：内容卷号 &gt; 名字卷标记 &gt; 大小分布。
         /// ⛔ 排不出顺序或连不成 1..N ⇒ 判不出（绝不猜缺哪几片）。
         /// </summary>
-        private static GroupCandidate Evaluate(string baseName, List<string> pieces)
+        private static GroupCandidate Evaluate(
+            string baseName,
+            List<string> pieces,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
         {
             var items = pieces
-                .Select(path => new Piece(path, ArchiveFixer.Detection.FileNature.Inspect(path)))
+                .Select(path => BuildFacts(path, handoffByPath))
                 .ToList();
 
             ArchiveFixer.Detection.VolumeContentFormat format = items
-                .Select(item => item.Card.Format)
+                .Select(item => item.Format)
                 .FirstOrDefault(value => value != ArchiveFixer.Detection.VolumeContentFormat.Unknown);
 
-            // ① 内容卷号（能读出来的最有分量）。
+            int declaredPieceCount = items.Select(item => item.DeclaredPieceCount).DefaultIfEmpty(0).Max();
+            long declaredTotalBytes = items.Select(item => item.DeclaredTotalBytes).DefaultIfEmpty(0).Max();
+            long receivedBytes = items.Sum(item => item.Size);
+
+            // ① 内容卷号（能读出来的最有分量；交接单里的卷号也算"内容卷号"）。
             List<int> contentNumbers = items
-                .Select(item => item.Card.VolumeNumber)
+                .Select(item => item.VolumeNumber)
                 .Where(number => number.HasValue)
                 .Select(number => number!.Value)
                 .Distinct()
@@ -182,7 +255,7 @@ namespace ArchiveFixer.Extraction
 
             if (contentNumbers.Count > 0)
             {
-                return Judge(baseName, format, items, contentNumbers, "内容卷号");
+                return Judge(baseName, format, items, contentNumbers, "内容卷号", declaredPieceCount, declaredTotalBytes, receivedBytes);
             }
 
             // ② 名字里的卷标记（7z 中间/末片、ZIP 裸切中间片在内容上判不出，名字常常还读得出来）。
@@ -197,23 +270,57 @@ namespace ArchiveFixer.Extraction
 
             if (nameNumbers.Count > 0)
             {
-                return Judge(baseName, format, items, nameNumbers, "名字卷标记");
+                return Judge(baseName, format, items, nameNumbers, "名字卷标记", declaredPieceCount, declaredTotalBytes, receivedBytes);
             }
 
             /*
-             * ③ 都判不出 ⇒ **只按大小定序**（除末片外等大、末片更小或相等）。
+             * ③ **7z 的自述整包对账**（用户 2026-10-24 口径：自述片数/整包字节数随交接单过来）：
+             * 7z 中间片的内容里没有卷号，但第 1 片的起始头写着"整包应该有多少字节"。
+             * ⇒ 已收字节合计 == 自述整包字节数 ⇒ 可证完整；小于 ⇒ 缺片（卷号读不出 ⇒ ⛔ 不点名缺哪几片）。
+             * ⛔ 大于 ⇒ 判不出（多出来的片不该算进这一组）。
+             */
+            if (declaredTotalBytes > 0)
+            {
+                bool complete = receivedBytes == declaredTotalBytes;
+
+                return new GroupCandidate
+                {
+                    BaseName = baseName,
+                    Format = format,
+                    Pieces = items
+                        .OrderBy(item => item.Size)
+                        .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                        .Select(item => item.Path)
+                        .ToList(),
+                    EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
+                    Verdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
+                    MissingNumbers = Array.Empty<int>(),
+                    DeclaredPieceCount = declaredPieceCount,
+                    ReceivedPieceCount = items.Count,
+                    DeclaredTotalBytes = declaredTotalBytes,
+                    ReceivedBytes = receivedBytes,
+                    Evidence = complete
+                        ? "自述整包对账：已收字节合计 == 自述整包字节数（入口 = 第 1 片）"
+                        : receivedBytes < declaredTotalBytes
+                            ? $"自述整包 {declaredTotalBytes} 字节，只收到 {receivedBytes} 字节 ⇒ 缺片"
+                            : $"已收 {receivedBytes} 字节 > 自述整包 {declaredTotalBytes} 字节 ⇒ 判不出（不猜）"
+                };
+            }
+
+            /*
+             * ④ 都判不出 ⇒ **只按大小定序**（除末片外等大、末片更小或相等）。
              *
              * ⚠ 这一档能回答"谁可能是末片"，但回答不了"这一组该有几片"（N 只能由入口包自述的整包字节数
              * 给出，那一条属于分卷专属算法）⇒ 结论只能落"判不出"，⛔ 不猜缺卷。
              */
-            List<Piece> bySize = items
-                .OrderBy(item => item.Card.Size)
+            List<PieceFacts> bySize = items
+                .OrderBy(item => item.Size)
                 .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             bool regularSizes = bySize.Count >= 2
-                && bySize.Take(bySize.Count - 1).All(item => item.Card.Size == bySize[0].Card.Size)
-                && bySize[^1].Card.Size <= bySize[0].Card.Size;
+                && bySize.Take(bySize.Count - 1).All(item => item.Size == bySize[0].Size)
+                && bySize[^1].Size <= bySize[0].Size;
 
             return new GroupCandidate
             {
@@ -222,23 +329,76 @@ namespace ArchiveFixer.Extraction
                 Pieces = bySize.Select(item => item.Path).ToList(),
                 EntryPath = string.Empty,
                 Verdict = GroupAnalysisVerdict.Unknown,
+                DeclaredPieceCount = declaredPieceCount,
+                ReceivedPieceCount = items.Count,
+                DeclaredTotalBytes = declaredTotalBytes,
+                ReceivedBytes = receivedBytes,
                 Evidence = regularSizes
                     ? "卷号判不出：只能按大小定序（除末片外等大），⛔ 不猜缺哪几片"
                     : "卷号判不出、大小也不规律：只给候选清单，⛔ 什么都不做"
             };
         }
 
+        /// <summary>
+        /// 一片的证据：**已登记过交接单的片直接用交接单里的底层事实**（⛔ 不重读盘）；
+        /// 只有盘上补进来的、没登记过的兄弟片才 `FileNature.Inspect` 一次。
+        /// </summary>
+        private static PieceFacts BuildFacts(
+            string path,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+        {
+            if (handoffByPath != null && handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? handoff))
+            {
+                return new PieceFacts(
+                    path,
+                    handoff.Format,
+                    handoff.VolumeNumber,
+                    handoff.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece,
+                    handoff.Size,
+                    handoff.DeclaredVolumeCount,
+                    handoff.DeclaredTotalBytes);
+            }
+
+            ArchiveFixer.Detection.FileNatureCard card = ArchiveFixer.Detection.FileNature.Inspect(path);
+
+            long size = card.Size;
+
+            if (size <= 0)
+            {
+                try
+                {
+                    size = new FileInfo(path).Length;
+                }
+                catch
+                {
+                    // 读不到大小就按 0 计入（对账时会自然落到"缺片"或"判不出"）。
+                }
+            }
+
+            return new PieceFacts(
+                path,
+                card.Format,
+                card.VolumeNumber,
+                card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece,
+                size,
+                card.DeclaredVolumeCount,
+                card.DeclaredTotalBytes);
+        }
+
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
         private static GroupCandidate Judge(
             string baseName,
             ArchiveFixer.Detection.VolumeContentFormat format,
-            List<Piece> items,
+            List<PieceFacts> items,
             List<int> numbers,
-            string evidenceSource)
+            string evidenceSource,
+            int declaredPieceCount,
+            long declaredTotalBytes,
+            long receivedBytes)
         {
             var ordered = items
-                .OrderBy(item => item.Card.VolumeNumber ?? int.MaxValue)
-                .ThenBy(item => item.Card.Size)
+                .OrderBy(item => item.VolumeNumber ?? int.MaxValue)
+                .ThenBy(item => item.Size)
                 .ToList();
 
             int max = numbers[^1];
@@ -251,7 +411,7 @@ namespace ArchiveFixer.Extraction
                 : Enumerable.Range(1, max).Except(numbers).ToList();
 
             string entry = items
-                .FirstOrDefault(item => item.Card.FirstVolumeFlag || item.Card.VolumeNumber == 1)
+                .FirstOrDefault(item => item.IsFirstPiece || item.VolumeNumber == 1)
                 ?.Path ?? string.Empty;
 
             return new GroupCandidate
@@ -262,13 +422,25 @@ namespace ArchiveFixer.Extraction
                 EntryPath = entry,
                 Verdict = contiguous ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
                 MissingNumbers = missing,
+                DeclaredPieceCount = declaredPieceCount,
+                ReceivedPieceCount = items.Count,
+                DeclaredTotalBytes = declaredTotalBytes,
+                ReceivedBytes = receivedBytes,
                 Evidence = contiguous
                     ? $"{evidenceSource}连成 1..{max}"
                     : $"{evidenceSource}只找到 {string.Join(",", numbers)}（1..{max} 里缺 {string.Join(",", missing)}）"
             };
         }
 
-        private sealed record Piece(string Path, ArchiveFixer.Detection.FileNatureCard Card);
+        /// <summary>一片的证据（交接单优先，盘上补片才回盘上读一次）。</summary>
+        private sealed record PieceFacts(
+            string Path,
+            ArchiveFixer.Detection.VolumeContentFormat Format,
+            int? VolumeNumber,
+            bool IsFirstPiece,
+            long Size,
+            int DeclaredPieceCount,
+            long DeclaredTotalBytes);
 
         private static IEnumerable<string> SafeEnumerate(string root)
         {
