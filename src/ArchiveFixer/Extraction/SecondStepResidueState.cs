@@ -1,4 +1,4 @@
-namespace ArchiveFixer.SecondStepResidue
+namespace ArchiveFixer.Extraction
 {
     /// <summary>
     /// 第二大步残留区的总开关（用户 2026-10-24 拍板：第一大步只登记信息、不做任何分卷操作）。

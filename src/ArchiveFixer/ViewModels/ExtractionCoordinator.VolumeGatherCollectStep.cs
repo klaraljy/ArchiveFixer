@@ -1460,7 +1460,7 @@ namespace ArchiveFixer.ViewModels
         private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null, ArchiveFixer.Detection.CardVolumeGroupReading? cardEvidence = null)
         {
             // 第二大步停摆中（用户 2026-10-24）：第一大步不许收拢/接片。
-            if (SecondStepResidue.SecondStepResidueState.Parked)
+            if (ArchiveFixer.Extraction.SecondStepResidueState.Parked)
             {
                 return;
             }

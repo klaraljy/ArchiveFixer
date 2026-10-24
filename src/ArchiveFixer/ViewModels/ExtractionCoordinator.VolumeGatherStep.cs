@@ -353,7 +353,7 @@ namespace ArchiveFixer.ViewModels
         private void PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName)
         {
             // 第二大步停摆中（用户 2026-10-24）：第一大步不许收片，一个字节都不动。
-            if (SecondStepResidue.SecondStepResidueState.Parked)
+            if (ArchiveFixer.Extraction.SecondStepResidueState.Parked)
             {
                 return;
             }
@@ -940,7 +940,7 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyDictionary<int, string>? slotCanonicalTargets = null)
         {
             // 第二大步停摆中（用户 2026-10-24）：第一大步不许接片/建链接/改名。
-            if (SecondStepResidue.SecondStepResidueState.Parked)
+            if (ArchiveFixer.Extraction.SecondStepResidueState.Parked)
             {
                 return false;
             }
