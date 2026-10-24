@@ -844,6 +844,28 @@ namespace ArchiveFixer.ViewModels
                 return $"{triggerLabel}：内容物已好，但{subject}没能全部删除（" + cleanup.Message + $"）；{subject}仍在原处，内容物不受影响";
             }
 
+            foreach (string deletedPath in cleanup.DeletedFiles)
+            {
+                DiagnosticLog.WriteFileOperation(
+                    _vm.Logger,
+                    "delete",
+                    deletedPath,
+                    target: null,
+                    result: "deleted",
+                    detail: $"trigger={trigger}; subject=源包; fate=永久删除");
+            }
+
+            foreach (string failedPath in cleanup.FailedFiles)
+            {
+                DiagnosticLog.WriteFileOperation(
+                    _vm.Logger,
+                    "delete",
+                    failedPath,
+                    target: null,
+                    result: "failed",
+                    detail: $"trigger={trigger}; subject=源包; message={cleanup.Message}");
+            }
+
             task.SourcePackageMove = SourcePackageMoveState.Done;
 
             /*

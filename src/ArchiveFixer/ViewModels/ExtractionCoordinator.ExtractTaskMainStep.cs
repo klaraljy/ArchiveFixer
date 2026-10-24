@@ -274,6 +274,8 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            DiagnosticLog.WriteTaskSnapshot(_vm.Logger, "task.begin", task);
+
             // 每个任务开始：清掉"这一个"的冲突记账（"全部 X"是本批级的，不清）。
             ResetTaskConflictState();
 
@@ -2264,6 +2266,18 @@ namespace ArchiveFixer.ViewModels
                     {
                         EngineOutputLog.LogVerbose(AppendLog, task.FileName, extractResult);
                     }
+
+                    _vm.Logger.Event(
+                        "engine.extract",
+                        $"{task.FileName}：引擎={extractResult.EngineId}；成功={extractResult.Success}；错误={extractResult.DetectedErrorType}",
+                        detail: "command=" + extractResult.CommandSummary
+                            + "; exit=" + extractResult.ExitCode
+                            + "; message=" + extractResult.Message
+                            + "; output=" + string.Join(" ｜ ", extractResult.KeyOutputLines()),
+                        file: task.CurrentPath,
+                        engine: extractResult.EngineId,
+                        exitCode: extractResult.ExitCode,
+                        result: extractResult.Success ? "success" : "failed");
 
                     if (extractResult.DetectedErrorType == "Cancelled" ||
                         extractResult.Status == StatusText.Cancelled ||

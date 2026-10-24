@@ -135,6 +135,18 @@ namespace ArchiveFixer.ViewModels
             _runOptions = runOptions;
 
             /*
+             * 诊断日志 v2：批次开始就把“本批有谁、每个文件多大/什么身份/内容卡是什么、
+             * 设置与工具是什么”写成一份独立可读的记录。用户以后只发日志时，不再依赖原包。
+             */
+            DiagnosticLog.WriteBatchStart(
+                _vm.Logger,
+                oneClickRun ? "一键处理" : "只解压",
+                oneClickRun ? "一键处理" : "手动只解压",
+                selectedTasks,
+                Settings,
+                ToolLocator.Default.DescribeAvailability());
+
+            /*
              * 手动档「解压到当前文件夹」：只认**手动那一条入口**传来的值。
              * 一键处理那条入口压根没有这个参数（永远 false）—— 这里再挡一道，防止以后有人顺手把它接过去：
              * 批量摊平会把几十个包的内容物混进同一层，是用户明令禁止的。
@@ -625,6 +637,12 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                DiagnosticLog.WriteBatchEnd(
+                    _vm.Logger,
+                    oneClickRun ? "一键处理" : "只解压",
+                    selectedTasks,
+                    "批量解压完成（逐任务终态见 tasks）");
 
                 /*
                  * **批末把"改过名的行"那三列重算一遍**（检测格式 / 建议后缀 / 后缀状态）——

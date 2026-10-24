@@ -927,6 +927,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 AppendLog("ERROR", "一键处理失败：" + ex.Message);
+                _vm.Logger.Exception("一键处理失败", ex);
                 _dialogService.ShowException(ex, "一键处理失败");
             }
             finally
@@ -1454,6 +1455,18 @@ namespace ArchiveFixer.ViewModels
                                 AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{linked.Describe()}（{namePlan.Evidence}）");
                                 _extractionCoordinator.MarkVolumeGroupLinked(committedUnit, linked.LinkedNames);
 
+                                DiagnosticLog.WriteGroup(
+                                    _vm.Logger,
+                                    "group.linked",
+                                    group.BaseName,
+                                    group.Format.ToString(),
+                                    committedUnit.State.ToString(),
+                                    committedUnit.Verdict,
+                                    group.EntryPath,
+                                    committedUnit.OrderedPieces,
+                                    committedUnit.MissingNumbers,
+                                    detail: namePlan.Evidence);
+
                                 if (namePlan.Items.FirstOrDefault(item => item.IsEntry) is { } entryItem)
                                 {
                                     entryTask.EngineEntryPathOverride =
@@ -1562,6 +1575,18 @@ namespace ArchiveFixer.ViewModels
 
                                     _extractionCoordinator.MarkVolumeGroupLinked(ownedUnit, linked.LinkedNames);
                                     AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{linked.Describe()}");
+
+                                    DiagnosticLog.WriteGroup(
+                                        _vm.Logger,
+                                        "group.linked",
+                                        group.BaseName,
+                                        group.Format.ToString(),
+                                        ownedUnit.State.ToString(),
+                                        ownedUnit.Verdict,
+                                        group.EntryPath,
+                                        ownedUnit.OrderedPieces,
+                                        ownedUnit.MissingNumbers,
+                                        detail: plan.Evidence);
 
                                     if (plan.Items.FirstOrDefault(item => item.IsEntry) is { } entryItem)
                                     {

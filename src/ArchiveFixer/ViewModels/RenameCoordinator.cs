@@ -153,6 +153,14 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"{item.OriginalFileName} -> {item.NewFileName}，状态：{item.Status}，错误：{item.ErrorMessage}");
+
+                    DiagnosticLog.WriteFileOperation(
+                        _vm.Logger,
+                        "rename",
+                        item.OriginalPath,
+                        item.NewPath,
+                        result: item.Status,
+                        detail: $"检测格式={item.DetectedFormat}；操作={item.Operation}；错误={item.ErrorMessage}");
                 }
 
                 await RescanRenamedTasksAsync(renamedTasks);

@@ -1,8 +1,11 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Password;
@@ -53,7 +56,20 @@ namespace ArchiveFixer.Services
 
         private string _currentLogFilePath = string.Empty;
         private string _currentJsonlFilePath = string.Empty;
+        private string _currentTraceFilePath = string.Empty;
         private bool _enableFileLog = true;
+
+        /// <summary>本次进程运行 id（每次启动一个；日志只靠它就能区分“哪一次运行”）。</summary>
+        private readonly string _runId = Guid.NewGuid().ToString("N");
+
+        /// <summary>本次运行内的日志序号（从 1 开始；人读/机器读同一条同号）。</summary>
+        private long _sequence;
+
+        /// <summary>诊断事件专用序号（不参与人读/JSONL 的一比一）。</summary>
+        private long _traceSequence;
+
+        /// <summary>本进程启动时间（环境头用）。</summary>
+        private readonly DateTime _processStarted = Process.GetCurrentProcess().StartTime;
 
         /// <summary>
         /// **这一行的来源上下文**（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）—— 大测试的"只看日志排查"靠它。
@@ -118,6 +134,12 @@ namespace ArchiveFixer.Services
         /// 于是"只看日志"也能把每一处判据的输入与结论摆出来。</para>
         /// </summary>
         public string CurrentJsonlFilePath => _currentJsonlFilePath;
+
+        /// <summary>
+        /// 当前**诊断事件**那一份（`.trace.jsonl`：schema v2，一批一条 JSON，不占人读行）。
+        /// 它与 `.log`/`.jsonl` 分离：成功任务的屏幕日志仍只留少量行，详细的批次/任务/文件/引擎事实全在这里。
+        /// </summary>
+        public string CurrentTraceFilePath => _currentTraceFilePath;
 
         /// <summary>
         /// 是否往文件里写日志（对应设置项「启用日志文件」，默认开）。
@@ -255,6 +277,27 @@ namespace ArchiveFixer.Services
                 }
             }
 
+            /*
+             * 诊断事件（`.trace.jsonl`）一并附在导出文件末尾：用户只发这一份 txt 时，
+             * 批次清单/任务事实/文件操作/引擎原话不能丢。它**不计入**上面的“日志行数”
+             * （那个数字仍然只数人读正文，与既有导出头的口径一致）。
+             */
+            if (!string.IsNullOrWhiteSpace(_currentTraceFilePath) && File.Exists(_currentTraceFilePath))
+            {
+                string[] traceLines = File.ReadAllLines(_currentTraceFilePath);
+
+                if (traceLines.Length > 0)
+                {
+                    builder.AppendLine();
+                    builder.AppendLine("================ 以下是诊断事件（trace.jsonl） ================");
+
+                    foreach (string traceLine in traceLines)
+                    {
+                        builder.AppendLine(traceLine);
+                    }
+                }
+            }
+
             File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
 
             return (lines, fromMarker);
@@ -289,6 +332,7 @@ namespace ArchiveFixer.Services
                 string fileName = $"ArchiveFixer_{FormatFileTimestamp(DateTime.Now)}.log";
                 _currentLogFilePath = Path.Combine(LogDirectory, fileName);
                 _currentJsonlFilePath = Path.ChangeExtension(_currentLogFilePath, ".jsonl");
+                _currentTraceFilePath = Path.ChangeExtension(_currentLogFilePath, ".trace.jsonl");
 
                 if (_enableFileLog)
                 {
@@ -315,6 +359,13 @@ namespace ArchiveFixer.Services
                             Encoding.UTF8);
                     }
 
+                    if (_currentTraceFilePath.Length > 0)
+                    {
+                        File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
+                    }
+
+                    WriteEnvironmentHeader();
+
                     // 顺手把老日志收一收（第 44 条追加）：不清理的话日志目录只增不减。
                     CleanupOldLogs();
                 }
@@ -323,6 +374,50 @@ namespace ArchiveFixer.Services
             {
                 _enableFileLog = false;
                 _currentLogFilePath = string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 日志环境头：OS / .NET / 进程 / 架构 / 启动时间 / 工作目录 / 程序版本。
+        /// 以后用户只发日志时，这一条让读日志的人不必再问“什么系统、什么版本、什么时候跑的”。
+        /// </summary>
+        private void WriteEnvironmentHeader()
+        {
+            try
+            {
+                Process process = Process.GetCurrentProcess();
+                string detail = JsonSerializer.Serialize(new
+                {
+                    schema = "archivefixer.log.v2",
+                    app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
+                    file_version = FileVersionInfo.GetVersionInfo(typeof(LogService).Assembly.Location).FileVersion ?? string.Empty,
+                    os = RuntimeInformation.OSDescription,
+                    os_arch = RuntimeInformation.OSArchitecture.ToString(),
+                    process_arch = RuntimeInformation.ProcessArchitecture.ToString(),
+                    framework = RuntimeInformation.FrameworkDescription,
+                    dotnet = Environment.Version.ToString(),
+                    process_id = process.Id,
+                    process_name = process.ProcessName,
+                    process_started = FormatTimestamp(process.StartTime),
+                    machine = Environment.MachineName,
+                    user = Environment.UserName,
+                    working_directory = Environment.CurrentDirectory,
+                    command_line = Environment.CommandLine,
+                    processor_count = Environment.ProcessorCount,
+                    is_64bit_process = Environment.Is64BitProcess,
+                    log_directory = LogDirectory,
+                    culture = CultureInfo.CurrentCulture.Name,
+                    ui_culture = CultureInfo.CurrentUICulture.Name
+                });
+
+                Event(
+                    "session.environment",
+                    $"运行环境：{RuntimeInformation.OSDescription}；{RuntimeInformation.FrameworkDescription}；进程 {process.ProcessName}（{process.Id}）",
+                    detail: detail);
+            }
+            catch (Exception exception)
+            {
+                Exception("写运行环境头失败", exception);
             }
         }
 
@@ -383,6 +478,13 @@ namespace ArchiveFixer.Services
                         deleted++;
                         freedBytes += length;
                         totalBytes -= length;
+
+                        /*
+                         * 孪生文件跟着人读日志一起收：否则 `.jsonl` / `.trace.jsonl` 只增不减，
+                         * 而用户看到的是“日志已经清过了”。当前这一份三件套永远不在这里的 files 里。
+                         */
+                        freedBytes += TryDeleteLogTwin(file.FullName, ".jsonl");
+                        freedBytes += TryDeleteLogTwin(file.FullName, ".trace.jsonl");
                     }
                     catch
                     {
@@ -403,6 +505,31 @@ namespace ArchiveFixer.Services
             catch
             {
                 // 清理失败绝不能让程序起不来：日志只是辅助。
+            }
+        }
+
+        /// <summary>
+        /// 删掉人读日志的孪生文件（`.jsonl` / `.trace.jsonl`），返回释放字节数。
+        /// 只由保留策略调用；当前这一份永远不会走到这里。
+        /// </summary>
+        private static long TryDeleteLogTwin(string logPath, string extension)
+        {
+            try
+            {
+                string twin = Path.ChangeExtension(logPath, extension);
+
+                if (!File.Exists(twin))
+                {
+                    return 0;
+                }
+
+                long length = new FileInfo(twin).Length;
+                File.Delete(twin);
+                return length;
+            }
+            catch
+            {
+                return 0;
             }
         }
 
@@ -505,6 +632,112 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// **写一条结构化诊断事件**：人读一行（事件名 + 摘要），机器读那一份带
+        /// <c>event/source/target/action/result/detail/stack/engine/exitCode/bytes/durationMs/group/identity</c>。
+        /// 这是“只靠日志排查”的入口；⛔ 不改任何业务判据。
+        /// </summary>
+        public void Event(
+            string eventName,
+            string message,
+            string detail = "",
+            string level = "INFO",
+            string file = "",
+            string source = "",
+            string target = "",
+            string action = "",
+            string result = "",
+            string stack = "",
+            string engine = "",
+            int? exitCode = null,
+            long? bytes = null,
+            long? durationMs = null,
+            string group = "",
+            string identity = "")
+        {
+            string human = $"事件「{eventName}」：{message}"
+                + (source.Length > 0 || target.Length > 0
+                    ? $"（{source} → {target}）"
+                    : string.Empty)
+                + (result.Length > 0 ? $" ⇒ {result}" : string.Empty);
+
+            level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
+            var item = new OperationLogItem(level, Sanitize(human), file);
+
+            /*
+             * 诊断事件只进 `.trace.jsonl`：成功任务的屏幕/人读日志仍保持“一行”纪律，
+             * 而详细事实（批次清单/任务卡/文件操作/引擎原话）在独立文件里，行数与屏幕无关。
+             */
+            lock (_lockObj)
+            {
+                if (!_enableFileLog || string.IsNullOrWhiteSpace(_currentTraceFilePath))
+                {
+                    return;
+                }
+
+                try
+                {
+                    File.AppendAllText(
+                        _currentTraceFilePath,
+                        BuildJsonRecord(
+                            item,
+                            RunContext,
+                            null,
+                            new LogEventFields(
+                                Event: eventName,
+                                Source: Sanitize(source),
+                                Target: Sanitize(target),
+                                Action: Sanitize(action),
+                                Result: Sanitize(result),
+                                Detail: Sanitize(detail),
+                                Stack: Sanitize(stack),
+                                Engine: Sanitize(engine),
+                                ExitCode: exitCode,
+                                Bytes: bytes,
+                                DurationMs: durationMs,
+                                Group: Sanitize(group),
+                                Identity: Sanitize(identity)),
+                            ++_traceSequence,
+                            _runId,
+                            Environment.ProcessId,
+                            Environment.CurrentManagedThreadId)
+                        + Environment.NewLine,
+                        Encoding.UTF8);
+                }
+                catch
+                {
+                    // 诊断日志写失败不影响主日志与业务。
+                }
+            }
+        }
+
+        /// <summary>写一条异常事件（异常类型/消息进人读行，完整 ToString 进机器读的 stack）。</summary>
+        public void Exception(string context, Exception exception, string taskPath = "")
+        {
+            if (exception == null)
+            {
+                return;
+            }
+
+            string detail = JsonSerializer.Serialize(new
+            {
+                type = exception.GetType().FullName,
+                message = exception.Message,
+                inner = exception.InnerException?.GetType().FullName,
+                inner_message = exception.InnerException?.Message,
+                source = exception.Source,
+                hresult = exception.HResult
+            });
+
+            Event(
+                "exception",
+                $"{context}：{exception.GetType().Name}：{exception.Message}",
+                detail: detail,
+                level: "ERROR",
+                file: taskPath,
+                stack: exception.ToString());
+        }
+
+        /// <summary>
         /// **写一处判据**（大测试的"只看日志排查"主要靠它）：人读一行 + 机器读一条（字段固定）。
         ///
         /// <para>人读那一行的形状：<c>判据「&lt;名字&gt;」｜输入：&lt;判据输入&gt; ⇒ 结论：&lt;结论&gt;（动作：&lt;动作&gt;）</c>；
@@ -533,7 +766,12 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary><see cref="Write"/> 与 <see cref="Criterion"/> 的**唯一**收口（屏幕 + 人读文件 + 机器读文件）。</summary>
-        private void WriteInternal(string level, string message, string taskPath, CriterionFields? criterion)
+        private void WriteInternal(
+            string level,
+            string message,
+            string taskPath,
+            CriterionFields? criterion,
+            LogEventFields? evidence = null)
         {
             level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
             message = Sanitize(message);
@@ -543,7 +781,7 @@ namespace ArchiveFixer.Services
             lock (_lockObj)
             {
                 AddScreenLog(item);
-                WriteFileLog(item, criterion);
+                WriteFileLog(item, criterion, evidence);
             }
 
             LogAdded?.Invoke(this, item);
@@ -625,7 +863,10 @@ namespace ArchiveFixer.Services
             }
         }
 
-        private void WriteFileLog(OperationLogItem item, CriterionFields? criterion = null)
+        private void WriteFileLog(
+            OperationLogItem item,
+            CriterionFields? criterion = null,
+            LogEventFields? evidence = null)
         {
             if (!_enableFileLog)
             {
@@ -652,7 +893,16 @@ namespace ArchiveFixer.Services
                 {
                     File.AppendAllText(
                         _currentJsonlFilePath,
-                        BuildJsonRecord(item, RunContext, criterion) + Environment.NewLine,
+                        BuildJsonRecord(
+                            item,
+                            RunContext,
+                            criterion,
+                            evidence,
+                            ++_sequence,
+                            _runId,
+                            Environment.ProcessId,
+                            Environment.CurrentManagedThreadId)
+                        + Environment.NewLine,
                         Encoding.UTF8);
                 }
             }
@@ -670,6 +920,24 @@ namespace ArchiveFixer.Services
             string Action,
             string File,
             string Identity);
+
+        /// <summary>
+        /// 一条结构化诊断事件的字段（唯一写入口 <see cref="Event"/>）；⛔ 不参与任何业务判据。
+        /// </summary>
+        public sealed record LogEventFields(
+            string Event = "",
+            string Source = "",
+            string Target = "",
+            string Action = "",
+            string Result = "",
+            string Detail = "",
+            string Stack = "",
+            string Engine = "",
+            int? ExitCode = null,
+            long? Bytes = null,
+            long? DurationMs = null,
+            string Group = "",
+            string Identity = "");
 
         /// <summary>这一行的来源上下文（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）。</summary>
         public sealed record LogRunContext
@@ -698,13 +966,23 @@ namespace ArchiveFixer.Services
         internal static string BuildJsonRecord(
             OperationLogItem item,
             LogRunContext context,
-            CriterionFields? criterion)
+            CriterionFields? criterion,
+            LogEventFields? evidence = null,
+            long sequence = 0,
+            string runId = "",
+            int processId = 0,
+            int threadId = 0)
         {
             var builder = new StringBuilder(256);
 
             builder.Append('{');
-            AppendJsonField(builder, "ts", FormatTimestamp(item.Time), first: true);
+            AppendJsonField(builder, "schema", "archivefixer.log.v2", first: true);
+            AppendJsonField(builder, "ts", FormatTimestamp(item.Time));
             AppendJsonField(builder, "level", item.Level);
+            AppendJsonNumber(builder, "seq", sequence);
+            AppendJsonField(builder, "run", runId);
+            AppendJsonNumber(builder, "pid", processId);
+            AppendJsonNumber(builder, "thread", threadId);
             AppendJsonField(builder, "batch", context.Batch);
             AppendJsonNumber(builder, "round", context.Round);
             AppendJsonField(builder, "sample", context.Sample);
@@ -718,6 +996,19 @@ namespace ArchiveFixer.Services
             AppendJsonField(builder, "verdict", criterion?.Verdict ?? string.Empty);
             AppendJsonField(builder, "action", criterion?.Action ?? string.Empty);
             AppendJsonField(builder, "msg", item.Message);
+            AppendJsonField(builder, "event", evidence?.Event ?? string.Empty);
+            AppendJsonField(builder, "source", evidence?.Source ?? string.Empty);
+            AppendJsonField(builder, "target", evidence?.Target ?? string.Empty);
+            AppendJsonField(builder, "op_action", evidence?.Action ?? string.Empty);
+            AppendJsonField(builder, "result", evidence?.Result ?? string.Empty);
+            AppendJsonField(builder, "detail", evidence?.Detail ?? string.Empty);
+            AppendJsonField(builder, "stack", evidence?.Stack ?? string.Empty);
+            AppendJsonField(builder, "engine", evidence?.Engine ?? string.Empty);
+            AppendJsonNumber(builder, "exitCode", evidence?.ExitCode);
+            AppendJsonNumber(builder, "bytes", evidence?.Bytes);
+            AppendJsonNumber(builder, "durationMs", evidence?.DurationMs);
+            AppendJsonField(builder, "group", evidence?.Group ?? string.Empty);
+            AppendJsonField(builder, "op_identity", evidence?.Identity ?? string.Empty);
             builder.Append('}');
 
             return builder.ToString();
@@ -736,6 +1027,27 @@ namespace ArchiveFixer.Services
         private static void AppendJsonNumber(StringBuilder builder, string name, int value)
         {
             builder.Append(",\"").Append(name).Append("\":").Append(value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void AppendJsonNumber(StringBuilder builder, string name, long value)
+        {
+            builder.Append(",\"").Append(name).Append("\":").Append(value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void AppendJsonNumber(StringBuilder builder, string name, int? value)
+        {
+            if (value.HasValue)
+            {
+                AppendJsonNumber(builder, name, (long)value.Value);
+            }
+        }
+
+        private static void AppendJsonNumber(StringBuilder builder, string name, long? value)
+        {
+            if (value.HasValue)
+            {
+                AppendJsonNumber(builder, name, value.Value);
+            }
         }
 
         /// <summary>JSON 字符串转义（零依赖；控制字符走 <c>\uXXXX</c>，⛔ 换行绝不许漏进记录里）。</summary>
@@ -919,6 +1231,31 @@ namespace ArchiveFixer.Services
                 foreach (string line in lines)
                 {
                     builder.AppendLine(line);
+                }
+
+                string tracePath = Path.ChangeExtension(file, ".trace.jsonl");
+
+                if (File.Exists(tracePath))
+                {
+                    try
+                    {
+                        string[] traceLines = File.ReadAllLines(tracePath);
+
+                        if (traceLines.Length > 0)
+                        {
+                            builder.AppendLine();
+                            builder.AppendLine($"# {Path.GetFileName(tracePath)}（诊断事件 {traceLines.Length} 行）");
+
+                            foreach (string traceLine in traceLines)
+                            {
+                                builder.AppendLine(traceLine);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // 诊断事件读不出不影响人读日志的导出。
+                    }
                 }
 
                 builder.AppendLine();

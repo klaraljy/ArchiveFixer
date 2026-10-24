@@ -273,6 +273,9 @@ namespace ArchiveFixer.ViewModels
 
         public ObservableCollection<OperationLogItem> Logs { get; } = new();
 
+        /// <summary>诊断日志入口（只读；⛔ 业务判据不许读它，只许写日志）。</summary>
+        internal LogService Logger => _logService;
+
         public AppSettings Settings
         {
             get => _settings;
@@ -2259,6 +2262,15 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", "软件启动");
 
             /*
+             * 诊断日志 v2：启动即写本次设置与工具状态（脱敏，⛔ 不写密码）。
+             * 以后用户只发日志时，不必再问“他是什么设置、工具在哪一版”。
+             */
+            DiagnosticLog.WriteSettings(
+                _logService,
+                Settings,
+                ArchiveFixer.Engines.ToolLocator.Default.DescribeAvailability());
+
+            /*
              * 弹窗"要不要响铃闪任务栏"的决定写进日志（用户 2026-09-26）：
              * 现在的口径是**只有窗口没能出现在最前面时才提醒**，所以"这次为什么响 / 为什么没响"
              * 必须答得出来 —— 用户问过一次"这个提醒的作用是什么"，日志就是那个答案。
@@ -3905,7 +3917,8 @@ namespace ArchiveFixer.ViewModels
                 "细节在哪看：①页任务行的「详情 / 右键复制任务信息」= 单任务全过程；"
                 + "「导出失败清单」= 每个失败包的原因与所用引擎；"
                 + "③页「工作区残留」= 失败时留下的中间产物（要先在③页打开「失败时保留中间产物」）；"
-                + "要看成功任务的全过程请在⑥设置勾上「详细日志（排查用）」再跑一次。");
+                + "本次导出末尾已附「诊断事件（trace.jsonl）」= 批次清单/任务文件事实/判据/文件操作/引擎原话，"
+                + "以后排查只发这一份日志即可；⑥设置的「详细日志（排查用）」也仍可用。");
             lines.Add("================ 以下是日志正文 ================");
 
             return lines;
