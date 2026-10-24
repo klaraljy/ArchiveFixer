@@ -52,7 +52,7 @@ namespace ArchiveFixer.Tests
         /// </summary>
         [Theory]
         [InlineData(@"src\ArchiveFixer\ViewModels\RenameCoordinator.cs")]
-        [InlineData(@"src\ArchiveFixer\ViewModels\ExtractionCoordinator.cs")]
+        [InlineData(@"src\ArchiveFixer\ViewModels\ExtractionCoordinator.PasswordPromptStep.cs")]
         public void 内联建的子窗_同样挂了这条策略(string relativePath)
         {
             string source = File.ReadAllText(RepoPath(relativePath.Split('\\')));
