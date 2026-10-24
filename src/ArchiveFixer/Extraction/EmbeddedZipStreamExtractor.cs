@@ -125,6 +125,12 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>解锁成功时用的是哪种密码字节编码（<see cref="ResolvedPasswordIndex"/> 为 0 时无意义）。</summary>
         public ZipAesPasswordEncoding ResolvedPasswordEncoding { get; init; }
+
+        /// <summary>
+        /// 命名类警告（保留设备名 / 结尾点或空格 / 备用数据流）：不拒绝整包，落盘时由清洗步骤改名；
+        /// 没有就是空串。调用方负责把它写成一行 WARN（用户 2026-10-24：日志要详细）。
+        /// </summary>
+        public string NamingSummary { get; init; } = string.Empty;
     }
 
     /// <summary>
@@ -157,6 +163,9 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>是不是加密包（AES）。报告与日志里要说清"这次是按哪种字节解开的"。</summary>
         public bool WasEncrypted { get; init; }
+
+        /// <summary>命名类警告（保留名 / 结尾点或空格 / 备用数据流）；没有就是空串。</summary>
+        public string NamingSummary { get; init; } = string.Empty;
     }
 
     /// <summary>
@@ -358,7 +367,8 @@ namespace ArchiveFixer.Extraction
                     Success = false,
                     Unsupported = !plan.PathRejected && !plan.PasswordRejected,
                     Message = plan.PathRejected || plan.PasswordRejected ? plan.Message : plan.Reason,
-                    Entries = plan.Entries
+                    Entries = plan.Entries,
+                    NamingSummary = plan.NamingSummary
                 };
             }
 
@@ -896,7 +906,8 @@ namespace ArchiveFixer.Extraction
                 offset,
                 offset + zipLength,
                 resolvedPasswordIndex,
-                resolvedEncoding);
+                resolvedEncoding,
+                pathReport.NamingSummary);
         }
 
         /// <summary>
@@ -1415,7 +1426,8 @@ namespace ArchiveFixer.Extraction
                 Entries = plan.Entries,
                 ResolvedPasswordIndex = plan.ResolvedPasswordIndex,
                 ResolvedPasswordEncoding = plan.ResolvedPasswordEncoding,
-                WasEncrypted = aesStrength != 0
+                WasEncrypted = aesStrength != 0,
+                NamingSummary = plan.NamingSummary
             };
         }
 
@@ -2198,7 +2210,8 @@ namespace ArchiveFixer.Extraction
                 long offset,
                 long end,
                 int resolvedPasswordIndex,
-                ZipAesPasswordEncoding resolvedPasswordEncoding) => new()
+                ZipAesPasswordEncoding resolvedPasswordEncoding,
+                string namingSummary = "") => new()
                 {
                     IsCandidate = true,
                     Result = new EmbeddedZipProbeResult
@@ -2211,7 +2224,8 @@ namespace ArchiveFixer.Extraction
                         End = end,
                         TotalBytes = totalBytes,
                         ResolvedPasswordIndex = resolvedPasswordIndex,
-                        ResolvedPasswordEncoding = resolvedPasswordEncoding
+                        ResolvedPasswordEncoding = resolvedPasswordEncoding,
+                        NamingSummary = namingSummary
                     }
                 };
         }

@@ -80,10 +80,10 @@ $samples = @(
        Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'C02'; Family = '负对照'; Title = '内容是分卷首卷、名字被改成 .7z（闸门拦下 → 跳过 + 交接）'
-       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @() } },
+       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：', '分卷成员'); LogForbids = @('解压成功') } },
 
     @{ Id = 'C03'; Family = '负对照'; Title = '纯文本改名 .zip（判不出 ⇒ 跳过，不算失败）'
-       Build = 'textzip'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @() } },
+       Build = 'textzip'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：'); LogForbids = @('解压成功') } },
 
     # D 双面文件（3）
     @{ Id = 'D01'; Family = '双面'; Title = 'mp4 前缀 + 尾部 zip'
@@ -95,7 +95,7 @@ $samples = @(
        Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
 
     @{ Id = 'D03'; Family = '双面'; Title = '纯媒体、尾部没有归档（不许当包）'
-       Build = 'puremedia'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @() } },
+       Build = 'puremedia'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：'); LogForbids = @('解压成功') } },
 
     # E 损坏（2）
     @{ Id = 'E01'; Family = '损坏'; Title = '7z 头完好、数据段被改坏（损坏包 ⇒ 部分完成）'
@@ -119,10 +119,10 @@ $samples = @(
        Build = 'traversal'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Failed'; Content = @(); ForbidOutside = $true } },
 
     @{ Id = 'G02'; Family = '安全'; Title = 'zip 里有 CON / 结尾空格与点（引擎改名后照常落盘）'
-       Build = 'reserved'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt') } },
+       Build = 'reserved'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); LogContains = @('格式：', '名字不规范'); LogForbids = @() } },
 
     @{ Id = 'G03'; Family = '安全'; Title = 'APK（必须拒绝解压）'
-       Build = 'apk'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Skipped'; Content = @() } },
+       Build = 'apk'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：'); LogForbids = @('解压成功') } },
 
     # H 落点 / 收尾（3）
     @{ Id = 'H01'; Family = '落点'; Title = '普通落点：包名目录 + 内容物层'
@@ -458,6 +458,10 @@ foreach ($s in $samples) {
         $p = Join-Path $dir $tmp
         if (Test-Path $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }
+
+    # 断言默认值：日志里必须记下"文件的信息"（检测行）；⛔ 用户可见文本不许出现 Markdown 加粗
+    if (-not $s.Expect.ContainsKey('LogContains')) { $s.Expect.LogContains = @('格式：') }
+    if (-not $s.Expect.ContainsKey('LogForbids')) { $s.Expect.LogForbids = @() }
 
     # recipe.json（断言随样本走）
     $recipe = [ordered]@{

@@ -106,6 +106,15 @@ namespace ArchiveFixer.ViewModels
                 + $"；用时 {directReadWatch.Elapsed.TotalSeconds:0.0} 秒 ≈ {DescribeThroughput(extract.WrittenBytes, directReadWatch.Elapsed)}"
                 + "（直读就是「读出来再写进去」的一次拷贝，速度上限由这块盘决定）");
 
+            /*
+             * 命名类警告（保留名 / 结尾点或空格 / 备用数据流）：直读这条路**照常落盘**，
+             * 只把"哪些名字会被 Windows 改写"如实写一行（用户 2026-10-24：日志要详细）。
+             */
+            if (extract.NamingSummary.Length > 0)
+            {
+                AppendLog("WARN", $"{task.LogName}：{extract.NamingSummary}");
+            }
+
             task.Status = StatusText.ExtractSuccess;
             /*
              * 密码状态按**实际发生的事**写：加密包是被内置读取器用候选密码解开的，

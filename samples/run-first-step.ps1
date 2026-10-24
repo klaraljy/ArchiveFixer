@@ -1,4 +1,4 @@
-﻿# 第一大步 runner：按 recipe.json 跑一遍并判红绿（用户 2026-10-24）
+# 第一大步 runner：按 recipe.json 跑一遍并判红绿（用户 2026-10-24）
 #
 # 用法：
 #   pwsh -NoProfile -File samples/run-first-step.ps1                   # 跑全部样本 × 两种落点模式
@@ -63,6 +63,12 @@ try {
             }
             foreach ($sub in Get-ChildItem -LiteralPath $dir.FullName -Directory) {
                 Copy-Item -LiteralPath $sub.FullName -Destination (Join-Path $stage $sub.Name) -Recurse
+            }
+
+            # 跑之前先记下每一份样本文件的哈希：跑完必须逐字节不变（"闸门通过 ⇒ 原地不动"）
+            $beforeHash = @{}
+            foreach ($f in Get-ChildItem -LiteralPath $stage -Recurse -File) {
+                $beforeHash[$f.FullName.Substring($stage.Length + 1)] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
             }
 
             # 密码本
@@ -138,12 +144,37 @@ try {
                 Where-Object { $_.Name -eq '.ArchiveFixer.work' })
             if ($residue.Count -gt 0) { $reasons.Add("工作区残留 $($residue.Count) 处") }
 
-            # ⑤ 源包不动（这一套 runner 用 KeepInPlace 档）
+            # ⑤ 源包逐字节不变（这一套 runner 用 KeepInPlace 档）：闸门放行的分卷片必须原地不动
             $lost = @()
-            foreach ($f in $sampleFiles) {
-                if (-not (Test-Path -LiteralPath (Join-Path $res.inputRoot $f))) { $lost += $f }
+            $changed = @()
+            foreach ($rel in $beforeHash.Keys) {
+                $p2 = Join-Path $res.inputRoot $rel
+                if (-not (Test-Path -LiteralPath $p2)) { $lost += $rel; continue }
+                if ((Get-FileHash -LiteralPath $p2 -Algorithm SHA256).Hash -ne $beforeHash[$rel]) { $changed += $rel }
             }
             if ($lost.Count -gt 0) { $reasons.Add("源包不见了：" + ($lost -join '，')) }
+            if ($changed.Count -gt 0) { $reasons.Add("源包被改了字节：" + ($changed -join '，')) }
+
+            # ⑥ 跳过的样本：不许产出内容物、也不许建输出目录
+            if ($recipe.expect.Outcome -eq 'Skipped' -and @($recipe.expect.Content).Count -eq 0) {
+                $outFiles = @(Get-ChildItem -LiteralPath $res.outputRoot -Recurse -File -ErrorAction SilentlyContinue)
+                if ($outFiles.Count -gt 0) { $reasons.Add("跳过却产出了 $($outFiles.Count) 个文件") }
+                $inDirs = @(Get-ChildItem -LiteralPath $res.inputRoot -Recurse -Directory -ErrorAction SilentlyContinue)
+                if ($inDirs.Count -gt 0) { $reasons.Add("跳过却在样本目录里建了 $($inDirs.Count) 个目录") }
+            }
+
+            # ⑦ 日志：文件信息必须被记录；不许出现被禁的文案
+            $logText = ''
+            $logDir = Join-Path $fixtureRoot 'data\logs'
+            if (Test-Path -LiteralPath $logDir) {
+                $logText = (@(Get-ChildItem -LiteralPath $logDir -Filter *.log | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n")
+            }
+            foreach ($needle in @($recipe.expect.LogContains)) {
+                if (-not [string]::IsNullOrWhiteSpace($needle) -and -not $logText.Contains($needle)) { $reasons.Add("日志里没记「$needle」") }
+            }
+            foreach ($needle in @($recipe.expect.LogForbids)) {
+                if (-not [string]::IsNullOrWhiteSpace($needle) -and $logText.Contains($needle)) { $reasons.Add("日志里不该出现「$needle」") }
+            }
 
             # ⑥ 不许逃出目录（G01 那一档）
             if ($recipe.expect.ForbidOutside) {
