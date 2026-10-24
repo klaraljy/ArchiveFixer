@@ -1168,13 +1168,36 @@ namespace ArchiveFixer.ViewModels
                      * 直接 `break` 跳过它（实测：EEE ③ 一点没变）。
                      */
                     /*
-                     * ===== 第二大步（组分析 / 收卷）：已整段停用并搬到 `SecondStepResidue`
-                     * （用户 2026-10-24：这些都不属于第一大步；重建第二大步时去残留里挑）=====
+                     * ===== 交界处消费端 · 第一段（只读）：用交接单做组分析 =====
                      *
-                     * 原来这里跑：`GroupAnalysis.Analyze`（吃交接单 + 内层归档）→ 打 `[第二大步·组分析]`
-                     * → `HarvestSolvedGroupVolumesForRound`（记已解开的组）。
-                     * 现在一次都不跑；交接事实仍由第一大步登记，留给将来重建的第二大步消费。
+                     * 用户 2026-10-24：交接处先只做「读」—— 交接单是事实来源（族/卷号/首卷/自述片数/自述整包），
+                     * 这一遍只打 `[第二大步·组分析]` 事实行；⛔ 不点名、不搬片、不改名、不动盘。
+                     * 组分析实现从 `SecondStepResidue/GroupAnalysis.cs` 挑回来的（只读纯函数）。
                      */
+                    try
+                    {
+                        List<string> groupRoots = innerArchives
+                            .Select(candidate => candidate.ParentOutputDirectory)
+                            .Concat(Tasks.Select(task => task.OutputPath))
+                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.SourceLayer))
+                            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
+                                     _extractionCoordinator.VolumeHandoffEntries,
+                                     groupRoots,
+                                     innerArchives.Select(candidate => candidate.Path)))
+                        {
+                            AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
+                        }
+                    }
+                    catch (Exception probeError)
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"[第二大步·组分析] 跳过：{probeError.GetType().Name}：{probeError.Message}");
+                    }
 
                     foreach (string line in scanLog)
                     {
