@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -183,13 +184,6 @@ namespace ArchiveFixer.Extraction
 
             foreach (CanonicalNamePlanItem item in plan.Items)
             {
-                if (item.Conflict.Length > 0)
-                {
-                    result.Skipped++;
-                    result.Details.Add($"{item.TargetName}：{item.Conflict}，跳过（不覆盖）");
-                    continue;
-                }
-
                 if (string.IsNullOrWhiteSpace(item.PiecePath) || !File.Exists(item.PiecePath))
                 {
                     result.Skipped++;
@@ -198,6 +192,27 @@ namespace ArchiveFixer.Extraction
                 }
 
                 string target = Path.Combine(sourceLayer, item.TargetName);
+
+                /*
+                 * 目标名已经存在、且与源片是**同一份物理文件**（上一轮已建过这条链接）⇒
+                 * 不算冲突、不再建一次，但必须记进 LinkedNames —— 收片账要按它把原名也一起收掉。
+                 */
+                if (File.Exists(target)
+                    && !string.Equals(Path.GetFullPath(target), Path.GetFullPath(item.PiecePath), StringComparison.OrdinalIgnoreCase)
+                    && FileIdentity.IsSamePhysicalFile(item.PiecePath, target))
+                {
+                    result.Linked++;
+                    result.LinkedNames.Add(target);
+                    result.Details.Add($"{item.TargetName}：同一份文件的规范名已经在了（计入本组收片账）");
+                    continue;
+                }
+
+                if (item.Conflict.Length > 0)
+                {
+                    result.Skipped++;
+                    result.Details.Add($"{item.TargetName}：{item.Conflict}，跳过（不覆盖）");
+                    continue;
+                }
 
                 if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(item.PiecePath), StringComparison.OrdinalIgnoreCase))
                 {

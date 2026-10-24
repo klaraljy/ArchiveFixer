@@ -1226,46 +1226,44 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
+                        /*
+                         * 族的**入口片**才是 owner。先按组事实建 Unit（owner 先空），
+                         * 由族算法给出规范名计划里的 IsEntry 片（RAR=第 1 卷、跨盘 ZIP=末片 .zip、
+                         * 通用分片/7z=第 1 片）；⛔ 不再“任务表里哪一片先出现就拿哪一片当 owner”
+                         * （真机 6666：owner 被点成了第 2 片 `.=Z002`，引擎打不开）。
+                         */
+                        string entryLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
+                        if (entryLayer.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        ArchiveFixer.Extraction.VolumeGroupUnit? preUnit =
+                            _extractionCoordinator.TryCommitVolumeGroup(group, null, entryLayer);
+
+                        if (preUnit != null
+                            && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
+                                || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·组] {group.BaseName}：{preUnit.State} ⇒ 不点名、不链接（{preUnit.Verdict}）。");
+                            continue;
+                        }
+
+                        string entryPath = preUnit?.NamePlan?.Items.FirstOrDefault(item => item.IsEntry)?.PiecePath
+                            ?? group.EntryPath;
+
                         ArchiveTask? entryTask = null;
 
                         foreach (ArchiveTask candidate in Tasks)
                         {
                             if (candidate != null
-                                && SafePathHelper.PathEquals(candidate.CurrentPath, group.EntryPath))
+                                && SafePathHelper.PathEquals(candidate.CurrentPath, entryPath))
                             {
                                 entryTask = candidate;
                                 break;
-                            }
-                        }
-
-                        /*
-                         * 入口不一定在任务表里：跨盘 ZIP 的入口是 `.z01`，任务却是末片 `.zip`；
-                         * V02 那种"片由上一轮解出来"的组也可能只有第一片成了任务。
-                         * ⇒ 只要任务表里有**这一组的任意一片**，就把它当这一组的执行单
-                         * （引擎自己会按族的入口打开；⛔ 不改名、不搬）。
-                         */
-                        if (entryTask == null)
-                        {
-                            foreach (ArchiveTask candidate in Tasks)
-                            {
-                                if (candidate == null || string.IsNullOrWhiteSpace(candidate.CurrentPath))
-                                {
-                                    continue;
-                                }
-
-                                foreach (string piece in group.Pieces)
-                                {
-                                    if (SafePathHelper.PathEquals(candidate.CurrentPath, piece))
-                                    {
-                                        entryTask = candidate;
-                                        break;
-                                    }
-                                }
-
-                                if (entryTask != null)
-                                {
-                                    break;
-                                }
                             }
                         }
 
@@ -1273,28 +1271,23 @@ namespace ArchiveFixer.ViewModels
                         {
                             /*
                              * 入口任务还没建（典型：这一组的三片是上一轮刚产出的，扫描只把它们当“分卷片”
-                             * 记了交接事实，还没进任务表）。⇒ 用**组事实**先把 Unit 建出来（owner 先空着），
-                             * 再把入口片按正常“加任务”那条路补进表；下一轮由第二大步点名为 owner。
+                             * 记了交接事实，还没进任务表）。⇒ 用**组事实**把入口片按正常“加任务”那条路
+                             * 补进表；下一轮由第二大步点名为 owner。
                              * ⛔ 不在这里解压、不搬片、不改名；⛔ owner 只补写一次。
                              */
-                            string orphanLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
-
-                            ArchiveFixer.Extraction.VolumeGroupUnit? orphanUnit =
-                                _extractionCoordinator.TryCommitVolumeGroup(group, null, orphanLayer);
-
-                            if (orphanUnit != null
-                                && (orphanUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
-                                    || orphanUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
-                                && File.Exists(orphanUnit.EntryPath))
+                            if (preUnit != null
+                                && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
+                                    || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
+                                && File.Exists(entryPath))
                             {
                                 secondStepEntryCandidates.Add(new InnerArchiveCandidate
                                 {
-                                    Path = orphanUnit.EntryPath,
-                                    ParentOutputDirectory = orphanLayer,
+                                    Path = entryPath,
+                                    ParentOutputDirectory = entryLayer,
                                     ParentTaskName = group.BaseName,
-                                    RootSourcePath = orphanUnit.EntryPath
+                                    RootSourcePath = entryPath
                                 });
-                                secondStepEntryGroups.Add((group, orphanUnit));
+                                secondStepEntryGroups.Add((group, preUnit));
 
                                 AppendLog(
                                     "INFO",
@@ -1306,7 +1299,7 @@ namespace ArchiveFixer.ViewModels
                                 AppendLog(
                                     "WARN",
                                     $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
-                                    + $"（{FileNameHelper.GetFileName(group.EntryPath)}）⇒ 这一组不动。");
+                                    + $"（{FileNameHelper.GetFileName(entryPath)}）⇒ 这一组不动。");
                             }
 
                             continue;
@@ -1344,15 +1337,8 @@ namespace ArchiveFixer.ViewModels
                         entryTask.Operation = StatusText.OpWaiting;
                         entryTask.ProgressText = StatusText.ProgressWaiting;
 
-                        string entryLayer = Path.GetDirectoryName(entryTask.CurrentPath ?? string.Empty) ?? string.Empty;
-
-                        if (entryLayer.Length == 0)
-                        {
-                            continue;
-                        }
-
                         /*
-                         * ===== P1：先提交成 Unit（族算法在这里回答完整性/顺序/规范名计划）=====
+                         * ===== P1：提交成 Unit（族算法在这里回答完整性/顺序/规范名计划）=====
                          * ⛔ Missing/Unknown ⇒ 不点名、不链接、不解压（判不出就不动）。
                          * RAR 已接线；其它族未接线 ⇒ 保持 P0 行为（不判、不命名）。
                          */
@@ -1486,14 +1472,19 @@ namespace ArchiveFixer.ViewModels
                                      in secondStepEntryGroups)
                             {
                                 ArchiveTask? createdTask = createdSecondStepTasks.FirstOrDefault(task =>
-                                    SafePathHelper.PathEquals(task.CurrentPath, unit.EntryPath));
+                                    SafePathHelper.PathEquals(
+                                        task.CurrentPath,
+                                        unit.NamePlan?.Items.FirstOrDefault(item => item.IsEntry)?.PiecePath
+                                        ?? unit.EntryPath));
 
                                 if (createdTask == null)
                                 {
                                     continue;
                                 }
 
-                                string layer = Path.GetDirectoryName(unit.EntryPath) ?? string.Empty;
+                                string layer = Path.GetDirectoryName(
+                                    unit.NamePlan?.Items.FirstOrDefault(item => item.IsEntry)?.PiecePath
+                                    ?? unit.EntryPath) ?? string.Empty;
 
                                 ArchiveFixer.Extraction.VolumeGroupUnit? ownedUnit =
                                     _extractionCoordinator.TryCommitVolumeGroup(group, createdTask, layer);

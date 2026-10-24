@@ -151,18 +151,89 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 成功收片 = 本组建出来的链接名 + 本组消费掉的**链内产出片**。
+             * 成功收片 = 本组建出来的链接名 + 本组消费掉的**链内产出片**（含规范名计划里的原产片名）。
              * ⛔ 用户原件（Source=UserImported 或 IsUserImportedSourcePath）不删；
              * 链内产出片即使还是某个任务的源（例如被闸门跳过的分卷片）也收掉 —— 组已解开，它没用了。
              */
-            var consumed = unit.Pieces
+            var consumed = new List<string>();
+
+            consumed.AddRange(unit.Pieces
                 .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
                 .Select(piece => piece.Path)
-                .Where(path => !IsUserImportedSourcePath(path))
+                .Where(path => !IsUserImportedSourcePath(path)));
+
+            if (unit.NamePlan != null)
+            {
+                foreach (CanonicalNamePlanItem item in unit.NamePlan.Items)
+                {
+                    if (item.Conflict.Length > 0 || IsUserImportedSourcePath(item.PiecePath))
+                    {
+                        continue;
+                    }
+
+                    string targetPath = Path.Combine(unit.SourceLayer, item.TargetName);
+
+                    bool linked = unit.LinkedNames.Any(name =>
+                        string.Equals(
+                            Path.GetFullPath(name),
+                            Path.GetFullPath(targetPath),
+                            StringComparison.OrdinalIgnoreCase));
+
+                    bool sameOriginalName = string.Equals(
+                        item.TargetName,
+                        Path.GetFileName(item.PiecePath),
+                        StringComparison.OrdinalIgnoreCase);
+
+                    if (linked || sameOriginalName)
+                    {
+                        consumed.Add(item.PiecePath);
+                    }
+                }
+            }
+
+            /*
+             * 同一份物理文件可能还有别的名字（`.中文003` 与 `.003` 是同一份）——
+             * 收片必须按**文件身份**把同层里这些多余名字一起收掉，否则链接名删了、原产片名还在。
+             * ⛔ 用户原件（任务源）一律不动。
+             */
+            var purgeSeeds = unit.LinkedNames.Concat(consumed)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            foreach (string directory in purgeSeeds
+                         .Select(path => Path.GetDirectoryName(path) ?? string.Empty)
+                         .Where(path => path.Length > 0)
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                IEnumerable<string> siblings;
+
+                try
+                {
+                    siblings = Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string sibling in siblings)
+                {
+                    if (IsUserImportedSourcePath(sibling)
+                        || purgeSeeds.Contains(sibling, StringComparer.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (purgeSeeds.Any(seed => FileIdentity.IsSamePhysicalFile(seed, sibling)))
+                    {
+                        consumed.Add(sibling);
+                    }
+                }
+            }
+
             int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
-                unit.LinkedNames.Concat(consumed),
+                unit.LinkedNames.Concat(consumed).Distinct(StringComparer.OrdinalIgnoreCase),
                 path => IsUserImportedSourcePath(path),
                 (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
 
