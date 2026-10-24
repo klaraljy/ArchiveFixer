@@ -1187,10 +1187,39 @@ namespace ArchiveFixer.ViewModels
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
 
+                        /*
+                         * 候选池的种子不能只来自交接单：脏名字的片（`.zip.@z002`、`.7z.=Z002`）
+                         * 内容认不出、闸门不会登记，可它们确实是某一组的片（用户第 1 步：基名+大小）；
+                         * 没有种子 ⇒ 整组永远不入候选池 ⇒ 源包/其余物那里红。
+                         * ⇒ 在组根里补“名字/内容像分卷片”的种子，只做候选，判定仍交给族算法。
+                         */
+                        var extraGroupSeeds = new List<string>(innerArchives.Select(candidate => candidate.Path));
+
+                        foreach (string root in groupRoots)
+                        {
+                            try
+                            {
+                                foreach (string file in Directory.EnumerateFiles(
+                                             root,
+                                             "*",
+                                             SearchOption.AllDirectories))
+                                {
+                                    if (IsVolumeCandidateSeed(file))
+                                    {
+                                        extraGroupSeeds.Add(file);
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // 扫不到的目录只影响候选池，不影响任何破坏性动作。
+                            }
+                        }
+
                         foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
                                      _extractionCoordinator.VolumeHandoffEntries,
                                      groupRoots,
-                                     innerArchives.Select(candidate => candidate.Path)))
+                                     extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase)))
                         {
                             handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
@@ -3084,6 +3113,35 @@ namespace ArchiveFixer.ViewModels
             {
                 return ArchiveFixer.Detection.FileNature.Inspect(filePath).BodyKind
                     == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 名字/内容像“某一组的片”的候选种子（只用于第二大步候选池，⛔ 不据此搬/删/改名）：
+        /// 卷标记容忍档命中、卷号 ≥ 2、或内容自证首片。
+        /// </summary>
+        internal static bool IsVolumeCandidateSeed(string filePath)
+        {
+            try
+            {
+                if (FileNameHelper.IsVolumeContinuationPart(filePath))
+                {
+                    return true;
+                }
+
+                int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    Path.GetFileName(filePath));
+
+                if (index is >= 2)
+                {
+                    return true;
+                }
+
+                return ContentProvesFirstVolumePiece(filePath);
             }
             catch
             {

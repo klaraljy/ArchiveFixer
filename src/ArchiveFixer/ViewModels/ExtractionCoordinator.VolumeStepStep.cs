@@ -241,6 +241,44 @@ namespace ArchiveFixer.ViewModels
                 unit,
                 VolumeGroupState.Succeeded,
                 $"解压成功，收片 {deleted} 片（用户原件不删）");
+
+            /*
+             * 组成功 ⇒ 这一组每一片对应的任务按**跟班卷**收场（唯一出口
+             * `SettleOneConsumedPieceTask`，与既有的“谁吐过片”那本账同一套闸门）：
+             * 源片在「彻底删除」档下这才有人处理；Keep 档一个字节都不动。
+             * ⛔ 不新造删除判据、⛔ 不直接 File.Delete。
+             */
+            var pieceSettleLogs = new List<(string Level, string Message)>();
+            IReadOnlyList<ArchiveTask> taskSnapshot = SnapshotTaskTable(Tasks);
+
+            foreach (GroupPieceFact piece in unit.Pieces)
+            {
+                ArchiveTask? pieceTask = taskSnapshot.FirstOrDefault(candidate =>
+                    candidate != null
+                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
+                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
+
+                if (pieceTask == null || ReferenceEquals(pieceTask, task))
+                {
+                    continue;
+                }
+
+                SettleOneConsumedPieceTask(
+                    pieceTask,
+                    task,
+                    unit.BaseName,
+                    Path.GetFileName(piece.Path),
+                    moveSources: true,
+                    pieceSettleLogs,
+                    producedPiecePath: piece.Path);
+            }
+
+            foreach ((string level, string message) in pieceSettleLogs)
+            {
+                AppendLog(level, message);
+            }
+
             MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
             AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
             return true;
