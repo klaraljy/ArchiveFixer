@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -122,15 +123,19 @@ namespace ArchiveFixer.ViewModels
             return false;
         }
 
-        /// <summary>第二大步入口任务 ⇒ 它这一组的入口层与片清单（成功后收片用；批首清空）。</summary>
+        /// <summary>第二大步入口任务 ⇒ 它这一组的基名/入口层/片清单（成功后收片与回写用；批首清空）。</summary>
         private readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _volumeStepGroupWork = new();
 
-        private sealed record VolumeStepGroupWork(string EntryLayer, IReadOnlyList<string> Pieces);
+        /// <summary>第二大步每组一句话结论（批末回写读它；⛔ 不从日志反推）。</summary>
+        private readonly Dictionary<string, string> _volumeStepGroupVerdicts = new(StringComparer.OrdinalIgnoreCase);
+
+        private sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
 
         /// <summary>批首清空（与交接账同一处调用）：⛔ 不许把上一批的收片账带进下一批。</summary>
         internal void ResetVolumeStepGroupWork()
         {
             _volumeStepGroupWork.Clear();
+            _volumeStepGroupVerdicts.Clear();
         }
 
         /// <summary>
@@ -153,6 +158,13 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     $"[第二大步·收片] {task.LogName}：{task.Outcome} ⇒ 入口层里的片全部留着"
                     + "（失败 / 密码错 / 缺卷不删，等补密码）。");
+
+                MarkVolumeHandoffVerdict(
+                    work.Pieces,
+                    $"没成功（{task.Outcome}），片全部留在入口层");
+
+                _volumeStepGroupVerdicts[work.BaseName] = $"没成功（{task.Outcome}），片全部留在入口层";
+
                 return;
             }
 
@@ -165,6 +177,12 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "INFO",
                 $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片（用户原件不删）。");
+
+            MarkVolumeHandoffVerdict(
+                work.Pieces,
+                $"解压成功，入口层收片 {deleted} 片（用户原件不删）");
+
+            _volumeStepGroupVerdicts[work.BaseName] = $"解压成功，入口层收片 {deleted} 片（用户原件不删）";
 
             _volumeStepGroupWork.Remove(task);
         }

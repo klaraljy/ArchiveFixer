@@ -599,6 +599,18 @@ namespace ArchiveFixer.ViewModels
                 await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
 
                 /*
+                 * **目标 ④ 的范围记录**（用户 2026-10-24）：手动「只解压」没有轮循环，本批**不自动接手**
+                 * 分卷组（交接单照常登记、文件原地不动）。这里如实写一行，别让用户以为第二大步也跑了。
+                 */
+                if (!oneClickRun && VolumeHandoffEntries.Count > 0)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步] 手动「只解压」不自动接手分卷组：本批交接 {VolumeHandoffEntries.Count} 份"
+                        + "（文件原地没动）。要解这几组请用「一键处理」；这条路径不做建组 / 搬片。");
+                }
+
+                /*
                  * 等到最后还是排不上的：**这时候才**如实记「空间不足」（状态 / 错误信息 / 日志 / 批末清单
                  * 走同一个落点 `MarkSpaceBlocked`）。⛔ 这些任务从头到尾一个字节都没动。
                  */

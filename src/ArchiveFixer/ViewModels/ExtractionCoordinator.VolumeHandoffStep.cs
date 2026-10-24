@@ -118,7 +118,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal void AppendVolumeHandoffBatchSummary()
         {
-            if (_volumeHandoffEntries.Count == 0)
+            if (_volumeHandoffEntries.Count == 0 && _volumeStepGroupVerdicts.Count == 0)
             {
                 return;
             }
@@ -149,12 +149,54 @@ namespace ArchiveFixer.ViewModels
                     .Select(entry => entry.ConsumedBy)
                     .Distinct(StringComparer.Ordinal));
 
-            AppendLog(
-                "INFO",
-                $"[第二大步·交接] 本批交接 {_volumeHandoffEntries.Count} 份"
-                + $"（在盘 {onDisk} / 已不在 {_volumeHandoffEntries.Count - onDisk}）"
-                + $"｜已消费 {consumed} 份｜待处理 {_volumeHandoffEntries.Count - consumed} 份"
-                + (consumers.Length > 0 ? $"｜消费方：{consumers}" : string.Empty));
+            if (_volumeHandoffEntries.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·交接] 本批交接 {_volumeHandoffEntries.Count} 份"
+                    + $"（在盘 {onDisk} / 已不在 {_volumeHandoffEntries.Count - onDisk}）"
+                    + $"｜已消费 {consumed} 份｜待处理 {_volumeHandoffEntries.Count - consumed} 份"
+                    + (consumers.Length > 0 ? $"｜消费方：{consumers}" : string.Empty));
+            }
+
+            /*
+             * **P4 回写：每组一行结论**（用户 2026-10-24「回写结论」）：
+             * 结论由第二大步收尾时写进账本（`_volumeStepGroupVerdicts`），⛔ 不从日志里反推；
+             * 没有交接单的批次（批首点名那一档）也能读到。
+             */
+            foreach (KeyValuePair<string, string> verdict in _volumeStepGroupVerdicts)
+            {
+                AppendLog("INFO", $"[第二大步·结论] {verdict.Key}：{verdict.Value}");
+            }
+        }
+
+        /// <summary>
+        /// **P4 回写**：把第二大步对某一组的结论写回交接单（同一组多份都写，批末按基名汇总）。
+        /// 判据与文案由调用方给；⛔ 这里不做任何推断。
+        /// </summary>
+        internal void MarkVolumeHandoffVerdict(IEnumerable<string>? pieces, string verdict)
+        {
+            if (pieces == null || string.IsNullOrWhiteSpace(verdict))
+            {
+                return;
+            }
+
+            var wanted = new HashSet<string>(
+                pieces.Where(path => !string.IsNullOrWhiteSpace(path)),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (wanted.Count == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _volumeHandoffEntries)
+            {
+                if (wanted.Contains(entry.Path))
+                {
+                    entry.ConsumedVerdict = verdict;
+                }
+            }
         }
 
         /// <summary>
@@ -592,7 +634,10 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
 
-                _volumeStepGroupWork[entryTask] = new VolumeStepGroupWork(entryLayer, group.Pieces);
+                _volumeStepGroupWork[entryTask] = new VolumeStepGroupWork(
+                    group.BaseName,
+                    entryLayer,
+                    group.Pieces);
 
                 AppendLog(
                     "INFO",

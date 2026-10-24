@@ -72,6 +72,12 @@ namespace ArchiveFixer.Detection
         /// <summary>取用时间（批末汇总与日志用）。</summary>
         public DateTime? ConsumedAt { get; set; }
 
+        /// <summary>
+        /// 第二大步对这一组的**结论**（成功/失败原因/收片数）；还没结论 = 空串。
+        /// 批末「第二大步·结论」那几行读它，⛔ 不再从日志里反推。
+        /// </summary>
+        public string ConsumedVerdict { get; set; } = string.Empty;
+
         /// <summary>给人看的一行（日志与判据输入共用；⛔ 不猜，判不出的字段如实写"判不出"）。</summary>
         public string Describe() =>
             $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 内容身份={BodyKind}"

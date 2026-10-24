@@ -137,7 +137,7 @@ $samples = @(
     # V 第二大步（2）
     @{ Id = 'V01'; Family = '第二大步'; Title = '完整的 7z 三卷组（可证完整 ⇒ 第二大步接住、只解一层）'
        Build = 'volcomplete'; SizeKb = 3072
-       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '内容卡', '第二大步入口任务') } },
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '内容卡', '第二大步入口任务', '第二大步·结论') } },
 
     @{ Id = 'V02'; Family = '第二大步'; Title = '外层 zip 里装 7z 三卷组（程序产出的片 ⇒ 搬进入口层 + 成功后收片）'
        Build = 'nestedvol'; SizeKb = 3072
@@ -145,7 +145,7 @@ $samples = @(
 
     @{ Id = 'V03'; Family = '第二大步'; Title = '7z 三卷组散在两个目录（用户原件 ⇒ 入口层只建硬链接、成功后只收链接）'
        Build = 'volscatter'; SizeKb = 3072
-       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '硬链接', '第二大步·收片') } }
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '硬链接', '第二大步·收片', '第二大步·结论') } }
 )
 
 if ($List) {
