@@ -1175,6 +1175,8 @@ namespace ArchiveFixer.ViewModels
                      * 本轮它仍然**只落事实行**：组事实 / 入口 / 缺片都如实写出来，
                      * 改名与搬运仍由分卷专属算法在第二大步里做（⛔ 这里一个字节都不动盘）。
                      */
+                    var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
+
                     try
                     {
                         List<string> groupRoots = innerArchives
@@ -1195,6 +1197,7 @@ namespace ArchiveFixer.ViewModels
                                      groupRoots,
                                      innerArchives.Select(candidate => candidate.Path)))
                         {
+                            handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
                         }
                     }
@@ -1214,7 +1217,14 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(line.Contains("[WARN]", StringComparison.Ordinal) ? "WARN" : "INFO", line);
                     }
 
-                    if (innerArchives.Count == 0)
+                    /*
+                     * **P3a 第二大步接住**（用户 2026-10-24）：可证完整的交接组，把入口那一份点名为
+                     * 第二大步任务（只解一层）。⛔ 只点名：不搬片、不改名、不动盘。
+                     */
+                    IReadOnlyList<ArchiveTask> volumeEntryTasks =
+                        _extractionCoordinator.TryMarkHandoffGroupEntryTasks(handoffGroups, Tasks.ToList());
+
+                    if (innerArchives.Count == 0 && volumeEntryTasks.Count == 0)
                     {
                         /*
                          * 这一句是必须的，不是噪音。
@@ -1289,6 +1299,18 @@ namespace ArchiveFixer.ViewModels
                         DeselectProcessedTasks(processed);
 
                         nextRound = await AddInnerTasksAsync(innerArchives);
+
+                        /*
+                         * P3a 点名的第二大步入口任务，跟内层包一起进下一轮（去重）。
+                         * 它们不搬片、不改名，只按"只解一层"跑这一组。
+                         */
+                        foreach (ArchiveTask volumeEntryTask in volumeEntryTasks)
+                        {
+                            if (!nextRound.Contains(volumeEntryTask))
+                            {
+                                nextRound.Add(volumeEntryTask);
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {

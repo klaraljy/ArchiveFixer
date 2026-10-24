@@ -83,8 +83,24 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 仍只读内容卡，不按名字猜；非入口卷照旧跳过、原地不动。
                  */
 
-                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
+                /*
+                 * **第二大步入口那一单例外**（用户 2026-10-24）：被点名成第二大步任务的入口卷，
+                 * 闸门**放行**它去解这一组（只解一层由 `_volumeStepTasks` 保证）；其余分卷成员照旧跳过+交接。
+                 */
+                bool isSecondStepEntry = IsSingleLayerRecursion(task);
+
+                /*
+                 * 闸门判定必须留下判据输入（用户 2026-10-24「日志做到详细」）：
+                 * 事后只看一行就知道这一单是按"分卷成员"跳过的、还是按"第二大步入口"放行的。
+                 */
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，"
+                    + $"内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
+
+                if (!isSecondStepEntry
+                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece))
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
@@ -108,6 +124,14 @@ namespace ArchiveFixer.ViewModels
                         + $"底层识别：{handoff.Describe()}");
 
                     return;
+                }
+
+                if (isSecondStepEntry)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：第二大步入口任务（只解一层）—— 闸门放行，不按分卷成员跳过"
+                        + $"（族={entryCard.Format}，内容身份={entryCard.BodyKind}）。");
                 }
 
                 /*

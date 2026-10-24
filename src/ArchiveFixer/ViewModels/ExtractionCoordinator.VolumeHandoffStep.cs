@@ -497,5 +497,94 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// **第二大步接住（P3a）：把可证完整的交接组点名为组入口任务**（用户 2026-10-24）。
+        ///
+        /// <para>只做三件事：① 在任务表里找到入口那一份对应的任务；② 清掉它上一趟「已跳过」的结论，
+        /// 让它能作为第二大步入口重新跑（只解一层由 `_volumeStepTasks` 保证）；③ 把这一组登记成
+        /// 「已消费」。⛔ 不搬片、不改名、不动盘 —— 搬进入口层是 P3b 的事。</para>
+        ///
+        /// <para>判据全部来自组分析（它已经用交接单的族/卷号/首卷/自述片数/自述整包对过账）；
+        /// 找不到入口任务 ⇒ 只写一行 WARN、什么都不做（⛔ 不新建任务绕过任务表）。</para>
+        /// </summary>
+        internal IReadOnlyList<ArchiveTask> TryMarkHandoffGroupEntryTasks(
+            IReadOnlyList<ArchiveFixer.Extraction.GroupAnalysis.GroupCandidate>? groups,
+            IReadOnlyCollection<ArchiveTask> tasks)
+        {
+            var result = new List<ArchiveTask>();
+
+            if (groups == null || groups.Count == 0 || tasks == null || tasks.Count == 0)
+            {
+                return result;
+            }
+
+            foreach (ArchiveFixer.Extraction.GroupAnalysis.GroupCandidate group in groups)
+            {
+                if (group == null
+                    || group.Verdict != ArchiveFixer.Extraction.GroupAnalysis.GroupAnalysisVerdict.Complete
+                    || string.IsNullOrWhiteSpace(group.EntryPath))
+                {
+                    continue;
+                }
+
+                ArchiveTask? entryTask = null;
+
+                foreach (ArchiveTask candidate in tasks)
+                {
+                    if (candidate != null
+                        && SafePathHelper.PathEquals(candidate.CurrentPath, group.EntryPath))
+                    {
+                        entryTask = candidate;
+                        break;
+                    }
+                }
+
+                if (entryTask == null)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
+                        + $"（{FileNameHelper.GetFileName(group.EntryPath)}）⇒ 这一组不动。");
+                    continue;
+                }
+
+                /*
+                 * ⛔ 已经由第二大步解成功过的入口不再点名：再点一次会把它加进下一轮重跑，
+                 * 同名产物只能改名 ⇒ 盘上多一份 `(1)` 垃圾副本（2026-10-05 只读审计那条老坑）。
+                 */
+                if (entryTask.Outcome == TaskOutcome.Succeeded || entryTask.IsOutputVerified)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"[第二大步·接住] {group.BaseName}：入口已经解成功过 ⇒ 不再点名（⛔ 不重跑）。");
+                    continue;
+                }
+
+                /*
+                 * 清掉上一趟的结论（这一单上一轮是被闸门跳过的那一份）：不清理的话，
+                 * 它在下一轮会带着 `Skipped` 终态直接收场，第二大步一次都跑不起来。
+                 */
+                entryTask.Outcome = TaskOutcome.Pending;
+                entryTask.IsOutputVerified = false;
+                entryTask.EndTime = null;
+                entryTask.ErrorMessage = string.Empty;
+                entryTask.Status = StatusText.WaitingExtract;
+                entryTask.Operation = StatusText.OpWaiting;
+                entryTask.ProgressText = StatusText.ProgressWaiting;
+
+                RememberVolumeStepTask(entryTask);
+                MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名");
+                result.Add(entryTask);
+
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·接住] {group.BaseName}：可证完整（{group.Pieces.Count} 片，{group.Evidence}）"
+                    + $"—— 入口={FileNameHelper.GetFileName(group.EntryPath)}，这一单只解这一层"
+                    + "（本轮只点名：不搬片、不改名、不动盘）。");
+            }
+
+            return result;
+        }
+
     }
 }

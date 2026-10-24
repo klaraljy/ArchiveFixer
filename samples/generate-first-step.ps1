@@ -1,4 +1,4 @@
-﻿# 第一大步造包器（用户 2026-10-24 规格：只回答"第一大步完成没有"）
+# 第一大步造包器（用户 2026-10-24 规格：只回答"第一大步完成没有"）
 #
 # 用法：
 #   pwsh -NoProfile -File samples/generate-first-step.ps1 -List          # 列出全部样本与预期
@@ -132,7 +132,12 @@ $samples = @(
        Build = 'zip-duplicate'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '让位' } },
 
     @{ Id = 'H03'; Family = '落点'; Title = '指定位置模式（落点 = 指定根 / 包名 / 内容物）'
-       Build = 'zip'; Mode = 'custom'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '指定位置' } }
+       Build = 'zip'; Mode = 'custom'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '指定位置' } },
+
+    # V 第二大步（1）
+    @{ Id = 'V01'; Family = '第二大步'; Title = '完整的 7z 三卷组（可证完整 ⇒ 第二大步接住、只解一层）'
+       Build = 'volcomplete'; SizeKb = 3072
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '内容卡', '第二大步入口任务') } }
 )
 
 if ($List) {
@@ -323,6 +328,7 @@ foreach ($s in $samples) {
     # 最终样本文件的后缀：按"解出来该长什么样"给个正常/合理的名字
     $ext = switch -Wildcard ($build) {
         'volfirst' { '7z' }
+        'volcomplete' { '7z' }
         'nested*' { 'zip' }
         'textzip' { 'zip' }
         'traversal' { 'zip' }
@@ -388,6 +394,18 @@ foreach ($s in $samples) {
             Run-7z @('a', '-t7z', '-mx=0', '-v1m', $volBase, (Join-Path $contentDir '*'))
             Move-Item -LiteralPath ($volBase + '.001') -Destination $outFile
             Get-ChildItem -LiteralPath $dir -Filter '.vol.7z.*' | Remove-Item -Force
+            break
+        }
+        'volcomplete' {
+            # 真·完整的 7z 三卷组（标准卷名、三片全在场）：给第二大步“可证完整 ⇒ 接住 ⇒ 只解一层”用
+            $volBase = Join-Path $dir '.vol.7z'
+            Run-7z @('a', '-t7z', '-mx=1', '-v1m', $volBase, (Join-Path $contentDir '*'))
+            $pieceIndex = 1
+            foreach ($piece in Get-ChildItem -LiteralPath $dir -Filter '.vol.7z.*' | Sort-Object Name) {
+                Move-Item -LiteralPath $piece.FullName -Destination (Join-Path $dir ("样本包.7z.{0:D3}" -f $pieceIndex))
+                $pieceIndex++
+            }
+            $outFile = Join-Path $dir '样本包.7z.001'
             break
         }
         'textzip' {
