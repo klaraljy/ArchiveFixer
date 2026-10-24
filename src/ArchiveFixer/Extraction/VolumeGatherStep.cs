@@ -168,7 +168,7 @@ namespace ArchiveFixer.Extraction
              */
             if (fullSizeAnchor > 0
                 && referenceBase.Length > 0
-                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase)
+                && BaseNameRelatedToGroup(FileNameHelper.SecondStepBaseName(card.Path), referenceBase)
                 && card.Size > 0
                 && Math.Abs(card.Size - fullSizeAnchor) <= Math.Max(1, fullSizeAnchor / 100))
             {
@@ -185,7 +185,7 @@ namespace ArchiveFixer.Extraction
              */
             if (fullSizeAnchor > 0
                 && referenceBase.Length > 0
-                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase)
+                && BaseNameRelatedToGroup(FileNameHelper.SecondStepBaseName(card.Path), referenceBase)
                 && card.Size > 0
                 && card.Size <= fullSizeAnchor
                 && card.BodyKind == ArchiveBodyKind.Unknown
@@ -197,7 +197,7 @@ namespace ArchiveFixer.Extraction
             /* ④ 卡 + 弱名字证据（既有两把尺子）。 */
             if (referenceBase.Length > 0
                 && VolumePieceFacts.CardSaysItIsOneOfTheGroup(card)
-                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase))
+                && BaseNameRelatedToGroup(FileNameHelper.SecondStepBaseName(card.Path), referenceBase))
             {
                 return true;
             }
@@ -209,7 +209,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 这一份的基名与这一组"有关系"吗（用户口径：「看后缀有没有相似的地方」）。
         ///
-        /// <para>判据只有两条，都读**既有出口** <see cref="FileNameHelper.GetArchiveBaseName"/>：
+        /// <para>判据只有两条，都读**既有出口** <see cref="FileNameHelper.SecondStepBaseName"/>（第二大步那份）：
         /// ① 逐字相同；② 一方是另一方的前缀（实测 `28282828`：这一片的基名读出来是 `111-L2.7z`，
         /// 而这一组的基名是 `111-L2` ⇒ 卷标记 `00_!63` 被垃圾污染 ⇒ 只有前缀关系还活着）。</para>
         /// ⛔ 它是**弱证据**，只用来决定"要不要把它放进候选池"；占哪个槽位仍由打分分配说了算。
@@ -221,7 +221,7 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            string candidateBase = FileNameHelper.GetArchiveBaseName(candidateFileName);
+            string candidateBase = FileNameHelper.SecondStepBaseName(candidateFileName);
 
             if (candidateBase.Length == 0)
             {

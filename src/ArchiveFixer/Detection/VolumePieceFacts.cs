@@ -365,7 +365,7 @@ namespace ArchiveFixer.Detection
                 return string.Empty;   // 别的族拿不到"本族第一卷名" ⇒ 判不出（⛔ 不猜）
             }
 
-            string cleaned = FileNameHelper.GetArchiveBaseName(name);
+            string cleaned = FileNameHelper.SecondStepBaseName(name);
 
             /*
              * ⚠ 2026-10-14（走查档实测，`10101010` 收拢之后那一份）：名字**已经被清干净**成 `X.7z`

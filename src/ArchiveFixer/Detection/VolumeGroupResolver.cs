@@ -1367,7 +1367,7 @@ namespace ArchiveFixer.Detection
                 }
             }
 
-            string baseName = FileNameHelper.GetArchiveBaseName(sampleVolumeName);
+            string baseName = FileNameHelper.SecondStepBaseName(sampleVolumeName);
             string? first = VolumeGroupDetector.TryGetFirstVolumeName(sampleVolumeName);
 
             if (baseName.Length == 0 || string.IsNullOrWhiteSpace(first))
@@ -1425,7 +1425,7 @@ namespace ArchiveFixer.Detection
         {
             canonical = string.Empty;
 
-            string baseName = FileNameHelper.GetArchiveBaseName(fileName);
+            string baseName = FileNameHelper.SecondStepBaseName(fileName);
             int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
             string? first = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
 

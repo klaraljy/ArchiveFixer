@@ -21,8 +21,8 @@ namespace ArchiveFixer.Detection
     ///
     /// <para>三条证据与权重（都要能被日志打印出来，用户口径②要求顺序与次数可调）：
     /// <list type="number">
-    /// <item><description><b>基名匹配</b>（权重 <see cref="BaseNameWeight"/>）：归档基名（唯一出口
-    /// <see cref="FileNameHelper.GetArchiveBaseName"/>）与这一组的基名逐字相同；</description></item>
+    /// <item><description><b>基名匹配</b>（权重 <see cref="BaseNameWeight"/>）：基名（**第二大步**那份
+    /// <see cref="FileNameHelper.SecondStepBaseName"/>，与 <see cref="VolumeGroupResolver"/> 同一份）与这一组的基名逐字相同；</description></item>
     /// <item><description><b>后缀相似</b>（权重 <see cref="SuffixWeight"/>）：名字与"规范槽位名"的相似度
     /// （<see cref="Similarity"/>：公共子序列占较长者的比例）—— 治的是"卷标记里夹垃圾"
     /// （`.005729572` 与 `.003` 仍有共同前缀 `.00`）；</description></item>
@@ -112,8 +112,12 @@ namespace ArchiveFixer.Detection
 
                     string canonical = canonicalNameForSlot(slot) ?? string.Empty;
 
+                    /*
+                     * 基名那一票按**第二大步**那份（用户 2026-10-23：两步的基名判据要彻底切开；
+                     * 这条打分只服务第二大步"缺什么补什么"，候选永远是分卷片的名字）。
+                     */
                     int baseScore = string.Equals(
-                        FileNameHelper.GetArchiveBaseName(candidate.FileName),
+                        FileNameHelper.SecondStepBaseName(candidate.FileName),
                         groupBaseName,
                         StringComparison.OrdinalIgnoreCase)
                         ? BaseNameWeight

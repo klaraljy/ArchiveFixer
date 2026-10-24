@@ -418,7 +418,7 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            baseName = FileNameHelper.GetArchiveBaseName(fileName);
+            baseName = FileNameHelper.SecondStepBaseName(fileName);
 
             return !string.IsNullOrWhiteSpace(baseName);
         }

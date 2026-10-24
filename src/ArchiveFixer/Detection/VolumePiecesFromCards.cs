@@ -48,8 +48,8 @@ namespace ArchiveFixer.Detection
                 return string.Empty;
             }
 
-            string stem = Helpers.FileNameHelper.GetArchiveBaseName(
-                Helpers.FileNameHelper.GetArchiveBaseName(card.Path));
+            string stem = Helpers.FileNameHelper.SecondStepBaseName(
+                Helpers.FileNameHelper.SecondStepBaseName(card.Path));
 
             /*
              * ⚠ 现场新样本 `1111`：`222-L2.part34B+.rar` 的第一层剥离只掉 `.rar`，
