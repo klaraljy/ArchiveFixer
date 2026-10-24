@@ -174,6 +174,24 @@ public class ArchiveDetectServiceTests
         }
     }
 
+    /// <summary>
+    /// 跨盘 ZIP 的成员（无论首片还是末片）**永远不该被“按检测格式自动改后缀”**：
+    /// 首片必须保持 `.z01` 语义；一旦改成 `.zip`，一组里会出现两个末片，组分析只能 Unknown。
+    /// 红检：修前这里返回「后缀缺失」，修后返回「分卷后缀」。
+    /// </summary>
+    [Fact]
+    public void 跨盘ZIP成员_后缀状态是分卷后缀_不参与自动改名()
+    {
+        var service = new ArchiveDetectService();
+
+        string status = service.GetExtensionStatus(
+            "aaa-W0-1",
+            "无",
+            ArchiveFixer.Models.DetectResult.Archive("ZIP_SPANNED", ".zip"));
+
+        Assert.Equal(ArchiveFixer.Models.StatusText.ExtensionVolume, status);
+    }
+
     [Theory]
     [InlineData("a.zip", ".zip", "ZIP", "后缀正常")]
     [InlineData("a", "无", "ZIP", "后缀缺失")]

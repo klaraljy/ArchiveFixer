@@ -645,7 +645,8 @@ namespace ArchiveFixer.ViewModels
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
             string? reclaimWorkspaceDirectory = null,
-            bool ignoreDoneState = false)
+            bool ignoreDoneState = false,
+            bool groupComplete = false)
         {
             if (task == null)
             {
@@ -788,6 +789,9 @@ namespace ArchiveFixer.ViewModels
                  && task.IsVolumeComplete
                  && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
                 || (task.IsVolumeGroupFollower
+                    && reclaimVerdict != null
+                    && reclaimVerdict.AllowsSourceRemoval)
+                || (groupComplete
                     && reclaimVerdict != null
                     && reclaimVerdict.AllowsSourceRemoval);
 

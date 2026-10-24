@@ -141,7 +141,103 @@ namespace ArchiveFixer.ViewModels
                 VolumeGroupState.Succeeded,
                 $"入口已解成功，收片 {deleted} 片（用户原件不删）");
             AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
+
+            ReclaimSucceededGroupSources(unit, FindOwnerTask(unit));
         }
+
+        /// <summary>
+        /// 组成功后按「源包操作」收本组用户源片：只在 `DeleteInPlace` 档、且组齐全、
+        /// owner 内容可证完整时执行；把**组级事实**（而非单片“旁边还有一片”）喂给删除闸门。
+        /// </summary>
+        private void ReclaimSucceededGroupSources(VolumeGroupUnit unit, ArchiveTask? ownerTask)
+        {
+            if (unit == null
+                || unit.State != VolumeGroupState.Succeeded
+                || unit.MissingNumbers.Count > 0)
+            {
+                return;
+            }
+
+            SourceHandlingMode handling = RunOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
+
+            if (handling != SourceHandlingMode.DeleteInPlace)
+            {
+                return;
+            }
+
+            ArchiveTask? owner = ownerTask ?? FindOwnerTask(unit);
+            ResultCompletenessVerdict? groupVerdict = owner != null
+                ? ResultCompletenessClassifier.Classify(owner)
+                : null;
+
+            if (groupVerdict == null || !groupVerdict.AllowsSourceRemoval)
+            {
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+            var reclaimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Reclaim(ArchiveTask? task)
+            {
+                if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath)
+                    || !reclaimed.Add(task.CurrentPath))
+                {
+                    return;
+                }
+
+                PurgeLayerSourcePackage(
+                    task,
+                    verification: null,
+                    commit: null,
+                    logEntries,
+                    LayerPurgeTrigger.SourceHandlingDelete,
+                    reclaimVerdict: groupVerdict,
+                    groupComplete: true);
+            }
+
+            Reclaim(owner);
+
+            foreach (GroupPieceFact piece in unit.Pieces)
+            {
+                if (piece.Source != VolumeHandoffSource.UserImported
+                    && !IsUserImportedSourcePath(piece.Path))
+                {
+                    continue;
+                }
+
+                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+                    candidate != null
+                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
+                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
+
+                Reclaim(pieceTask);
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
+        }
+
+        private ArchiveTask? FindOwnerTask(VolumeGroupUnit unit)
+        {
+            if (unit == null || string.IsNullOrWhiteSpace(unit.OwnerTaskFileName))
+            {
+                return null;
+            }
+
+            return SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+                candidate != null
+                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                && string.Equals(
+                    FileNameHelper.GetFileName(candidate.CurrentPath),
+                    unit.OwnerTaskFileName,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
 
         internal bool TrySettleVolumeGroup(ArchiveTask? task)
         {
@@ -310,6 +406,8 @@ namespace ArchiveFixer.ViewModels
 
             MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
             AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
+
+            ReclaimSucceededGroupSources(unit, task);
             return true;
         }
     }

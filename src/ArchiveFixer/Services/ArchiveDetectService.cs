@@ -905,6 +905,18 @@ namespace ArchiveFixer.Services
             }
 
             /*
+             * ⛔ 跨盘 ZIP 的成员**永远不参与“按检测格式自动改后缀”**：
+             * 首片必须保持 .z01 语义、末片才是 .zip；一旦把首片也改成 .zip，
+             * 一组里会出现两个末片，组分析只能 Unknown（真机 940 批 7777/16161616）。
+             * 槽位由第二大步组算法按内容/盘号统一命名，这里只负责“别动它”。
+             */
+            if (result != null
+                && string.Equals(result.Format, "ZIP_SPANNED", StringComparison.OrdinalIgnoreCase))
+            {
+                return StatusText.ExtensionVolume;
+            }
+
+            /*
              * 分卷文件的"后缀"是 .001 / .z01 / .part1 这类卷标记，不是伪装，也不是漏写后缀。
              * 设计.md §七 要求把它单独归一类；报成"多重后缀疑似伪装"会误导用户去"修正"它，
              * 而修正分卷名会直接切断分卷链。

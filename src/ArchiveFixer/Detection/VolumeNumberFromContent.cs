@@ -971,7 +971,7 @@ namespace ArchiveFixer.Detection
              * ⛔ 放松的只有"这一片像不像 zip 流"这一条判据；"哪一片是第几片"仍然只由 EOCD 的盘号 + 片数 +
              * 尺寸规律决定（见 ResolveZipGroup），拿不准一律不认。
              */
-            byte[] head = ReadBytes(filePath, 0, 4);
+            byte[] head = ReadBytes(filePath, 0, 64);
 
             if (IsZipSignature(head))
             {
@@ -984,9 +984,13 @@ namespace ArchiveFixer.Detection
                     /*
                      * 「开头是不是**本地文件头** `PK\x03\x04`」＝ 通用分片族里"这是第 1 片"的内容证据
                      * （设计文档 §6.6 A / 工单 #10）。中间片是从数据中间切开的，开头是别的 PK 签名。
+                     *
+                     * ⚠ 2026-10-24 真机 940 批 `16161616`：第 1 片开头是**跨盘标记** `PK\x07\x08`
+                     * （4 字节 Embedded Stub），本地文件头在它**后面**。只看前 4 字节会把第一片判成
+                     * “没有本地文件头” ⇒ 组里丢第 1 槽 ⇒ 整组 Unknown。所以在头部前 64 字节里找
+                     * 本地文件头，而不是只认 offset 0。
                      */
-                    HasZipLocalHeader = head.Length >= 4
-                        && head[0] == 0x50 && head[1] == 0x4B && head[2] == 0x03 && head[3] == 0x04,
+                    HasZipLocalHeader = ContainsZipLocalHeader(head),
                     Number = null, // 非末片内容里没有盘号：位置只能靠消去法
                     Fail = VolumeNumberFail.None
                 };
@@ -1010,6 +1014,36 @@ namespace ArchiveFixer.Detection
                 || (head[2] == 0x01 && head[3] == 0x02)
                 || (head[2] == 0x05 && head[3] == 0x06)
                 || (head[2] == 0x07 && head[3] == 0x08));
+
+        /// <summary>
+        /// 头部前 64 字节里有没有**结构合理**的 ZIP 本地文件头 <c>PK\x03\x04</c>。
+        /// 跨盘 ZIP 第 1 片允许先出现 4 字节跨盘标记（<c>PK\x07\x08</c>），所以不能只认 offset 0。
+        /// ⛔ 只认 4 字节签名会把“魔数 + 全零”的坏文件也当第一片；必须再过版本/文件名长度两条。
+        /// </summary>
+        private static bool ContainsZipLocalHeader(ReadOnlySpan<byte> head)
+        {
+            for (int offset = 0; offset + 30 <= head.Length; offset++)
+            {
+                if (head[offset] != 0x50
+                    || head[offset + 1] != 0x4B
+                    || head[offset + 2] != 0x03
+                    || head[offset + 3] != 0x04)
+                {
+                    continue;
+                }
+
+                ushort versionNeeded = BinaryPrimitives.ReadUInt16LittleEndian(head.Slice(offset + 4, 2));
+                ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(head.Slice(offset + 26, 2));
+                ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(head.Slice(offset + 28, 2));
+
+                if (versionNeeded >= 10 && nameLength > 0 && extraLength <= 4096)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
 
         private static VolumeNumberReading FromEndOfCentralDirectory(string filePath, ReadOnlySpan<byte> eocd)

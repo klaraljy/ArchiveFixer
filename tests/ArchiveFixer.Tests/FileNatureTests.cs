@@ -155,6 +155,34 @@ namespace ArchiveFixer.Tests
             Assert.Equal(2, second.VolumeNumber);
         }
 
+        /// <summary>
+        /// **跨盘 ZIP 第一片不一定以 `PK\x03\x04` 开头**：真机 940 批 `16161616` 的第一片
+        /// 开头是数据描述符 `PK\x07\x08`，紧跟本地文件头 `PK\x03\x04`。当前判据只看前 4 字节，
+        /// 会把它判成“没有本地文件头” ⇒ 第一片身份丢失 ⇒ 整组判不出。
+        /// 红检：修前 `HasZipLocalHeader=false`，修后为 true。
+        /// </summary>
+        [Fact]
+        public void 跨盘ZIP第一片_数据描述符前缀后面的本地文件头也要认出来()
+        {
+            string path = Path.Combine(_root, "aaa-L2.z01");
+            byte[] bytes = new byte[128];
+
+            bytes[0] = 0x50; bytes[1] = 0x4B; bytes[2] = 0x07; bytes[3] = 0x08;
+            bytes[4] = 0x50; bytes[5] = 0x4B; bytes[6] = 0x03; bytes[7] = 0x04;
+            bytes[8] = 20;   // version needed，结构合理
+            bytes[30] = 1;   // name length
+            bytes[34] = (byte)'a';
+
+            File.WriteAllBytes(path, bytes);
+
+            FileNatureCard card = FileNature.Inspect(path);
+
+            Assert.Equal(
+                VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                card.Membership);
+            Assert.True(card.HasZipLocalHeader, "数据描述符之后就是 PK\\x03\\x04，第一片身份不能丢");
+        }
+
         private static void WriteSingleDiskZip(string path)
         {
             using var stream = new FileStream(path, FileMode.Create, FileAccess.Write);

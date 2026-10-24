@@ -324,6 +324,15 @@ namespace ArchiveFixer.Detection
                 // RAR5 / 跨盘 ZIP 那些"内容里就写着卷号"的族：> 1 ⇒ 它是这一组的一片（不是第一片）。
                 bodyKind = ArchiveBodyKind.VolumePiece;
             }
+            else if (reading.IsVolumeMember && reading.HasZipLocalHeader)
+            {
+                /*
+                 * **跨盘 ZIP 的第 1 片**：内容里开头有本地文件头（允许前面先出现 4 字节
+                 * `PK\x07\x08` 跨盘标记）。它没有 EOCD、没有盘号 ⇒ 以前停在 Unknown，
+                 * 组里丢第 1 槽（真机 940 批 `16161616`）。
+                 */
+                bodyKind = ArchiveBodyKind.VolumeFirstPiece;
+            }
             else if (reading.IsVolumeMember && reading.Number == 1)
             {
                 /*

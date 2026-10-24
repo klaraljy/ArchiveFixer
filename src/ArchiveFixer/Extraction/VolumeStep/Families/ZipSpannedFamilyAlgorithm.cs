@@ -49,7 +49,22 @@ namespace ArchiveFixer.Extraction
             {
                 string name = Path.GetFileName(piece.Path);
 
-                if (ZipName.IsMatch(name))
+                /*
+                 * 第 1 片的内容证据：开头有本地文件头（允许先出现 `PK\x07\x08` 跨盘标记）。
+                 * 它没有 EOCD、名字也被包坏时，靠这一条占住槽 1；⛔ 不靠名字猜。
+                 */
+                if (piece.HasZipLocalHeader)
+                {
+                    named.Add((piece, 1));
+                    continue;
+                }
+
+                bool contentSaysLast =
+                    piece.VolumeNumber is int contentNumber
+                    && contentNumber >= 2
+                    && piece.DeclaredVolumeCount == contentNumber;
+
+                if (ZipName.IsMatch(name) || contentSaysLast)
                 {
                     if (zipPiece != null)
                     {

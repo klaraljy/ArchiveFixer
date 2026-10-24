@@ -215,6 +215,29 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
+        /// 名字里是否还留着“归档/卷标记段”的痕迹（如 `333-L2.7z.png`、`111-L2.7z.txt`）。
+        /// 这类文件即使 prober 打不开，也可能是 7z 中间卷（中间卷没有魔数）⇒ 不能当无用物。
+        /// </summary>
+        private static bool LooksLikePotentialVolumeMember(string path)
+        {
+            string name = Path.GetFileName(path);
+
+            if (FileNameHelper.IsVolumePartFileName(name))
+            {
+                return true;
+            }
+
+            string stem = Path.GetFileNameWithoutExtension(name);
+
+            return stem.Contains(".7z", StringComparison.OrdinalIgnoreCase)
+                || stem.Contains(".zip", StringComparison.OrdinalIgnoreCase)
+                || stem.Contains(".rar", StringComparison.OrdinalIgnoreCase)
+                || stem.Contains(".tar", StringComparison.OrdinalIgnoreCase)
+                || stem.Contains(".gz", StringComparison.OrdinalIgnoreCase);
+        }
+
+
+        /// <summary>
         /// 密码候选里**有没有一个能用的**（B 段判据）。
         ///
         /// <para>为什么要单独判"非空"：<c>PasswordService.GetPasswordCandidates</c> 保证**至少给一个空密码**
@@ -338,6 +361,17 @@ namespace ArchiveFixer.Storage
                     if (await IsArchiveAsync(prober, path, cancellationToken).ConfigureAwait(false))
                     {
                         // 魔数认得出是压缩包（含"伪装成 .jpg/.txt 的真包"与双面文件）→ 绝不是无用物。
+                        continue;
+                    }
+
+                    /*
+                     * ⛔ 7z 中间卷**没有魔数**（只有第 1 卷有起始头），单独打不开是正常的。
+                     * 名字里若还留着归档/卷标记段（`333-L2.7z.png`、`111-L2.7z.txt`），
+                     * 它可能是某一组的中间片 ⇒ 不能按“prober 打不开”判无用物；
+                     * 保留给第二大步组分析认领。
+                     */
+                    if (LooksLikePotentialVolumeMember(path))
+                    {
                         continue;
                     }
 

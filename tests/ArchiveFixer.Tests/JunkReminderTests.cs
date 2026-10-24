@@ -105,6 +105,31 @@ namespace ArchiveFixer.Tests
                 name => name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// **7z 中间卷没有魔数**（只有第 1 卷有起始头），`333-L2.7z.png` / `111-L2.7z.txt`
+        /// 这类“卷标记 + 假后缀”的文件单独打不开是正常的，不能判成无用物移出任务表；
+        /// 普通说明文件照旧要报。红检：修前 `AllHits` 含这两个，修后只含 `说明.txt`。
+        /// </summary>
+        [Fact]
+        public async Task 名字里还留着归档段的中卷_即使打不开也不许当无用物()
+        {
+            Harness harness = CreateHarness("run");
+
+            string hint = CreateTextFile(harness, "说明.txt");
+            CreateTextFile(harness, "333-L2.7z.png");
+            CreateTextFile(harness, "111-L2.7z.txt");
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile(harness, "001.7z"));
+
+            SourceJunkScanResult result = await SourceJunkScanner.ScanAsync(
+                new[] { task },
+                new MagicArchiveProber(),
+                CancellationToken.None);
+
+            Assert.Equal(1, result.TotalCount);
+            Assert.Equal(Path.GetFileName(hint), Assert.Single(result.Items).FileName);
+        }
+
         // ================================================================ ①B 目录形式的密码提示（第 32 条）
 
         /// <summary>
