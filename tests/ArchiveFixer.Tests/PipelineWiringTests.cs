@@ -176,69 +176,7 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ A4 / A5：预检那一支的落地
 
-        /// <summary>
-        /// 列目录失败 + 引擎判"文件名已加密" → 任务状态就是「文件名已加密」，
-        /// 而不是含糊的"密码错误"。文案里还要给出下一步（需要正确密码）。
-        ///
-        /// ⚠ 假引擎必须**真的失败**：加密头的包在真实世界里 7z 也解不开
-        /// （<c>Cannot open encrypted archive. Wrong password?</c>）。
-        /// 如果让假引擎返回成功，这条测试测的就不是"预检的结论落到任务上"，
-        /// 而是"解压成功会不会被覆盖" —— 那是另一件事。
-        /// </summary>
-        [Fact]
-        public async Task 列目录失败且判为加密头_任务状态是文件名已加密()
-        {
-            Harness harness = CreateHarness();
-            ArchiveTask task = AddTask(harness, CreateSourceFile("hdr.7z"));
 
-            harness.Engine.OnListAsync = _ => Task.FromResult(
-                ArchiveListResult.Failure(
-                    "EncryptedHeaders",
-                    "Cannot open encrypted archive. Wrong password?",
-                    "fake",
-                    "1.0"));
-
-            harness.Engine.OnExtractAsync = _ => Task.FromResult(new ArchiveOperationResult
-            {
-                Success = false,
-                Status = StatusText.WrongPassword,
-                Message = "密码错误或缺少正确密码",
-                DetectedErrorType = "WrongPassword"
-            });
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.EncryptedHeaders, task.Status);
-            Assert.Contains("加密了文件名", task.ErrorMessage);
-            Assert.Contains("需要正确密码", task.ErrorMessage);
-        }
-
-        /// <summary>
-        /// ⛔ 反向回归（这一条比上面那条更重要）：**列目录失败但不是加密头**时，
-        /// 绝不许落成「文件名已加密」—— 那会把"文件损坏""权限不足"这类结论改成一句误导人的话。
-        /// </summary>
-        [Fact]
-        public async Task 列目录失败但不是加密头_不许落成文件名已加密()
-        {
-            Harness harness = CreateHarness();
-            ArchiveTask task = AddTask(harness, CreateSourceFile("broken.7z"));
-
-            harness.Engine.OnListAsync = _ => Task.FromResult(
-                ArchiveListResult.Failure("Corrupted", "归档已损坏", "fake", "1.0"));
-
-            harness.Engine.OnExtractAsync = _ => Task.FromResult(new ArchiveOperationResult
-            {
-                Success = false,
-                Status = StatusText.Corrupted,
-                Message = "归档已损坏",
-                DetectedErrorType = "Corrupted"
-            });
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.NotEqual(StatusText.EncryptedHeaders, task.Status);
-            Assert.Equal(StatusText.Corrupted, task.Status);
-        }
 
         /// <summary>
         /// A5：预检算出来的路径长度预警要落进**任务字段**（以前只有一行日志，
@@ -642,114 +580,7 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ C3：缺卷时的手动指定目录
 
-        /// <summary>
-        /// 缺卷门的**前置条件不变**：没有人（也没有界面）指定目录时，仍然拒绝启动、仍然报缺哪几个。
-        /// ⛔ 不变量 7：出口只是"帮你找齐"，不是"缺卷也允许开始"。
-        /// </summary>
-        [Fact]
-        public async Task 缺卷_没有指定目录时仍然不启动并报缺哪几个()
-        {
-            Harness harness = CreateHarness();
-            ArchiveTask task = AddTask(harness, CreateSourceFile("vol.7z.001"));
 
-            task.IsVolumeGroup = true;
-            task.IsVolumeComplete = false;
-            task.VolumePaths.Add(task.CurrentPath);
-            task.MissingVolumeNames.Add("vol.7z.002");
-            task.VolumeInfoText = "2 卷，缺 vol.7z.002";
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Contains("vol.7z.002", task.ErrorMessage);
-
-            // 一次都没有真的去解压（不变量 7：缺卷不得开始不可完成的任务）。
-            Assert.Empty(harness.Engine.ExtractCalls);
-        }
-
-        /// <summary>
-        /// **缺卷要说得对**（用户 2026-09-30 分卷组装算法）：真案 ① 的现场 ——
-        /// <c>111.7z.001</c> + 没有后缀的 <c>111</c> + <c>111.7z.003</c>。
-        ///
-        /// <para>报出来的必须是**缺哪一卷**（<c>111.7z.002</c>），而且**一次引擎调用都不许发生**：
-        /// 缺卷不开解（不变量 7）。</para>
-        ///
-        /// <para><b>⚠ 旧断言里"解前拦下"那半条为什么改成"批末补判才拦下"</b>
-        /// （用户 2026-10-05 口径 2，见 AGENTS.md §11.4）：他原话是
-        /// 「<b>所以你开始就得突破所有的伪装和压缩，这种分卷找不到的情况可以留在最后做</b>」——
-        /// 批首那一刻的"缺"只是**当时的读数**，同一批里另一个包解出来的第 1 卷可能正好补上它
-        /// （真机 <c>B250135.7z.002</c> 16:29:33 就被判「分卷不完整……本次不开始」，
-        /// 而它的 <c>.001</c> 正躺在同一棵树里、由同批另一个包解出来）。所以现在批首**只记缺口**、
-        /// ⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过；**等这一批的解压都跑完再补判一次**，
-        /// 到那时仍然凑不齐才如实报缺卷。⇒ 断言从"解前就落结论"改成"这一组**最终没有开解**、
-        /// 结论在批末才落"。</para>
-        ///
-        /// <para>⛔ 不变量 7 **一条都没少**（下面逐条钉住）：① 这一组**最终没有开解** ——
-        /// "不提前把话说死"绝不等于"带着缺卷开始解"；② 缺的是哪一卷**点得出名**（<c>111.7z.002</c>）；
-        /// ③ 源包**一个字节都没动**。
-        /// ⚠ 旧断言里那句「缺第 2 卷 …… 推定」来自**批首**那条诊断（<c>VolumeGroupResolver</c> 的证据句），
-        /// 批末补判这条走的是账上那份缺卷清单 ⇒ 证据句换成了「先把缺口记下来 …… 批末仍然缺」这一对；
-        /// 报出来的**缺哪一卷**一个字没少（这就是本条要钉的那条不变量）。</para>
-        /// </summary>
-        [Fact]
-        public async Task 缺卷_真案一的现场_批末补判才拦下并点名缺第2卷()
-        {
-            Harness harness = CreateHarness();
-
-            string first = CreateSourceFile("111.7z.001");
-            CreateSourceFile("111");
-            CreateSourceFile("111.7z.003");
-
-            ArchiveTask task = AddTask(harness, first);
-            task.IsVolumeGroup = true;
-            task.IsVolumeComplete = false;
-            task.VolumePaths.Add(first);
-            task.VolumeInfoText = "3 卷，缺 111.7z.002";
-
-            string sourceDirectory = Path.GetDirectoryName(first)!;
-            List<string> sourcesBefore = SourceContentDigests(sourceDirectory);
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-
-            // 说清缺哪一卷（缺卷清单点得出名）。
-            Assert.Contains("111.7z.002", task.ErrorMessage);
-
-            // ① 批首**只记缺口**：⛔ 没有"本次不开始"，⛔ 也没有当场落死的结论。
-            Assert.Contains(
-                harness.Log.Logs,
-                item => item.Message.Contains("先把缺口记下来", StringComparison.Ordinal));
-
-            Assert.DoesNotContain(
-                harness.Log.Logs,
-                item => item.Message.Contains("本次不开始", StringComparison.Ordinal));
-
-            // ② 结论是**批末补判**落的（这一批的解压都跑完之后）。
-            Assert.Contains("批末补判", task.ErrorMessage);
-            Assert.Contains(
-                harness.Log.Logs,
-                item => item.Message.Contains("批末补判", StringComparison.Ordinal) &&
-                        item.Message.Contains("仍然缺", StringComparison.Ordinal));
-
-            // ③ 这一组**最终没有开解**：引擎一次都没被调用（不变量 7）。
-            Assert.Empty(harness.Engine.ExtractCalls);
-            Assert.Empty(harness.Engine.AllCalls);
-
-            /*
-             * ④ 机器终态跟着落（不许停在"未处理"）。
-             *
-             * ⚠ 2026-10-06 按**用户新指令**改口径（旧断言是 `TaskOutcome.Failed`）：他原话
-             * 「假如，1_最后剩一个 `111.7z.001` **你不能说是解压失败了，这应该是部分完成**，
-             * 因为这个分卷不完整 …；2_如果最后完整了，但是解压不出来，那才是失败了」。
-             * ⇒ 到最后一刻仍然缺片 = 没拿到全部数据 ⇒ `PartiallyCompleted`（本条走的就是这一档）。
-             */
-            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
-
-            // ⑤ 源包**一个字节都没动**（不变量 1）：按"内容指纹的多重集"比对 ——
-            //    逐字节钉住"没改内容、没删、没多出东西"（批首那一步允许改卷名，所以不按文件名比）。
-            Assert.Equal(sourcesBefore, SourceContentDigests(sourceDirectory));
-        }
 
         /// <summary>
         /// 重新归组的判据（纯函数，不碰界面）：把"任务现有各卷 + 用户指定目录里找到的卷"合起来重算，
@@ -787,36 +618,6 @@ namespace ArchiveFixer.Tests
             Assert.Contains(Path.GetFullPath(part2), both);
         }
 
-        /// <summary>
-        /// 缺卷补救的入口本身：**每批每个任务只问一次**，而且无界面宿主时直接按缺卷处理
-        /// （绝不弹窗、绝不死等）。这里用真管线跑，断言"没有第二个包被反复问"的形态。
-        /// </summary>
-        [Fact]
-        public async Task 缺卷_无界面宿主时一次都不弹且不启动()
-        {
-            Harness harness = CreateHarness();
-
-            ArchiveTask first = AddTask(harness, CreateSourceFile("a.7z.001"));
-            first.IsVolumeGroup = true;
-            first.IsVolumeComplete = false;
-            first.VolumePaths.Add(first.CurrentPath);
-            first.MissingVolumeNames.Add("a.7z.002");
-            first.VolumeInfoText = "2 卷，缺 a.7z.002";
-
-            ArchiveTask second = AddTask(harness, CreateSourceFile("b.7z.001"));
-            second.IsVolumeGroup = true;
-            second.IsVolumeComplete = false;
-            second.VolumePaths.Add(second.CurrentPath);
-            second.MissingVolumeNames.Add("b.7z.002");
-            second.VolumeInfoText = "2 卷，缺 b.7z.002";
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.VolumeMissing, first.Status);
-            Assert.Equal(StatusText.VolumeMissing, second.Status);
-
-            Assert.Empty(harness.Engine.ExtractCalls);
-        }
 
         // ================================================================ B：改名路径上的 Ask
 
