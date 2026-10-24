@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
@@ -83,6 +84,61 @@ namespace ArchiveFixer.ViewModels
                 + $"｜片={unit.Pieces.Count}｜owner={unit.OwnerTaskFileName}｜状态={unit.State}｜{unit.Verdict}");
 
             return unit;
+        }
+
+        /// <summary>链接完成后回写 Unit（唯一写者：Service）。</summary>
+        internal void MarkVolumeGroupLinked(VolumeGroupUnit? unit, IReadOnlyList<string>? linkedNames) =>
+            _volumeGroupService.MarkLinked(unit, linkedNames);
+
+        /// <summary>
+        /// **收尾（P1）**：owner 任务跑完后按 Unit 收片/留片、回写结论。
+        /// 返回 false = 这一单不是某组的 owner（交回旧收片账处理）。
+        /// </summary>
+        internal bool TrySettleVolumeGroup(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return false;
+            }
+
+            string ownerName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
+            VolumeGroupUnit? unit = _volumeGroupService.FindByOwner(ownerName);
+
+            /*
+             * 只有**族算法接线并出了规范名计划**的组才走 Unit 收尾；
+             * 其它族（计划为空）仍走旧收片账 —— 否则链接是按原文件名建的、收片却按 LinkedNames 删，
+             * 两边对不上（V01–V04 回归当场变红）。
+             */
+            if (unit == null || unit.NamePlan == null)
+            {
+                return false;
+            }
+
+            bool succeeded = task.Outcome == TaskOutcome.Succeeded;
+
+            if (!succeeded)
+            {
+                _volumeGroupService.MarkState(
+                    unit,
+                    VolumeGroupState.Failed,
+                    "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
+                MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
+                AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
+                return true;
+            }
+
+            int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
+                unit.LinkedNames,
+                path => IsUserImportedSourcePath(path),
+                (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
+
+            _volumeGroupService.MarkState(
+                unit,
+                VolumeGroupState.Succeeded,
+                $"解压成功，收片 {deleted} 片（用户原件不删）");
+            MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
+            AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
+            return true;
         }
     }
 }

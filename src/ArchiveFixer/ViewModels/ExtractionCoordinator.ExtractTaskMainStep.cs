@@ -151,11 +151,14 @@ namespace ArchiveFixer.ViewModels
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
 
                 /*
-                 * D 段：成功收片 / 失败留片（交界处重建，2026-10-24）。
-                 * 只有 B/C 段登记过收片账的第二大步入口任务才会动作；第一大步任务查不到账 ⇒ 直接返回。
-                 * 成功 ⇒ 入口层里的片按过程物删掉（用户原件不删）；失败/密码错/缺卷 ⇒ 一个字节不动。
+                 * 收尾（P1）：owner 任务先按 VolumeGroupUnit 收片/留片/回写结论；
+                 * 不是某组 owner ⇒ 交回旧收片账（其它族/未接线路径行为不变）。
+                 * 成功 ⇒ 只删本组建出来的链接名（用户原件不删）；失败/密码错/缺卷 ⇒ 一个字节不动。
                  */
-                TryPurgeSolvedVolumeStepPieces(task);
+                if (!TrySettleVolumeGroup(task))
+                {
+                    TryPurgeSolvedVolumeStepPieces(task);
+                }
             }
             catch (OperationCanceledException)
             {

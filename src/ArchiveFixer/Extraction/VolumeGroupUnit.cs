@@ -79,6 +79,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>这一组的片（原始事实；卷号可为空，由族算法决定怎么用）。</summary>
         public IReadOnlyList<GroupPieceFact> Pieces { get; set; } = Array.Empty<GroupPieceFact>();
 
+        /// <summary>族算法定好的片顺序（按卷号；判不出 = 空）。</summary>
+        public IReadOnlyList<string> OrderedPieces { get; set; } = Array.Empty<string>();
+
+        /// <summary>族算法产出的规范名计划（判不出/未定 = null；⛔ 交界处不许产出）。</summary>
+        public CanonicalNamePlan? NamePlan { get; set; }
+
         /// <summary>已建好的链接名（收片按它删，⛔ 不按原片名）。</summary>
         public IReadOnlyList<string> LinkedNames { get; set; } = Array.Empty<string>();
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
@@ -24,6 +25,13 @@ namespace ArchiveFixer.Extraction
         private readonly Dictionary<string, VolumeGroupUnit> _units =
             new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>已接线的族算法（P1 先接 RAR；其它族未接 ⇒ 保持 P0 行为，不判、不命名）。</summary>
+        private readonly Dictionary<VolumeNamingFamily, IVolumeFamilyAlgorithm> _algorithms =
+            new()
+            {
+                [VolumeNamingFamily.RarPart] = new RarFamilyAlgorithm()
+            };
+
         /// <summary>本批/本链已经登记的组（只读视图）。</summary>
         public IReadOnlyCollection<VolumeGroupUnit> Units => _units.Values;
 
@@ -44,6 +52,30 @@ namespace ArchiveFixer.Extraction
             return _units.TryGetValue(BuildKey(baseName, family.Value), out VolumeGroupUnit? unit)
                 ? unit
                 : null;
+        }
+
+        /// <summary>按唯一 owner 任务文件名找回这一组（收尾用；⛔ 不用“再算一遍”。）</summary>
+        public VolumeGroupUnit? FindByOwner(string? ownerTaskFileName)
+        {
+            if (string.IsNullOrWhiteSpace(ownerTaskFileName))
+            {
+                return null;
+            }
+
+            return _units.Values.FirstOrDefault(unit =>
+                string.Equals(unit.OwnerTaskFileName, ownerTaskFileName, StringComparison.Ordinal));
+        }
+
+        /// <summary>链接完成后回写（唯一写者；只追加本次真建出来的链接名）。</summary>
+        public void MarkLinked(VolumeGroupUnit? unit, IReadOnlyList<string>? linkedNames)
+        {
+            if (unit == null)
+            {
+                return;
+            }
+
+            unit.LinkedNames = linkedNames ?? Array.Empty<string>();
+            unit.State = VolumeGroupState.Linked;
         }
 
         /// <summary>
@@ -99,6 +131,33 @@ namespace ArchiveFixer.Extraction
                 Verdict = evidence,
                 OutputLayer = outputLayer
             };
+
+            /*
+             * 族已接线 ⇒ 由族算法回答“顺序 / 片数 / 完整性 / 规范名计划”。
+             * ⛔ 只有 Complete 才继续；Missing/Unknown 把 Unit 留在账上（判不出就不动），
+             * 由调用方负责“不点名、不链接、不解压”。
+             */
+            if (_algorithms.TryGetValue(family.Value, out IVolumeFamilyAlgorithm? algorithm))
+            {
+                FamilyResult result = algorithm.Evaluate(unit);
+
+                unit.OrderedPieces = result.OrderedPieces;
+                unit.NamePlan = result.NamePlan;
+                unit.MissingNumbers = result.MissingNumbers;
+                unit.Verdict = result.Evidence;
+                unit.State = result.Verdict switch
+                {
+                    GroupAnalysis.GroupAnalysisVerdict.Complete => VolumeGroupState.Complete,
+                    GroupAnalysis.GroupAnalysisVerdict.Missing => VolumeGroupState.Missing,
+                    _ => VolumeGroupState.Unknown
+                };
+
+                if (unit.State != VolumeGroupState.Complete)
+                {
+                    _units[key] = unit;
+                    return unit;
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(ownerTaskFileName))
             {

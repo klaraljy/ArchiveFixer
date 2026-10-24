@@ -147,6 +147,131 @@ namespace ArchiveFixer.Extraction
             return result;
         }
 
+        /// <summary>按规范名计划的链接结果（逐片细节 + 真建出来的链接名）。</summary>
+        public sealed class PlanLinkResult
+        {
+            public int Linked { get; set; }
+
+            public int Skipped { get; set; }
+
+            public int Failed { get; set; }
+
+            public List<string> LinkedNames { get; } = new();
+
+            public List<string> Details { get; } = new();
+
+            public string Describe() => $"按规范名建链接：链接 {Linked} / 跳过 {Skipped} / 失败 {Failed}";
+        }
+
+        /// <summary>
+        /// **按族算法给出的规范名计划建链接**（第二大步 P1）：只建硬链接，
+        /// ⛔ 不搬、不复制、不覆盖；目标名被占/源片不在/就是它自己 ⇒ 跳过并写清原因。
+        /// </summary>
+        public static PlanLinkResult LinkByPlan(
+            CanonicalNamePlan? plan,
+            string? sourceLayer,
+            Action<string, string>? log = null)
+        {
+            var result = new PlanLinkResult();
+
+            if (plan == null || plan.IsEmpty || string.IsNullOrWhiteSpace(sourceLayer))
+            {
+                result.Failed++;
+                result.Details.Add("规范名计划或入口层为空 —— 什么都不做");
+                return result;
+            }
+
+            foreach (CanonicalNamePlanItem item in plan.Items)
+            {
+                if (item.Conflict.Length > 0)
+                {
+                    result.Skipped++;
+                    result.Details.Add($"{item.TargetName}：{item.Conflict}，跳过（不覆盖）");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(item.PiecePath) || !File.Exists(item.PiecePath))
+                {
+                    result.Skipped++;
+                    result.Details.Add($"{item.TargetName}：源片不在盘上，跳过");
+                    continue;
+                }
+
+                string target = Path.Combine(sourceLayer, item.TargetName);
+
+                if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(item.PiecePath), StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Skipped++;
+                    continue;
+                }
+
+                if (File.Exists(target))
+                {
+                    result.Skipped++;
+                    result.Details.Add($"{item.TargetName}：目标名已被占用，跳过（不覆盖）");
+                    continue;
+                }
+
+                if (HardLinkHelper.TryCreateHardLink(target, item.PiecePath))
+                {
+                    result.Linked++;
+                    result.LinkedNames.Add(target);
+                    result.Details.Add($"{Path.GetFileName(item.PiecePath)} → {item.TargetName}：按规范名建硬链接（原件未动）");
+                }
+                else
+                {
+                    result.Failed++;
+                    result.Details.Add($"{item.TargetName}：硬链接建不出来（跨卷？）");
+                }
+            }
+
+            foreach (string detail in result.Details)
+            {
+                log?.Invoke(result.Failed > 0 ? "WARN" : "INFO", detail);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 成功 ⇒ 只删**本组自己建出来的链接名**（用户原件不删；失败那一档不调用）。
+        /// ⛔ 不按原片名找，避免把用户原件或别的组的链接删掉。
+        /// </summary>
+        public static int PurgeLinkedNames(
+            IEnumerable<string>? linkedNames,
+            Func<string, bool>? isUserImportedSource,
+            Action<string, string>? log = null)
+        {
+            int deleted = 0;
+
+            foreach (string name in linkedNames ?? Array.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(name) || !File.Exists(name))
+                {
+                    continue;
+                }
+
+                if (isUserImportedSource?.Invoke(name) == true)
+                {
+                    log?.Invoke("INFO", $"{Path.GetFileName(name)}：用户原件，不删");
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(name);
+                    deleted++;
+                    log?.Invoke("INFO", $"{Path.GetFileName(name)}：这一组已经解开 ⇒ 链接按过程物删除");
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke("WARN", $"{Path.GetFileName(name)}：链接没删掉（不影响内容物）—— {ex.GetType().Name}");
+                }
+            }
+
+            return deleted;
+        }
+
         /// <summary>
         /// 这一组**解开成功**之后：把入口层里这一组的片按过程物删掉（⛔ 用户导入的原件不删）。
         /// 失败 / 密码错 / 缺卷那一档**不调用本方法** —— 片要留在入口包的位置。

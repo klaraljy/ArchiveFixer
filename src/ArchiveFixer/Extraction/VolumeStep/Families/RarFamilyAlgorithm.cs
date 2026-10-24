@@ -1,0 +1,224 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using ArchiveFixer.Detection;
+
+namespace ArchiveFixer.Extraction
+{
+    /// <summary>
+    /// **RAR 族专属算法**（2026-10-24 重建，P1）。
+    ///
+    /// <para>证据：RAR5 / RAR4 新编号 / RAR4 老编号的主头都能给卷号（或首卷锚点 + 相对卷号差），
+    /// ⇒ 槽位直接来自内容；数量 = 最大卷号；连成 1..N 才算完整。**不用试开**。</para>
+    ///
+    /// <para>规范名：新编号 `基名.partN.rar`（保留入口前缀/宽度）；老编号 `基名.rar + .r00/.r01…`。
+    /// 入口名不动；只给其余片出“链接成规范名”的计划，⛔ 不落盘、不覆盖。</para>
+    /// </summary>
+    public sealed class RarFamilyAlgorithm : IVolumeFamilyAlgorithm
+    {
+        private static readonly Regex PartPattern = new(
+            @"^(?<prefix>.*?part)(?<num>\d+)(?<suffix>\..+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        private static readonly Regex LegacyPattern = new(
+            @"^(?<stem>.*?)(?<ext>\.rar|\.r\d{2})$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public VolumeNamingFamily Family => VolumeNamingFamily.RarPart;
+
+        public FamilyResult Evaluate(VolumeGroupUnit unit)
+        {
+            if (unit == null || unit.Pieces.Count == 0)
+            {
+                return new FamilyResult(
+                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    Array.Empty<string>(),
+                    Array.Empty<int>(),
+                    null,
+                    "RAR：没有片事实 ⇒ 判不出");
+            }
+
+            var numbered = new List<(GroupPieceFact Fact, int Number)>();
+            var unnumbered = new List<GroupPieceFact>();
+
+            foreach (GroupPieceFact piece in unit.Pieces)
+            {
+                int? number = piece.VolumeNumber;
+
+                /*
+                 * 名字卷标记只作**补缺**：内容读不出卷号的片（RAR4 老编号的首卷锚点/断片）才用；
+                 * ⛔ 内容能读出的号一个都不改（不许两套编号合流，之前踩过假缺卷）。
+                 */
+                if (number == null)
+                {
+                    number = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
+                }
+
+                if (number == null || number.Value < 1)
+                {
+                    unnumbered.Add(piece);
+                }
+                else
+                {
+                    numbered.Add((piece, number.Value));
+                }
+            }
+
+            if (unnumbered.Count > 0 || numbered.Count == 0)
+            {
+                return new FamilyResult(
+                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    Array.Empty<string>(),
+                    Array.Empty<int>(),
+                    null,
+                    $"RAR：{unnumbered.Count} 片卷号判不出（内容/名字都没有）⇒ 判不出，不动");
+            }
+
+            if (numbered.GroupBy(item => item.Number).Any(group => group.Count() > 1))
+            {
+                return new FamilyResult(
+                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    Array.Empty<string>(),
+                    Array.Empty<int>(),
+                    null,
+                    "RAR：卷号有重复 ⇒ 判不出，不动");
+            }
+
+            List<int> numbers = numbered
+                .Select(item => item.Number)
+                .OrderBy(number => number)
+                .ToList();
+
+            int max = numbers[^1];
+            bool contiguous = numbers[0] == 1
+                && numbers.Count == max
+                && numbers.SequenceEqual(Enumerable.Range(1, max));
+
+            List<string> ordered = numbered
+                .OrderBy(item => item.Number)
+                .Select(item => item.Fact.Path)
+                .ToList();
+
+            /*
+             * ⛔ 规范名必须按**卷号顺序**映射（第 i 个目标名 → 卷号 i 那一片）。
+             * `unit.Pieces` 的顺序是候选扫描顺序，不保证按卷号排；直接拿它映射会把
+             * 第 3 卷的链接指到第 1 卷上（真机 10101010：part3 变成了 part1 的硬链接，
+             * 引擎随后报 part4 缺失）。
+             */
+            List<(GroupPieceFact Fact, int Number)> orderedNumbered = numbered
+                .OrderBy(item => item.Number)
+                .ToList();
+
+            if (!contiguous)
+            {
+                List<int> missing = Enumerable.Range(1, max).Except(numbers).ToList();
+
+                return new FamilyResult(
+                    GroupAnalysis.GroupAnalysisVerdict.Missing,
+                    ordered,
+                    missing,
+                    null,
+                    $"RAR 内容卷号只找到 {string.Join(",", numbers)}（1..{max} 里缺 {string.Join(",", missing)}）");
+            }
+
+            CanonicalNamePlan plan = BuildNamePlan(unit, orderedNumbered);
+
+            return new FamilyResult(
+                GroupAnalysis.GroupAnalysisVerdict.Complete,
+                ordered,
+                Array.Empty<int>(),
+                plan,
+                $"RAR 内容卷号连成 1..{max}（入口 = 第 1 卷）");
+        }
+
+        private static CanonicalNamePlan BuildNamePlan(
+            VolumeGroupUnit unit,
+            List<(GroupPieceFact Fact, int Number)> numbered)
+        {
+            string entryName = Path.GetFileName(unit.EntryPath);
+            string sourceLayer = unit.SourceLayer;
+
+            List<string>? targets = null;
+            string namingEvidence;
+
+            Match part = PartPattern.Match(entryName);
+
+            if (part.Success)
+            {
+                string prefix = part.Groups["prefix"].Value;
+                string suffix = part.Groups["suffix"].Value;
+                int width = part.Groups["num"].Value.Length;
+
+                targets = new List<string>();
+
+                for (int index = 1; index <= numbered.Count; index++)
+                {
+                    targets.Add(
+                        prefix
+                        + index.ToString(
+                            "D" + width.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            System.Globalization.CultureInfo.InvariantCulture)
+                        + suffix);
+                }
+
+                namingEvidence = $"RAR 新编号（{prefix}partN{suffix}，宽度 {width}）";
+            }
+            else
+            {
+                Match legacy = LegacyPattern.Match(entryName);
+
+                if (legacy.Success)
+                {
+                    string stem = legacy.Groups["stem"].Value;
+                    targets = new List<string> { stem + ".rar" };
+
+                    for (int index = 2; index <= numbered.Count; index++)
+                    {
+                        targets.Add(stem + ".r" + (index - 2).ToString("D2", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+
+                    namingEvidence = $"RAR 老编号（{stem}.rar + .rNN）";
+                }
+                else
+                {
+                    namingEvidence = "RAR 入口名认不出卷标记 ⇒ 不出规范名计划";
+                }
+            }
+
+            if (targets == null || targets.Count != numbered.Count)
+            {
+                return new CanonicalNamePlan { Evidence = namingEvidence };
+            }
+
+            var items = new List<CanonicalNamePlanItem>();
+
+            for (int index = 0; index < numbered.Count; index++)
+            {
+                GroupPieceFact piece = numbered[index].Fact;
+                string targetName = targets[index];
+                string targetPath = Path.Combine(sourceLayer, targetName);
+                string conflict = string.Empty;
+
+                if (!string.Equals(Path.GetFullPath(targetPath), Path.GetFullPath(piece.Path), StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(targetPath))
+                {
+                    conflict = "目标名已被别的文件占用";
+                }
+
+                items.Add(new CanonicalNamePlanItem(
+                    piece.Path,
+                    targetName,
+                    numbered[index].Number == 1,
+                    conflict));
+            }
+
+            return new CanonicalNamePlan
+            {
+                Items = items,
+                Evidence = namingEvidence
+            };
+        }
+    }
+}

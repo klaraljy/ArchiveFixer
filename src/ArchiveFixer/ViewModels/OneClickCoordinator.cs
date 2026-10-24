@@ -1304,6 +1304,31 @@ namespace ArchiveFixer.ViewModels
                         entryTask.Operation = StatusText.OpWaiting;
                         entryTask.ProgressText = StatusText.ProgressWaiting;
 
+                        string entryLayer = Path.GetDirectoryName(entryTask.CurrentPath ?? string.Empty) ?? string.Empty;
+
+                        if (entryLayer.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        /*
+                         * ===== P1：先提交成 Unit（族算法在这里回答完整性/顺序/规范名计划）=====
+                         * ⛔ Missing/Unknown ⇒ 不点名、不链接、不解压（判不出就不动）。
+                         * RAR 已接线；其它族未接线 ⇒ 保持 P0 行为（不判、不命名）。
+                         */
+                        ArchiveFixer.Extraction.VolumeGroupUnit? committedUnit =
+                            _extractionCoordinator.TryCommitVolumeGroup(group, entryTask, entryLayer);
+
+                        if (committedUnit != null
+                            && (committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
+                                || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·组] {group.BaseName}：{committedUnit.State} ⇒ 不点名、不链接（{committedUnit.Verdict}）。");
+                            continue;
+                        }
+
                         _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
                         _extractionCoordinator.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名");
 
@@ -1313,31 +1338,41 @@ namespace ArchiveFixer.ViewModels
                          * ⛔ 规范卷名/改名是**第二大步自己的算法**，不在这里做（用户 2026-10-24 拍板：
                          * 交界处只负责把片送到入口层；"名字该怎么写"属第二大步）。
                          */
-                        string entryLayer = Path.GetDirectoryName(entryTask.CurrentPath ?? string.Empty) ?? string.Empty;
-
                         if (entryLayer.Length > 0)
                         {
-                            ArchiveFixer.Extraction.VolumeGroupEntryLayer.MoveResult moved =
-                                ArchiveFixer.Extraction.VolumeGroupEntryLayer.MovePiecesIntoEntryLayer(
-                                    group.Pieces,
-                                    entryLayer,
-                                    _ => true,
-                                    (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"),
-                                    forceLinks: true);
+                            if (committedUnit?.NamePlan is { IsEmpty: false } namePlan)
+                            {
+                                /*
+                                 * P1：族算法给了规范名计划 ⇒ 按计划建链接（只链接、不覆盖）。
+                                 * ⛔ 不再按原文件名另建一套，避免同一组两套名字。
+                                 */
+                                ArchiveFixer.Extraction.VolumeGroupEntryLayer.PlanLinkResult linked =
+                                    ArchiveFixer.Extraction.VolumeGroupEntryLayer.LinkByPlan(
+                                        namePlan,
+                                        entryLayer,
+                                        (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"));
 
-                            AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
+                                AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{linked.Describe()}（{namePlan.Evidence}）");
+                                _extractionCoordinator.MarkVolumeGroupLinked(committedUnit, linked.LinkedNames);
+                            }
+                            else
+                            {
+                                ArchiveFixer.Extraction.VolumeGroupEntryLayer.MoveResult moved =
+                                    ArchiveFixer.Extraction.VolumeGroupEntryLayer.MovePiecesIntoEntryLayer(
+                                        group.Pieces,
+                                        entryLayer,
+                                        _ => true,
+                                        (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"),
+                                        forceLinks: true);
+
+                                AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
+                            }
 
                             _extractionCoordinator.RememberVolumeStepGroupWork(
                                 entryTask,
                                 group.BaseName,
                                 entryLayer,
                                 group.Pieces);
-
-                            /*
-                             * P0：把候选提交成 VolumeGroupUnit（唯一建组出口）。
-                             * ⛔ 只登记组事实、打一行日志；链接/解压/收片仍走原路（行为与接线前一致）。
-                             */
-                            _extractionCoordinator.TryCommitVolumeGroup(group, entryTask, entryLayer);
                         }
 
                         if (!volumeEntryTasks.Contains(entryTask))
