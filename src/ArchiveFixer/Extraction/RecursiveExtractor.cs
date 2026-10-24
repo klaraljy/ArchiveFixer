@@ -4166,6 +4166,15 @@ namespace ArchiveFixer.Extraction
             missingVolumeMessage = null;
             gatherEntryPath = archivePath;
 
+            /*
+             * 第二大步停摆中（用户 2026-10-24）：第一大步不许跨层收卷/改卷名，直接按原样继续。
+             * 实现仍在 `VolumeNameRepair.ResolveCrossLayerVolumeGather` + `TryApply`（第二大步重建时再用）。
+             */
+            if (ArchiveFixer.SecondStepResidue.SecondStepResidueState.Parked)
+            {
+                return true;
+            }
+
             try
             {
                 string? skippedReason = null;
@@ -4723,9 +4732,11 @@ namespace ArchiveFixer.Extraction
              * "回环"就在下一行：还原完照旧走 `CollapseSameGroupVolumes`（它按**还原之后**的名字
              * 重新判"谁是首卷、哪些是它的续卷"）—— 一步都不跳。
              */
-            IReadOnlyList<string> restoredAll = VolumeNameRepair.RestoreDisguisedInnerPackageNames(
-                restoreInput,
-                (level, message) => Log(level, layerLabel + "：" + message));
+            IReadOnlyList<string> restoredAll = ArchiveFixer.SecondStepResidue.SecondStepResidueState.Parked
+                ? restoreInput
+                : VolumeNameRepair.RestoreDisguisedInnerPackageNames(
+                    restoreInput,
+                    (level, message) => Log(level, layerLabel + "：" + message));
 
             /*
              * ⛔ 只把**归档候选**带进这一层的续解名单：

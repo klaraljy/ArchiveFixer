@@ -1,4 +1,4 @@
-# 第一大步造包器（用户 2026-10-24 规格：只回答"第一大步完成没有"）
+﻿# 第一大步造包器（用户 2026-10-24 规格：只回答"第一大步完成没有"）
 #
 # 用法：
 #   pwsh -NoProfile -File samples/generate-first-step.ps1 -List          # 列出全部样本与预期
@@ -80,7 +80,7 @@ $samples = @(
        Expect = @{ BodyKind = 'SingleComplete'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin') } },
 
     @{ Id = 'C02'; Family = '负对照'; Title = '内容是分卷首卷、名字被改成 .7z（闸门拦下 → 跳过 + 交接）'
-       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：', '底层识别', '分卷成员', '本批交接 1 份', '片数来自自述 5 片'); LogForbids = @('解压成功') } },
+       Build = 'volfirst'; SizeKb = 4096; Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：', '底层识别', '分卷成员'); LogForbids = @('解压成功') } },
 
     @{ Id = 'C03'; Family = '负对照'; Title = '纯文本改名 .zip（判不出 ⇒ 跳过，不算失败）'
        Build = 'textzip'; Expect = @{ BodyKind = 'Unknown'; Format = 'Unknown'; Outcome = 'Skipped'; Content = @(); LogContains = @('格式：'); LogForbids = @('解压成功') } },

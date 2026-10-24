@@ -110,8 +110,12 @@ namespace ArchiveFixer.Services
                     }
                 }
 
-                // 一组分卷 = 一个任务（AGENTS.md §9.3）：在这里归组，后面的识别/解压只看到代表任务。
-                result = new VolumeGroupingService().ApplyVolumeGrouping(result);
+                /*
+                 * 一组分卷 = 一个任务：已停用（用户 2026-10-24：第一大步不许做分卷操作，扫描期也不行）。
+                 * 原 `new VolumeGroupingService().ApplyVolumeGrouping(result)` 把同组卷并成一个任务，
+                 * 属于第二大步的活；实现已搬到 `SecondStepResidue/VolumeGroupingService.cs`。
+                 * 现在扫描结果是一份文件一个任务，分卷组只在交接事实里登记。
+                 */
 
                 RebuildIndex(result);
                 return result;

@@ -1625,7 +1625,11 @@ namespace ArchiveFixer.ViewModels
                      */
                     Tasks[i].IsSelected = true;
 
-                    ApplyVolumeGroupingFromDirectory(Tasks[i]);
+                    /*
+                     * 按目录补跑一次分卷归组：已停用（用户 2026-10-24）。
+                     * 实现 `ApplyVolumeGroupingFromDirectory` 仍在原处（第二大步重建时可能要用），
+                     * 但第一大步不再把同组卷并成一个任务。
+                     */
 
                     if (byPath.TryGetValue(NormalizePath(Tasks[i].CurrentPath), out InnerArchiveCandidate? candidate))
                     {
