@@ -47,11 +47,16 @@ namespace ArchiveFixer.Extraction
         /// 调用方给的**唯一判据**：这一片是不是用户导入的原件。判据不在这里（⛔ 不按路径/名字猜）。
         /// </param>
         /// <param name="log">日志回调 (级别, 文案)；为空则不写。</param>
+        /// <param name="forceLinks">
+        /// true = **一律只建硬链接**（交界处重建 C 段用：宁可多一个链接名字，也绝不搬走/复制任何源片；
+        /// 目标名被占、硬链接建不出来 ⇒ 跳过并写清原因）。
+        /// </param>
         public static MoveResult MovePiecesIntoEntryLayer(
             IEnumerable<string>? pieces,
             string? entryLayerDirectory,
             Func<string, bool>? isUserImportedSource,
-            Action<string, string>? log = null)
+            Action<string, string>? log = null,
+            bool forceLinks = false)
         {
             var result = new MoveResult();
 
@@ -89,7 +94,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    bool userSource = isUserImportedSource?.Invoke(piece) == true;
+                    bool userSource = forceLinks || isUserImportedSource?.Invoke(piece) == true;
 
                     if (userSource)
                     {
@@ -100,12 +105,14 @@ namespace ArchiveFixer.Extraction
                         if (HardLinkHelper.TryCreateHardLink(target, piece))
                         {
                             result.Linked++;
-                            result.Details.Add($"{Path.GetFileName(piece)}：用户原件，已在入口层建硬链接（原件未动）");
+                            result.Details.Add(forceLinks
+                                ? $"{Path.GetFileName(piece)}：C 段规则，只在入口层建硬链接（原件未动）"
+                                : $"{Path.GetFileName(piece)}：用户原件，已在入口层建硬链接（原件未动）");
                         }
                         else
                         {
                             result.Skipped++;
-                            result.Details.Add($"{Path.GetFileName(piece)}：用户原件，硬链接建不出来（跨卷？），原件未动");
+                            result.Details.Add($"{Path.GetFileName(piece)}：硬链接建不出来（跨卷？），原件未动");
                         }
 
                         continue;

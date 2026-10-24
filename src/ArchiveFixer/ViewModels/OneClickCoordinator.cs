@@ -1181,6 +1181,7 @@ namespace ArchiveFixer.ViewModels
                         List<string> groupRoots = innerArchives
                             .Select(candidate => candidate.ParentOutputDirectory)
                             .Concat(Tasks.Select(task => task.OutputPath))
+                            .Concat(Tasks.Select(task => Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
                             .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.SourceLayer))
                             .Where(directory => !string.IsNullOrWhiteSpace(directory))
                             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1248,6 +1249,22 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
+                        /*
+                         * ⛔ 上一轮已经拿到「失败 / 取消 / 部分完成」的终态 ⇒ **绝不重跑**：
+                         * 重跑只会把终态重置成 Pending，一路撞轮数上限、最后连"失败"都没了
+                         * （真机 V04：密码错 ⇒ 每次都被重新点名，7 轮后停在 Pending）。
+                         * 片原样留着，结论由收片账那一行给。
+                         */
+                        if (entryTask.Outcome == TaskOutcome.Failed
+                            || entryTask.Outcome == TaskOutcome.Cancelled
+                            || entryTask.Outcome == TaskOutcome.PartiallyCompleted)
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·接住] {group.BaseName}：入口上一轮终态={entryTask.Outcome} ⇒ 不重跑，片原样留着。");
+                            continue;
+                        }
+
                         entryTask.Outcome = TaskOutcome.Pending;
                         entryTask.IsOutputVerified = false;
                         entryTask.EndTime = null;
@@ -1257,6 +1274,33 @@ namespace ArchiveFixer.ViewModels
                         entryTask.ProgressText = StatusText.ProgressWaiting;
 
                         _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
+                        _extractionCoordinator.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名");
+
+                        /*
+                         * ===== C 段：把片放进入口层，**一律只建硬链接** =====
+                         * ⛔ 不搬、不复制、不删：用户原件与下一轮内层包都必须原地不动；
+                         * 目标名被占/跨卷 ⇒ 跳过并写清原因（引擎可能因此报缺卷，那是第二大步的事，不许甩给第一大步）。
+                         */
+                        string entryLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
+                        if (entryLayer.Length > 0)
+                        {
+                            ArchiveFixer.Extraction.VolumeGroupEntryLayer.MoveResult moved =
+                                ArchiveFixer.Extraction.VolumeGroupEntryLayer.MovePiecesIntoEntryLayer(
+                                    group.Pieces,
+                                    entryLayer,
+                                    _ => true,
+                                    (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"),
+                                    forceLinks: true);
+
+                            AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
+
+                            _extractionCoordinator.RememberVolumeStepGroupWork(
+                                entryTask,
+                                group.BaseName,
+                                entryLayer,
+                                group.Pieces);
+                        }
 
                         if (!volumeEntryTasks.Contains(entryTask))
                         {
@@ -1441,12 +1485,13 @@ namespace ArchiveFixer.ViewModels
                 runOptions);
 
             /*
-             * ===== 第二大步「批末收卷」与「交界处批末对账」：已停用（用户 2026-10-24）=====
+             * ===== 交界处批末对账（D 段，2026-10-24）=====
              *
-             * 原来这里跑：`HarvestRememberedGroupVolumesForBatch`（批末再试一次收卷）
-             * 与 `AppendVolumeHandoffBatchSummary`（交接 N / 已消费 M 汇总）。
-             * 第一大步不许再动分卷；实现仍在 `SecondStepResidue/`，重建第二大步时去挑。
+             * 只打事实行：`[第二大步·交接] 本批交接 N 份（在盘 / 已不在）｜已消费 M｜待处理 K`
+             * 与每组一行 `[第二大步·结论] 基名：…`；⛔ 不搬、不删、不改名。
+             * 批末收卷（`HarvestRememberedGroupVolumesForBatch`）仍停用（不在本段范围内）。
              */
+            _extractionCoordinator.AppendVolumeHandoffBatchSummary();
 
             string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 

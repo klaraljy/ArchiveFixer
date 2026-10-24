@@ -401,14 +401,24 @@ namespace ArchiveFixer.Extraction
                 .ThenBy(item => item.Size)
                 .ToList();
 
-            int max = numbers[^1];
+            /*
+             * 完整性的 N 取「名字/内容卷号的最大值」与「入口包自述片数」里的较大者：
+             * ⛔ 只要有自述片数，就不许把"只找到 1 片、名字恰好是 1"当成 1..1 完整
+             * （真机 V03：只看到 `组.7z.001`、自述 4 片，老判据会判 Complete ⇒ 第二大步白跑一轮）。
+             */
+            int expected = Math.Max(numbers[^1], declaredPieceCount);
+
             bool contiguous = numbers[0] == 1
-                && numbers.Count == max
-                && numbers.SequenceEqual(Enumerable.Range(1, max));
+                && numbers.Count == expected
+                && numbers.SequenceEqual(Enumerable.Range(1, expected));
 
             List<int> missing = contiguous
                 ? new List<int>()
-                : Enumerable.Range(1, max).Except(numbers).ToList();
+                : Enumerable.Range(1, expected).Except(numbers).ToList();
+
+            string declaredNote = declaredPieceCount > numbers[^1]
+                ? $"（自述 {declaredPieceCount} 片）"
+                : string.Empty;
 
             string entry = items
                 .FirstOrDefault(item => item.IsFirstPiece || item.VolumeNumber == 1)
@@ -427,8 +437,8 @@ namespace ArchiveFixer.Extraction
                 DeclaredTotalBytes = declaredTotalBytes,
                 ReceivedBytes = receivedBytes,
                 Evidence = contiguous
-                    ? $"{evidenceSource}连成 1..{max}"
-                    : $"{evidenceSource}只找到 {string.Join(",", numbers)}（1..{max} 里缺 {string.Join(",", missing)}）"
+                    ? $"{evidenceSource}连成 1..{expected}{declaredNote}"
+                    : $"{evidenceSource}只找到 {string.Join(",", numbers)}（1..{expected} 里缺 {string.Join(",", missing)}）{declaredNote}"
             };
         }
 

@@ -151,10 +151,11 @@ namespace ArchiveFixer.ViewModels
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
 
                 /*
-                 * P3b 收片：已停用（用户 2026-10-24：第一大步不许动分卷）。
-                 * 实现仍在 `SecondStepResidue/ExtractionCoordinator.VolumeStepPreflightStep.cs` 的
-                 * `TryPurgeSolvedVolumeStepPieces`，重建第二大步时去那儿挑。
+                 * D 段：成功收片 / 失败留片（交界处重建，2026-10-24）。
+                 * 只有 B/C 段登记过收片账的第二大步入口任务才会动作；第一大步任务查不到账 ⇒ 直接返回。
+                 * 成功 ⇒ 入口层里的片按过程物删掉（用户原件不删）；失败/密码错/缺卷 ⇒ 一个字节不动。
                  */
+                TryPurgeSolvedVolumeStepPieces(task);
             }
             catch (OperationCanceledException)
             {

@@ -131,6 +131,21 @@ namespace ArchiveFixer.ViewModels
 
         private sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
 
+        /// <summary>B/C 段点名入口任务时登记这一组的收片账（基名 + 入口层 + 片清单）。</summary>
+        internal void RememberVolumeStepGroupWork(
+            ArchiveTask task,
+            string baseName,
+            string entryLayer,
+            IReadOnlyList<string> pieces)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(baseName) || string.IsNullOrWhiteSpace(entryLayer))
+            {
+                return;
+            }
+
+            _volumeStepGroupWork[task] = new VolumeStepGroupWork(baseName, entryLayer, pieces);
+        }
+
         /// <summary>批首清空（与交接账同一处调用）：⛔ 不许把上一批的收片账带进下一批。</summary>
         internal void ResetVolumeStepGroupWork()
         {
