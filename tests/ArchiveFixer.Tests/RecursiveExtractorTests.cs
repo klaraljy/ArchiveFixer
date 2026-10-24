@@ -1568,6 +1568,18 @@ namespace ArchiveFixer.Tests
             string source = Path.Combine(_root, "layer-progress-source.7z");
             File.WriteAllText(source, "not a real archive; the engine is fake");
 
+            /*
+             * 内层候选现在过的是「内容证据」闸门（FileNature.BodyKind == SingleComplete），
+             * 不再看后缀/测试 prober ⇒ 这里必须放一份**真 7z**，否则第 1 层根本不会入队，
+             * 用例测到的就不是"进度基准"，而是"假包没通过内容闸门"。
+             */
+            string innerSource = Path.Combine(_root, "_inner-progress");
+            Directory.CreateDirectory(innerSource);
+            File.WriteAllText(Path.Combine(innerSource, "leaf.txt"), "leaf");
+            string realInner = Path.Combine(_root, "real-inner-progress.7z");
+            Run7z("a", "-t7z", realInner, Path.Combine(innerSource, "*"));
+            byte[] realInnerBytes = File.ReadAllBytes(realInner);
+
             var engine = new FakeEngine();
             var recorded = new List<ArchiveProgress>();
             int calls = 0;
@@ -1579,9 +1591,9 @@ namespace ArchiveFixer.Tests
 
                 if (calls == 1)
                 {
-                    // 第 0 层：解出一个内层包（按后缀就能被认成归档 ⇒ 会有第 1 层），
+                    // 第 0 层：解出一个真 7z（内容闸门才会把它收进第 1 层），
                     // 并把进度推到 100% —— 真机上第 0 层结束时就是这样。
-                    File.WriteAllText(Path.Combine(request.OutputPath!, "inner.7z"), "假内层包");
+                    File.WriteAllBytes(Path.Combine(request.OutputPath!, "inner.7z"), realInnerBytes);
                     request.Progress?.Report(new ArchiveProgress { Percent = 100, CurrentEntry = "第 0 层的最后一个文件" });
                 }
                 else

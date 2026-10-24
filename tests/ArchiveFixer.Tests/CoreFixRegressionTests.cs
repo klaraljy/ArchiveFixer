@@ -290,10 +290,21 @@ namespace ArchiveFixer.Tests
             string archivePath = Path.Combine(_root, "single-branch.7z");
             File.WriteAllBytes(archivePath, new byte[256]);
 
+            /*
+             * 内层候选现在过「内容证据」闸门（FileNature.BodyKind == SingleComplete）；
+             * 假 7z 魔数不再算数 ⇒ 用真 7z 给假引擎当内层字节。
+             */
+            string payload = Path.Combine(_root, "_single-branch-payload");
+            Directory.CreateDirectory(payload);
+            File.WriteAllText(Path.Combine(payload, "leaf.txt"), "leaf");
+            string realInner = Path.Combine(_root, "single-branch-inner.7z");
+            Run7z("a", "-t7z", realInner, Path.Combine(payload, "*"));
+            byte[] realInnerBytes = File.ReadAllBytes(realInner);
+
             RecursionResult result = await RunRecursiveAsync(
                 archivePath,
                 "branch-single",
-                new SingleInnerWithSiblingEngine(),
+                new SingleInnerWithSiblingEngine(realInnerBytes),
                 Path.Combine(_root, "out_branch_single"));
 
             // ① 一路往下解，直到层数上限（不再因为"旁边有别的文件"停下）。
@@ -782,6 +793,10 @@ namespace ArchiveFixer.Tests
         /// </summary>
         private sealed class SingleInnerWithSiblingEngine : IArchiveEngine
         {
+            private readonly byte[] _innerBytes;
+
+            public SingleInnerWithSiblingEngine(byte[] innerBytes) => _innerBytes = innerBytes;
+
             public string Id => "single-inner-with-sibling";
 
             public string DisplayName => "单内层包+旁文件假引擎（仅测试用）";
@@ -822,22 +837,17 @@ namespace ArchiveFixer.Tests
                     if (request.ArchivePath.EndsWith("single-branch.7z", StringComparison.OrdinalIgnoreCase))
                     {
                         // 第 0 层：一个内层包（单链，自动往下走）。
-                        WriteFake7z(Path.Combine(outputPath, "level1.7z"));
+                        File.WriteAllBytes(Path.Combine(outputPath, "level1.7z"), _innerBytes);
                     }
                     else
                     {
                         // 第 1 层：**1 个**内层归档 + 一个非说明类文件 ⇒ 不是单链（但没展开的只有 1 个）。
-                        WriteFake7z(Path.Combine(outputPath, "a.7z"));
+                        File.WriteAllBytes(Path.Combine(outputPath, "a.7z"), _innerBytes);
                         File.WriteAllBytes(Path.Combine(outputPath, "movie.mp4"), new byte[64]);
                     }
                 }
 
                 return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
-            }
-
-            private static void WriteFake7z(string path)
-            {
-                File.WriteAllBytes(path, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04 });
             }
         }
 

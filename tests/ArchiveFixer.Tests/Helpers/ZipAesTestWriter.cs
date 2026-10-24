@@ -23,6 +23,12 @@ namespace ArchiveFixer.Tests
     /// </summary>
     internal static class ZipAesTestWriter
     {
+        /// <summary>
+        /// 测试进程不一定已经注册代码页提供程序；按名称取 GB18030 会抛。
+        /// 单跑这一类用例时没有别的类帮忙注册，所以这里自己保证一次。
+        /// </summary>
+        static ZipAesTestWriter() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
         private const int SaltLength = 16;
         private const int AuthenticationCodeLength = 10;
         private const int AesMethodField = 99;

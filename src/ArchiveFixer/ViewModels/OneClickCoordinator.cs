@@ -978,7 +978,16 @@ namespace ArchiveFixer.ViewModels
 
             // 源文件（含分卷各卷）不算内层包：不能把用户最初给的那个 .mp4 / .7z.001 又加一遍。
             HashSet<string> sourcePaths = BuildSourcePathSet(rootTargets);
-            _extractionCoordinator.BeginKeepInPlaceSourceProtection(rootTargets);
+
+            /*
+             * 一键档的「自动修正后缀」是**用户要的改名**，不是"源包被搬走/改名"。
+             * ⛔ 不要把这类源包登记进 KeepInPlace 保护快照：否则批末的
+             * `RestoreKeepInPlaceSourceNames` 会把旧名按硬链接恢复回来（真机
+             * `2222.jpg` 改名成 `2222.7z` 后旧名又出现，验收判据 ② 当场红）。
+             * 保护快照只登记那些不会被自动改名的源包。
+             */
+            _extractionCoordinator.BeginKeepInPlaceSourceProtection(
+                rootTargets.Where(task => task != null && !NeedsRename(task)).ToList());
 
             List<ArchiveTask> roundTargets = rootTargets.ToList();
 

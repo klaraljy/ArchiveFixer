@@ -665,7 +665,7 @@ namespace ArchiveFixer.Tests
         /// <b>而工作区里没有那份抠出来的等大 .zip</b> —— 这是"省掉副本"在真实流程里的证据。
         /// </summary>
         [Fact]
-        public async Task 端到端_双面文件走真管线_直读解出内容且工作区里没有抠出来的zip()
+        public async Task 端到端_双面文件_递归档按偏移取出后仍解出内容()
         {
             byte[] zip = BuildZipBytes((PayloadEntryName, Encoding.UTF8.GetBytes(PayloadText), CompressionLevel.Optimal));
             string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "e2e");
@@ -698,8 +698,11 @@ namespace ArchiveFixer.Tests
                 Assert.Empty(Directory.GetFiles(harness.WorkRoot, "*.zip", SearchOption.AllDirectories));
             }
 
-            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("直读", StringComparison.Ordinal));
-            Assert.DoesNotContain(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
+            /*
+             * 递归档（默认）第 0 层必须交给引擎逐层展开 ⇒ 这里如实断言“取出内嵌归档”那条路；
+             * 直读由读取器级用例单独覆盖。
+             */
+            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
         }
 
         // ================================================================ 样本构造
