@@ -86,14 +86,20 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 第一大步**只登记、不操作**（用户 2026-10-24 拍板）：内容卡证明是分卷成员的，
                  * 一律在这里跳过并登记交接事实；⛔ 不再放行、不再点名、不再搬片。
-                 * 原「第二大步入口例外」整段已停用（实现搬去 `SecondStepResidue`）。
+                 *
+                 * 唯一例外（交界处重建 B 段，2026-10-24）：**已经被第二大步点名的入口任务**
+                 * （`_volumeStepTasks` 里有它）放行，只解这一层。⛔ 放行不放宽任何判据：
+                 * 它仍然是"内容卡证明的入口卷 + 第二大步点名"两个事实同时成立。
                  */
+                bool isSecondStepEntry = IsSingleLayerRecursion(task);
+
                 AppendLog(
                     "INFO",
-                    $"{task.LogName}：闸门判定 —— 内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
+                    $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
 
-                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
+                if (!isSecondStepEntry
+                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece))
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
@@ -117,6 +123,14 @@ namespace ArchiveFixer.ViewModels
                         + $"底层识别：{handoff.Describe()}");
 
                     return;
+                }
+
+                if (isSecondStepEntry)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：第二大步入口任务（只解一层）—— 闸门放行，不按分卷成员跳过"
+                        + $"（族={entryCard.Format}，内容身份={entryCard.BodyKind}）。");
                 }
 
                 /*

@@ -1174,6 +1174,8 @@ namespace ArchiveFixer.ViewModels
                      * 这一遍只打 `[第二大步·组分析]` 事实行；⛔ 不点名、不搬片、不改名、不动盘。
                      * 组分析实现从 `SecondStepResidue/GroupAnalysis.cs` 挑回来的（只读纯函数）。
                      */
+                    var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
+
                     try
                     {
                         List<string> groupRoots = innerArchives
@@ -1189,6 +1191,7 @@ namespace ArchiveFixer.ViewModels
                                      groupRoots,
                                      innerArchives.Select(candidate => candidate.Path)))
                         {
+                            handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
                         }
                     }
@@ -1197,6 +1200,74 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "WARN",
                             $"[第二大步·组分析] 跳过：{probeError.GetType().Name}：{probeError.Message}");
+                    }
+
+                    /*
+                     * ===== 交界处消费端 · 第二段（B）：点名入口任务（只解一层，⛔ 不搬片）=====
+                     *
+                     * 可证完整的交接组 ⇒ 在任务表里找到入口那一份，清掉它上一轮「已跳过」的结论，
+                     * 登记第二大步事实位（`_volumeStepTasks` ⇒ 只解一层），并把它排进下一轮。
+                     * ⛔ 这一版不搬片、不改名、不动盘；片进不进入口层由 C 段再做。
+                     */
+                    var volumeEntryTasks = new List<ArchiveTask>();
+
+                    foreach (GroupAnalysis.GroupCandidate group in handoffGroups)
+                    {
+                        if (group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete
+                            || string.IsNullOrWhiteSpace(group.EntryPath))
+                        {
+                            continue;
+                        }
+
+                        ArchiveTask? entryTask = null;
+
+                        foreach (ArchiveTask candidate in Tasks)
+                        {
+                            if (candidate != null
+                                && SafePathHelper.PathEquals(candidate.CurrentPath, group.EntryPath))
+                            {
+                                entryTask = candidate;
+                                break;
+                            }
+                        }
+
+                        if (entryTask == null)
+                        {
+                            AppendLog(
+                                "WARN",
+                                $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
+                                + $"（{FileNameHelper.GetFileName(group.EntryPath)}）⇒ 这一组不动。");
+                            continue;
+                        }
+
+                        if (entryTask.Outcome == TaskOutcome.Succeeded || entryTask.IsOutputVerified)
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·接住] {group.BaseName}：入口已经解成功过 ⇒ 不再点名（⛔ 不重跑）。");
+                            continue;
+                        }
+
+                        entryTask.Outcome = TaskOutcome.Pending;
+                        entryTask.IsOutputVerified = false;
+                        entryTask.EndTime = null;
+                        entryTask.ErrorMessage = string.Empty;
+                        entryTask.Status = StatusText.WaitingExtract;
+                        entryTask.Operation = StatusText.OpWaiting;
+                        entryTask.ProgressText = StatusText.ProgressWaiting;
+
+                        _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
+
+                        if (!volumeEntryTasks.Contains(entryTask))
+                        {
+                            volumeEntryTasks.Add(entryTask);
+                        }
+
+                        AppendLog(
+                            "INFO",
+                            $"[第二大步·接住] {group.BaseName}：可证完整（{group.Pieces.Count} 片，{group.Evidence}）"
+                            + $"—— 入口={FileNameHelper.GetFileName(group.EntryPath)}，这一单只解一层"
+                            + "（B 段：只点名、不搬片）。");
                     }
 
                     foreach (string line in scanLog)
@@ -1209,7 +1280,7 @@ namespace ArchiveFixer.ViewModels
                      * 实现（`TryMarkHandoffGroupEntryTasks`、搬/链接片、记账）仍保留在
                      * `SecondStepResidue/ExtractionCoordinator.VolumeHandoffStep.cs`，重建第二大步时去那儿挑。
                      */
-                    if (innerArchives.Count == 0)
+                    if (innerArchives.Count == 0 && volumeEntryTasks.Count == 0)
                     {
                         /*
                          * 这一句是必须的，不是噪音。
@@ -1286,9 +1357,19 @@ namespace ArchiveFixer.ViewModels
                         nextRound = await AddInnerTasksAsync(innerArchives);
 
                         /*
-                         * P3a 点名的第二大步入口任务：已停用（用户 2026-10-24）。
-                         * 原来这里把它们跟内层包一起塞进下一轮；实现见 `SecondStepResidue`。
+                         * B 段点名的第二大步入口任务，跟内层包一起进下一轮。
+                         * ⛔ 必须显式勾上：`DeselectProcessedTasks(processed)` 刚把它取消勾选
+                         * （它上一轮被闸门跳过、算"处理过"），下一轮只跑勾上的。
                          */
+                        foreach (ArchiveTask volumeEntryTask in volumeEntryTasks)
+                        {
+                            if (!nextRound.Contains(volumeEntryTask))
+                            {
+                                nextRound.Add(volumeEntryTask);
+                            }
+
+                            volumeEntryTask.IsSelected = true;
+                        }
                     }
                     catch (Exception ex)
                     {
