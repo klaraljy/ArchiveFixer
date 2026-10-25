@@ -1,4 +1,6 @@
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace ArchiveFixer.Views
 {
@@ -15,6 +17,26 @@ namespace ArchiveFixer.Views
         public HelpBodyPanel()
         {
             InitializeComponent();
+        }
+
+        /// <summary>
+        /// 流程图那一层只允许横向滚动；普通滚轮必须交给外层正文纵向滚动。
+        /// ScrollViewer 自己会吃掉 MouseWheel（内层纵向禁用也不冒泡），所以在预览阶段转交。
+        /// </summary>
+        private void FlowDiagram_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (e.Handled || (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+            {
+                return;
+            }
+
+            e.Handled = true;
+
+            BodyScrollViewer.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = Mouse.MouseWheelEvent,
+                Source = BodyScrollViewer
+            });
         }
     }
 }

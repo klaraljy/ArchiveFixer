@@ -32,7 +32,8 @@
             </ItemsControl>
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1"
+        <ScrollViewer x:Name="BodyScrollViewer"
+                      Grid.Row="1"
                       Margin="0,14,0,0"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
@@ -61,7 +62,9 @@
                                    Margin="0,0,0,6" />
 
                         <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Disabled">
+                                      VerticalScrollBarVisibility="Disabled"
+                                      Cursor="Arrow"
+                                      PreviewMouseWheel="FlowDiagram_PreviewMouseWheel">
                             <TextBlock Text="{x:Static models:HelpContent.ExampleFlowDiagram}"
                                        Style="{StaticResource MonoTextStyle}"
                                        TextWrapping="NoWrap" />
