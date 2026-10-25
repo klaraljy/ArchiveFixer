@@ -63,7 +63,7 @@ namespace ArchiveFixer.ViewModels
              * 空间不足模式的源包处置是运行期最高优先：要删的档不需要"改名胜出后恢复原名"
              * 的保护快照（没有快照，恢复那一步自然没有可恢复的东西）。⛔ 不碰「不删原包」安全档。
              */
-            if (_vm.SpaceTightMode && !_vm.SpaceTightKeepSource)
+            if (_vm.SpaceTightMode)
             {
                 return;
             }
@@ -133,7 +133,7 @@ namespace ArchiveFixer.ViewModels
 
         internal void RestoreKeepInPlaceSourceNames()
         {
-            if (_vm.SpaceTightMode && !_vm.SpaceTightKeepSource)
+            if (_vm.SpaceTightMode)
             {
                 return;
             }

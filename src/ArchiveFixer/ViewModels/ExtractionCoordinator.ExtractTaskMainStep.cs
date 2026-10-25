@@ -40,6 +40,17 @@ namespace ArchiveFixer.ViewModels
                 await ProcessExtractTaskAsync(task, oneClickRun);
 
                 await RunRestHandlingAsync(task, runtime, oneClickRun);
+
+                if (_spaceTightThisBatch
+                    && task.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted)
+                {
+                    SourceCleanupResult cleanup = new SourceCleanupService()
+                        .CleanupAcceptedRisk(task, enabled: true);
+
+                    AppendLog(
+                        cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                        $"{task.LogName}：空间不足模式失败后删源包（用户已接受风险）—— {cleanup.Message}");
+                }
             }
             finally
             {
