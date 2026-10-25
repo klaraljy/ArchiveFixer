@@ -821,7 +821,8 @@ namespace ArchiveFixer.ViewModels
                 task,
                 verified: true,
                 verificationNote: $"{triggerLabel}：内容物已定稿，校验通过",
-                enabled: true);
+                enabled: true,
+                includeRestAliases: _vm.SpaceTightMode);
 
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
             {

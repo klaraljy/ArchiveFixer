@@ -143,9 +143,10 @@ namespace ArchiveFixer.Extraction
             ArchiveTask? task,
             bool verified,
             string verificationNote,
-            bool enabled)
+            bool enabled,
+            bool includeRestAliases = false)
         {
-            return CleanupCore(task, enabled, verified, verificationNote);
+            return CleanupCore(task, enabled, verified, verificationNote, includeRestAliases);
         }
 
         /// <summary>
@@ -158,14 +159,16 @@ namespace ArchiveFixer.Extraction
                 task,
                 enabled,
                 verified: true,
-                verificationNote: "空间不足模式：用户已接受源包丢失风险");
+                verificationNote: "空间不足模式：用户已接受源包丢失风险",
+                includeRestAliases: false);
         }
 
         private SourceCleanupResult CleanupCore(
             ArchiveTask? task,
             bool enabled,
             bool verified,
-            string verificationNote)
+            string verificationNote,
+            bool includeRestAliases = false)
         {
             /*
              * 规则 1：开关没开就什么都不做。
@@ -205,7 +208,7 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
-            List<string> targets = BuildTargetList(task);
+            List<string> targets = BuildTargetList(task, includeRestAliases);
 
             if (targets.Count == 0)
             {
@@ -309,7 +312,7 @@ namespace ArchiveFixer.Extraction
         /// —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5：同一件事的真值只允许有一个出口），
         /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
         /// </summary>
-        internal static List<string> BuildTargetList(ArchiveTask task)
+        internal static List<string> BuildTargetList(ArchiveTask task, bool includeRestAliases = false)
         {
             var targets = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -342,6 +345,11 @@ namespace ArchiveFixer.Extraction
                     AddTarget(targets, seen, task.OriginalPath);
                 }
 
+                if (includeRestAliases)
+                {
+                    AddRestAliases(task, targets, seen);
+                }
+
                 return targets;
             }
 
@@ -354,7 +362,37 @@ namespace ArchiveFixer.Extraction
              */
             AddTarget(targets, seen, task.OriginalPath);
 
+            if (includeRestAliases)
+            {
+                AddRestAliases(task, targets, seen);
+            }
+
             return targets;
+        }
+
+        /// <summary>
+        /// 空间不足成功路径：同一份源在「其余物」里可能还有一个硬链接名字。
+        /// 只删产品树那一个名字，字节不会真正释放，下一轮还会把它当新内层包扫到。
+        /// 这里把同一份文件在其余物里的已知别名一并加入清单，确保删完所有目录项。
+        /// </summary>
+        private static void AddRestAliases(ArchiveTask task, List<string> targets, HashSet<string> seen)
+        {
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return;
+            }
+
+            foreach (string path in targets.ToList())
+            {
+                string name = Path.GetFileName(path);
+
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                AddTarget(targets, seen, Path.Combine(task.RestDirectoryPath, name));
+            }
         }
 
         private static void AddTarget(List<string> targets, HashSet<string> seen, string? path)

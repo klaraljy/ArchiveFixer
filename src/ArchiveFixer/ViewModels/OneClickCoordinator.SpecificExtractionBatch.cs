@@ -132,7 +132,8 @@ namespace ArchiveFixer.ViewModels
                         task,
                         verified: true,
                         verificationNote: "特定解压内容物已落地",
-                        enabled: deleteSource);
+                        enabled: deleteSource,
+                        includeRestAliases: true);
 
                     if (deleteSource)
                     {
