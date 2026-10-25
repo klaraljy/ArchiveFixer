@@ -55,6 +55,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * 2026-10-25 真机（链路测试 sp1）：空间不足模式先按设计删了源包，批末
+             * RestoreKeepInPlaceSourceNames 又拿保护快照把源包硬链接恢复回来 ——
+             * 日志逐字「空间不足模式 —— 已立刻永久删除源包 1 个」紧跟
+             * 「源包档=留下，但源名被搬走/改名 —— 已按原路径硬链接恢复」。
+             * 空间不足模式的源包处置是运行期最高优先：要删的档不需要"改名胜出后恢复原名"
+             * 的保护快照（没有快照，恢复那一步自然没有可恢复的东西）。⛔ 不碰「不删原包」安全档。
+             */
+            if (_vm.SpaceTightMode && !_vm.SpaceTightKeepSource)
+            {
+                return;
+            }
+
             var sources = (tasks ?? Array.Empty<ArchiveTask>())
                 .Where(task => task != null)
                 .SelectMany(task => new[] { task!.OriginalPath, task.CurrentPath }
@@ -120,6 +133,11 @@ namespace ArchiveFixer.ViewModels
 
         internal void RestoreKeepInPlaceSourceNames()
         {
+            if (_vm.SpaceTightMode && !_vm.SpaceTightKeepSource)
+            {
+                return;
+            }
+
             foreach ((string original, string backup) in _keepSourceSnapshots.ToList())
             {
                 try
