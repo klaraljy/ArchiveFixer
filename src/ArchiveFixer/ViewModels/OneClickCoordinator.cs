@@ -214,9 +214,10 @@ namespace ArchiveFixer.ViewModels
         /// 两处各有一套上限只会让人以为"有一处没生效"（2026-09-24 把 3 与 10 统一成 10 就是这个原因，
         /// 2026-09-26 它跟着 10→5 一起下来，2026-10-14 用户拍板**默认再调到 7**，始终是同一个数字）。</para>
         /// </summary>
-        internal int RoundLimit => _vm.SpaceTightMode
-            ? 1
-            : Math.Clamp(Settings?.MaxRecursionDepth ?? 7, 1, MaxRoundsCeiling);
+        internal int RoundLimit => Math.Clamp(
+            Settings?.MaxRecursionDepth ?? 7,
+            1,
+            MaxRoundsCeiling);
 
         private readonly MainViewModel _vm;
         private readonly ScanCoordinator _scanCoordinator;
@@ -2818,6 +2819,16 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     /*
+                     * 空间不足模式：其余物里的东西是「最后一层过程物」或已成功过程的副本，
+                     * 成功时应彻底删除，失败时只留给用户，⛔ 不再当下一轮的新内层包。
+                     */
+                    if (ShouldSkipAsProcessArtifact(file, _vm.SpaceTightMode, out string artifactReason))
+                    {
+                        skippedLines.Add($"{file}（{artifactReason}）");
+                        continue;
+                    }
+
+                    /*
                      * 唯一还按名字排除的一类：分卷的**后续卷**（.002 / .z02 / .r01 / .part2+）。
                      * 理由是"哪一卷是组的开头"只能从名字看出来 —— 这是**分组**信息，不是格式判断；
                      * 格式一律只看内容（下一段）。⛔ 别在这里再加"后缀得是已知归档后缀"那种条件：
@@ -2946,6 +2957,34 @@ namespace ArchiveFixer.ViewModels
                          */
                         candidates.Add((task, parentName, file));
                     }
+                }
+            }
+
+            /*
+             * 同一份内层包在「其余物」里还有一份副本时，只认产品树那一份。
+             * 空间不足模式会删掉产品树里的源，但其余物副本仍在；不拦就会把同一包
+             * 再当一次新内层包解开，出现 222-L2 / 222-L2(1) 这种重复目录。
+             * 判据 = 同名 + 同字节数；只拦其余物里的那一份，正常「只存在于其余物」的续解包照旧保留。
+             */
+            var outsideRestKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((ArchiveTask _, string _, string file) in candidates)
+            {
+                if (!ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
+                {
+                    outsideRestKeys.Add(InnerPackageKey(file));
+                }
+            }
+
+            foreach ((ArchiveTask _, string _, string file) in candidates.ToList())
+            {
+                if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(file)
+                    && outsideRestKeys.Contains(InnerPackageKey(file)))
+                {
+                    skippedLines.Add($"{file}（产品树里已有同名同大小的内层包，其余物里的副本不再当成新包）");
+                    candidates.RemoveAll(candidate =>
+                        string.Equals(candidate.File, file, StringComparison.OrdinalIgnoreCase));
+                    found.Remove(file);
                 }
             }
 
