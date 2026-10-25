@@ -52,9 +52,42 @@ namespace ArchiveFixer.Tests
             Assert.Equal(first, candidate.EntryPath);
         }
 
-        private string Create(string name, int length)
+        [Fact]
+        public void 同名同族但在不同目录_必须分成两组()
         {
-            string path = Path.Combine(_root, name);
+            string dirA = Path.Combine(_root, "a");
+            string dirB = Path.Combine(_root, "b");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+
+            string a1 = CreateIn(dirA, "组.7z.001", 1000);
+            string a2 = CreateIn(dirA, "组.7z.002", 200);
+            string b1 = CreateIn(dirB, "组.7z.001", 500);
+            string b2 = CreateIn(dirB, "组.7z.002", 100);
+
+            var handoffs = new[]
+            {
+                Handoff(a1, 1000, firstPiece: true, declaredCount: 2, declaredTotal: 1200),
+                Handoff(a2, 200),
+                Handoff(b1, 500, firstPiece: true, declaredCount: 2, declaredTotal: 600),
+                Handoff(b2, 100)
+            };
+
+            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
+                GroupAnalysis.Analyze(handoffs, new[] { _root });
+
+            Assert.Equal(2, groups.Count);
+            Assert.All(groups, group => Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict));
+            Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
+            Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
+        }
+
+        private string Create(string name, int length) => CreateIn(_root, name, length);
+
+        private static string CreateIn(string directory, string name, int length)
+        {
+            string path = Path.Combine(directory, name);
+            Directory.CreateDirectory(directory);
             File.WriteAllBytes(path, new byte[length]);
             return path;
         }

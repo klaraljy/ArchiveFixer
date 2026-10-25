@@ -168,7 +168,13 @@ namespace ArchiveFixer.Extraction
                 ArchiveFixer.Detection.VolumeContentFormat seedFormat =
                     ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
 
-                string key = baseName + "|" + seedFormat;
+                /*
+                 * 同名不同目录不合并：组键必须带目录。
+                 * 真机 `地狱` 首跑里两个目录都有 hell-7z，旧键只带基名+族，
+                 * 第二次种子被当重复跳过；即使不跳过，CollectPieces 也会跨目录收片。
+                 */
+                string seedDirectory = Path.GetDirectoryName(Path.GetFullPath(seed)) ?? string.Empty;
+                string key = seedDirectory + "|" + baseName + "|" + seedFormat;
 
                 if (!seenBaseAndFormat.Add(key))
                 {
@@ -233,6 +239,15 @@ namespace ArchiveFixer.Extraction
                         ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path),
                         baseName,
                         StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // 同名不同目录不是同一组；组只收 seed 所在目录的片。
+                string candidateDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+                string seedDirectory = Path.GetDirectoryName(Path.GetFullPath(seed)) ?? string.Empty;
+
+                if (!string.Equals(candidateDirectory, seedDirectory, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
