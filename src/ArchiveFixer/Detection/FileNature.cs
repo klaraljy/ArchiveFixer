@@ -302,19 +302,15 @@ namespace ArchiveFixer.Detection
                     else
                     {
                         /*
-                         * ⚠ 2026-10-14（`LogVolumePolicyTests.批末汇总_一眼看到成功失败与逐条失败` 当场打红，
-                         * 运行期实测）：**垃圾头自述出来的荒谬值不许当证据**。那份 `broken.7z`
-                         * （7z 魔数 + 随机字节）读出片数 21 亿、整包 1.25 EB ⇒ 卡上写 `VolumeFirstPiece`
-                         * ⇒ 一份坏包被下游报成「分卷缺失」。⇒ 片数过一道合理性闸（见
-                         * <see cref="MaxSaneDeclaredVolumeCount"/>）才算事实；过不了 ⇒ **判不出**（保持 Unknown），
-                         * 照旧走"引擎说了算 / 损坏"那条老口径。⛔ 不猜、⛔ 不放宽任何既有判据。
+                         * 7z 格式没有“共几片”字段；原来的 ceil(整包/首卷大小) 只在等大卷时成立。
+                         * 非均匀分卷（首卷 18 MiB、第二卷 124 MiB）会被算成 8 片，
+                         * 两卷齐全的组因此被误判 Missing。
+                         * 现在只保留首卷身份 + 自述整包字节数；片数交给族算法用入口/名字/已收片数推。
+                         * 自述字节数的荒谬值仍用“最多 1024 个首卷大小”做上界闸门。
                          */
-                        long count = (expectedTotal + size - 1) / size;
-
-                        if (count <= MaxSaneDeclaredVolumeCount)
+                        if (expectedTotal / size <= MaxSaneDeclaredVolumeCount)
                         {
                             bodyKind = ArchiveBodyKind.VolumeFirstPiece;
-                            declaredVolumeCount = (int)count;
                         }
                     }
                 }

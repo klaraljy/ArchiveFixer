@@ -41,9 +41,21 @@ namespace ArchiveFixer.Extraction
             GroupPieceFact first = firsts[0];
             int total = first.DeclaredVolumeCount;
 
+            /*
+             * 7z 格式没有“共几片”字段；DeclaredVolumeCount 只在等大卷时由首卷大小反推，
+             * 非均匀分卷会推错（18 MiB + 124 MiB 被推成 8 片）。片数缺失时改用
+             * 入口/名字/已收片数推，完整性仍由“已收字节 == 自述整包”证明。
+             */
             if (total < 2)
             {
-                return Unknown($"7z：首卷没自述片数（DeclaredVolumeCount={total}）⇒ 判不出");
+                int maxNameIndex = unit.Pieces
+                    .Select(piece => ResolveTolerantIndex(Path.GetFileName(piece.Path), int.MaxValue))
+                    .Where(index => index.HasValue)
+                    .Select(index => index!.Value)
+                    .DefaultIfEmpty(0)
+                    .Max();
+
+                total = Math.Max(2, Math.Max(maxNameIndex, unit.Pieces.Count));
             }
 
             if (first.DeclaredTotalBytes <= 0)

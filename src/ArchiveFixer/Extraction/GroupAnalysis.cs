@@ -598,7 +598,11 @@ namespace ArchiveFixer.Extraction
              * ⛔ 只要有自述片数，就不许把"只找到 1 片、名字恰好是 1"当成 1..1 完整
              * （真机 V03：只看到 `组.7z.001`、自述 4 片，老判据会判 Complete ⇒ 第二大步白跑一轮）。
              */
-            int expected = Math.Max(numbers[^1], declaredPieceCount);
+            int expected = format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
+                           && declaredTotalBytes > 0
+                           && declaredTotalBytes == receivedBytes
+                ? Math.Max(numbers[^1], 1)
+                : Math.Max(numbers[^1], declaredPieceCount);
 
             bool contiguous = numbers[0] == 1
                 && numbers.Count == expected
