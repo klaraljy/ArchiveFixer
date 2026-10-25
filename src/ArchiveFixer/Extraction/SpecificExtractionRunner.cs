@@ -18,6 +18,8 @@ namespace ArchiveFixer.Extraction
 
         public int Depth { get; init; }
 
+        public string RestDirectory { get; init; } = string.Empty;
+
         public string Message { get; init; } = string.Empty;
     }
 
@@ -111,11 +113,16 @@ namespace ArchiveFixer.Extraction
                     string finalPath = Path.Combine(outputRoot, name);
 
                     MoveContent(layerRoot, finalPath);
+                    string restDirectory = PreserveLastProcessArtifact(
+                        currentArchive,
+                        workRoot,
+                        outputRoot);
 
                     return new SpecificExtractionRunResult
                     {
                         Success = true,
                         OutputPath = finalPath,
+                        RestDirectory = restDirectory,
                         Depth = depth
                     };
                 }
@@ -180,6 +187,37 @@ namespace ArchiveFixer.Extraction
             string source = singleFolder ?? layerRoot;
 
             Directory.Move(source, finalPath);
+        }
+
+        /// <summary>
+        /// 最后一层的过程压缩包留在 <c>其余物</c>；只看工作区里的那一份，
+        /// 用户最外层源包不在这里重复一份。
+        /// </summary>
+        private static string PreserveLastProcessArtifact(
+            string lastArchivePath,
+            string workRoot,
+            string outputRoot)
+        {
+            if (string.IsNullOrWhiteSpace(lastArchivePath)
+                || !File.Exists(lastArchivePath)
+                || !Path.GetFullPath(lastArchivePath).StartsWith(
+                    Path.GetFullPath(workRoot),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            string rest = Path.Combine(outputRoot, "其余物");
+            Directory.CreateDirectory(rest);
+
+            string target = Path.Combine(rest, Path.GetFileName(lastArchivePath));
+
+            if (!File.Exists(target))
+            {
+                File.Copy(lastArchivePath, target);
+            }
+
+            return rest;
         }
     }
 }

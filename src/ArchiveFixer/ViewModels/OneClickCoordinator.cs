@@ -1035,18 +1035,55 @@ namespace ArchiveFixer.ViewModels
 
                 if (result.Success)
                 {
+                    bool spaceTight = _vm.SpaceTightMode;
+
                     task.OutputPath = result.OutputPath;
                     task.ContentDirectoryPath = result.OutputPath;
+                    task.RestDirectoryPath = result.RestDirectory;
                     task.Status = StatusText.ExtractSuccess;
                     task.ProgressText = StatusText.ExtractSuccess;
                     task.IsOutputVerified = true;
                     task.Outcome = TaskOutcome.Succeeded;
                     task.EndTime = DateTime.Now;
                     task.ApplyProgress(100, null);
-                    succeeded++;
+
+                    bool deleteSource = runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace
+                        || (spaceTight && !_vm.SpaceTightKeepSource);
+
+                    SourceCleanupResult cleanup = new SourceCleanupService().CleanupVerified(
+                        task,
+                        verified: true,
+                        verificationNote: "特定解压内容物已落地",
+                        enabled: deleteSource);
+
+                    if (deleteSource)
+                    {
+                        AppendLog(
+                            cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                            $"{task.LogName}：特定解压后源包处理 —— {cleanup.Message}");
+                    }
+
+                    if (!spaceTight
+                        && string.Equals(runOptions.RestHandling, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(result.RestDirectory))
+                    {
+                        try
+                        {
+                            Directory.Delete(result.RestDirectory, recursive: true);
+                            task.RestDirectoryPath = string.Empty;
+                            AppendLog("INFO", $"{task.LogName}：特定解压其余物按删除档清理完毕");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog("WARN", $"{task.LogName}：特定解压其余物删除失败：{ex.Message}");
+                        }
+                    }
+
                     AppendLog(
                         "INFO",
-                        $"{task.LogName}：特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）");
+                        $"{task.LogName}：特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）"
+                        + (spaceTight ? $"；空间不足剩余 {TryGetFreeBytes(outputRoot)}" : string.Empty));
+                    succeeded++;
                 }
                 else
                 {
@@ -1077,6 +1114,22 @@ namespace ArchiveFixer.ViewModels
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Failed;
             task.EndTime = DateTime.Now;
+        }
+
+        private static string TryGetFreeBytes(string path)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
+
+                return string.IsNullOrWhiteSpace(root)
+                    ? "未知"
+                    : new DriveInfo(root).AvailableFreeSpace.ToString("N0") + " 字节";
+            }
+            catch
+            {
+                return "未知";
+            }
         }
 
         internal async Task<OneClickOutcome> RunPipelineAsync(
