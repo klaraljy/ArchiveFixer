@@ -994,6 +994,21 @@ namespace ArchiveFixer.Helpers
             }
 
             /*
+             * 2026-10-25：`弦音sic NO.001 Alter EGO egoist [9P-92MB].rar` 这类名字里
+             * `.001` 只是标题的一部分，不是卷标记。容错档认出 `001` 后，如果同一段
+             * 还剩下 ASCII 字母或空格，就说明后面接着的是正文，不是「删除」这类后缀附加。
+             * ⇒ 不认成 partN 分卷（标准名 `x.001删除.rar` 仍然只余中文，照旧认）。
+             */
+            string markLeftover = mark.StartsWith(canonical, StringComparison.OrdinalIgnoreCase)
+                ? mark[canonical.Length..]
+                : string.Empty;
+
+            if (markLeftover.Any(ch => char.IsAsciiLetter(ch) || char.IsWhiteSpace(ch)))
+            {
+                return false;
+            }
+
+            /*
              * 卷号：partN 取 part 后面那串数字，数字族整段就是号码。
              * ⛔ 不用 int.Parse/LINQ：这里手算并卡上限，免得为一行逻辑多引一个 using。
              */

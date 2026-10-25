@@ -686,6 +686,14 @@ namespace ArchiveFixer.Detection
 
             if (isVolumeSegment)
             {
+                if (!IsSuffixOnlyJunk(junkTail))
+                {
+                    isVolumeSegment = false;
+                }
+            }
+
+            if (isVolumeSegment)
+            {
                 string baseName = JoinBaseName(parts, 1);
                 if (baseName.Length > 0)
                 {
@@ -709,7 +717,12 @@ namespace ArchiveFixer.Detection
             {
                 for (int i = parts.Length - 2; i >= 1; i--)
                 {
-                    if (!TryParseVolumeSegment(parts[i], out VolumeFamily tailFamily2, out int tailIndex2, out int tailWidth2, out _))
+                    if (!TryParseVolumeSegment(parts[i], out VolumeFamily tailFamily2, out int tailIndex2, out int tailWidth2, out string tailJunk2))
+                    {
+                        continue;
+                    }
+
+                    if (!IsSuffixOnlyJunk(tailJunk2))
                     {
                         continue;
                     }
@@ -832,6 +845,29 @@ namespace ArchiveFixer.Detection
         /// 但它只回答"是不是、垃圾是什么"，"是哪一族、第几卷"还得自己拆 ——
         /// 这才是卷序偏移最容易写错的地方。
         /// </summary>
+        /// <summary>
+        /// 卷标记后面粘的"垃圾"只能是后缀附加（删除 / 括号 / 数字等），不能是 ASCII 正文。
+        /// 2026-10-25：`弦音sic NO.001 Alter EGO egoist [9P-92MB].rar` 的 ` Alter EGO...`
+        /// 是标题正文，不是「删除」；这条闸门把它挡在分卷组之外。
+        /// </summary>
+        private static bool IsSuffixOnlyJunk(string? junk)
+        {
+            if (string.IsNullOrEmpty(junk))
+            {
+                return true;
+            }
+
+            foreach (char ch in junk)
+            {
+                if (char.IsAsciiLetter(ch) || char.IsWhiteSpace(ch))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static bool TryParseVolumeSegment(
             string segment,
             out VolumeFamily family,

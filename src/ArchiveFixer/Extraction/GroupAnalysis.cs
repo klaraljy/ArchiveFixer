@@ -203,6 +203,14 @@ namespace ArchiveFixer.Extraction
             var pieces = new List<string> { seed };
             var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            /*
+             * 2026-10-25：独立 `.rar`（例如合集里的 `弦音sic NO.001 ... .rar`）不是分卷。
+             * 只有 seed 自己带卷标记（`.001` / `.part1.rar` / `.r00` 等），或者候选文件带卷标记时，
+             * 才把它收进同一组；否则每个包必须各自成任务/各自输出。
+             * 这条不按样本名开分支，防的是“同基名的普通归档被误当分卷”。
+             */
+            bool seedHasVolumeMarker = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(seed));
+
             if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(seed, out ulong seedVolume, out ulong seedIndex))
             {
                 identities.Add(seedVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -225,6 +233,12 @@ namespace ArchiveFixer.Extraction
                         ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path),
                         baseName,
                         StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!seedHasVolumeMarker
+                    && !ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
                 {
                     continue;
                 }
