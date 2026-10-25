@@ -268,13 +268,12 @@ namespace ArchiveFixer.ViewModels
             _spaceProbePath = ResolveSpaceProbePath(tasks);
 
             /*
-             * 排序键（空间不足模式）：**净占用** = 解完之后真正留在盘上的字节数（= 内容物）。
-             * 那个模式下源包与过程物都会被删掉，所以"需求"里那一截过程物是**会回来的** ——
-             * 先解净占用小的，盘上越跑越宽；按需求排则会先啃过程物多的包。
-             * ⚠ 只改顺序：放行判断照旧按需求（内容物 + 过程物，见 ExtractionScheduler.Build 的说明）。
+             * 排序键（空间不足模式 2026-10-25 新口径）：**源包总体积从大到小**。
+             * 那个模式下成功即删源包，最大的包先过；后面越来越小，并发才能按剩余空间提高。
+             * ⚠ 只改顺序：放行判断照旧按需求。
              */
             Func<ScheduledExtractionItem, long>? sortKey = spaceTightOrdering
-                ? item => item.Estimate.NetOccupancyBytes
+                ? item => -item.Estimate.SourceBytes
                 : null;
 
             return ExtractionScheduler.Build(
@@ -285,7 +284,44 @@ namespace ArchiveFixer.ViewModels
                 ReserveSpaceBytes,
                 requestedParallel,
                 sortKey,
-                spaceTightOrdering ? ExtractionSchedulePlan.NetOccupancyOrderBasis : null);
+                spaceTightOrdering ? ExtractionSchedulePlan.SourceSizeDescendingOrderBasis : null);
+        }
+
+        /// <summary>
+        /// 空间不足模式的动态并发：按当前可用空间与**剩余队列的源包体积**算还能跑几个；
+        /// 每完成一个任务都重算，后续小包阶段并发自然提高。
+        /// </summary>
+        private int ResolveDynamicSpaceParallel(
+            IReadOnlyList<ScheduledExtractionItem> pending,
+            int runningCount)
+        {
+            int userCap = Math.Clamp(Settings.MaxParallelExtractCount, 1, 8);
+
+            if (pending == null || pending.Count == 0)
+            {
+                return Math.Max(1, Math.Min(userCap, Math.Max(1, runningCount)));
+            }
+
+            long? available = ProbeAvailableSpace(_spaceProbePath);
+
+            if (!available.HasValue)
+            {
+                return Math.Max(1, Math.Min(userCap, runningCount + 1));
+            }
+
+            long budget = Math.Max(0, available.Value - ReserveSpaceBytes);
+            List<long> sizes = pending
+                .Select(item => item.Estimate.SourceBytes)
+                .ToList();
+
+            int launchable = SpaceConcurrencyPlanner.CountLaunchable(
+                budget,
+                reservedBytes: 0,
+                sizes,
+                maxParallel: userCap);
+
+            int desired = Math.Min(userCap, runningCount + launchable);
+            return Math.Max(1, Math.Max(runningCount, desired));
         }
 
         /// <summary>

@@ -425,6 +425,13 @@ namespace ArchiveFixer.ViewModels
                 StartSpaceTrendMonitor(ResolveSpaceProbePath(selectedTasks));
 
                 var runningTasks = new List<Task>();
+                var startedTasks = new HashSet<ArchiveTask>();
+
+                if (_spaceTightThisBatch)
+                {
+                    maxParallel = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
+                    AppendLog("INFO", $"空间不足动态并发：批首按源包体积降序与当前可用空间定为 {maxParallel} 个");
+                }
 
                 /*
                  * 第 45 条（用户 2026-09-26）：等待并发位的提示**一批只说一次** + 批末给个计数。
@@ -530,6 +537,23 @@ namespace ArchiveFixer.ViewModels
                         runningTasks.Remove(finished);
                         await finished;
 
+                        if (_spaceTightThisBatch && !IsStopping)
+                        {
+                            var pending = plan.Ordered
+                                .Where(candidate => !startedTasks.Contains(candidate.Task))
+                                .ToList();
+
+                            int dynamicMax = ResolveDynamicSpaceParallel(pending, runningTasks.Count);
+
+                            if (dynamicMax != maxParallel)
+                            {
+                                AppendLog(
+                                    "INFO",
+                                    $"空间不足动态并发：从 {maxParallel} 调整为 {dynamicMax} 个（正在跑 {runningTasks.Count} 个）");
+                                maxParallel = dynamicMax;
+                            }
+                        }
+
                         if (IsStopping || _operationCts.IsCancellationRequested)
                         {
                             break;
@@ -609,7 +633,7 @@ namespace ArchiveFixer.ViewModels
 
                     runtime.ReservedBytes = gate.ProbeFailed ? 0L : item.RequiredBytes;
                     runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
-
+                    startedTasks.Add(task);
                     runningTasks.Add(RunScheduledTaskAsync(task, oneClickRun, runtime));
                 }
 

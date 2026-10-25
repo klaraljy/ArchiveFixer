@@ -110,6 +110,9 @@ namespace ArchiveFixer.Storage
         /// <summary>空间不足模式的排序口径（唯一措辞来源，日志与界面都引它）。</summary>
         internal const string NetOccupancyOrderBasis = "按净占用从小到大（空间不足模式：先解「解完占地最少」的包）";
 
+        /// <summary>空间不足模式（2026-10-25 新口径）：按源包总体积从大到小。</summary>
+        internal const string SourceSizeDescendingOrderBasis = "按源包总体积从大到小（空间不足模式：大包先解）";
+
         /// <summary>给用户看的一句话："当前可用 10 GB，建议并行 2 个"。</summary>
         public string ParallelAdviceText()
         {
