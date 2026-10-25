@@ -313,6 +313,25 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * 7z 分卷的片顺序：入口/首卷在前，其余按名字卷号；名字判不出再按内容卷号。
+             * ⛔ 非均匀分卷下不能按大小排序：首卷可以比第二卷更大，也可以更小。
+             */
+            IReadOnlyList<string> OrderVolumePieces(IReadOnlyList<PieceFacts> pieces, string? entryPath)
+            {
+                return pieces
+                    .OrderBy(item => !string.IsNullOrWhiteSpace(entryPath)
+                                     && string.Equals(item.Path, entryPath, StringComparison.OrdinalIgnoreCase)
+                        ? 0
+                        : 1)
+                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path)) ?? int.MaxValue)
+                    .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .Select(item => item.Path)
+                    .ToList();
+            }
+
+            /*
              * ===== ⓪ 跨盘 ZIP 先按名字定序（用户 2026-10-11 口径：那一族"头尾在名字编号里是反的"）=====
              * `x.z01/.z02/……/x.zip`：名字里 `.zip` 是末片、`.z01` 才是第 1 片；
              * 而内容的 EOCD 盘号只有 `.zip` 那个末片带得出来（`.z01/.z02` 读不出）。
@@ -409,11 +428,7 @@ namespace ArchiveFixer.Extraction
                 {
                     BaseName = baseName,
                     Format = format,
-                    Pieces = items
-                        .OrderBy(item => item.Size)
-                        .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-                        .Select(item => item.Path)
-                        .ToList(),
+                    Pieces = OrderVolumePieces(items, items.FirstOrDefault(item => item.IsFirstPiece)?.Path),
                     EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
                     Verdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
                     MissingNumbers = Array.Empty<int>(),
@@ -565,10 +580,18 @@ namespace ArchiveFixer.Extraction
             long declaredTotalBytes,
             long receivedBytes)
         {
-            var ordered = items
-                .OrderBy(item => item.VolumeNumber ?? int.MaxValue)
-                .ThenBy(item => item.Size)
-                .ToList();
+            List<PieceFacts> ordered = format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
+                ? items
+                    .OrderBy(item => item.IsFirstPiece ? 0 : 1)
+                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path)) ?? int.MaxValue)
+                    .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+                : items
+                    .OrderBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Size)
+                    .ToList();
 
             /*
              * 完整性的 N 取「名字/内容卷号的最大值」与「入口包自述片数」里的较大者：
