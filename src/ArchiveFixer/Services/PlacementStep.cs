@@ -26,6 +26,9 @@ namespace ArchiveFixer.Services
         /// <summary>本次是不是"解压到源包所在文件夹"（它等于"不套包名那一层"）。</summary>
         bool ExtractIntoSourceFolderThisRun { get; }
 
+        /// <summary>本次是不是手动单层「只解压」：引擎这一层写出来的都算内容物，不算其余物。</summary>
+        bool ManualSingleLayerThisRun { get; }
+
         /// <summary>接片那一档算出来的"这一组拼到哪一层"（没记过 ⇒ false）。</summary>
         bool TryResolveGroupLayer(string baseName, out string layer);
 
@@ -171,7 +174,8 @@ namespace ArchiveFixer.Services
                  * 其余物与源包全留着不动）。判据只读既有账：这一批已经登记过"谁吐出了哪一组的片"
                  * （`_groupPieceProducers`）⇒ 那些组基名的片一律放行，交给收卷那一档。
                  */
-                assembledVolumeBaseNames: _host.SnapshotGroupPieceProducerBaseNames());
+                assembledVolumeBaseNames: _host.SnapshotGroupPieceProducerBaseNames(),
+                allStageFilesAreContent: _host.ManualSingleLayerThisRun);
         }
 
         /// <summary>
@@ -265,7 +269,8 @@ namespace ArchiveFixer.Services
             string? innermostPackageBaseName = null,
             RecursionResult? engineOutput = null,
             ContentKeepRules? contentKeepRules = null,
-            IReadOnlyCollection<string>? assembledVolumeBaseNames = null)
+            IReadOnlyCollection<string>? assembledVolumeBaseNames = null,
+            bool allStageFilesAreContent = false)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -372,7 +377,8 @@ namespace ArchiveFixer.Services
                  * ⇒ 来路**判不出** ⇒ 退回原来的保守判据 + 下面那两道分卷组完整性闸门
                  * （`VolumeGroupDeletionSafetyTests` 那一族钉的就是这条兜底 —— 实测 136 条全绿）。
                  */
-                bool isProcessArtifact = engineOutput == null
+                bool isProcessArtifact = !allStageFilesAreContent
+                    && engineOutput == null
                     && (StageFilePredicates.IsProcessArtifactFile(file) || StageFilePredicates.CardSaysItIsOneOfTheGroup(file))
                     /*
                      * ⛔ 命中「内容物保留关键词」的**不是过程物**（用户 2026-10-04 的新功能

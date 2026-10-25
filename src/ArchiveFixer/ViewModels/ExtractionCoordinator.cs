@@ -172,6 +172,13 @@ namespace ArchiveFixer.ViewModels
         private bool _extractIntoSourceFolderThisRun;
 
         /*
+         * 2026-10-25 用户拍板：手动「只解压」只解当前这一层（WinRAR 语义）。
+         * 这条运行期事实只给定稿分类用：这一层引擎刚写出来的所有东西都是内容物，
+         * ⛔ 不许再按"像不像归档"把它们扫进其余物。一键处理始终 false。
+         */
+        private bool _manualSingleLayerThisRun;
+
+        /*
          * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
          * 2026-09-25 第 32 条之后**管线里再没有任何一处调用 `SourceCleanupService`**
          * （删除统一走 `Storage/RestItemPurger`，它自己的执行体接缝在 `RecycleBinService` 那一层），

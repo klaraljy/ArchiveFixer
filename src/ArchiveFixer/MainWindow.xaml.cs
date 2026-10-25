@@ -246,23 +246,6 @@ namespace ArchiveFixer
             TaskTabHost.ScrollToSelectedTask();
         }
 
-        /// <summary>
-        /// 选项卡那一排最右端的「说明」：直接切到「说明」选项卡（用户 2026-10-25：
-        /// 「右上角的说明应该弄到说明这个选项卡里面」）。⛔ 不再另开窗口，内容只保留一份。
-        /// </summary>
-        private void HelpMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                HelpTabItem.IsSelected = true;
-                HelpTabItem.BringIntoView();
-            }
-            catch (Exception ex)
-            {
-                _dialogService.ShowException(ex, "打开说明失败");
-            }
-        }
-
         private void UsageMenuItem_Click(object sender, RoutedEventArgs e)
         {
             string? doc = LocateUsageDoc();

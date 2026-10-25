@@ -150,6 +150,9 @@ namespace ArchiveFixer.ViewModels
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // 手动单层入口（oneClickRun=false）：这一层写出来的都是用户要的内容物。
+            _manualSingleLayerThisRun = !oneClickRun;
+
             /*
              * 递归展开超过一层 → 外层清单不再描述最终产物（见 recursion 参数说明）。
              *

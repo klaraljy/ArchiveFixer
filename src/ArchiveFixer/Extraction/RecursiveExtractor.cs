@@ -25,6 +25,13 @@ namespace ArchiveFixer.Extraction
         /// <summary>最多解几层（含第 0 层）。3 层足够覆盖 外层.zip → 内层.7z → data.tar 这种真实包。</summary>
         public int MaxDepth { get; init; } = 3;
 
+        /// <summary>
+        /// 手动「只解压」：第 0 层成功后不再展开内层包（用户 2026-10-25，WinRAR 语义）。
+        /// 与 MaxDepth=1 的区别是**停因是 Completed 而不是 MaxDepthReached** ——
+        /// 后者会把这一单算成部分完成并留下工作区；手动单层是正常的终点。
+        /// </summary>
+        public bool ManualSingleLayer { get; init; }
+
         /// <summary>所有层累计的输出文件数上限。</summary>
         public int MaxTotalFiles { get; init; } = 100_000;
 
@@ -4782,6 +4789,16 @@ namespace ArchiveFixer.Extraction
             {
                 // 这一层里没有可继续的东西，队列自然消耗干净；停因在循环结束时统一判定为 Completed。
                 return true;
+            }
+
+            /*
+             * 手动单层：第 0 层成功就是终点。内层归档原样留在这层内容物里，
+             * ⛔ 不标记为"未展开"（否则收尾会判部分完成、留工作区）。
+             */
+            if (_limits.ManualSingleLayer)
+            {
+                stopReason = RecursionStopReason.Completed;
+                return false;
             }
 
             List<string> toProcess = innerArchives.ToList();

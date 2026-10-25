@@ -41,7 +41,7 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ 一个任务一个实例：递归核心把"本次任务的工作区"记在实例上（<c>CurrentWorkspace</c>），
         /// 清理只认那一个目录。共用实例会让并发任务互相覆盖这个字段。
         /// </summary>
-        private RecursiveExtractor CreateRecursiveExtractor()
+        private RecursiveExtractor CreateRecursiveExtractor(int? maxDepth = null, bool manualSingleLayer = false)
         {
             /*
              * 这一趟递归的「候选值 → 来源」映射：递归层只拿得到值，来源说明只能由**算候选时**
@@ -57,7 +57,7 @@ namespace ArchiveFixer.ViewModels
                 _archiveEngine,
                 new MagicArchiveProber(),
                 archivePath => BuildRecursionPasswordCandidates(archivePath, candidateSources),
-                BuildRecursionLimits(),
+                BuildRecursionLimits(maxDepth, manualSingleLayer),
                 AppendLog,
                 // 不变量 11 在**第 0 层**上的落点：递归核心每解一层之前都会问一次
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
@@ -369,9 +369,10 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ <c>internal</c>（2026-10-05）：单测要钉住"四条上限一条都不许漏映"——
         /// 单文件那一条正是这么漏掉的（递归核心过去一处都没引用 ResourceBudget）。
         /// </summary>
-        internal RecursionLimits BuildRecursionLimits() => new()
+        internal RecursionLimits BuildRecursionLimits(int? maxDepth = null, bool manualSingleLayer = false) => new()
         {
-            MaxDepth = Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
+            MaxDepth = maxDepth ?? Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
+            ManualSingleLayer = manualSingleLayer,
             MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer,
 
             /*

@@ -119,6 +119,8 @@ namespace ArchiveFixer.ViewModels
 
         bool IPlacementStepHost.ExtractIntoSourceFolderThisRun => _extractIntoSourceFolderThisRun;
 
+        bool IPlacementStepHost.ManualSingleLayerThisRun => _manualSingleLayerThisRun;
+
         bool IPlacementStepHost.MoveCarvedArtifactIntoProcessDirectory => MoveCarvedArtifactIntoProcessDirectory;
 
         bool IPlacementStepHost.TryResolveGroupLayer(string baseName, out string layer)

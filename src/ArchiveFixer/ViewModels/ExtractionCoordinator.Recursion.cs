@@ -366,7 +366,8 @@ namespace ArchiveFixer.ViewModels
             string engineArchivePath,
             string stageDirectory,
             bool oneClickRun,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            int? maxDepth = null)
         {
             /*
              * 递归核心只有一种模式：**全展开**（②页那三档已删除，用户 2026-10-14：
@@ -377,8 +378,8 @@ namespace ArchiveFixer.ViewModels
 
             // 上限（层数 / 每层密码尝试次数）当场从设置里取，并交给**本次**的递归核心：
             // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。
-            RecursionLimits limits = BuildRecursionLimits();
-            RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor();
+            RecursionLimits limits = BuildRecursionLimits(maxDepth, manualSingleLayer: !oneClickRun);
+            RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor(maxDepth, manualSingleLayer: !oneClickRun);
             // 「先测试再解压」：用户开了这一档就必须交给递归核心（它才有 TestAsync 那一支）。
             recursiveExtractor.TestBeforeExtract = Settings.TestBeforeExtract;
 

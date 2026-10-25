@@ -1529,6 +1529,11 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 这条分支里的第 0 层同样受不变量 11 保护：递归核心**每一层**开工之前都会回头问一次
              * "源文件还是原来那一份吗"（见 CheckRootSourceUnchangedAsync），不必在这里再写一遍。
              */
+            /*
+             * 手动「只解压」= 只解当前这一层（2026-10-25 用户拍板，WinRAR 语义）；
+             * 一键处理 = 完全递归。两条路都交给同一个递归核心，仅层数上限不同
+             * （手动传 1，一键传设置里的最大嵌套层数）。
+             */
             if (!IsSecondStepTask(task))
             {
 
@@ -1537,7 +1542,8 @@ namespace ArchiveFixer.ViewModels
                 try
                 {
                     recursion = await RunRecursiveAsync(
-                        task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken);
+                        task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken,
+                        maxDepth: oneClickRun ? null : 1);
                 }
                 catch (Exception ex)
                 {

@@ -258,7 +258,8 @@ namespace ArchiveFixer.Tests
 
             ArchiveTask task = await harness.AddTaskAsync(outer);
 
-            await harness.Coordinator.StartExtractAsync();
+            // 2026-10-25：这条钉的是「一键处理 / 默认递归档」；手动「只解压」已改成单层。
+            await harness.Coordinator.StartExtractForOneClickAsync();
 
             /*
              * 判据 = **任务字段**（与单层路径写的是同一个字段：失败清单 / 详情窗都读它）。
