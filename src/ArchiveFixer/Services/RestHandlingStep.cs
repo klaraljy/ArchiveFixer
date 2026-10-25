@@ -1959,11 +1959,26 @@ namespace ArchiveFixer.Services
             {
                 // 磁盘活（量大小 + 删目录）→ 放后台，别占住 UI 线程。
                 outcome = await Task.Run(
-                    () => new RestItemPurger(
+                    () =>
+                    {
+                        var purger = new RestItemPurger(
                             _host.RestDeleteExecutor,
                             null,
-                            ContentKeepRules.FromSettings(_host.Settings))
-                        .Purge(task, cancelled, deleteMode));
+                            ContentKeepRules.FromSettings(_host.Settings));
+
+                        /*
+                         * 空间不足：最后一层过程物是这条链**唯一要留下**的过程物。
+                         * 递归核心已经把它复制到 task.OutputPath\其余物；这里按项保留，
+                         * 其余过程物照旧永久删。⛔ 只认盘上确实存在的那一份，判不出就退回整体删除。
+                         */
+                        string? keepLast = task.LastProcessArtifactPath;
+
+                        return _host.SpaceTightThisBatch
+                            && !string.IsNullOrWhiteSpace(keepLast)
+                            && File.Exists(keepLast)
+                                ? purger.PurgeExcept(task, new[] { keepLast }, deleteMode)
+                                : purger.Purge(task, cancelled, deleteMode);
+                    });
             }
             catch (Exception ex)
             {

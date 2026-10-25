@@ -38,6 +38,79 @@
                       HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
                 <!--
+                    完整例子（用户 2026-10-25：不要一整段文字，要像 Markdown 一样有层次、流程、路径标注）。
+                    这里用原生 XAML 的编号卡片/标题/正文/等宽路径排出 Markdown 的观感，⛔ 不引入
+                    Markdown 解析器、⛔ 不贴图片；内容唯一来源仍是 HelpContent。
+                -->
+                <TextBlock Text="{x:Static models:HelpContent.ExampleHeading}"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,0,0,6" />
+
+                <TextBlock Text="{x:Static models:HelpContent.ExampleIntro}"
+                           Style="{StaticResource HintTextStyle}"
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,10" />
+
+                <ItemsControl ItemsSource="{x:Static models:HelpContent.ExampleSteps}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardStyle}"
+                                    CornerRadius="{StaticResource CardCornerRadius}"
+                                    Padding="12,10"
+                                    Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="34" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <Border Grid.Column="0"
+                                            Width="24"
+                                            Height="24"
+                                            CornerRadius="12"
+                                            Background="{StaticResource PrimarySoftBrush}"
+                                            VerticalAlignment="Top">
+                                        <TextBlock Text="{Binding Number}"
+                                                   FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource PrimaryBrush}" />
+                                    </Border>
+
+                                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                        <TextBlock Text="{Binding Title}"
+                                                   Style="{StaticResource CardTitleTextStyle}" />
+
+                                        <TextBlock Text="{Binding Text}"
+                                                   Style="{StaticResource BodyTextStyle}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,4,0,0" />
+
+                                        <TextBlock Text="{Binding Path}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource MonoTextStyle}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Path}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Border Height="1"
+                        Background="{StaticResource PanelBorderBrush}"
+                        Margin="0,6,0,12" />
+
+                <!--
                     功能详解（用户 2026-09-27："里面有专有名词的详细解释，但是没有功能的详细解释"）。
                     与术语表同一套卡片样式，只是分两段、各有一个小标题。
                 -->

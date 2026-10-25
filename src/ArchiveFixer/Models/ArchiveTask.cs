@@ -1687,6 +1687,12 @@ namespace ArchiveFixer.Models
         public string RestDirectoryPath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 空间不足模式：这条链**最后一层过程物**在其余物里的保留路径（留不下时为空）。
+        /// 只给其余物删除那一档当"不要删这一份"的例外；⛔ 不参与界面显示、不写设置。
+        /// </summary>
+        public string LastProcessArtifactPath { get; set; } = string.Empty;
+
+        /// <summary>
         /// 本任务定稿成功那一刻，**内容物实际落地的那一层目录**（2026-09-25 第 35 条新加）。
         ///
         /// <para>为什么需要它：<see cref="ParentOutputDirectory"/>（续解产物的落点）以前直接取父任务的

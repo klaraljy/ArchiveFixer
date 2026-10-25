@@ -378,8 +378,15 @@ namespace ArchiveFixer.ViewModels
 
             // 上限（层数 / 每层密码尝试次数）当场从设置里取，并交给**本次**的递归核心：
             // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。
-            RecursionLimits limits = BuildRecursionLimits(maxDepth, manualSingleLayer: !oneClickRun);
-            RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor(maxDepth, manualSingleLayer: !oneClickRun);
+            RecursionLimits limits = BuildRecursionLimits(
+                maxDepth,
+                manualSingleLayer: !oneClickRun,
+                spaceTight: _spaceTightThisBatch);
+            RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor(
+                maxDepth,
+                manualSingleLayer: !oneClickRun,
+                spaceTight: _spaceTightThisBatch);
+            recursiveExtractor.RetainedArtifactDirectory = task.OutputPath;
             // 「先测试再解压」：用户开了这一档就必须交给递归核心（它才有 TestAsync 那一支）。
             recursiveExtractor.TestBeforeExtract = Settings.TestBeforeExtract;
 
@@ -608,6 +615,24 @@ namespace ArchiveFixer.ViewModels
             }
 
             ApplyRecursionResult(task, result);
+
+            if (_spaceTightThisBatch && !string.IsNullOrWhiteSpace(recursiveExtractor.RetainedProcessArtifactPath))
+            {
+                task.LastProcessArtifactPath = recursiveExtractor.RetainedProcessArtifactPath;
+            }
+
+            if (_spaceTightThisBatch && result.Completed)
+            {
+                var deepestSuccess = result.Layers.LastOrDefault(layer => layer.Success && layer.Depth > 0);
+
+                if (deepestSuccess != null && !string.IsNullOrWhiteSpace(task.OutputPath))
+                {
+                    task.LastProcessArtifactPath = Path.Combine(
+                        task.OutputPath,
+                        ProcessArtifactLayout.ArtifactDirectoryName,
+                        Path.GetFileName(deepestSuccess.ArchivePath));
+                }
+            }
 
             /*
              * ===== 停因是「分卷缺失」时，把话说对（用户 2026-10-06 口径）=====

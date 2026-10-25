@@ -41,7 +41,10 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ 一个任务一个实例：递归核心把"本次任务的工作区"记在实例上（<c>CurrentWorkspace</c>），
         /// 清理只认那一个目录。共用实例会让并发任务互相覆盖这个字段。
         /// </summary>
-        private RecursiveExtractor CreateRecursiveExtractor(int? maxDepth = null, bool manualSingleLayer = false)
+        private RecursiveExtractor CreateRecursiveExtractor(
+            int? maxDepth = null,
+            bool manualSingleLayer = false,
+            bool spaceTight = false)
         {
             /*
              * 这一趟递归的「候选值 → 来源」映射：递归层只拿得到值，来源说明只能由**算候选时**
@@ -57,7 +60,7 @@ namespace ArchiveFixer.ViewModels
                 _archiveEngine,
                 new MagicArchiveProber(),
                 archivePath => BuildRecursionPasswordCandidates(archivePath, candidateSources),
-                BuildRecursionLimits(maxDepth, manualSingleLayer),
+                BuildRecursionLimits(maxDepth, manualSingleLayer, spaceTight),
                 AppendLog,
                 // 不变量 11 在**第 0 层**上的落点：递归核心每解一层之前都会问一次
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
@@ -369,28 +372,32 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ <c>internal</c>（2026-10-05）：单测要钉住"四条上限一条都不许漏映"——
         /// 单文件那一条正是这么漏掉的（递归核心过去一处都没引用 ResourceBudget）。
         /// </summary>
-        internal RecursionLimits BuildRecursionLimits(int? maxDepth = null, bool manualSingleLayer = false) => new()
-        {
-            MaxDepth = maxDepth ?? Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
-            ManualSingleLayer = manualSingleLayer,
-            MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer,
+        internal RecursionLimits BuildRecursionLimits(
+            int? maxDepth = null,
+            bool manualSingleLayer = false,
+            bool spaceTight = false) => new()
+            {
+                MaxDepth = maxDepth ?? Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
+                ManualSingleLayer = manualSingleLayer,
+                KeepDeepestProcessArtifact = spaceTight,
+                MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer,
 
-            /*
-             * 累计总量与展开比也取用户那一套上限（第 36 条）：递归核心以前写死 50 GiB / 500 倍，
-             * 于是"我在设置里把总大小上限调大了"在完全递归路径下不生效 —— 又是一处"改了没反应"。
-             * 文件数同理（预算那一档默认 20 万，递归那一档原来是 10 万）。
-             */
-            MaxTotalSize = BudgetLimits.MaxTotalSize,
-            MaxTotalFiles = BudgetLimits.MaxFileCount,
-            MaxExpansionRatio = BudgetLimits.MaxExpansionRatio,
+                /*
+                 * 累计总量与展开比也取用户那一套上限（第 36 条）：递归核心以前写死 50 GiB / 500 倍，
+                 * 于是"我在设置里把总大小上限调大了"在完全递归路径下不生效 —— 又是一处"改了没反应"。
+                 * 文件数同理（预算那一档默认 20 万，递归那一档原来是 10 万）。
+                 */
+                MaxTotalSize = BudgetLimits.MaxTotalSize,
+                MaxTotalFiles = BudgetLimits.MaxFileCount,
+                MaxExpansionRatio = BudgetLimits.MaxExpansionRatio,
 
-            /*
-             * 单文件那一条（2026-10-05 只读审计）：递归核心过去**一处都没映** ——
-             * 出厂默认档（展开所有分支）下，一个含 200 GiB 单文件的包不会被这道闸门拦下。
-             * 上限只有 BudgetLimits 这一个出口（与上面三条同一个理由：改了设置不重启也要生效）。
-             */
-            MaxSingleFileSize = BudgetLimits.MaxSingleFileSize
-        };
+                /*
+                 * 单文件那一条（2026-10-05 只读审计）：递归核心过去**一处都没映** ——
+                 * 出厂默认档（展开所有分支）下，一个含 200 GiB 单文件的包不会被这道闸门拦下。
+                 * 上限只有 BudgetLimits 这一个出口（与上面三条同一个理由：改了设置不重启也要生效）。
+                 */
+                MaxSingleFileSize = BudgetLimits.MaxSingleFileSize
+            };
 
 
         /// <summary>

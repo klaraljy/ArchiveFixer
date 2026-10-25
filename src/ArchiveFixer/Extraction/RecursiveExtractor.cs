@@ -491,6 +491,16 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         internal const string CarveDirectoryName = "carved";
 
+        /// <summary>
+        /// 空间不足模式保留「最后一层过程物」的最终根目录（协调器设成 task.OutputPath）。
+        /// 非空时保留的那一份直接落在 &lt;这个目录&gt;\其余物\，活过工作区清理；
+        /// 为空时退回老口径（工作区里的 kept 目录）。
+        /// </summary>
+        public string? RetainedArtifactDirectory { get; set; }
+
+        /// <summary>空间不足模式在逐层回收**之前**已经保留到最终其余物的那一份（最后发现的为准）。</summary>
+        public string RetainedProcessArtifactPath { get; private set; } = string.Empty;
+
         /// <summary>展开比检查的上限保护：只对最大若干层做（防止有人把上限配得极大时白算）。</summary>
         private const int MaxExpansionRatioChecks = 20;
 
@@ -1322,7 +1332,6 @@ namespace ArchiveFixer.Extraction
                             {
                                 ReclaimedProcessArtifacts.Add(groupFile);
                             }
-
                             if (_limits.KeepDeepestProcessArtifact
                                 && outcome.Report is { InnerArchives.Count: 0 })
                             {
@@ -4792,6 +4801,19 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * 空间不足：最后一层过程物必须在**它被逐层回收 / 消费之前**留下。
+             * 这里只是把"这一层发现的内层包"复制到最终其余物，真正的"删不删/留哪个"
+             * 仍由收尾那一档按 RetainedProcessArtifactPath 决定；⛔ 不搬原件、不改名。
+             */
+            if (_limits.KeepDeepestProcessArtifact)
+            {
+                foreach (string innerArchivePath in innerArchives)
+                {
+                    RetainProcessArtifactBeforeConsumption(innerArchivePath);
+                }
+            }
+
+            /*
              * 手动单层：第 0 层成功就是终点。内层归档原样留在这层内容物里，
              * ⛔ 不标记为"未展开"（否则收尾会判部分完成、留工作区）。
              */
@@ -5818,8 +5840,44 @@ namespace ArchiveFixer.Extraction
         /// 为什么这条线放在本类而不是调用方：工作区是本类建出来的，谁来建谁负责收 ——
         /// 调用方（协调器）只拿到一个结论对象，它无从知道这次到底建了哪个目录。
         /// </summary>
-        private static string? ResolveRetainedArtifactRoot(string outputRoot)
+        private void RetainProcessArtifactBeforeConsumption(string archivePath)
         {
+            if (string.IsNullOrWhiteSpace(RetainedArtifactDirectory)
+                || string.IsNullOrWhiteSpace(archivePath)
+                || !File.Exists(archivePath))
+            {
+                return;
+            }
+
+            try
+            {
+                string restDirectory = Path.Combine(
+                    RetainedArtifactDirectory,
+                    ProcessArtifactLayout.ArtifactDirectoryName);
+                Directory.CreateDirectory(restDirectory);
+
+                string target = Path.Combine(restDirectory, Path.GetFileName(archivePath));
+
+                if (!File.Exists(target))
+                {
+                    File.Copy(archivePath, target, overwrite: false);
+                }
+
+                RetainedProcessArtifactPath = target;
+            }
+            catch
+            {
+                // 留不下不影响解压结论；收尾那一档会按原有路径继续。
+            }
+        }
+
+        private string? ResolveRetainedArtifactRoot(string outputRoot)
+        {
+            if (!string.IsNullOrWhiteSpace(RetainedArtifactDirectory))
+            {
+                return RetainedArtifactDirectory;
+            }
+
             string? parent = Path.GetDirectoryName(outputRoot);
             return string.IsNullOrWhiteSpace(parent)
                 ? null
@@ -5853,7 +5911,7 @@ namespace ArchiveFixer.Extraction
                 && result.Completed
                 && result.Layers.Count > 0)
             {
-                RecursionLayerReport? deepest = result.Layers.LastOrDefault(layer => layer.Success);
+                RecursionLayerReport? deepest = result.Layers.LastOrDefault(layer => layer.Success && layer.Depth > 0);
 
                 string? outputRoot = ResolveWorkspaceOutputRoot(workspace.RootDirectory);
 
