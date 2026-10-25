@@ -51,6 +51,32 @@
                            TextWrapping="Wrap"
                            Margin="0,0,0,10" />
 
+                <Border Style="{StaticResource CardStyle}"
+                        CornerRadius="{StaticResource CardCornerRadius}"
+                        Padding="12,10"
+                        Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="流程（箭头 = 程序实际走的下一步）"
+                                   Style="{StaticResource CardTitleTextStyle}"
+                                   Margin="0,0,0,6" />
+
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled">
+                            <TextBlock Text="{x:Static models:HelpContent.ExampleFlowDiagram}"
+                                       Style="{StaticResource MonoTextStyle}"
+                                       TextWrapping="NoWrap" />
+                        </ScrollViewer>
+
+                        <TextBlock Text="落点目录（普通文件夹，不含你的盘符）"
+                                   Style="{StaticResource CardTitleTextStyle}"
+                                   Margin="0,12,0,6" />
+
+                        <TextBlock Text="{x:Static models:HelpContent.ExampleDirectoryTree}"
+                                   Style="{StaticResource MonoTextStyle}"
+                                   TextWrapping="NoWrap" />
+                    </StackPanel>
+                </Border>
+
                 <ItemsControl ItemsSource="{x:Static models:HelpContent.ExampleSteps}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>

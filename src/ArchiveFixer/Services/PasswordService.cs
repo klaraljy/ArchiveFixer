@@ -110,6 +110,14 @@ namespace ArchiveFixer.Services
         /// </summary>
         public PasswordListStore ListStore { get; } = new();
 
+        /// <summary>程序自带的明文密码清单（用户 2026-10-25：不再链接外部密码本）。</summary>
+        public PasswordTextStore TextStore { get; } = new();
+
+        /// <summary>
+        /// 是否把内置 <c>passwords.txt</c> 当主存储（生产入口默认 true；单元测试默认 false，保持旧 DPAPI 夹具语义）。
+        /// </summary>
+        public bool UseTextStore { get; set; }
+
         /// <summary>
         /// 「记住密码列表」总开关（来自 <see cref="AppSettings.RememberPasswordList"/>，默认开）。
         ///
@@ -195,6 +203,7 @@ namespace ArchiveFixer.Services
 
                 // 记忆文件与侧车文件共用同一个根：两处分开设过一次就会互相看不见。
                 ListStore.DataRootDirectory = _dataRootDirectory;
+                TextStore.DataRootDirectory = _dataRootDirectory;
             }
         }
 
@@ -216,6 +225,50 @@ namespace ArchiveFixer.Services
             if (!RememberPasswordList)
             {
                 return PasswordListLoadStatus.Disabled;
+            }
+
+            /*
+             * 2026-10-25：内置明文清单是主存储。存在就只读它（顺序 = 行顺序），
+             * 不再从外部密码本自动合并；没有它才回落到旧的 DPAPI 记忆做一次性迁移。
+             */
+            if (UseTextStore && TextStore.Exists)
+            {
+                try
+                {
+                    if (TextStore.TryLoad(out List<string> textValues, out _))
+                    {
+                        _persistSuspensions++;
+
+                        try
+                        {
+                            Passwords.Clear();
+
+                            foreach (string value in textValues)
+                            {
+                                Passwords.Add(new PasswordItem
+                                {
+                                    Value = value,
+                                    Source = "BuiltInText",
+                                    IsEnabled = true,
+                                    Remark = string.Empty
+                                });
+                            }
+                        }
+                        finally
+                        {
+                            _persistSuspensions--;
+                        }
+
+                        RemoveDuplicatePasswordsKeepOrder();
+                        RememberedEntryCount = Passwords.Count;
+                        return PasswordListLoadStatus.Loaded;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LastListWarning = "内置密码清单读取失败，已回落到旧的密码记忆：" + ex.Message;
+                    RememberedListWarning?.Invoke(LastListWarning);
+                }
             }
 
             PasswordListLoadResult result = ListStore.Load();
@@ -310,6 +363,12 @@ namespace ArchiveFixer.Services
             RemoveDuplicatePasswordsKeepOrder();
 
             RememberedEntryCount = Passwords.Count;
+
+            // 旧 DPAPI 记忆读成功后做一次性迁移：立即写内置 txt，之后以 txt 为准。
+            if (UseTextStore)
+            {
+                PersistPasswordList();
+            }
 
             return result.Status;
         }
@@ -689,21 +748,32 @@ namespace ArchiveFixer.Services
             }
 
             PasswordListSaveResult result;
+            string textFailure = string.Empty;
 
             lock (_persistGate)
             {
+                // 内置 txt 是主存储：顺序 = 当前列表顺序（上下移动后立即写）。
+                if (UseTextStore
+                    && !TextStore.TrySave(Passwords.Select(item => item.Value), out textFailure))
+                {
+                    textFailure = "内置密码清单写入失败：" + textFailure;
+                }
+
+                // DPAPI 记忆继续保留，供迁移 / 统计等旧逻辑使用；它不是用户要写回的那一份。
                 result = ListStore.Save(BuildSnapshot());
             }
 
-            if (result.Success)
+            if (result.Success && textFailure.Length == 0)
             {
                 return;
             }
 
-            LastListWarning = string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.PasswordListMemorySaveFailedFormat,
-                result.FailureReason);
+            LastListWarning = textFailure.Length > 0
+                ? textFailure
+                : string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.PasswordListMemorySaveFailedFormat,
+                    result.FailureReason);
 
             RememberedListWarning?.Invoke(LastListWarning);
         }
@@ -1184,16 +1254,22 @@ namespace ArchiveFixer.Services
              * 把路径写盘 —— 挂在"导入"这个动作上，而不是挂在某个窗口上。
              * 用户从「密码列表」窗口导入、还是从「工具 → 导入密码本…」导入，都要记住；
              * 之前只在菜单那条路上存了设置，用户走窗口那条路就白导了。
+             *
+             * 2026-10-25：生产入口改用内置 passwords.txt 后，外部路径只作为一次性来源，
+             * 不再写侧车、也不再加入"记住的密码本"清单（否则下次启动又会去链接外部文件）。
              */
-            try
+            if (!UseTextStore)
             {
-                string dataRoot = DataRootDirectory;
-                Directory.CreateDirectory(dataRoot);
-                File.WriteAllText(Path.Combine(dataRoot, "password-book.path"), txtPath, new UTF8Encoding(false));
-            }
-            catch
-            {
-                // 记不住路径不该让导入本身失败。
+                try
+                {
+                    string dataRoot = DataRootDirectory;
+                    Directory.CreateDirectory(dataRoot);
+                    File.WriteAllText(Path.Combine(dataRoot, "password-book.path"), txtPath, new UTF8Encoding(false));
+                }
+                catch
+                {
+                    // 记不住路径不该让导入本身失败。
+                }
             }
 
             _bookEntries.Clear();
@@ -1236,7 +1312,11 @@ namespace ArchiveFixer.Services
             }
 
             // 这本书从此"已记住"（不重复加；顺序按第一次导入的先后）。
-            AddBookPathCore(txtPath);
+            // 内置 txt 模式不再登记外部书：导入只做一次性复制/合并。
+            if (!UseTextStore)
+            {
+                AddBookPathCore(txtPath);
+            }
 
             PersistPasswordList();
 

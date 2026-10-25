@@ -1,5 +1,6 @@
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -541,22 +542,31 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                string installedPath = PasswordService.CopyImportedBookToInstallDirectory(path);
-                var imported = _passwordService.ImportPasswordList(installedPath);
+                string sourcePath = _passwordService.UseTextStore
+                    ? path
+                    : PasswordService.CopyImportedBookToInstallDirectory(path);
+
+                var imported = _passwordService.ImportPasswordList(sourcePath);
 
                 ReloadFromService();
 
-                RememberPasswordBookPath(installedPath);
+                if (!_passwordService.UseTextStore)
+                {
+                    RememberPasswordBookPath(sourcePath);
+                }
 
                 // 与主界面「工具 → 导入密码本…」同一套文案：条数 + 已记住 + 下次启动自动加载。
                 // 以前这里只有"已导入 N 个新密码"，用户看不出到底记住没有，
                 // 而且只写在底部一行小字里 —— 现在改成窗口内的提示条，不容易被忽略。
                 int warningCount = _passwordService.LastImportWarnings.Count;
 
-                string summary =
-                    $"已从「{System.IO.Path.GetFileName(path)}」导入 {imported.Count} 条新密码，" +
-                    $"当前共 {TotalCount} 条（启用 {EnabledCount} 条）。" +
-                    "已记住这个文件，下次启动会自动加载。";
+                string summary = _passwordService.UseTextStore
+                    ? $"已从「{System.IO.Path.GetFileName(path)}」导入 {imported.Count} 条新密码，"
+                      + $"当前共 {TotalCount} 条（启用 {EnabledCount} 条）。"
+                      + "已合并进程序内置 passwords.txt；外部文件以后改了也不会再链接。"
+                    : $"已从「{System.IO.Path.GetFileName(path)}」导入 {imported.Count} 条新密码，"
+                      + $"当前共 {TotalCount} 条（启用 {EnabledCount} 条）。"
+                      + "已记住这个文件，下次启动会自动加载。";
 
                 if (warningCount > 0)
                 {
@@ -568,7 +578,9 @@ namespace ArchiveFixer.ViewModels
                 }
                 else
                 {
-                    Message = $"已导入 {imported.Count} 条密码，并记住了这个文件，下次启动会自动加载。";
+                    Message = _passwordService.UseTextStore
+                        ? $"已导入 {imported.Count} 条密码，并合并进内置 passwords.txt。"
+                        : $"已导入 {imported.Count} 条密码，并记住了这个文件，下次启动会自动加载。";
                     SetNotice(PasswordNoticeKind.Success, summary);
                 }
             }
@@ -700,6 +712,28 @@ namespace ArchiveFixer.ViewModels
                 {
                     Message = Models.StatusText.PasswordWriteBackStatusNoOp;
                     SetNotice(PasswordNoticeKind.Info, Models.StatusText.PasswordWriteBackNothingToWrite);
+                    return;
+                }
+
+                /*
+                 * 2026-10-25：生产入口使用内置 passwords.txt 作为主存储。
+                 * 列表每一次增删/改值/上下移动已经即时写 txt；这里不再弹外部文件选择框，
+                 * 只做一次显式落盘确认，避免用户以为"写回"还指向外部密码本。
+                 */
+                if (_passwordService.UseTextStore)
+                {
+                    PasswordListSaveResult saved = _passwordService.SaveRememberedList();
+
+                    if (!saved.Success)
+                    {
+                        Message = $"写入内置密码清单失败：{saved.FailureReason}";
+                        SetNotice(PasswordNoticeKind.Error, Message);
+                        return;
+                    }
+
+                    Message = "已写入程序内置密码清单（passwords.txt）。";
+                    SetNotice(PasswordNoticeKind.Success, Message);
+                    WriteWriteBackLog("已写入内置密码清单 passwords.txt。");
                     return;
                 }
 

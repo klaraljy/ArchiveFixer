@@ -623,6 +623,26 @@ namespace ArchiveFixer.ViewModels
 
             IReadOnlyList<string> books = _passwordService.RememberedBookPaths;
 
+            if (_passwordService.UseTextStore)
+            {
+                string textPath = _passwordService.TextStore.FilePath;
+
+                if (count == 0)
+                {
+                    PasswordBookSummary = "密码本：passwords.txt 暂无条目 ——点「密码列表管理」添加或导入";
+                    PasswordBookTooltip = "内置明文密码清单：" + textPath
+                        + Environment.NewLine + "空密码仍会按设置尝试；日志不记明文。";
+                    AppendRememberedListWarningToSummary();
+                    return;
+                }
+
+                PasswordBookSummary = $"密码本：passwords.txt — {count} 条（启用 {enabled} 条）";
+                PasswordBookTooltip = "内置明文密码清单：" + textPath
+                    + Environment.NewLine + "行顺序就是尝试顺序；可上下移动。外部密码本只导入一次，不再链接。";
+                AppendRememberedListWarningToSummary();
+                return;
+            }
+
             if (count == 0)
             {
                 PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或在④「密码」页点「导入密码本…」";
@@ -1894,6 +1914,8 @@ namespace ArchiveFixer.ViewModels
                   new ClipboardService(),
                   new DialogService())
         {
+            // 生产入口：内置 passwords.txt 是主存储；测试用带参构造，保持旧 DPAPI 夹具语义。
+            _passwordService.UseTextStore = true;
         }
 
         /// <summary>
@@ -2380,8 +2402,11 @@ namespace ArchiveFixer.ViewModels
                     LoadRememberedPasswordListAtStartup();
                 }
 
-                // 本次要按顺序合并的书：服务里那份（记忆 + 设置 + 导入共同维护）。
-                IReadOnlyList<string> books = _passwordService.RememberedBookPaths;
+                // 2026-10-25：外部密码本不再自动加载；内置 passwords.txt 是唯一活清单。
+                // RememberedBookPaths 只保留给旧配置显示/清理，不再拿它合并密码。
+                IReadOnlyList<string> books = _passwordService.UseTextStore
+                    ? Array.Empty<string>()
+                    : _passwordService.RememberedBookPaths;
 
                 var mergedNames = new List<string>();
                 int addedTotal = 0;
