@@ -101,6 +101,7 @@ namespace ArchiveFixer.Extraction
                     return new SpecificExtractionRunResult
                     {
                         Message = "解压失败：" + lastError,
+                        RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                         Depth = depth
                     };
                 }
@@ -138,6 +139,7 @@ namespace ArchiveFixer.Extraction
                     Message = decision.Kind == SpecificLayerKind.StandardVolumeGroup
                         ? "标准分卷：本轮独立管线暂未接入接片"
                         : "这一层的形状不在特定解压支持范围内",
+                    RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                     Depth = depth
                 };
             }
@@ -145,6 +147,7 @@ namespace ArchiveFixer.Extraction
             return new SpecificExtractionRunResult
             {
                 Message = "超过 3 层仍未得到内容物",
+                RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                 Depth = MaxDepth
             };
         }

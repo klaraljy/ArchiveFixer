@@ -148,6 +148,19 @@ namespace ArchiveFixer.Extraction
             return CleanupCore(task, enabled, verified, verificationNote);
         }
 
+        /// <summary>
+        /// 空间不足模式：用户已接受「失败也会丢源包」的风险，所以不看校验，直接按同一执行体删源。
+        /// 只给空间不足的失败/取消分支用；其它任何路径都不许调。
+        /// </summary>
+        public SourceCleanupResult CleanupAcceptedRisk(ArchiveTask? task, bool enabled)
+        {
+            return CleanupCore(
+                task,
+                enabled,
+                verified: true,
+                verificationNote: "空间不足模式：用户已接受源包丢失风险");
+        }
+
         private SourceCleanupResult CleanupCore(
             ArchiveTask? task,
             bool enabled,

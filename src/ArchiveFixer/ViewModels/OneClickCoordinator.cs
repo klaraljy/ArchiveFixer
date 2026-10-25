@@ -964,10 +964,14 @@ namespace ArchiveFixer.ViewModels
 
             var runner = new SpecificExtractionRunner(_extractionCoordinator.SpecificExtractionEngine);
             IReadOnlyList<string?> passwords = _extractionCoordinator.SpecificExtractionPasswords;
+            bool spaceTight = _vm.SpaceTightMode;
+            IReadOnlyList<ArchiveTask> orderedTargets = spaceTight
+                ? targets.OrderByDescending(task => GetSourceSize(task)).ToList()
+                : targets;
             int succeeded = 0;
             int failed = 0;
 
-            foreach (ArchiveTask task in targets)
+            foreach (ArchiveTask task in orderedTargets)
             {
                 if (_vm.IsStopping)
                 {
@@ -992,6 +996,22 @@ namespace ArchiveFixer.ViewModels
                     MarkSpecificTaskFailed(task, "输出目录无效");
                     failed++;
                     continue;
+                }
+
+                if (spaceTight)
+                {
+                    long freeBytes = GetFreeBytes(outputRoot);
+                    long sourceBytes = GetSourceSize(task);
+
+                    if (freeBytes < sourceBytes)
+                    {
+                        DeleteSourceOnSpaceRisk(task, spaceTight);
+                        MarkSpecificTaskFailed(
+                            task,
+                            $"空间不足：需要 {sourceBytes:N0} 字节，当前只剩 {freeBytes:N0} 字节");
+                        failed++;
+                        continue;
+                    }
                 }
 
                 string workRoot = Path.Combine(
@@ -1035,8 +1055,6 @@ namespace ArchiveFixer.ViewModels
 
                 if (result.Success)
                 {
-                    bool spaceTight = _vm.SpaceTightMode;
-
                     task.OutputPath = result.OutputPath;
                     task.ContentDirectoryPath = result.OutputPath;
                     task.RestDirectoryPath = result.RestDirectory;
@@ -1048,7 +1066,7 @@ namespace ArchiveFixer.ViewModels
                     task.ApplyProgress(100, null);
 
                     bool deleteSource = runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace
-                        || (spaceTight && !_vm.SpaceTightKeepSource);
+                        || spaceTight;
 
                     SourceCleanupResult cleanup = new SourceCleanupService().CleanupVerified(
                         task,
@@ -1063,15 +1081,19 @@ namespace ArchiveFixer.ViewModels
                             $"{task.LogName}：特定解压后源包处理 —— {cleanup.Message}");
                     }
 
-                    if (!spaceTight
-                        && string.Equals(runOptions.RestHandling, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase)
+                    if ((spaceTight
+                            || string.Equals(runOptions.RestHandling, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
                         && !string.IsNullOrWhiteSpace(result.RestDirectory))
                     {
                         try
                         {
                             Directory.Delete(result.RestDirectory, recursive: true);
                             task.RestDirectoryPath = string.Empty;
-                            AppendLog("INFO", $"{task.LogName}：特定解压其余物按删除档清理完毕");
+                            AppendLog(
+                                "INFO",
+                                spaceTight
+                                    ? $"{task.LogName}：空间不足模式，最后一层过程物在成功后彻底删除"
+                                    : $"{task.LogName}：特定解压其余物按删除档清理完毕");
                         }
                         catch (Exception ex)
                         {
@@ -1087,6 +1109,8 @@ namespace ArchiveFixer.ViewModels
                 }
                 else
                 {
+                    task.RestDirectoryPath = result.RestDirectory;
+                    DeleteSourceOnSpaceRisk(task, spaceTight);
                     MarkSpecificTaskFailed(task, result.Message);
                     failed++;
                     AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
@@ -1106,6 +1130,21 @@ namespace ArchiveFixer.ViewModels
             };
         }
 
+        private void DeleteSourceOnSpaceRisk(ArchiveTask task, bool spaceTight)
+        {
+            if (!spaceTight)
+            {
+                return;
+            }
+
+            SourceCleanupResult cleanup = new SourceCleanupService()
+                .CleanupAcceptedRisk(task, enabled: true);
+
+            AppendLog(
+                cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                $"{task.LogName}：空间不足模式删源包（用户已接受风险）—— {cleanup.Message}");
+        }
+
         private static void MarkSpecificTaskFailed(ArchiveTask task, string message)
         {
             task.Status = StatusText.ExtractFailed;
@@ -1114,6 +1153,34 @@ namespace ArchiveFixer.ViewModels
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Failed;
             task.EndTime = DateTime.Now;
+        }
+
+        private static long GetSourceSize(ArchiveTask task)
+        {
+            try
+            {
+                return !string.IsNullOrWhiteSpace(task.CurrentPath) && File.Exists(task.CurrentPath)
+                    ? new FileInfo(task.CurrentPath).Length
+                    : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static long GetFreeBytes(string path)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
+
+                return string.IsNullOrWhiteSpace(root) ? 0 : new DriveInfo(root).AvailableFreeSpace;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         private static string TryGetFreeBytes(string path)
