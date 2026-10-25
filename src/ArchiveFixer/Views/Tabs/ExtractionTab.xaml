@@ -279,62 +279,6 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 解压前与完成后 ==================== -->
-            <GroupBox Header="解压前与完成后">
-                <StackPanel>
-                    <!--
-                        第 17 条：一键处理的那**一个**确认框可以关掉（用户原话："这个可以选中以后不弹出"）。
-                        确认框里那个勾选项写的就是这一项 —— 这里是它的"再打开"入口。
-                    -->
-                    <CheckBox Content="{x:Static models:StatusText.SettingsSkipOneClickConfirmLabel}"
-                              IsChecked="{Binding SettingsEditor.Settings.SkipOneClickConfirm, Mode=TwoWay}"
-                              ToolTip="{x:Static models:StatusText.SettingsSkipOneClickConfirmHint}" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="22,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="{x:Static models:StatusText.SettingsSkipOneClickConfirmHint}" />
-
-                    <CheckBox Content="解压前测试完整性"
-                              Margin="0,10,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.TestBeforeExtract, Mode=TwoWay}" />
-
-                    <CheckBox Content="定稿完成后在资源管理器里打开输出目录"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.OpenOutputFolderWhenDone, Mode=TwoWay}"
-                              ToolTip="只在任务真正定稿成功之后打开；失败 / 部分完成 / 取消时一律不打开。只开文件夹，不会把本程序窗口置前。" />
-
-                    <CheckBox Content="统计并提示可疑条目（可执行文件 / 脚本）"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.ReportDangerousEntries, Mode=TwoWay}"
-                              ToolTip="只提示、绝不阻断：不会因此跳过任何条目，也不会改变落盘结果" />
-
-                    <CheckBox Content="把解压结果归集到统一目录"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.CollectResultsToDirectory, Mode=TwoWay}" />
-
-                    <Grid Margin="0,6,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="归集目标目录："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.Settings.CollectTargetDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                        <Button Grid.Column="2"
-                                Content="选择"
-                                MinWidth="72"
-                                Margin="8,0,0,0"
-                                Command="{Binding SettingsEditor.SelectCollectTargetDirectoryCommand}" />
-                    </Grid>
-                </StackPanel>
-            </GroupBox>
-
             <!-- ==================== 并发与空间 ==================== -->
             <GroupBox Header="并发与空间">
                 <StackPanel>

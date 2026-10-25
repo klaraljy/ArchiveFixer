@@ -247,16 +247,15 @@ namespace ArchiveFixer
         }
 
         /// <summary>
-        /// 选项卡那一排最右端的「说明」（用户 2026-09-27）。
-        /// ⛔ 只读程序里自带的内容（<see cref="Models.HelpContent"/>），不依赖任何文件 ——
-        /// 与帮助菜单里那份「使用说明」的区别就在这里。
+        /// 选项卡那一排最右端的「说明」：直接切到「说明」选项卡（用户 2026-10-25：
+        /// 「右上角的说明应该弄到说明这个选项卡里面」）。⛔ 不再另开窗口，内容只保留一份。
         /// </summary>
         private void HelpMenuItem_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                var window = new Views.HelpWindow { Owner = this };
-                window.ShowDialog();
+                HelpTabItem.IsSelected = true;
+                HelpTabItem.BringIntoView();
             }
             catch (Exception ex)
             {

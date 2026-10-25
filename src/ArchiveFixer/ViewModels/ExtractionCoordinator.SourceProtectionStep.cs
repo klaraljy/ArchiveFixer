@@ -86,6 +86,8 @@ namespace ArchiveFixer.ViewModels
             try
             {
                 Directory.CreateDirectory(backupDirectory);
+                HideDirectory(Path.GetDirectoryName(backupDirectory));
+                HideDirectory(backupDirectory);
                 int index = 0;
 
                 foreach (string source in sources)
@@ -250,10 +252,46 @@ namespace ArchiveFixer.ViewModels
                 {
                     Directory.Delete(protection.Directory, recursive: true);
                 }
+
+                string? parent = Path.GetDirectoryName(protection.Directory);
+
+                if (!string.IsNullOrWhiteSpace(parent) && Directory.Exists(parent))
+                {
+                    if (!Directory.EnumerateFileSystemEntries(parent).Any())
+                    {
+                        Directory.Delete(parent);
+                    }
+                    else
+                    {
+                        HideDirectory(parent);
+                    }
+                }
             }
             catch
             {
                 // 零字节链接清不掉不影响结论。
+            }
+        }
+
+        /// <summary>
+        /// 源保护目录是程序自己的临时区，默认带 `.` 前缀在 Windows 资源管理器里**仍然可见**；
+        /// 这里补上隐藏属性（用户 2026-10-25：工作区要完全隐藏，不能在 H:\ 根上露出来）。
+        /// </summary>
+        private static void HideDirectory(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(path);
+                File.SetAttributes(path, attributes | FileAttributes.Hidden);
+            }
+            catch
+            {
+                // 属性设不上不影响保护逻辑；不因为隐藏失败中断流程。
             }
         }
 

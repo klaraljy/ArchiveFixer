@@ -450,15 +450,17 @@ namespace ArchiveFixer.Tests
                  */
                 ["MaxRecursionDepth"] = "ExtractionTab",
                 ["MaxParallelExtractCount"] = "ExtractionTab",
-                ["TestBeforeExtract"] = "ExtractionTab",
-                ["OpenOutputFolderWhenDone"] = "ExtractionTab",
-                ["ReportDangerousEntries"] = "ExtractionTab",
-                ["CollectResultsToDirectory"] = "ExtractionTab",
-                ["CollectTargetDirectory"] = "ExtractionTab",
+
+                // 2026-10-25：「解压前与完成后」整组从②页搬到「提醒」页（用户口径）
+                ["TestBeforeExtract"] = "ReminderTab",
+                ["OpenOutputFolderWhenDone"] = "ReminderTab",
+                ["ReportDangerousEntries"] = "ReminderTab",
+                ["CollectResultsToDirectory"] = "ReminderTab",
+                ["CollectTargetDirectory"] = "ReminderTab",
                 ["CustomSevenZipExePath"] = "EngineTab",
 
-                // ② 的第 17 条那一格：一键处理的确认框可以关掉（也在确认框自己的勾选项里写着）
-                ["SkipOneClickConfirm"] = "ExtractionTab",
+                // ② 的第 17 条那一格：一键处理的确认框可以关掉（现在也在「提醒」页）
+                ["SkipOneClickConfirm"] = "ReminderTab",
 
                 /*
                  * ③ 清理与删除
