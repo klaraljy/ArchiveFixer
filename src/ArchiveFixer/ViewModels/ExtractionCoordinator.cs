@@ -50,6 +50,24 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly ISourceMoveFileSystem _sourceMoveFileSystem;
 
+        /// <summary>特定解压独立管线用的引擎（只读转发，不另造实例）。</summary>
+        internal IArchiveEngine SpecificExtractionEngine => _archiveEngine;
+
+        /// <summary>特定解压每层候选：无密码 → 空串 → 列表顺序（用户可上下移动的就是顺序）。</summary>
+        internal IReadOnlyList<string?> SpecificExtractionPasswords
+        {
+            get
+            {
+                var values = new List<string?> { null, string.Empty };
+
+                values.AddRange(_passwordService.Passwords
+                    .Where(item => item.IsEnabled)
+                    .Select(item => item.Value));
+
+                return values;
+            }
+        }
+
 
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
         private const int MaxPreflightPasswordAttempts = 3;

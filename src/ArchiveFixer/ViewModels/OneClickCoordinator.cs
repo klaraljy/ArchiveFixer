@@ -952,6 +952,133 @@ namespace ArchiveFixer.ViewModels
         /// 或者中途退回设置值，都会让"这一次选的落点"在链的后半段静默变掉。
         /// </para>
         /// </param>
+        /// <summary>
+        /// 特定解压的一键入口：每个源包独立跑 3 层以内的简单管线，不进入轮次/第二大步。
+        /// 第一版只记录内容物落地；源包/其余物删除随后接。
+        /// </summary>
+        private async Task<OneClickOutcome> RunSpecificBatchAsync(
+            IReadOnlyList<ArchiveTask> targets,
+            OneClickRunOptions? runOptions)
+        {
+            runOptions ??= OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
+
+            var runner = new SpecificExtractionRunner(_extractionCoordinator.SpecificExtractionEngine);
+            IReadOnlyList<string?> passwords = _extractionCoordinator.SpecificExtractionPasswords;
+            int succeeded = 0;
+            int failed = 0;
+
+            foreach (ArchiveTask task in targets)
+            {
+                if (_vm.IsStopping)
+                {
+                    break;
+                }
+
+                string source = task.CurrentPath;
+
+                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+                {
+                    MarkSpecificTaskFailed(task, "源文件不存在");
+                    failed++;
+                    continue;
+                }
+
+                string outputRoot = runOptions.PlacementMode == OutputPlacementMode.CustomRootPerArchive
+                    ? runOptions.CustomRoot
+                    : Path.GetDirectoryName(source) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(outputRoot))
+                {
+                    MarkSpecificTaskFailed(task, "输出目录无效");
+                    failed++;
+                    continue;
+                }
+
+                string workRoot = Path.Combine(
+                    outputRoot,
+                    ".ArchiveFixer.work",
+                    "specific-" + Guid.NewGuid().ToString("N"));
+
+                SpecificExtractionRunResult result;
+
+                try
+                {
+                    result = await runner
+                        .RunAsync(source, outputRoot, workRoot, passwords)
+                        .ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    result = new SpecificExtractionRunResult { Message = ex.Message };
+                }
+                finally
+                {
+                    try
+                    {
+                        if (Directory.Exists(workRoot))
+                        {
+                            Directory.Delete(workRoot, recursive: true);
+                        }
+
+                        string workParent = Path.Combine(outputRoot, ".ArchiveFixer.work");
+
+                        if (Directory.Exists(workParent)
+                            && !Directory.EnumerateFileSystemEntries(workParent).Any())
+                        {
+                            Directory.Delete(workParent);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (result.Success)
+                {
+                    task.OutputPath = result.OutputPath;
+                    task.ContentDirectoryPath = result.OutputPath;
+                    task.Status = StatusText.ExtractSuccess;
+                    task.ProgressText = StatusText.ExtractSuccess;
+                    task.IsOutputVerified = true;
+                    task.Outcome = TaskOutcome.Succeeded;
+                    task.EndTime = DateTime.Now;
+                    task.ApplyProgress(100, null);
+                    succeeded++;
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）");
+                }
+                else
+                {
+                    MarkSpecificTaskFailed(task, result.Message);
+                    failed++;
+                    AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
+                }
+            }
+
+            string summary = $"特定解压完成：成功 {succeeded} / 失败 {failed}（本次 {targets.Count} 个任务）。";
+            AppendLog("INFO", summary);
+
+            return new OneClickOutcome
+            {
+                Rounds = 1,
+                Summary = summary,
+                Severity = failed == 0 ? BatchSummarySeverity.Success : BatchSummarySeverity.Failed,
+                Diagnostics = string.Empty,
+                DiagnosticLines = Array.Empty<string>()
+            };
+        }
+
+        private static void MarkSpecificTaskFailed(ArchiveTask task, string message)
+        {
+            task.Status = StatusText.ExtractFailed;
+            task.ProgressText = StatusText.ProgressFailed;
+            task.ErrorMessage = string.IsNullOrWhiteSpace(message) ? "特定解压失败" : message;
+            task.IsOutputVerified = false;
+            task.Outcome = TaskOutcome.Failed;
+            task.EndTime = DateTime.Now;
+        }
+
         internal async Task<OneClickOutcome> RunPipelineAsync(
             IReadOnlyList<ArchiveTask> firstRoundTargets,
             OneClickRunOptions? runOptions = null)
@@ -973,6 +1100,11 @@ namespace ArchiveFixer.ViewModels
             List<ArchiveTask> rootTargets = firstRoundTargets.Where(listedTasks.Contains).ToList();
 
             AppendLog("INFO", $"一键处理开始，共 {rootTargets.Count} 个任务。");
+
+            if (SpecialExtractionPlan.FromSettings(Settings).IsActive)
+            {
+                return await RunSpecificBatchAsync(rootTargets, runOptions).ConfigureAwait(true);
+            }
 
             // 处理过的任务按轮累加：汇总要算"本次一共处理了多少个"，只算第一轮会和实际不符。
             var processed = new List<ArchiveTask>(rootTargets);
