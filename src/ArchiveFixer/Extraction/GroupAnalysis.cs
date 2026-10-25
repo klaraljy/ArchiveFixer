@@ -147,6 +147,8 @@ namespace ArchiveFixer.Extraction
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            var seenBaseAndFormat = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (string seed in (seeds ?? Enumerable.Empty<string>())
                          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path)))
             {
@@ -157,13 +159,23 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                // 基名相同就是一组（⛔ 不分族：用户口径"跨族同基名同体积"的概率极小，不做处理）。
-                if (result.Any(existing => string.Equals(existing.BaseName, baseName, StringComparison.OrdinalIgnoreCase)))
+                /*
+                 * 同基名不一定同组：970 批 `29292929` 的真机形状是
+                 * `pack111-L1.part1.rar`（RAR4）和 `pack111-L1.z01/.zip`（ZipSpanned）同基名。
+                 * 旧口径“基名相同就是一组、不分族”把 RAR 片塞进 ZIP 组，4 片对自述 3 片 ⇒ Missing。
+                 * ⇒ 组键必须是「基名 + 内容族」；内容判不出族的片仍允许补位，但不许把已证实的异族并进来。
+                 */
+                ArchiveFixer.Detection.VolumeContentFormat seedFormat =
+                    ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
+
+                string key = baseName + "|" + seedFormat;
+
+                if (!seenBaseAndFormat.Add(key))
                 {
                     continue;
                 }
 
-                List<string> pieces = CollectPieces(seed, baseName, roots);
+                List<string> pieces = CollectPieces(seed, baseName, seedFormat, roots);
 
                 result.Add(Evaluate(baseName, pieces, handoffByPath));
             }
@@ -178,10 +190,14 @@ namespace ArchiveFixer.Extraction
         private static string ResolveGroupBaseName(string path) =>
             ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path);
 
-        /// <summary>在扫描根里收"同基名"的片（全树，去重按物理身份）。</summary>
+        /// <summary>
+        /// 在扫描根里收"同基名、同内容族"的片（全树，去重按物理身份）。
+        /// 内容族未知的片允许补位；已证实的异族片绝不并进这一组。
+        /// </summary>
         private static List<string> CollectPieces(
             string seed,
             string baseName,
+            ArchiveFixer.Detection.VolumeContentFormat seedFormat,
             IReadOnlyList<string> roots)
         {
             var pieces = new List<string> { seed };
@@ -211,6 +227,27 @@ namespace ArchiveFixer.Extraction
                         StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
+                }
+
+                if (seedFormat != ArchiveFixer.Detection.VolumeContentFormat.Unknown)
+                {
+                    ArchiveFixer.Detection.VolumeContentFormat candidateFormat;
+
+                    try
+                    {
+                        candidateFormat = ArchiveFixer.Detection.FileNature.Inspect(path).Format;
+                    }
+                    catch
+                    {
+                        // 读不出内容不阻止补位；由族算法/完整性判据兜底。
+                        candidateFormat = ArchiveFixer.Detection.VolumeContentFormat.Unknown;
+                    }
+
+                    if (candidateFormat != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                        && candidateFormat != seedFormat)
+                    {
+                        continue;
+                    }
                 }
 
                 if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(path, out ulong volume, out ulong index))

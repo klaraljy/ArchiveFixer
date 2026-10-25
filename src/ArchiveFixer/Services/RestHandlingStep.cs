@@ -736,6 +736,48 @@ namespace ArchiveFixer.Services
         /// 见下面那一段长注释）。
         /// </param>
         /// <param name="cancellationToken">取消令牌（取消那一档由执行体 <c>RestItemPurger</c> 第 3 道门槛判）。</param>
+        /// <summary>
+        /// 链尾处理其余物时，根任务记下的目录可能**早于归集/内层产物落点**：
+        /// 970 批 `25252525` 根任务记的是 `...\bbb-W0-1删除\其余物`，
+        /// 真正装着过程物的是链内任务 `...\bbb-W0-1删除\bbb-W0-0\其余物`。
+        /// 判据只认「盘上确实存在的其余物目录」：根任务自己的优先，其次链内任务里最深的一个；
+        /// 判不出就保留原值，由后面的闸门保守拦下。
+        /// </summary>
+        private static string ResolveChainRestDirectory(
+            ArchiveTask task,
+            IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            if (!string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                && Directory.Exists(task.RestDirectoryPath)
+                && Directory.EnumerateFileSystemEntries(task.RestDirectoryPath).Any())
+            {
+                return task.RestDirectoryPath;
+            }
+
+            string? candidate = chainTasks?
+                .Where(item => item != null
+                    && !string.IsNullOrWhiteSpace(item.RestDirectoryPath)
+                    && Directory.Exists(item.RestDirectoryPath)
+                    && Directory.EnumerateFileSystemEntries(item.RestDirectoryPath).Any())
+                .Select(item => item.RestDirectoryPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(path => path.Length)
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return task.RestDirectoryPath;
+            }
+
+            if (!string.Equals(candidate, task.RestDirectoryPath, StringComparison.OrdinalIgnoreCase))
+            {
+                task.RestDirectoryPath = candidate;
+                task.ErrorMessage = string.Empty;
+            }
+
+            return candidate;
+        }
+
         internal async Task ApplyRestHandlingAfterChainAsync(
             ArchiveTask task,
             IReadOnlyList<ArchiveTask>? chainTasks,
@@ -847,6 +889,8 @@ namespace ArchiveFixer.Services
              * 其中 L4 那一档由唯一出口 <see cref="ResultCompletenessClassifier"/> 给出
              * 「哪一层 + 什么原因」（`verdict.Blocker`）。
              */
+            string chainRestDirectory = ResolveChainRestDirectory(task, chainTasks);
+
             if (task.Outcome != TaskOutcome.Succeeded)
             {
                 AppendRemovalBlocked(
@@ -873,21 +917,21 @@ namespace ArchiveFixer.Services
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            if (string.IsNullOrWhiteSpace(chainRestDirectory))
             {
                 AppendRemovalBlocked(task, StatusText.ChainRestBlockedNoRestDirectoryFormat);
 
                 return;
             }
 
-            if (!Directory.Exists(task.RestDirectoryPath))
+            if (!Directory.Exists(chainRestDirectory))
             {
                 AppendRemovalBlocked(
                     task,
                     string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.ChainRestBlockedRestMissingFormat,
-                        task.RestDirectoryPath));
+                        chainRestDirectory));
 
                 return;
             }
