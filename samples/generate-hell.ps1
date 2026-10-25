@@ -106,6 +106,7 @@ function Write-7zNonUniform {
         [string]$WorkRoot,
         [string]$Payload,
         [string]$Destination,
+        [string]$ArchiveStem,
         [bool]$EncryptedHeader
     )
 
@@ -136,7 +137,7 @@ function Write-7zNonUniform {
 
         $piece = New-Object byte[] $len
         [Array]::Copy($bytes, $start, $piece, 0, $len)
-        $name = 'hell-7z.7z.' + (($i + 1).ToString('D3'))
+        $name = $ArchiveStem + '.7z.' + (($i + 1).ToString('D3'))
         [System.IO.File]::WriteAllBytes((Join-Path $dest $name), $piece)
     }
 
@@ -153,6 +154,7 @@ function Write-WinRarNonUniform {
         [string]$WorkRoot,
         [string]$Payload,
         [string]$Destination,
+        [string]$ArchiveStem,
         [string]$Format,
         [bool]$HeaderEncrypted
     )
@@ -191,7 +193,7 @@ function Write-WinRarNonUniform {
     $volumeArgs += '-v4096m'
 
     $dest = New-Dir $Destination
-    $base = Join-Path $dest ('hell-' + $Format)
+    $base = Join-Path $dest $ArchiveStem
     $args = @('a', '-ibck', '-inul', '-r', '-ep1')
     if ($isRar) {
         if ($HeaderEncrypted) { $args += ('-hp' + $SamplePassword) }
@@ -222,11 +224,11 @@ $payload = $payloadInfo.Root
 $cases = New-Object System.Collections.Generic.List[object]
 
 try {
-    $cases.Add((Write-7zNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '01_7z_非均匀_明文') -EncryptedHeader $false)) | Out-Null
-    $cases.Add((Write-7zNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '02_7z_非均匀_头加密') -EncryptedHeader $true)) | Out-Null
-    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '03_rar_非均匀_明文') -Format 'rar' -HeaderEncrypted $false)) | Out-Null
-    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '04_rar_非均匀_头加密') -Format 'rar' -HeaderEncrypted $true)) | Out-Null
-    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '05_zip_非均匀_条目加密') -Format 'zip' -HeaderEncrypted $false)) | Out-Null
+    $cases.Add((Write-7zNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '01_7z_非均匀_明文') -ArchiveStem 'hell-7z-plain' -EncryptedHeader $false)) | Out-Null
+    $cases.Add((Write-7zNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '02_7z_非均匀_头加密') -ArchiveStem 'hell-7z-enc' -EncryptedHeader $true)) | Out-Null
+    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '03_rar_非均匀_明文') -ArchiveStem 'hell-rar-plain' -Format 'rar' -HeaderEncrypted $false)) | Out-Null
+    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '04_rar_非均匀_头加密') -ArchiveStem 'hell-rar-enc' -Format 'rar' -HeaderEncrypted $true)) | Out-Null
+    $cases.Add((Write-WinRarNonUniform -WorkRoot $OutputRoot -Payload $payload -Destination (Join-Path $OutputRoot '05_zip_非均匀_条目加密') -ArchiveStem 'hell-zip-enc' -Format 'zip' -HeaderEncrypted $false)) | Out-Null
 }
 finally {
     if (Test-Path -LiteralPath $payload) {
