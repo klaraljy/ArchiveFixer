@@ -135,6 +135,24 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 名字被伪装过的组_大小不规律_只有内容可证时才认()
+        {
+            var irregular = new List<VolumeCandidate>
+            {
+                new() { Path = @"C:\t\x.7z.001删除", Size = 1000 },
+                new() { Path = @"C:\t\x.7z.002删除", Size = 700 },
+                new() { Path = @"C:\t\x.7z.003删除", Size = 300 }
+            };
+
+            // 没有内容证明：仍按旧安全闸门不认。
+            Assert.Empty(VolumeGroupDetector.Group(irregular));
+
+            // 内容证明成立：放行；名字/大小规律仍只是候选。
+            IReadOnlyList<VolumeGroup> proved = VolumeGroupDetector.Group(irregular, _ => true);
+            Assert.Single(proved);
+        }
+
+        [Fact]
         public void 名字被伪装过的组_尺寸不规律就不认()
         {
             // 三层方案的第 2 层：名字宽松了，就必须靠"尺寸规律"兜底（除末卷外全相等）。
