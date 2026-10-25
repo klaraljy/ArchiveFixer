@@ -859,13 +859,13 @@ namespace ArchiveFixer.Detection
 
             foreach (char ch in junk)
             {
-                if (char.IsAsciiLetter(ch) || char.IsWhiteSpace(ch))
+                if (char.IsWhiteSpace(ch))
                 {
                     return false;
                 }
             }
 
-            return true;
+            return junk.Length <= 2 || !junk.Any(char.IsAsciiLetter);
         }
 
         private static bool TryParseVolumeSegment(

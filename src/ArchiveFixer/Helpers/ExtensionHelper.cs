@@ -1003,7 +1003,8 @@ namespace ArchiveFixer.Helpers
                 ? mark[canonical.Length..]
                 : string.Empty;
 
-            if (markLeftover.Any(ch => char.IsAsciiLetter(ch) || char.IsWhiteSpace(ch)))
+            if (markLeftover.Any(char.IsWhiteSpace)
+                || (markLeftover.Length > 2 && markLeftover.Any(char.IsAsciiLetter)))
             {
                 return false;
             }
