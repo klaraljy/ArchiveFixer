@@ -61,6 +61,44 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 修名时末片名坏_基名用第二大步基名()
+        {
+            string layer = NewLayer();
+            string tail = Path.Combine(layer, "组.mp4-572");
+            string[] ordered =
+            {
+                Path.Combine(layer, "组.z01"),
+                Path.Combine(layer, "组.z02"),
+                tail
+            };
+
+            Assert.True(VolumeNameRepair.TryDeriveSpannedStem(ordered, tail, 3, out string stem));
+            Assert.Equal("组", stem);
+        }
+
+        [Fact]
+        public void 末片名字带点但结尾zip_规范名仍用第二大步基名()
+        {
+            string layer = NewLayer();
+            string tail = Path.Combine(layer, "组.中文.zip");
+
+            var unit = NewUnit(
+                "组",
+                layer,
+                tail,
+                Fact(Path.Combine(layer, "组.z01"), null),
+                Fact(Path.Combine(layer, "组.z02"), null),
+                Fact(tail, 3, declaredVolumeCount: 3));
+
+            FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "组.z01", "组.z02", "组.zip" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+        }
+
+        [Fact]
         public void 末片盘号3但缺z02_判缺片_点名2()
         {
             string layer = NewLayer();

@@ -160,14 +160,17 @@ namespace ArchiveFixer.Extraction
                     $"跨盘 ZIP 末片盘号说 {total} 片；卷标记只找到 {string.Join(",", indices)}（缺 {string.Join(",", missing)}）");
             }
 
-            string zipName = Path.GetFileName(zipPiece.Path);
-            string stem = ZipName.IsMatch(zipName)
-                ? ZipName.Replace(zipName, string.Empty)
-                : unit.BaseName;
+            /*
+             * 规范名的基名只有一个来源：**第二大步基名**（`unit.BaseName`，由
+             * `FileNameHelper.SecondStepBaseName` 给出，第一个点之前）。
+             * ⛔ 不许再从末片文件名的点段里截 —— 末片可能叫 `X.中文.zip` / `X.mp4-572`，
+             * 那样会造出 `X.中文.z01` 这类旧名字。
+             */
+            string stem = unit.BaseName;
 
             if (string.IsNullOrWhiteSpace(stem))
             {
-                return Unknown("跨盘 ZIP：末片名字不是 .zip，且组基名判不出 ⇒ 规范名无法定");
+                return Unknown("跨盘 ZIP：组基名判不出 ⇒ 规范名无法定");
             }
 
             var planItems = new List<CanonicalNamePlanItem>();

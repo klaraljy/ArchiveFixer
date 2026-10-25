@@ -1405,6 +1405,29 @@ namespace ArchiveFixer.Extraction
         private const int SpannedZipTrialMaxUndecidedDisks = 3;
 
         /// <summary>
+        /// 跨盘 ZIP 的规范名前缀（stem）：**第二大步基名** = `FileNameHelper.SecondStepBaseName`。
+        /// 末片名可能是 `X.mp4-572`、中间片可能是 `set.z甲` —— 都不许拿名字里的点段硬截；
+        /// 基名只认那一个出口（第一个点之前）。规范名拼法仍只有 `BuildStandardNames` 一处。
+        /// </summary>
+        internal static bool TryDeriveSpannedStem(
+            IReadOnlyList<string> ordered,
+            string tailPath,
+            int count,
+            out string stem)
+        {
+            stem = FileNameHelper.SecondStepBaseName(tailPath);
+
+            if (string.IsNullOrWhiteSpace(stem) && ordered.Count > 0)
+            {
+                stem = FileNameHelper.SecondStepBaseName(ordered[0]);
+            }
+
+            return !string.IsNullOrWhiteSpace(stem)
+                && Detection.VolumeNumberFromContent
+                    .BuildStandardNames(stem, VolumeNamingFamily.ZipSpanned, count).Count == count;
+        }
+
+        /// <summary>
         /// **专属算法：跨盘 zip 按归档自己的索引定盘**（用户 2026-10-01 真机 <c>FFF</c> 那一组）。
         ///
         /// <para>三步，一步比一步软：</para>
@@ -1560,9 +1583,8 @@ namespace ArchiveFixer.Extraction
                 ordered = probe.OrderedVolumes.Select(v => v.Path).ToList();
             }
 
-            // ④ 基名从**末片**推（它的标准名就是 `X.zip`），卷名拼法只有 BuildStandardNames 一处。
-            if (!Detection.VolumeNumberFromContent.TryDeriveStem(
-                    tail.Path, Detection.VolumeContentFormat.Zip, out string stem))
+            // ④ 基名：优先末片；末片名坏了就从组内片推，最后退回基名。
+            if (!TryDeriveSpannedStem(ordered, tail.Path, ordered.Count, out string stem))
             {
                 return Cannot(path, StatusText.VolumeRepairNoSuggestion, trialAttempted: attempted);
             }
@@ -1780,11 +1802,22 @@ namespace ArchiveFixer.Extraction
              * 基名从"这一组里最像标准名的那一卷"推：跨盘 zip 取末片（它的标准名就是 `X.zip`），
              * RAR 取第 1 卷（`X.part1.rar`）。⛔ 名字只影响"改完像不像人写的"，正确性由卷号与"绝不覆盖"钉着。
              */
-            string stemSource = family == VolumeNamingFamily.ZipSpanned
-                ? order.Slots[^1].Path
-                : order.Slots[0].Path;
+            string stemSource = order.Slots[0].Path;
+            string tailPath = order.Slots[^1].Path;
+            string stem;
 
-            if (!Detection.VolumeNumberFromContent.TryDeriveStem(stemSource, format, out string stem))
+            if (family == VolumeNamingFamily.ZipSpanned)
+            {
+                if (!TryDeriveSpannedStem(
+                        order.Slots.Select(slot => slot.Path).ToList(),
+                        tailPath,
+                        order.Count,
+                        out stem))
+                {
+                    return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+                }
+            }
+            else if (!Detection.VolumeNumberFromContent.TryDeriveStem(stemSource, format, out stem))
             {
                 return Cannot(path, StatusText.VolumeRepairNoSuggestion);
             }
@@ -1804,7 +1837,7 @@ namespace ArchiveFixer.Extraction
              *     ⚠ 老写法在这里传的是第 1 卷 ⇒ 手上是 `.part2.rar` 时计划里的"当前项"指向别人的名字，
              *     调用方（`TryApply` / 任务路径同步）拿它当入口就会指到一个"名字本来就对"的卷上。
              */
-            string entryVolumePath = family == VolumeNamingFamily.ZipSpanned ? stemSource : path;
+            string entryVolumePath = family == VolumeNamingFamily.ZipSpanned ? tailPath : path;
 
             return BuildPlanFromOrder(path, order, targetNames, entryVolumePath: entryVolumePath);
         }
