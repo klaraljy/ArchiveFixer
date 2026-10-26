@@ -631,6 +631,49 @@ namespace ArchiveFixer.Tests
             Assert.False(plainTask.IsEncrypted, "不加密的内嵌 ZIP 不许被误报成加密");
         }
 
+        [SevenZipFact]
+        public async Task 媒体前缀AES_ZIP_递归首层用内置直读_不报密码错误()
+        {
+            string sevenZip = SevenZipFactAttribute.LocateSevenZipPath()!;
+
+            string seed = Path.Combine(_root, "媒体前缀-内容.txt");
+            File.WriteAllText(seed, "AES 内嵌内容", new UTF8Encoding(false));
+
+            string aesZip = Path.Combine(_root, "媒体前缀-aes.zip");
+            RunSevenZip(sevenZip, new[] { "a", "-tzip", aesZip, seed, "-psample-password", "-mem=AES256" });
+
+            string polyglot = BuildPolyglot(
+                aesZip,
+                BeyondSevenZipTolerancePrefixLength,
+                TailAfterEocdLength,
+                "aes-recursive");
+
+            string output = Path.Combine(_root, "aes-recursive-out");
+            var log = new List<(string Level, string Message)>();
+
+            var extractor = new RecursiveExtractor(
+                new SevenZipEngine(),
+                new MagicArchiveProber(),
+                _ => new[] { "sample-password" },
+                limits: null,
+                log: (level, message) => log.Add((level, message)));
+
+            RecursionResult result = await extractor.ExtractAsync(
+                new ArchiveTask(polyglot),
+                output,
+                null,
+                CancellationToken.None);
+
+            Assert.True(result.Completed, result.Summary);
+            Assert.Contains(
+                log,
+                entry => entry.Message.Contains("内置直读", StringComparison.Ordinal));
+
+            string[] files = Directory.GetFiles(output, "媒体前缀-内容.txt", SearchOption.AllDirectories);
+            Assert.Single(files);
+            Assert.Equal("AES 内嵌内容", File.ReadAllText(files[0]));
+        }
+
         /// <summary>调真 7z.exe（用 <c>ArgumentList</c> 安全传参，⛔ 不拼命令行字符串 —— 不变量 10）。</summary>
         private static void RunSevenZip(string sevenZipPath, string[] arguments)
         {

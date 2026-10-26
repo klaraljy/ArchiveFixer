@@ -1999,6 +1999,18 @@ namespace ArchiveFixer.Extraction
                 {
                     attemptedDirectTake = true;
 
+                    LayerOutcome? direct = await TryTakeEmbeddedZipDirectAsync(
+                            item,
+                            candidates,
+                            progress,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (direct != null)
+                    {
+                        return direct;
+                    }
+
                     LayerOutcome? taken = await TryTakeSingleStoredEntryAsync(item, progress, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -3763,6 +3775,133 @@ namespace ArchiveFixer.Extraction
                 System.Globalization.CultureInfo.CurrentCulture,
                 StatusText.RecursionLayerLogPrefixFormat,
                 item.Depth) + Path.GetFileName(item.ArchivePath);
+
+        /// <summary>
+        /// **媒体前缀 / 双面文件的第一层改用内置 ZIP 直读**（用户 2026-10-26 真机：
+        /// AES ZIP 的密码是 UTF-8，7-Zip 只按 ANSI 派生 ⇒ 同一个正确密码在 7-Zip 里全报密码错误）。
+        ///
+        /// <para>只在 7-Zip **列不出这一份**之后才调用（见候选循环里的挂点）：引擎能正常列目录的
+        /// 外层 7z 里也可能恰好藏着一个自洽 ZIP，抢在引擎前面会误判。判据与既有直读同一个出口
+        /// <see cref="EmbeddedZipStreamExtractor"/>；失败就返回 null，原样回落到 7-Zip/单条目近路。</para>
+        /// </summary>
+        private async Task<LayerOutcome?> TryTakeEmbeddedZipDirectAsync(
+            WorkItem item,
+            IReadOnlyList<string> candidates,
+            IProgress<ArchiveProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            string layerLabel = DescribeProbeLabel(item);
+
+            try
+            {
+                EmbeddedArchiveInfo info = DetectEmbeddedArchive(item.ArchivePath);
+
+                if (!info.Found || info.IsVolumePart || info.Offset <= 0)
+                {
+                    return null;
+                }
+
+                IReadOnlyList<string> limitedCandidates = candidates
+                    .Take(Math.Max(1, _limits.MaxPasswordAttemptsPerLayer))
+                    .ToList();
+
+                EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(
+                    item.ArchivePath,
+                    info.Offset,
+                    info.ArchiveEnd,
+                    item.Layer.OutputPath,
+                    limitedCandidates,
+                    cancellationToken);
+
+                if (!probe.Supported || probe.List == null)
+                {
+                    return null;
+                }
+
+                Log(
+                    "INFO",
+                    $"{layerLabel}：尾部内嵌 ZIP 可用内置直读（{probe.List.FileCount} 个文件）；"
+                    + (probe.ResolvedPasswordIndex > 0
+                        ? $"第 {probe.ResolvedPasswordIndex} 个候选密码按 "
+                          + $"{ZipAesCrypto.DescribeEncoding(probe.ResolvedPasswordEncoding)} 通过校验，"
+                          + "⛔ 不交给 7-Zip（它只按 ANSI 派生，会一律报密码错误）。"
+                        : "未加密，不交给 7-Zip。"));
+
+                IProgress<int>? directProgress = progress == null
+                    ? null
+                    : new Progress<int>(percent => progress.Report(new ArchiveProgress
+                    {
+                        Percent = percent,
+                        Layer = item.Depth,
+                        CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(item.ArchivePath)}（内置 ZIP 直读）"
+                    }));
+
+                EmbeddedZipExtractResult extract = await Task.Run(
+                    () => EmbeddedZipStreamExtractor.Extract(
+                        item.ArchivePath,
+                        info.Offset,
+                        info.ArchiveEnd,
+                        item.Layer.OutputPath,
+                        progress: directProgress,
+                        cancellationToken,
+                        budgetOptions: new ResourceBudgetOptions
+                        {
+                            MaxSingleFileSize = _limits.MaxSingleFileSize,
+                            MaxTotalSize = _limits.MaxTotalSize,
+                            MaxFileCount = _limits.MaxTotalFiles
+                        },
+                        passwords: limitedCandidates),
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!extract.Success)
+                {
+                    Log(
+                        "WARN",
+                        $"{layerLabel}：内置 ZIP 直读没成功（{extract.Message}）—— 原样回落到引擎路径。");
+                    return null;
+                }
+
+                DangerousEntriesReported?.Invoke(
+                    ViewModels.ExtractionCoordinator.AnalyzeDangerousEntries(
+                        probe.List.Entries,
+                        ReportDangerousEntries));
+
+                string? succeededPassword = probe.ResolvedPasswordIndex > 0
+                    && probe.ResolvedPasswordIndex <= limitedCandidates.Count
+                        ? limitedCandidates[probe.ResolvedPasswordIndex - 1]
+                        : null;
+
+                item.ListingSaidNoEncryption = probe.ResolvedPasswordIndex == 0;
+
+                return await FinishSuccessfulLayerAsync(
+                        item,
+                        new ArchiveOperationResult
+                        {
+                            Success = true,
+                            Status = StatusText.ExtractSuccess,
+                            EngineDisplayName = EmbeddedZipStreamExtractor.ReaderDisplayName
+                        },
+                        LayerManifest.From(probe.List),
+                        succeededPassword,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                /*
+                 * 这条是加法：判据内部任何意外都只能"这条近路走不通"，不许挡住原本能解开的包。
+                 */
+                Log(
+                    "WARN",
+                    $"{layerLabel}：内置 ZIP 直读尝试失败（{ex.Message}）—— 原样回落到引擎路径。");
+
+                return null;
+            }
+        }
 
         /// <summary>
         /// **尾部归档里只有一个原样存（stored）的条目 ⇒ 直接按偏移把那一段取出来。**

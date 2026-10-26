@@ -146,11 +146,13 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(payload);
             Assert.Contains("双面文件里的真内容", File.ReadAllText(payload!), StringComparison.Ordinal);
 
-            // ③ 日志必须点名说清"这是双面文件、按偏移取出副本再解"（⛔ 不许悄悄改行为）。
+            // ③ 日志必须点名说清"这是双面文件、按偏移直接取出/内置直读"（⛔ 不许悄悄改行为）。
             Assert.Contains(
                 log,
-                entry => entry.Message.Contains("双面文件", StringComparison.Ordinal)
-                         && entry.Message.Contains("按偏移", StringComparison.Ordinal));
+                entry => (entry.Message.Contains("双面文件", StringComparison.Ordinal)
+                          && entry.Message.Contains("按偏移", StringComparison.Ordinal))
+                         || (entry.Message.Contains("尾部内嵌 ZIP", StringComparison.Ordinal)
+                             && entry.Message.Contains("内置直读", StringComparison.Ordinal)));
 
             // ④ ⛔ 原文件一个字节没动：外层源包 SHA256 前后相同。
             Assert.Equal(outerHashBefore, Sha256Of(outer));
