@@ -100,11 +100,19 @@ namespace ArchiveFixer.ViewModels
 
             if (fullSpeed)
             {
-                return Math.Max(1, tasks?.Count ?? 1);
+                /*
+                 * 用户 2026-10-26：「全速不是所有的一起开，最高限 8 个，要不然用户的电脑会卡死」。
+                 * 8 与设置项/调度器同一个硬顶（ExtractionScheduler.ParallelCeiling），不另造数字。
+                 */
+                return ResolveFullSpeedParallel(tasks?.Count ?? 1);
             }
 
             return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
         }
+
+        /// <summary>「全速」的硬顶 = 8 个（用户 2026-10-26：不是所有的一起开）。</summary>
+        internal static int ResolveFullSpeedParallel(int taskCount) =>
+            Math.Min(Math.Max(1, taskCount), MaxParallelExtractCountCeiling);
 
         /// <summary>
         /// 「空间不足」模式下**本批开几个**（用户 2026-09-27 拍板：忽略设置里的并发档与「全速」）。

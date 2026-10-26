@@ -257,10 +257,10 @@
                     </Grid>
 
                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <CheckBox Content="全速（本批不节流）"
+                        <CheckBox Content="全速（最高 8 个）"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
-                                  ToolTip="本批忽略并发档，能并行多少就并行多少。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复排队就把勾去掉）。慢盘上会让磁盘更忙。" />
+                                  ToolTip="本批忽略并发档，最多同时 8 个（不会无限开；8 是硬顶）。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复按并发档排队就把勾去掉）。慢盘上会让磁盘更忙。" />
 
                         <Button Content="按空间算建议"
                                 Margin="16,0,0,0"

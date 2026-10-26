@@ -944,7 +944,7 @@ namespace ArchiveFixer.Tests
                 harness.Log.Logs,
                 item => item.Message.Contains("并发已满", StringComparison.Ordinal) &&
                         item.Message.Contains("等空位", StringComparison.Ordinal) &&
-                        item.Message.Contains("全速（本批不节流）", StringComparison.Ordinal));
+                        item.Message.Contains("全速（最高 8 个）", StringComparison.Ordinal));
 
             /*
              * ⚠ 2026-09-26 第 45 条：**等待那一段不再逐任务刷**（真机 76 个任务刷了 74 遍），

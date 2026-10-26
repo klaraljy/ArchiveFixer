@@ -502,7 +502,7 @@ namespace ArchiveFixer.ViewModels
                             /*
                              * 一批只说一次（用户 2026-09-26 第 45 条：这条刷了 74 遍）。
                              * 三个必须写对的点：
-                             * ①**位置**：「全速（本批不节流）」在**②页 →「并发与空间」**，不在主界面；
+                             * ①**位置**：「全速（最高 8 个）」在**②页 →「并发与空间」**，不在主界面；
                              * ②**怎么用**：勾上**立刻**就放开本批（下面那个 if 会当场生效），不用停也不用重开；
                              * ③另一条出路是「停止后续」。
                              */
@@ -511,7 +511,7 @@ namespace ArchiveFixer.ViewModels
                                 $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。" +
                                 (fullSpeed
                                     ? "（已开「全速」，本批不再节流。）"
-                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（本批不节流）」—— 勾上当场生效，" +
+                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（最高 8 个）」—— 勾上当场生效，" +
                                       "不用停止、也不用重开；或点①页「停止后续」不再启动后面的任务。" +
                                       "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）"));
                         }
@@ -526,9 +526,9 @@ namespace ArchiveFixer.ViewModels
                         if (!_spaceTightThisBatch && !fullSpeed && _vm.RunAtFullSpeed)
                         {
                             fullSpeed = true;
-                            maxParallel = Math.Max(1, plan.Ordered.Count);
+                            maxParallel = ResolveFullSpeedParallel(plan.Ordered.Count);
 
-                            AppendLog("INFO", $"检测到「全速」已勾上，本批立刻放开并发（同时最多 {maxParallel} 个）。");
+                            AppendLog("INFO", $"检测到「全速」已勾上，本批立刻放开并发（同时最多 {maxParallel} 个，硬顶 {MaxParallelExtractCountCeiling}）。");
 
                             break;
                         }
@@ -687,7 +687,7 @@ namespace ArchiveFixer.ViewModels
                         $"并发排队汇总：本批 {throttledTasks} 个任务等过空位（同时最多跑 {maxParallel} 个）。"
                         + (fullSpeed
                             ? "本批已开「全速」。"
-                            : "下次想全程不排队：②页 →「并发与空间」勾上「全速（本批不节流）」（勾上当场生效）。"));
+                            : "下次想全程不排队：②页 →「并发与空间」勾上「全速（最高 8 个）」（勾上当场生效）。"));
                 }
 
                 /*

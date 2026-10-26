@@ -308,7 +308,7 @@ namespace ArchiveFixer.Tests
 
             // 指对地方：②页 + 那个开关的真名字；并说清"勾上当场生效"。
             Assert.Contains("②页", throttleLines[0]);
-            Assert.Contains("全速（本批不节流）", throttleLines[0]);
+            Assert.Contains("全速（最高 8 个）", throttleLines[0]);
             Assert.Contains("当场生效", throttleLines[0]);
 
             // ⛔ 反面：不许再说"主界面的「全速」"（主界面没有这个选项，用户就是被这句带偏的）。

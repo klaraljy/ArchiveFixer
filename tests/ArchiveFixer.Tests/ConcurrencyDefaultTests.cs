@@ -3,6 +3,7 @@ using System.IO;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
+using ArchiveFixer.ViewModels;
 
 namespace ArchiveFixer.Tests
 {
@@ -61,6 +62,16 @@ namespace ArchiveFixer.Tests
             settings.MaxParallelExtractCount = 6;
             settings.Normalize();
             Assert.Equal(6, settings.MaxParallelExtractCount);
+        }
+
+        [Theory]
+        [InlineData(1, 1)]
+        [InlineData(3, 3)]
+        [InlineData(8, 8)]
+        [InlineData(20, 8)]
+        public void 全速硬顶是8个_不是所有任务一起开(int taskCount, int expected)
+        {
+            Assert.Equal(expected, ExtractionCoordinator.ResolveFullSpeedParallel(taskCount));
         }
 
         [Fact]

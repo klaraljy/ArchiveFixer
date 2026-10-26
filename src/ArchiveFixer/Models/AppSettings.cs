@@ -269,7 +269,7 @@ namespace ArchiveFixer.Models
         public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
 
         /// <summary>
-        /// 「全速」：不再按 <see cref="MaxParallelExtractCount"/> 节流（能并行多少就并行多少）。
+        /// 「全速」：不再按 <see cref="MaxParallelExtractCount"/> 节流，但硬顶 8 个并发。
         ///
         /// <para><b>用户 2026-09-26 明确要求它必须记住</b>：原话"我刚刚测试当点击并发操作的时候，
         /// 这个开关就没有保存……我现在是想他们一个要自动保存……而且要有记忆性，下次重启也要有，
