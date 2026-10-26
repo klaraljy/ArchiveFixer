@@ -1218,6 +1218,21 @@ namespace ArchiveFixer.ViewModels
             string Normalize(string? path) => SafePathHelper.GetFullPathSafe(path ?? string.Empty)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+            string FirstExistingOutput()
+            {
+                foreach (string? candidate in new[] { task.OutputPath, task.ContentDirectoryPath, task.CollectedPath })
+                {
+                    string normalized = Normalize(candidate);
+
+                    if (normalized.Length > 0 && Directory.Exists(normalized))
+                    {
+                        return normalized;
+                    }
+                }
+
+                return string.Empty;
+            }
+
             string baseName = task.CurrentPath.Length > 0
                 ? OutputPlacement.ResolveArchiveBaseName(task.CurrentPath)
                 : string.Empty;
@@ -1235,9 +1250,9 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (fileSelection)
                 {
-                    string actualOutput = Normalize(task.OutputPath);
+                    string actualOutput = FirstExistingOutput();
 
-                    if (actualOutput.Length > 0 && Directory.Exists(actualOutput))
+                    if (actualOutput.Length > 0)
                     {
                         return actualOutput;
                     }
@@ -1279,9 +1294,9 @@ namespace ArchiveFixer.ViewModels
              * 「未指定位置」+ 选单个压缩包：H:\111.rar → H:\111\，只扫这个成品文件夹。
              * 源包自己就在外面，用户明确说"外面只有原包，不用管其他"。
              */
-            string actualFileOutput = Normalize(task.OutputPath);
+            string actualFileOutput = FirstExistingOutput();
 
-            if (actualFileOutput.Length > 0 && Directory.Exists(actualFileOutput))
+            if (actualFileOutput.Length > 0)
             {
                 return actualFileOutput;
             }
