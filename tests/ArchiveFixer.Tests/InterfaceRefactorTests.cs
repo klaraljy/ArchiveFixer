@@ -80,11 +80,11 @@ namespace ArchiveFixer.Tests
         {
             ["OutputLocationDisplay"] = "①页那一格显示的省略路径（第 27 条）。它只是显示，不存值。",
 
-            ["OutputLocationFollowsArchive"] = "①页那一格的「未指定位置」开关（第 27 条）。它写的就是②页落点判据本身。",
+            ["OutputLocationFollowsArchive"] = "①页那一格的「未指定位置」开关（第 27 条）。",
 
             ["OutputLocationToolTip"] = "①页那一格的完整路径提示（第 27 条）。只读。",
 
-            ["SelectOutputDirectoryCommand"] = "①页「选择…」（第 27 条）。与②页那把「选择」同一个动作、同一份值。",
+            ["SelectOutputDirectoryCommand"] = "①页「选择…」（第 27 条；②页重复入口已于 2026-10-26 删除）。",
 
             ["CopyOutputLocationCommand"] = "①页那一格右键的「复制完整路径」（第 27 条）。只读，不改任何值。"
         };
@@ -98,7 +98,7 @@ namespace ArchiveFixer.Tests
         /// </summary>
         private static readonly Dictionary<string, string> DeliberateSecondEntryValues = new(StringComparer.Ordinal)
         {
-            ["SelectedOutputDirectory"] = "①页与②页共用的那一个输出位置值（第 27 条）。"
+            ["SelectedOutputDirectory"] = "①页那一格显示的那个输出位置值（第 27 条）。"
         };
 
         // ================================================================ ① 九个选项卡
@@ -587,10 +587,11 @@ namespace ArchiveFixer.Tests
             // SettingsViewModel 自己的属性（不是 AppSettings 上的）：同样一项都不能少。
             var expected = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["OutputPlacement"] = "ExtractionTab",
-                ["CustomOutputDirectory"] = "ExtractionTab",
-                ["OutputPlacementSummary"] = "ExtractionTab",
-                ["SelectOutputDirectoryCommand"] = "ExtractionTab",
+                /*
+                 * 输出位置（OutputPlacement / CustomOutputDirectory / OutputPlacementSummary /
+                 * SelectOutputDirectoryCommand）**不在②页**：用户 2026-10-26 拍板只保留①「任务」页
+                 * 那一处入口，②页那一组重复控件已整组删除。
+                 */
 
                 /*
                  * 续解的中间层（用户 2026-09-27）：原来这里是「终端落法」两档 + 「同名塌缩」勾选框，

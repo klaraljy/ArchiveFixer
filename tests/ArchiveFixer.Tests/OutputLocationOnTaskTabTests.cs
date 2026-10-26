@@ -371,34 +371,16 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        /// <summary>②页那个入口一个字没动（用户："选项卡里面的也可以留着"）。</summary>
+        /// <summary>②页不再有输出位置入口（用户 2026-10-26：只保留①页那一处）。</summary>
         [Fact]
-        public void 解压方式页的输出位置入口照旧()
+        public void 解压方式页不再有输出位置入口()
         {
             string extraction = Read("Views", "Tabs", "ExtractionTab.xaml");
 
-            Assert.Contains("SettingsEditor.OutputPlacement", extraction, StringComparison.Ordinal);
-            Assert.Contains("SettingsEditor.CustomOutputDirectory", extraction, StringComparison.Ordinal);
-            Assert.Contains("SettingsEditor.SelectOutputDirectoryCommand", extraction, StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// **进②页就对齐**（2026-09-25 第 31 条的第二道保险）：①页那条路已经统一发通知，
-        /// 但只要将来有人再加一条写设置的路径漏了通知，用户切过去还是会看到旧状态 ——
-        /// 所以切到②「解压方式」页时再按最新设置求值一次。这里钉的是**接线真的在**
-        /// （TabControl 的 SelectionChanged + ②页那个 TabItem 有名字 + 处理器里确实调了刷新）。
-        /// </summary>
-        [Fact]
-        public void 切到解压方式页_会再对齐一次落点显示()
-        {
-            string window = Read("MainWindow.xaml");
-            string code = Read("MainWindow.xaml.cs");
-
-            Assert.Contains(@"SelectionChanged=""MainTabControl_SelectionChanged""", window, StringComparison.Ordinal);
-            Assert.Contains(@"x:Name=""ExtractionTabItem""", window, StringComparison.Ordinal);
-            Assert.Contains("MainTabControl_SelectionChanged", code, StringComparison.Ordinal);
-            Assert.Contains("NotifyOutputPlacementChanged", code, StringComparison.Ordinal);
-            Assert.Contains("ExtractionTabItem", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsEditor.OutputPlacement", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsEditor.CustomOutputDirectory", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsEditor.SelectOutputDirectoryCommand", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsEditor.OutputPlacementSummary", extraction, StringComparison.Ordinal);
         }
 
         // ================================================================ ④ 记忆：启动填回地址**不许**动落点档位

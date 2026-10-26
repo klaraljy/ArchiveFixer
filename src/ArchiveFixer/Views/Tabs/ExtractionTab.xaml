@@ -7,7 +7,8 @@
 
     <!--
         ② 解压方式页（用户 2026-09-24 第 11 条）。
-        内容全部按功能归位：落点 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
+        内容全部按功能归位：嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
+        （输出位置只在①「任务」页；用户 2026-10-26 拍板把②页那一组重复入口整组删除。）
         ⛔ 页面最底下那块「高风险区（危险模式 + 自测凭证 + 风险四条 + 红横幅）」按用户
         2026-09-25 第 32 条**整块退役**：那条需求现在是③页「删除操作」里的第三档，
         选它时会在下面出现一条不可关闭的红字提示 —— 红字就是警告，不再另配注释。
@@ -18,69 +19,10 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
         <StackPanel>
 
-            <!-- ==================== 落点（解压到哪） ==================== -->
-            <GroupBox Header="落点（解压到哪）">
-                <StackPanel>
-                    <RadioButton GroupName="OutputPlacement"
-                                 IsChecked="{Binding SettingsEditor.OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=ArchiveNamedSubfolder, Mode=TwoWay}"
-                                 Content="同名子文件夹（111\222.rar → 111\222\）"
-                                 ToolTip="与 WinRAR 默认一致，不会和同目录其它文件混在一起" />
-
-                    <RadioButton GroupName="OutputPlacement"
-                                 Margin="0,6,0,0"
-                                 IsChecked="{Binding SettingsEditor.OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomNamedSubfolder, Mode=TwoWay}"
-                                 Content="指定位置 + 同名子文件夹（111\222.rar → 333\222\）"
-                                 ToolTip="多个包各占一个文件夹，适合归集整理" />
-
-                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,10,0,8">
-                        <TextBlock Text="{Binding SettingsEditor.OutputPlacementSummary}"
-                                   Style="{StaticResource BannerTextStyle}"
-                                   Foreground="{StaticResource InfoTextBrush}"
-                                   FontFamily="{StaticResource MonoFontFamily}" />
-                    </Border>
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0"
-                                   Text="指定位置："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 IsEnabled="{Binding SettingsEditor.IsCustomOutputEnabled}"
-                                 ToolTip="只有选了「指定位置 + 同名子文件夹」那一档才用得上" />
-
-                        <Button Grid.Column="2"
-                                Content="选择"
-                                MinWidth="72"
-                                Margin="8,0,0,0"
-                                IsEnabled="{Binding SettingsEditor.IsCustomOutputEnabled}"
-                                Command="{Binding SettingsEditor.SelectOutputDirectoryCommand}" />
-
-                        <TextBlock Grid.Column="3"
-                                   Text="（不适用）"
-                                   VerticalAlignment="Center"
-                                   Margin="10,0,0,0">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SettingsEditor.IsCustomOutputEnabled}" Value="False">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Grid>
-                </StackPanel>
-            </GroupBox>
+            <!--
+                用户 2026-10-26：输出位置只在①「任务」页那一处；②页这一整组是重复入口，已整组删除。
+                ⛔ 不要再把「指定位置 / 未指定位置」搬回这一页。
+            -->
 
             <!--
                 ==================== 内容物最后一层：2026-09-27 整组删除 ====================
