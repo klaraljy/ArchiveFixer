@@ -31,7 +31,8 @@ namespace ArchiveFixer.ViewModels
         internal VolumeGroupUnit? TryCommitVolumeGroup(
             GroupAnalysis.GroupCandidate? group,
             ArchiveTask? ownerTask,
-            string? entryLayer)
+            string? entryLayer,
+            IReadOnlyList<string>? confirmedOrder = null)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer))
@@ -90,7 +91,8 @@ namespace ArchiveFixer.ViewModels
                 group.Evidence,
                 group.DeclaredPieceCount > 0 ? group.DeclaredPieceCount : null,
                 group.DeclaredTotalBytes > 0 ? group.DeclaredTotalBytes : null,
-                outputLayer);
+                outputLayer,
+                confirmedOrder);
 
             if (unit == null)
             {

@@ -96,7 +96,8 @@ namespace ArchiveFixer.Extraction
             string evidence,
             int? declaredPieceCount,
             long? declaredTotalBytes,
-            string outputLayer)
+            string outputLayer,
+            IReadOnlyList<string>? confirmedOrder = null)
         {
             if (string.IsNullOrWhiteSpace(baseName)
                 || family == null
@@ -165,6 +166,7 @@ namespace ArchiveFixer.Extraction
                 MissingNumbers = missingNumbers ?? Array.Empty<int>(),
                 DeclaredPieceCount = declaredPieceCount,
                 DeclaredTotalBytes = declaredTotalBytes,
+                ConfirmedOrder = confirmedOrder,
                 Verdict = evidence,
                 OutputLayer = outputLayer
             };
