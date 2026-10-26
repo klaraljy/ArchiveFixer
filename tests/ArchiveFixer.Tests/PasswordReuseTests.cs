@@ -262,6 +262,51 @@ namespace ArchiveFixer.Tests
         // ================================================================ ④ 顺序：严格按④页列表
 
         /// <summary>
+        /// 特定解压的候选：**本次导入内**按本批成功次数排；下一批（<see cref="PasswordService.BeginBatch"/>）
+        /// 立即回到④页列表顺序，历史次数（<see cref="PasswordService.GetSuccessCount"/>）不许跨批重排。
+        /// </summary>
+        [Fact]
+        public void 特定解压_同一次导入内按本批次数排_下一批回列表()
+        {
+            Harness harness = CreateHarness("specific-password-order");
+
+            harness.Book.AddPassword("<示例密码1>");
+            harness.Book.AddPassword("<示例密码2>");
+            harness.Book.AddPassword("<示例密码3>");
+
+            /*
+             * 先制造**跨批次历史次数**：p1 历史最多，但本批一次都没成功。
+             * 本批内 p2 成功 2 次、p3 成功 1 次 ⇒ 本批顺序必须是 p2、p3、p1；
+             * 若误用历史次数，会排成 p1、p2、p3（红检就靠这一点）。
+             */
+            harness.Book.RecordPasswordSuccess("old-a.7z", "<示例密码1>");
+            harness.Book.RecordPasswordSuccess("old-b.7z", "<示例密码1>");
+            harness.Book.RecordPasswordSuccess("old-c.7z", "<示例密码1>");
+
+            harness.Coordinator.BeginSpecificPasswordBatch();
+
+            harness.Book.RecordPasswordSuccess("a.7z", "<示例密码3>");
+            harness.Book.RecordPasswordSuccess("b.7z", "<示例密码2>");
+            harness.Book.RecordPasswordSuccess("c.7z", "<示例密码2>");
+            // p1 在本批也成功一次（本批次数 1，但历史次数 4）；按历史排会把它顶到最前。
+            harness.Book.RecordPasswordSuccess("d.7z", "<示例密码1>");
+
+            string?[] first = harness.Coordinator.SpecificExtractionPasswords.ToArray();
+
+            Assert.Equal(
+                new string?[] { null, string.Empty, "<示例密码2>", "<示例密码3>", "<示例密码1>" },
+                first);
+
+            harness.Coordinator.BeginSpecificPasswordBatch();
+
+            string?[] second = harness.Coordinator.SpecificExtractionPasswords.ToArray();
+
+            Assert.Equal(
+                new string?[] { null, string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" },
+                second);
+        }
+
+        /// <summary>
         /// **跨任务一律严格按④页列表顺序**（用户 2026-10-04 口述，推翻了 2026-09-24 第 14 条那一半）：
         ///
         /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，

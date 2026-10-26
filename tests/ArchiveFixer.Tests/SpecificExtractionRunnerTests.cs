@@ -102,6 +102,46 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 每层重新取候选_成功密码回调给上层记账()
+        {
+            string source = Path.Combine(_root, "outer.7z");
+            File.WriteAllText(source, "x");
+
+            var engine = new ScriptedEngine();
+            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+            engine.FailNullPasswords.Add("inner.rar");
+
+            int providerCalls = 0;
+            var successes = new List<string?>();
+
+            var runner = new SpecificExtractionRunner(engine);
+            SpecificExtractionRunResult result = await runner.RunAsync(
+                source,
+                Path.Combine(_root, "out"),
+                Path.Combine(_root, "work"),
+                Array.Empty<string?>(),
+                passwordProvider: () =>
+                {
+                    providerCalls++;
+                    return providerCalls == 1
+                        ? new string?[] { null }
+                        : new string?[] { null, "pwd" };
+                },
+                onPasswordSuccess: password => successes.Add(password));
+
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(2, providerCalls);
+            Assert.Equal(
+                new string?[] { null, "pwd" },
+                engine.Requests
+                    .Where(request => request.ArchivePath.EndsWith("inner.rar", StringComparison.OrdinalIgnoreCase))
+                    .Select(request => request.Password)
+                    .ToArray());
+            Assert.Equal(new string?[] { null, "pwd" }, successes.ToArray());
+        }
+
+        [Fact]
         public async Task 输出名已存在时_自动改名_结果路径指向真实目录()
         {
             string source = Path.Combine(_root, "outer.7z");
@@ -133,6 +173,8 @@ namespace ArchiveFixer.Tests
 
             public List<ArchiveRequest> Requests { get; } = new();
 
+            public HashSet<string> FailNullPasswords { get; } = new(StringComparer.OrdinalIgnoreCase);
+
             public void Add(string fileName, Action<string> writer) => _writers[fileName] = writer;
 
             public string Id => "scripted";
@@ -158,6 +200,15 @@ namespace ArchiveFixer.Tests
                 Requests.Add(new ArchiveRequest { ArchivePath = request.ArchivePath, Password = request.Password });
 
                 string fileName = Path.GetFileName(request.ArchivePath);
+
+                if (request.Password is null && FailNullPasswords.Contains(fileName))
+                {
+                    return Task.FromResult(new ArchiveOperationResult
+                    {
+                        Success = false,
+                        Message = "这一层不接受无密码"
+                    });
+                }
 
                 if (_writers.TryGetValue(fileName, out Action<string>? writer))
                 {

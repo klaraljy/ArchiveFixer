@@ -57,6 +57,27 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 后缀里所有中文都删掉_不是只删一个()
+        {
+            Assert.Equal("111.rar", SpecificOutputNaming.RemoveChineseFromExtension("111.rar删除中"));
+            Assert.Equal("111.7z", SpecificOutputNaming.RemoveChineseFromExtension("111.删除中7z"));
+            Assert.Equal("111.rar", SpecificOutputNaming.RemoveChineseFromExtension("111.rar中"));
+        }
+
+        [Fact]
+        public void 后缀带中文的最后一层_输出名用清洗后的基名()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "SpecificNaming_" + Guid.NewGuid().ToString("N"), "layer-000");
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "01.jpg"), "x");
+
+            string name = SpecificOutputNaming.Resolve("合集\\111.rar删除中", root);
+
+            Assert.Equal("111", name);
+            Directory.Delete(Path.GetDirectoryName(root)!, true);
+        }
+
+        [Fact]
         public void 文件夹导入_嵌套包输出到选中的合集根()
         {
             string root = CreateRoot();

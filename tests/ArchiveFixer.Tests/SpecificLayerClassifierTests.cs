@@ -31,6 +31,19 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 后缀里带多个中文字符_仍判单一压缩包()
+        {
+            string root = CreateRoot();
+            File.WriteAllText(Path.Combine(root, "inner.rar删除中"), "x");
+
+            SpecificLayerDecision decision = SpecificLayerClassifier.Classify(root);
+
+            Assert.Equal(SpecificLayerKind.SingleArchive, decision.Kind);
+            Assert.EndsWith("inner.rar删除中", decision.ArchivePath, StringComparison.OrdinalIgnoreCase);
+            Cleanup(root);
+        }
+
+        [Fact]
         public void 标准同组分卷_判分卷组()
         {
             string root = CreateRoot();

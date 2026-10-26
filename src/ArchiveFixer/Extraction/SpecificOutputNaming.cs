@@ -15,6 +15,57 @@ namespace ArchiveFixer.Extraction
     public static class SpecificOutputNaming
     {
         /// <summary>
+        /// 特定解压只处理一种简单伪装：**后缀里塞中文字符**（用户 2026-10-25：
+        /// “就删除中文字符就行，而不是一个中文字符，将所有的中文字符删除”）。
+        /// 只清洗**最后一段后缀**，基名里的中文一个字都不动。
+        /// </summary>
+        public static string RemoveChineseFromExtension(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return fileName ?? string.Empty;
+            }
+
+            int dot = fileName.LastIndexOf('.');
+
+            if (dot < 0 || dot == fileName.Length - 1)
+            {
+                return fileName;
+            }
+
+            string extension = fileName[(dot + 1)..];
+            string cleaned = new string(extension.Where(character => !IsChineseCharacter(character)).ToArray());
+
+            return cleaned.Length == extension.Length
+                ? fileName
+                : fileName[..(dot + 1)] + cleaned;
+        }
+
+        /// <summary>这个文件名（去掉后缀里的中文后）是不是已知归档名。</summary>
+        public static bool IsKnownArchiveFileName(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            if (ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(fileName)))
+            {
+                return true;
+            }
+
+            string cleaned = RemoveChineseFromExtension(fileName);
+
+            return !string.Equals(cleaned, fileName, StringComparison.Ordinal)
+                   && ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(cleaned));
+        }
+
+        private static bool IsChineseCharacter(char value) =>
+            (value >= '\u4E00' && value <= '\u9FFF')
+            || (value >= '\u3400' && value <= '\u4DBF')
+            || (value >= '\uF900' && value <= '\uFAFF');
+
+        /// <summary>
         /// 特定解压的输出根：用户选的是文件夹时，输出直接落在**选中的那个合集根**下，
         /// 不跟着源包所在的深层子目录走（用户 2026-10-25 口径：
         /// <c>合集\333\3333.rar</c> → <c>合集\3333\内容物</c>，不是 <c>合集\333\3333\内容物</c>）。
@@ -37,7 +88,7 @@ namespace ArchiveFixer.Extraction
 
         public static string Resolve(string lastArchivePath, string contentRoot)
         {
-            string archiveName = Path.GetFileName(lastArchivePath);
+            string archiveName = RemoveChineseFromExtension(Path.GetFileName(lastArchivePath));
 
             if (!string.IsNullOrWhiteSpace(contentRoot) && Directory.Exists(contentRoot))
             {

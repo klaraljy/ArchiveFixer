@@ -54,7 +54,7 @@ namespace ArchiveFixer.Extraction
 
             List<string> archiveFiles = entries
                 .Where(File.Exists)
-                .Where(path => ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(path)))
+                .Where(path => SpecificOutputNaming.IsKnownArchiveFileName(Path.GetFileName(path)))
                 .ToList();
 
             if (archiveFiles.Count == 1 && entries.Count == 1)
@@ -68,7 +68,8 @@ namespace ArchiveFixer.Extraction
 
             List<string> volumePieces = entries
                 .Where(File.Exists)
-                .Where(path => FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
+                .Where(path => FileNameHelper.IsVolumePartFileName(
+                    SpecificOutputNaming.RemoveChineseFromExtension(Path.GetFileName(path))))
                 .ToList();
 
             if (volumePieces.Count >= 2 && volumePieces.Count == entries.Count)

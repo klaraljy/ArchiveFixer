@@ -48,7 +48,9 @@ namespace ArchiveFixer.Extraction
             string outputRoot,
             string workRoot,
             IReadOnlyList<string?> passwordCandidates,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Func<IReadOnlyList<string?>>? passwordProvider = null,
+            Action<string?>? onPasswordSuccess = null)
         {
             if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
             {
@@ -69,8 +71,9 @@ namespace ArchiveFixer.Extraction
 
                 bool extracted = false;
                 string lastError = string.Empty;
+                IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
 
-                foreach (string? password in NormalizePasswords(passwordCandidates))
+                foreach (string? password in NormalizePasswords(candidates))
                 {
                     var request = new ArchiveRequest
                     {
@@ -98,6 +101,7 @@ namespace ArchiveFixer.Extraction
                     if (result.Success)
                     {
                         extracted = true;
+                        onPasswordSuccess?.Invoke(password);
                         break;
                     }
 

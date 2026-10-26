@@ -137,6 +137,77 @@ namespace ArchiveFixer.Tests
                 "空间不足模式按用户接受的风险处理：失败也要删源包（不是留在原地）");
         }
 
+        [SevenZipFact]
+        public async Task 特定解压_入口就是标准分卷_整组只解一次()
+        {
+            string collection = Path.Combine(_root, "合集-volume");
+            Directory.CreateDirectory(collection);
+
+            string build = Path.Combine(_root, "build-volume");
+            Directory.CreateDirectory(build);
+            var payload = new byte[100_000];
+            new Random(12345).NextBytes(payload);
+            File.WriteAllBytes(Path.Combine(build, "payload.bin"), payload);
+
+            Run7z(build, "a", "-t7z", "-v1k", Path.Combine(collection, "111.7z"), "payload.bin");
+
+            string[] parts = Directory.GetFiles(collection, "111.7z.*");
+            Assert.True(parts.Length >= 2, "样本本身必须真的分成多卷");
+
+            Harness harness = CreateHarness("specific-volume", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.MaxParallelExtractCount = 1;
+            });
+
+            await harness.AddPathsAsync(collection);
+            Assert.Equal(parts.Length, harness.Vm.Tasks.Count);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(
+                File.Exists(Path.Combine(collection, "111", "payload.bin")),
+                "标准分卷整组应只由入口卷解一次；实际目录树：" + string.Join(" | ", Tree(collection)));
+            Assert.True(
+                harness.Vm.Tasks.Count(task => task.IsVolumeGroupFollower) == parts.Length - 1,
+                "同组其余卷必须标成跟班卷，不能各自再解一遍");
+        }
+
+        [SevenZipFact]
+        public async Task 特定解压_空间不足_小包会按空间提高并发()
+        {
+            string collection = Path.Combine(_root, "合集-concurrent");
+            Directory.CreateDirectory(collection);
+
+            string build = Path.Combine(_root, "build-concurrent");
+            Directory.CreateDirectory(build);
+            WriteText(Path.Combine(build, "01.jpg"), "x");
+
+            Run7z(build, "a", "-t7z", Path.Combine(collection, "a.7z"), "01.jpg");
+            Run7z(build, "a", "-t7z", Path.Combine(collection, "b.7z"), "01.jpg");
+
+            Harness harness = CreateHarness("specific-concurrent", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.MaxParallelExtractCount = 2;
+            });
+
+            harness.Vm.SpaceTightMode = true;
+
+            await harness.AddPathsAsync(collection);
+            Assert.Equal(2, harness.Vm.Tasks.Count);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(File.Exists(Path.Combine(collection, "a", "01.jpg")));
+            Assert.True(File.Exists(Path.Combine(collection, "b", "01.jpg")));
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("本浪 2 个", StringComparison.Ordinal));
+        }
+
         // ================================================================ ③ 多分支：不塌 + WARN
 
 

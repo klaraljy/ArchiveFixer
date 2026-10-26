@@ -25,8 +25,8 @@ namespace ArchiveFixer.Services
         /// 每条密码成功解开过多少次（用户 2026-09-24 第 14 条："密码本里面的优先级差不多就是
         /// 使用次数的频繁程度"）。**大小写敏感**（与密码本解析 / 去重口径一致：密码就是字节）。
         ///
-        /// <para>它有两处用处：① 同层级的候选按它**从多到少**排；② 「记住密码列表」开着时随列表
-        /// 一起加密落盘（<see cref="PasswordListSnapshot.SuccessCounts"/>），重启后优先级不丢。</para>
+        /// <para>它只有一处用处：随「记住密码列表」一起加密落盘（<see cref="PasswordListSnapshot.SuccessCounts"/>），
+        /// 供重启后统计；⛔ **候选顺序不读它**（跨批次重排已被用户 2026-10-04 否掉）。</para>
         /// <para>⚠ 并行解压时多个任务会同时调 <see cref="RecordPasswordSuccess"/>，
         /// 所以对它的读写一律在 <see cref="_passwordStatsLock"/> 里 —— <c>Dictionary</c> 不是线程安全的。</para>
         /// </summary>
@@ -45,6 +45,13 @@ namespace ArchiveFixer.Services
         /// 跨重启的优先级由成功次数承担。</para>
         /// </summary>
         private readonly List<string> _batchVerifiedPasswords = new();
+
+        /// <summary>
+        /// **本次导入内**每条密码成功过多少次（用户 2026-10-25：按频率排序只限单次导入；
+        /// 不同次导入必须回到④页列表顺序）。它和 <see cref="_successCounts"/> 是两本账：
+        /// 后者跨重启、跨批次保留，只用于展示/落盘；前者在 <see cref="BeginBatch"/> 时清零。
+        /// </summary>
+        private readonly Dictionary<string, int> _batchSuccessCounts = new(StringComparer.Ordinal);
 
         /// <summary>成功次数与"本批已成功"清单的锁（并行解压会从多个线程记账）。</summary>
         private readonly object _passwordStatsLock = new();
@@ -863,6 +870,9 @@ namespace ArchiveFixer.Services
             lock (_passwordStatsLock)
             {
                 _successCounts[password] = _successCounts.TryGetValue(password, out int count) ? count + 1 : 1;
+                _batchSuccessCounts[password] = _batchSuccessCounts.TryGetValue(password, out int batchCount)
+                    ? batchCount + 1
+                    : 1;
 
                 if (!_batchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
                 {
@@ -891,6 +901,26 @@ namespace ArchiveFixer.Services
             lock (_passwordStatsLock)
             {
                 _batchVerifiedPasswords.Clear();
+                _batchSuccessCounts.Clear();
+            }
+        }
+
+        /// <summary>
+        /// 这条密码**本次导入内**成功过多少次（0 = 本批还没成功过）。
+        ///
+        /// <para>候选排序只读它，不读跨批次的 <see cref="GetSuccessCount"/>：
+        /// 用户 2026-10-25 明确「单次的情况」才按频率排，下一次导入必须回到④页列表顺序。</para>
+        /// </summary>
+        public int GetBatchSuccessCount(string? password)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                return 0;
+            }
+
+            lock (_passwordStatsLock)
+            {
+                return _batchSuccessCounts.TryGetValue(password, out int count) ? count : 0;
             }
         }
 
@@ -926,7 +956,7 @@ namespace ArchiveFixer.Services
         ///
         /// <para>✅ 而**这一档内部**按成功频率排序是用户 2026-10-16 当面许可的（"同一次的解压可以按照
         /// 频率次序来弄……同一次就是指同一次导入的"）⇒ 消费点 <see cref="GetPasswordCandidates"/>
-        /// 在这里按 <see cref="GetSuccessCount"/> 从多到少排（稳定排序，次数相同保持先后）。</para>
+        /// 在这里按 <see cref="GetBatchSuccessCount"/> 从多到少排（稳定排序，次数相同保持先后）。</para>
         /// </summary>
         public IReadOnlyList<string> BatchVerifiedPasswords
         {
@@ -969,9 +999,8 @@ namespace ArchiveFixer.Services
         /// ⛔ 但它只是**提前**，不是**替换**：原来的候选链一条都不删（不同包的密码可能确实不同）。
         /// </para>
         /// <para>
-        /// 同层级的候选按**成功次数从多到少**排（次数相同保持原顺序）—— 用户第 14 条："密码本里面的
-        /// 优先级差不多就是使用次数的频繁程度"。排序是稳定的，所以"没记录过"的那些仍按原顺序，
-        /// 用户能解释"为什么这条排在前面"。
+        /// 同一次导入内，本批已成功的密码按**本批成功次数从多到少**排（次数相同保持首次成功先后）；
+        /// ⛔ 不读跨批次历史次数，下一次导入回到④页列表顺序。
         /// </para>
         /// </summary>
         public List<PasswordItem> GetPasswordCandidates(
@@ -1040,7 +1069,7 @@ namespace ArchiveFixer.Services
             }
 
             /*
-             * 顺序 = **同一次导入内按成功频率从多到少**。
+             * 顺序 = **同一次导入内按成功频率从多到少**（读本批计数，不读跨批次历史次数）。
              *
              * 口径出处（用户 2026-10-16 当面澄清逐字）：「我说过**同一次的解压可以按照频率次序来弄**，
              * 但是**不同批次的**就是密码本里面的，**同一次就是指同一次导入的**」。
@@ -1053,7 +1082,7 @@ namespace ArchiveFixer.Services
              * `OrderByDescending` 是**稳定**排序 ⇒ 次数相同仍然保持"首次成功的先后"。
              */
             foreach (string verified in verifiedPasswords
-                         .OrderByDescending(GetSuccessCount))
+                         .OrderByDescending(GetBatchSuccessCount))
             {
                 AddCandidate(verified, "BatchSuccess", "复用本批已成功的密码");
             }

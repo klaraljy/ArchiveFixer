@@ -53,16 +53,45 @@ namespace ArchiveFixer.ViewModels
         /// <summary>特定解压独立管线用的引擎（只读转发，不另造实例）。</summary>
         internal IArchiveEngine SpecificExtractionEngine => _archiveEngine;
 
-        /// <summary>特定解压每层候选：无密码 → 空串 → 列表顺序（用户可上下移动的就是顺序）。</summary>
+        /// <summary>特定解压批次开工时清空“本次导入内已成功”的两本账。</summary>
+        internal void BeginSpecificPasswordBatch() => _passwordService.BeginBatch();
+
+        /// <summary>特定解压某层成功后记账；空密码不进本批复用表（与主解压同一口径）。</summary>
+        internal void RecordSpecificPasswordSuccess(string sourceArchive, string? password) =>
+            _passwordService.RecordPasswordSuccess(sourceArchive, password);
+
+        /// <summary>
+        /// 特定解压每层候选：无密码 → 空串 → 本批已成功的密码（按**本批**成功次数从多到少）
+        /// → 列表顺序（用户 2026-10-25：频率只限单次导入，下一次导入仍按④页原顺序）。
+        /// </summary>
         internal IReadOnlyList<string?> SpecificExtractionPasswords
         {
             get
             {
                 var values = new List<string?> { null, string.Empty };
+                var seen = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
 
-                values.AddRange(_passwordService.Passwords
-                    .Where(item => item.IsEnabled)
-                    .Select(item => item.Value));
+                foreach (string password in _passwordService.BatchVerifiedPasswords
+                             .Where(value => !string.IsNullOrEmpty(value))
+                             .OrderByDescending(_passwordService.GetBatchSuccessCount))
+                {
+                    if (seen.Add(password))
+                    {
+                        values.Add(password);
+                    }
+                }
+
+                foreach (string? password in _passwordService.Passwords
+                             .Where(item => item.IsEnabled)
+                             .Select(item => item.Value))
+                {
+                    string value = password ?? string.Empty;
+
+                    if (seen.Add(value))
+                    {
+                        values.Add(value);
+                    }
+                }
 
                 return values;
             }
