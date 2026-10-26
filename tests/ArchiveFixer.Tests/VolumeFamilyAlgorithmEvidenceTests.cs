@@ -282,6 +282,84 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void Zip通用分片_有试开确认顺序_名字不标准也按确认顺序()
+        {
+            string layer = Path.Combine(
+                Path.GetTempPath(),
+                "af-zip-confirmed-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(layer);
+
+            string first = Path.Combine(layer, "a.bin");
+            string middle1 = Path.Combine(layer, "b.bin");
+            string middle2 = Path.Combine(layer, "c.bin");
+            string end = Path.Combine(layer, "d.bin");
+
+            try
+            {
+                File.WriteAllText(first, "1");
+                File.WriteAllText(middle1, "2");
+                File.WriteAllText(middle2, "3");
+                File.WriteAllText(end, "4");
+
+                var unit = new VolumeGroupUnit(
+                    "组",
+                    VolumeNamingFamily.ZipNumbered,
+                    layer,
+                    first)
+                {
+                    Pieces = new List<GroupPieceFact>
+                    {
+                        ZipPiece(first, first: true, end: false),
+                        ZipPiece(middle1, first: false, end: false),
+                        ZipPiece(middle2, first: false, end: false),
+                        ZipPiece(end, first: false, end: true)
+                    },
+                    ConfirmedOrder = new[] { first, middle1, middle2, end }
+                };
+
+                FamilyResult result = new ZipNumberedFamilyAlgorithm().Evaluate(unit);
+
+                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+                Assert.Equal(
+                    new[] { "组.zip.001", "组.zip.002", "组.zip.003", "组.zip.004" },
+                    result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(layer, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static GroupPieceFact ZipPiece(string path, bool first, bool end)
+        {
+            return new GroupPieceFact(
+                path,
+                1,
+                VolumeContentFormat.Zip,
+                ArchiveBodyKind.VolumePiece,
+                null,
+                first,
+                VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                VolumeNumberFail.None,
+                0,
+                0,
+                null,
+                Path.GetDirectoryName(path) ?? string.Empty,
+                null,
+                FromHandoff: false,
+                HasZipEndRecord: end,
+                ZipEndRecordMeansSplit: end,
+                HasZipLocalHeader: first);
+        }
+
         private static VolumeHandoffEntry Handoff(
             string path,
             string baseName,

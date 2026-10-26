@@ -52,7 +52,33 @@ namespace ArchiveFixer.Extraction
             int total = unit.Pieces.Count;
             List<GroupPieceFact> ordered;
 
-            if (total == 3)
+            if (unit.ConfirmedOrder is { Count: > 0 } confirmedOrder
+                && confirmedOrder.Count == total)
+            {
+                var byPath = unit.Pieces.ToDictionary(
+                    piece => Path.GetFullPath(piece.Path),
+                    piece => piece,
+                    StringComparer.OrdinalIgnoreCase);
+
+                if (confirmedOrder
+                        .Select(Path.GetFullPath)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count() != total
+                    || confirmedOrder.Any(path => !byPath.ContainsKey(Path.GetFullPath(path))))
+                {
+                    return Unknown("ZIP 通用分片：试开确认顺序与片清单对不上 ⇒ 判不出");
+                }
+
+                ordered = confirmedOrder.Select(path => byPath[Path.GetFullPath(path)]).ToList();
+
+                if (firsts.Count != 1
+                    || !ReferenceEquals(ordered[0], firsts[0])
+                    || !ReferenceEquals(ordered[^1], end))
+                {
+                    return Unknown("ZIP 通用分片：试开确认顺序与“首片本地头 / 末片 EOCD”对不上 ⇒ 判不出");
+                }
+            }
+            else if (total == 3)
             {
                 if (firsts.Count != 1)
                 {
