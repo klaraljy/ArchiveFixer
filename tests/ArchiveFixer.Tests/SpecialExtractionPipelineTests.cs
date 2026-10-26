@@ -71,7 +71,71 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ② 规则开：用户要的那一句
 
+        /// <summary>
+        /// 特定解压的输出规则是**按合集根算**，不是按源包自己所在的深层子目录算：
+        /// <c>合集\333\3333.7z</c>（包内只有 <c>33333\</c>）→ <c>合集\33333\</c>。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 特定解压_嵌套包_输出到合集根_不跟源包子目录()
+        {
+            string collection = Path.Combine(_root, "合集");
+            Directory.CreateDirectory(Path.Combine(collection, "333"));
 
+            string build = Path.Combine(_root, "build-specific-root");
+            Directory.CreateDirectory(build);
+            WriteText(Path.Combine(build, "33333", "01.jpg"), "x");
+
+            string package = Path.Combine(collection, "333", "3333.7z");
+            Run7z(build, "a", "-t7z", package, @"33333\01.jpg");
+
+            Harness harness = CreateHarness("specific-root", settings =>
+            {
+                EnableSpecialExtraction(settings);
+            });
+
+            await harness.AddPathsAsync(collection);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.Equal(collection, task.SourceSelectionRoot);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(
+                File.Exists(Path.Combine(collection, "33333", "01.jpg")),
+                "输出必须在合集根下；实际目录树：" + string.Join(" | ", Tree(collection)));
+            Assert.False(
+                Directory.Exists(Path.Combine(collection, "333", "3333")),
+                "不能把源包所在的深层子目录套进输出路径");
+            Assert.False(
+                Directory.Exists(Path.Combine(collection, "333", "33333")),
+                "输出不能再留在源包子目录里");
+        }
+
+
+
+        [SevenZipFact]
+        public async Task 特定解压_空间不足模式_失败也删源包()
+        {
+            string source = Path.Combine(_root, "bad.7z");
+            File.WriteAllText(source, "这不是压缩包");
+
+            Harness harness = CreateHarness("specific-space-fail", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            });
+
+            harness.Vm.SpaceTightMode = true;
+
+            await harness.AddPathsAsync(source);
+            Assert.Single(harness.Vm.Tasks);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.False(
+                File.Exists(source),
+                "空间不足模式按用户接受的风险处理：失败也要删源包（不是留在原地）");
+        }
 
         // ================================================================ ③ 多分支：不塌 + WARN
 

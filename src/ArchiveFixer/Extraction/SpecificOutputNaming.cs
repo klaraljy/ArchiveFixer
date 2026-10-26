@@ -14,6 +14,27 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class SpecificOutputNaming
     {
+        /// <summary>
+        /// 特定解压的输出根：用户选的是文件夹时，输出直接落在**选中的那个合集根**下，
+        /// 不跟着源包所在的深层子目录走（用户 2026-10-25 口径：
+        /// <c>合集\333\3333.rar</c> → <c>合集\3333\内容物</c>，不是 <c>合集\333\3333\内容物</c>）。
+        /// 选的是单个文件时仍落在文件自己那一层。
+        /// </summary>
+        public static string ResolveOutputRoot(
+            string sourceArchive,
+            SourceSelectionKind selectionKind,
+            string? selectionRoot)
+        {
+            if (selectionKind == SourceSelectionKind.Folder
+                && !string.IsNullOrWhiteSpace(selectionRoot)
+                && Directory.Exists(selectionRoot))
+            {
+                return selectionRoot;
+            }
+
+            return Path.GetDirectoryName(sourceArchive) ?? string.Empty;
+        }
+
         public static string Resolve(string lastArchivePath, string contentRoot)
         {
             string archiveName = Path.GetFileName(lastArchivePath);

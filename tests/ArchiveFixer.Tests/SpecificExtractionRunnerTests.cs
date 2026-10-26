@@ -101,6 +101,32 @@ namespace ArchiveFixer.Tests
             Assert.All(engine.Requests, request => Assert.Null(request.Password));
         }
 
+        [Fact]
+        public async Task 输出名已存在时_自动改名_结果路径指向真实目录()
+        {
+            string source = Path.Combine(_root, "outer.7z");
+            File.WriteAllText(source, "x");
+
+            var engine = new ScriptedEngine();
+            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+            string outputRoot = Path.Combine(_root, "out");
+            Directory.CreateDirectory(Path.Combine(outputRoot, "inner"));
+
+            var runner = new SpecificExtractionRunner(engine);
+            SpecificExtractionRunResult result = await runner.RunAsync(
+                source,
+                outputRoot,
+                Path.Combine(_root, "work"),
+                new string?[] { "pwd" });
+
+            Assert.True(result.Success, result.Message);
+            Assert.NotEqual(Path.Combine(outputRoot, "inner"), result.OutputPath);
+            Assert.True(Directory.Exists(result.OutputPath), "返回的路径必须是实际落地的目录（可能是自动改名后的）");
+            Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
+        }
+
         private sealed class ScriptedEngine : IArchiveEngine
         {
             private readonly Dictionary<string, Action<string>> _writers = new(StringComparer.OrdinalIgnoreCase);

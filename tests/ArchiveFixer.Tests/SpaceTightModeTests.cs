@@ -26,8 +26,8 @@ namespace ArchiveFixer.Tests
     /// <list type="number">
     /// <item><description><b>不写设置</b>：开关一动，`appsettings.json` 一个字节都不许变
     /// （用户原话："覆盖是运行期的，别动我的设置"）；</description></item>
-    /// <item><description><b>删的是源包、而且只在"定稿 + 校验通过"之后</b>：
-    /// 失败 / 校验不过 / 取消三种情形一个字节都不删（与"删源包"那条既有红线同一口径）；</description></item>
+    /// <item><description><b>删的是源包、而且成功后只在"定稿 + 校验通过"之后</b>：
+    /// 失败 / 校验不过按用户接受的风险也删源包；取消时源包原地不动（与"删源包"那条既有红线同一口径）；</description></item>
     /// <item><description><b>覆盖确实生效</b>：设置里明明是「源包留在原地 + 其余物不动」，开了模式之后源包照删
     /// —— 而**设置里的值仍然没变**；</description></item>
     /// <item><description><b>覆盖要说出来</b>：日志、②③页的提示、一键处理确认框里的红字都按同一个词表说
@@ -228,7 +228,7 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 失败 / 校验不过：源包按用户接受的风险删除
 
         [Fact]
-        public async Task 空间不足模式_解压失败_一个字节都不删()
+        public async Task 空间不足模式_解压失败_源包按接受风险删除()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -257,7 +257,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 空间不足模式_校验不过_一个字节都不删()
+        public async Task 空间不足模式_校验不过_源包按接受风险删除()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -280,7 +280,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 空间不足模式_取消_一个字节都不删()
+        public async Task 空间不足模式_取消_源包原地不动()
         {
             Harness harness = CreateHarness(settings =>
             {

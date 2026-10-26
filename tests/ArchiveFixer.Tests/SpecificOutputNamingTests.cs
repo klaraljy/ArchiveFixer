@@ -56,6 +56,40 @@ namespace ArchiveFixer.Tests
             Assert.Equal("111", SpecificOutputNaming.StripVolumeSuffix("111.part1.rar"));
         }
 
+        [Fact]
+        public void 文件夹导入_嵌套包输出到选中的合集根()
+        {
+            string root = CreateRoot();
+            string nested = Path.Combine(root, "333");
+            Directory.CreateDirectory(nested);
+            string source = Path.Combine(nested, "3333.rar");
+            File.WriteAllText(source, "x");
+
+            string outputRoot = SpecificOutputNaming.ResolveOutputRoot(
+                source,
+                SourceSelectionKind.Folder,
+                root);
+
+            Assert.Equal(root, outputRoot);
+            Directory.Delete(root, true);
+        }
+
+        [Fact]
+        public void 单文件导入_输出仍在文件自己那一层()
+        {
+            string root = CreateRoot();
+            string source = Path.Combine(root, "111.rar");
+            File.WriteAllText(source, "x");
+
+            string outputRoot = SpecificOutputNaming.ResolveOutputRoot(
+                source,
+                SourceSelectionKind.File,
+                source);
+
+            Assert.Equal(root, outputRoot);
+            Directory.Delete(root, true);
+        }
+
         private static string CreateRoot()
         {
             string root = Path.Combine(Path.GetTempPath(), "SpecificNaming_" + Guid.NewGuid().ToString("N"));

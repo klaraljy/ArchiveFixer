@@ -125,9 +125,7 @@ namespace ArchiveFixer.Extraction
                 if (decision.Kind == SpecificLayerKind.Content)
                 {
                     string name = SpecificOutputNaming.Resolve(currentArchive, layerRoot);
-                    string finalPath = Path.Combine(outputRoot, name);
-
-                    MoveContent(layerRoot, finalPath);
+                    string finalPath = MoveContent(layerRoot, Path.Combine(outputRoot, name));
 
                     _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
 
@@ -207,7 +205,7 @@ namespace ArchiveFixer.Extraction
             }
         }
 
-        private static void MoveContent(string layerRoot, string finalPath)
+        private static string MoveContent(string layerRoot, string finalPath)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
 
@@ -231,6 +229,8 @@ namespace ArchiveFixer.Extraction
             string source = singleFolder ?? layerRoot;
 
             Directory.Move(source, finalPath);
+
+            return finalPath;
         }
 
         /// <summary>
