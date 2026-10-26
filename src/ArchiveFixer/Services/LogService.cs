@@ -289,7 +289,7 @@ namespace ArchiveFixer.Services
                 if (traceLines.Length > 0)
                 {
                     builder.AppendLine();
-                    builder.AppendLine("================ 以下是诊断事件（trace.jsonl） ================");
+                    builder.AppendLine("================ 以下是结构化诊断事件（机器可读 JSONL，不是错误清单；先看上面的任务明细和正文） ================");
 
                     foreach (string traceLine in traceLines)
                     {

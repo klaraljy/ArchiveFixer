@@ -22,7 +22,9 @@ namespace ArchiveFixer.ViewModels
         {
             runOptions ??= OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
 
-            var runner = new SpecificExtractionRunner(_extractionCoordinator.SpecificExtractionEngine);
+            var runner = new SpecificExtractionRunner(
+                _extractionCoordinator.SpecificExtractionEngine,
+                message => AppendLog("INFO", message));
             IReadOnlyList<string?> passwords = _extractionCoordinator.SpecificExtractionPasswords;
             bool spaceTight = _vm.SpaceTightMode;
             IReadOnlyList<ArchiveTask> orderedTargets = spaceTight
@@ -166,6 +168,17 @@ namespace ArchiveFixer.ViewModels
                         "INFO",
                         $"{task.LogName}：特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）"
                         + (spaceTight ? $"；空间不足剩余 {TryGetFreeBytes(outputRoot)}" : string.Empty));
+
+                    _vm.Logger.Event(
+                        "specific.success",
+                        result.Message,
+                        detail: $"层={result.Depth + 1}; 输出={result.OutputPath}",
+                        level: "INFO",
+                        file: source,
+                        source: source,
+                        target: result.OutputPath,
+                        result: "Succeeded",
+                        group: "特定解压");
                     succeeded++;
                 }
                 else
@@ -175,6 +188,16 @@ namespace ArchiveFixer.ViewModels
                     MarkSpecificTaskFailed(task, result.Message);
                     failed++;
                     AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
+
+                    _vm.Logger.Event(
+                        "specific.failure",
+                        result.Message,
+                        detail: result.DiagnosticDetail,
+                        level: "ERROR",
+                        file: source,
+                        source: source,
+                        result: "Failed",
+                        group: "特定解压");
                 }
             }
 

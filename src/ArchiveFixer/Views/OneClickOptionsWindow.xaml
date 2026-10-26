@@ -252,13 +252,13 @@
                         ⚠ 2026-10-15：原来是三档（多一档"回收站"），那一档整条下线后只剩两档
                         （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」）。
                     -->
-                    <GroupBox Header="2 删除操作（成品目录里的「其余物」怎么办）">
+                    <GroupBox Header="2 最后一层过程物操作（失败 / 部分完成时，链停下那一层的包怎么办）">
                         <StackPanel>
                             <RadioButton x:Name="PanelRestKeepOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelRestHandling"
                                          Checked="RestHandling_Checked">
-                                <TextBlock Text="不动其余物（默认）" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="留下（默认，留在原地）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
                             <RadioButton x:Name="PanelRestDeleteOption"
@@ -267,7 +267,7 @@
                                          Margin="0,4,0,0"
                                          Foreground="{StaticResource DangerTextBrush}"
                                          Checked="RestHandling_Checked">
-                                <TextBlock Text="彻底删除，直接省空间" Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource DangerTextBrush}" />
+                                <TextBlock Text="彻底删除，直接省空间（不可恢复）" Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource DangerTextBrush}" />
                             </RadioButton>
 
                             <!--
@@ -282,7 +282,7 @@
                                 <TextBlock Style="{StaticResource BannerTextStyle}"
                                            Foreground="{StaticResource DangerTextBrush}"
                                            TextWrapping="Wrap"
-                                           Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（过程物，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
+                                           Text="⚠ 彻底删除不可恢复：只作用于失败 / 部分完成时链停下那一层要解的包（最后一层过程物）。成功链上的其他过程物本来就按固定规则当场删除；失败 / 取消的源包一个字节都不动。" />
                             </Border>
                         </StackPanel>
                     </GroupBox>

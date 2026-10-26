@@ -20,6 +20,9 @@ namespace ArchiveFixer.Extraction
 
         public string RestDirectory { get; init; } = string.Empty;
 
+        /// <summary>失败时的结构化诊断（层号、入口、卷数、分类），只进日志，不参与判据。</summary>
+        public string DiagnosticDetail { get; init; } = string.Empty;
+
         public string Message { get; init; } = string.Empty;
     }
 
@@ -32,10 +35,12 @@ namespace ArchiveFixer.Extraction
         public const int MaxDepth = 3;
 
         private readonly IArchiveEngine _engine;
+        private readonly Action<string>? _log;
 
-        public SpecificExtractionRunner(IArchiveEngine engine)
+        public SpecificExtractionRunner(IArchiveEngine engine, Action<string>? log = null)
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+            _log = log;
         }
 
         public async Task<SpecificExtractionRunResult> RunAsync(
@@ -58,6 +63,9 @@ namespace ArchiveFixer.Extraction
             {
                 string layerRoot = Path.Combine(workRoot, "layer-" + depth.ToString("D2"));
                 Directory.CreateDirectory(layerRoot);
+
+                _log?.Invoke(
+                    $"第 {depth + 1} 层：解压「{Path.GetFileName(currentArchive)}」");
 
                 bool extracted = false;
                 string lastError = string.Empty;
@@ -98,9 +106,13 @@ namespace ArchiveFixer.Extraction
 
                 if (!extracted)
                 {
+                    _log?.Invoke($"第 {depth + 1} 层解压失败：{lastError}");
+
                     return new SpecificExtractionRunResult
                     {
                         Message = "解压失败：" + lastError,
+                        DiagnosticDetail =
+                            $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
                         RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                         Depth = depth
                     };
@@ -108,22 +120,27 @@ namespace ArchiveFixer.Extraction
 
                 SpecificLayerDecision decision = SpecificLayerClassifier.Classify(layerRoot);
 
+                _log?.Invoke($"第 {depth + 1} 层分类：{decision.Kind}");
+
                 if (decision.Kind == SpecificLayerKind.Content)
                 {
                     string name = SpecificOutputNaming.Resolve(currentArchive, layerRoot);
                     string finalPath = Path.Combine(outputRoot, name);
 
                     MoveContent(layerRoot, finalPath);
-                    string restDirectory = PreserveLastProcessArtifact(
-                        currentArchive,
-                        workRoot,
-                        outputRoot);
 
+                    _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
+
+                    /*
+                     * 成功链上的内层包是过程物，按固定规则随工作区删除；
+                     * ⛔ 不再复制到「其余物」。「最后一层过程物」只在失败 / 部分完成时才保留。
+                     */
                     return new SpecificExtractionRunResult
                     {
                         Success = true,
                         OutputPath = finalPath,
-                        RestDirectory = restDirectory,
+                        RestDirectory = string.Empty,
+                        Message = "特定解压成功",
                         Depth = depth
                     };
                 }
@@ -134,11 +151,34 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                if (decision.Kind == SpecificLayerKind.StandardVolumeGroup)
+                {
+                    /*
+                     * 特定解压也要接标准分卷：把这一组的第一卷当作下一层的输入，
+                     * 同目录的其余卷由引擎按标准卷名自己找。⛔ 不再直接报“暂未接入”失败。
+                     */
+                    string? firstVolume = decision.VolumePaths
+                        .OrderBy(path => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                            Path.GetFileName(path)) ?? int.MaxValue)
+                        .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault();
+
+                    if (!string.IsNullOrWhiteSpace(firstVolume))
+                    {
+                        currentArchive = firstVolume;
+                        _log?.Invoke(
+                            $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(firstVolume)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
+                        continue;
+                    }
+                }
+
                 return new SpecificExtractionRunResult
                 {
                     Message = decision.Kind == SpecificLayerKind.StandardVolumeGroup
-                        ? "标准分卷：本轮独立管线暂未接入接片"
+                        ? "标准分卷：这一层没有可用的第一卷"
                         : "这一层的形状不在特定解压支持范围内",
+                    DiagnosticDetail =
+                        $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
                     RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                     Depth = depth
                 };
@@ -147,6 +187,7 @@ namespace ArchiveFixer.Extraction
             return new SpecificExtractionRunResult
             {
                 Message = "超过 3 层仍未得到内容物",
+                DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
                 RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                 Depth = MaxDepth
             };

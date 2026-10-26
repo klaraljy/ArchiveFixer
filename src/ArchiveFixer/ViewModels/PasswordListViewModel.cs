@@ -241,6 +241,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>把手工添加的密码追加进用户自己的密码本 txt（写前自动备份）。</summary>
         public ICommand WriteBackPasswordsCommand { get; }
 
+        /// <summary>把当前密码列表显式保存到内置 passwords.txt（不看“记住密码列表”开关）。</summary>
+        public ICommand SavePasswordListCommand { get; }
+
         public ICommand MoveUpCommand { get; }
         public ICommand MoveDownCommand { get; }
         public ICommand ToggleShowPasswordsCommand { get; }
@@ -284,6 +287,7 @@ namespace ArchiveFixer.ViewModels
             ClearPasswordsCommand = new RelayCommand(ClearPasswords, () => Passwords.Count > 0);
             ImportPasswordsCommand = new RelayCommand(ImportPasswords);
             WriteBackPasswordsCommand = new RelayCommand(WriteBackPasswords, CanWriteBackPasswords);
+            SavePasswordListCommand = new RelayCommand(SavePasswordList, () => Passwords.Count > 0);
             MoveUpCommand = new RelayCommand(MoveUp, CanMoveUp);
             MoveDownCommand = new RelayCommand(MoveDown, CanMoveDown);
             ToggleShowPasswordsCommand = new RelayCommand(ToggleShowPasswords);
@@ -702,6 +706,54 @@ namespace ArchiveFixer.ViewModels
         /// （界面上给他看是应该的；<b>日志里绝不出现明文</b>，见 §8）→ 追加 + 备份 + 自检 →
         /// 如实显示"写了几条 / 跳过几条 / 写到哪 / 备份在哪"。</para>
         /// </summary>
+        /// <summary>
+        /// 显式保存当前列表（生产入口 = 内置 passwords.txt）。
+        /// 与旧「写回密码本」分开：这一档不要求存在“未写回的手工条目”，
+        /// 也不看「记住密码列表」开关；用户点一次就一定落盘，失败时如实报。
+        /// </summary>
+        private void SavePasswordList()
+        {
+            if (Passwords.Count == 0)
+            {
+                Message = Models.StatusText.PasswordWriteBackStatusNoOp;
+                SetNotice(PasswordNoticeKind.Info, Models.StatusText.PasswordWriteBackNothingToWrite);
+                return;
+            }
+
+            if (!_passwordService.UseTextStore)
+            {
+                WriteBackPasswords();
+                return;
+            }
+
+            try
+            {
+                if (!_passwordService.TextStore.TrySave(
+                        Passwords.Select(item => item.Value),
+                        out string failure))
+                {
+                    Message = "保存内置密码清单失败：" + failure;
+                    SetNotice(PasswordNoticeKind.Error, Message);
+                    WriteWriteBackLog(Message);
+                    return;
+                }
+
+                Message = "已保存到程序内置密码清单（passwords.txt）。";
+                SetNotice(PasswordNoticeKind.Success, Message);
+                WriteWriteBackLog("已保存到程序内置密码清单 passwords.txt。");
+
+                _passwordService.RefreshRememberedBookValues();
+                RefreshUnwrittenMarkers();
+                RefreshStatistics();
+            }
+            catch (Exception ex)
+            {
+                Message = "保存内置密码清单失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, Message);
+                WriteWriteBackLog(Message);
+            }
+        }
+
         private void WriteBackPasswords()
         {
             try
@@ -734,6 +786,9 @@ namespace ArchiveFixer.ViewModels
                     Message = "已写入程序内置密码清单（passwords.txt）。";
                     SetNotice(PasswordNoticeKind.Success, Message);
                     WriteWriteBackLog("已写入内置密码清单 passwords.txt。");
+                    _passwordService.RefreshRememberedBookValues();
+                    RefreshUnwrittenMarkers();
+                    RefreshStatistics();
                     return;
                 }
 

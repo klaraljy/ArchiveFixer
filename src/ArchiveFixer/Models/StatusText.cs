@@ -632,17 +632,17 @@ namespace ArchiveFixer.Models
         /// <summary>第一件事：内容物会生成在什么地方。</summary>
         public const string OneClickConfirmDestinationLabel = "内容物会生成在：";
 
-        /// <summary>第二件事：其余物。</summary>
-        public const string OneClickConfirmRestLabel = "其余物：";
+        /// <summary>第二件事：最后一层过程物（仅失败 / 部分完成）。</summary>
+        public const string OneClickConfirmRestLabel = "最后一层过程物（仅失败时）：";
 
-        /// <summary>其余物这一档：删除操作=彻底删除 → 解压成功后自动彻底删掉（不可恢复）。</summary>
-        public const string OneClickConfirmRestAutoDelete = "解压成功后自动彻底删除（不可恢复，直接省空间）";
+        /// <summary>其余物这一档：删除操作=彻底删除 → 失败/部分完成后彻底删掉（不可恢复）。</summary>
+        public const string OneClickConfirmRestAutoDelete = "彻底删除（不可恢复）";
 
         /// <summary>其余物这一档：删除操作=移入回收站 → 解压成功后自动移入回收站（可还原）。</summary>
         public const string OneClickConfirmRestRecycle = "解压成功后自动移入回收站（可还原；空间要等清空回收站才释放）";
 
-        /// <summary>其余物这一档：删除操作=不动其余物（默认）→ 留在输出目录的「其余物」里。</summary>
-        public const string OneClickConfirmRestKeep = "不自动删除，留在输出目录的「其余物」里";
+        /// <summary>其余物这一档：删除操作=留下（默认）。</summary>
+        public const string OneClickConfirmRestKeep = "留下（默认）";
 
         /// <summary>第三行（短）：源包怎么处理。</summary>
         public const string OneClickConfirmSourceLabel = "源包：";

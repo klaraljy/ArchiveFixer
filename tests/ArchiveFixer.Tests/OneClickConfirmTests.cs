@@ -156,7 +156,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(task.OutputPath, facts!.DestinationEcho);
 
             // 另外两行也在，而且说的是设置里的档位
-            Assert.Contains("其余物", facts.RestEcho, StringComparison.Ordinal);
+            Assert.Contains("最后一层过程物", facts.RestEcho, StringComparison.Ordinal);
             Assert.Contains("源包", facts.SourceEcho, StringComparison.Ordinal);
         }
 
@@ -245,7 +245,7 @@ namespace ArchiveFixer.Tests
                 OneClickRunOptions.FromSettings(harness.Vm.Settings),
                 null);
 
-            Assert.Contains("不自动删除", bySettings.RestEcho, StringComparison.Ordinal);
+            Assert.Contains("留下（默认）", bySettings.RestEcho, StringComparison.Ordinal);
 
             // 本次选项改成"彻底删除"：正文必须跟着改口。
             var chosen = new OneClickRunOptions
@@ -259,8 +259,8 @@ namespace ArchiveFixer.Tests
                 chosen,
                 null);
 
-            Assert.Contains("自动彻底删除", byChoice.RestEcho, StringComparison.Ordinal);
-            Assert.DoesNotContain("不自动删除", byChoice.RestEcho, StringComparison.Ordinal);
+            Assert.Contains("彻底删除", byChoice.RestEcho, StringComparison.Ordinal);
+            Assert.DoesNotContain("留下", byChoice.RestEcho, StringComparison.Ordinal);
         }
 
         /// <summary>

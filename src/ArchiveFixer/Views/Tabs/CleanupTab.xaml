@@ -72,20 +72,20 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 2 删除操作 ==================== -->
-            <GroupBox Header="2 删除操作（解压成功后，成品目录里的「其余物」怎么办）">
+            <!-- ==================== 2 最后一层过程物操作 ==================== -->
+            <GroupBox Header="2 最后一层过程物操作（失败 / 部分完成时，链停下那一层的包怎么办）">
                 <StackPanel>
                     <RadioButton x:Name="RestKeepOption"
                                  GroupName="RestHandling"
                                  IsChecked="{Binding SettingsEditor.RestHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=Keep, Mode=TwoWay}"
-                                 Content="不动其余物（默认）" />
+                                 Content="留下（默认，留在原地，不占额外动作）" />
 
                     <RadioButton x:Name="RestDeleteOption"
                                  GroupName="RestHandling"
                                  Margin="0,6,0,0"
                                  Foreground="{StaticResource DangerTextBrush}"
                                  IsChecked="{Binding SettingsEditor.RestHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=Delete, Mode=TwoWay}"
-                                 Content="动，而且是彻底删除，直接省空间" />
+                                 Content="彻底删除，直接省空间（不可恢复）" />
 
                     <!--
                         选「彻底删除」时下面**常驻**一条提示（用户 2026-09-25 第 32 条原话：
@@ -98,7 +98,7 @@
                         <TextBlock Style="{StaticResource BannerTextStyle}"
                                    Foreground="{StaticResource DangerTextBrush}"
                                    TextWrapping="Wrap"
-                                   Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（过程物，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
+                                   Text="⚠ 彻底删除不可恢复：只作用于失败 / 部分完成时链停下那一层要解的包（最后一层过程物）。成功链上的其他过程物本来就按固定规则当场删除；失败 / 取消的源包一个字节都不动。" />
                     </Border>
                 </StackPanel>
             </GroupBox>
@@ -125,15 +125,15 @@
                                        Foreground="{StaticResource DangerTextBrush}" />
 
                             <WrapPanel Margin="0,8,0,0">
-                                <Button Content="删除其余物…"
+                                <Button Content="删除过程物…"
                                         Style="{StaticResource DangerOutlineButtonStyle}"
-                                        ToolTip="删除勾选的每个任务自己那一份「其余物」（内层归档 / 分卷 / 过程物 / 源包）。先预览条目数、总大小与源包个数。"
+                                        ToolTip="删除勾选的每个任务自己那一份过程物（内层归档 / 分卷 / 最后一层过程物）。先预览条目数、总大小与源包个数。"
                                         Command="{Binding CleanProcessArtifactsCommand}" />
 
-                                <Button Content="删除本目录全部其余物…"
+                                <Button Content="删除本目录全部过程物…"
                                         Margin="8,0,0,0"
                                         Style="{StaticResource DangerOutlineButtonStyle}"
-                                        ToolTip="删除目标任务输出目录下的全部其余物，会影响同目录里的所有包 —— 确认框里会点名影响几个包。"
+                                        ToolTip="删除目标任务输出目录下的全部过程物，会影响同目录里的所有包 —— 确认框里会点名影响几个包。"
                                         Command="{Binding CleanAllProcessArtifactsCommand}" />
 
                                 <Button Content="清理空文件夹…"

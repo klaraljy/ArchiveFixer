@@ -3944,6 +3944,25 @@ namespace ArchiveFixer.ViewModels
                 + "③页「工作区残留」= 失败时留下的中间产物（要先在③页打开「失败时保留中间产物」）；"
                 + "本次导出末尾已附「诊断事件（trace.jsonl）」= 批次清单/任务文件事实/判据/文件操作/引擎原话，"
                 + "以后排查只发这一份日志即可；⑥设置的「详细日志（排查用）」也仍可用。");
+
+            /*
+             * 导出文件必须和①页看到的一致：至少把每一单的名字/状态/机器终态列出来。
+             * 具体过程（逐层、密码候选、引擎原话）仍看正文与 trace，不在这里复述。
+             */
+            lines.Add("任务明细（与①页一致）：");
+
+            foreach (ArchiveTask task in Tasks)
+            {
+                string error = (task.ErrorMessage ?? string.Empty)
+                    .Replace("\r", " ")
+                    .Replace("\n", " ")
+                    .Trim();
+
+                lines.Add(
+                    $"{task.LogName} ｜ {task.Status} ｜ {task.Outcome}"
+                    + (error.Length > 0 ? $" ｜ {error}" : string.Empty));
+            }
+
             lines.Add("================ 以下是日志正文 ================");
 
             return lines;

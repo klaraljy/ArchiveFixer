@@ -367,9 +367,9 @@ namespace ArchiveFixer.Models
         {
             return RestHandlingModes.Normalize(mode) switch
             {
-                // ⚠ 2026-10-15：「移入回收站」那一档整条下线（详见 RestHandlingModes 的说明）。
-                RestHandlingModes.Delete => "彻底删除（直接省空间，不可恢复）",
-                _ => "不动其余物（默认）"
+                // 只作用于失败 / 部分完成时链停下那一层要解的包。
+                RestHandlingModes.Delete => "彻底删除最后一层过程物（仅失败 / 部分完成，不可恢复）",
+                _ => "留下最后一层过程物（仅失败 / 部分完成，默认）"
             };
         }
 

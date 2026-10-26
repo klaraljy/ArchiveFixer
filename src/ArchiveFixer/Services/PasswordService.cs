@@ -420,6 +420,19 @@ namespace ArchiveFixer.Services
                 return false;
             }
 
+            /*
+             * 生产入口把内置 passwords.txt 当主存储；它没有“已记住的外部密码本路径”，
+             * 所以不能只查 _bookValuesByPath，否则手动密码明明已落盘，列表仍永远显示
+             * 「手动添加 · 未写回」。内置文本存储也必须算“已经写回”。
+             */
+            if (UseTextStore
+                && TextStore.Exists
+                && TextStore.TryLoad(out List<string> textValues, out _)
+                && textValues.Contains(value, StringComparer.Ordinal))
+            {
+                return true;
+            }
+
             foreach (string path in _bookPaths)
             {
                 if (_bookValuesByPath.TryGetValue(path, out HashSet<string>? known) && known.Contains(value))
