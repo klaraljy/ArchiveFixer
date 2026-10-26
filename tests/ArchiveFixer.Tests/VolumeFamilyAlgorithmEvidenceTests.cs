@@ -223,6 +223,65 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 组分析_七z自述片数与实收不一致_候选层也不能报缺片()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "af-group-7z-evidence-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            string first = Path.Combine(root, "P53-8.7z.001");
+            string second = Path.Combine(root, "P53-8.7z.002");
+
+            try
+            {
+                File.WriteAllText(first, "1");
+                File.WriteAllText(second, "2");
+
+                var firstHandoff = Handoff(first, "P53-8", VolumeContentFormat.SevenZip, 1, true);
+                firstHandoff = new VolumeHandoffEntry
+                {
+                    Path = firstHandoff.Path,
+                    BaseName = firstHandoff.BaseName,
+                    Format = firstHandoff.Format,
+                    Size = firstHandoff.Size,
+                    BodyKind = firstHandoff.BodyKind,
+                    VolumeNumber = 1,
+                    FirstVolumeFlag = true,
+                    Membership = firstHandoff.Membership,
+                    ContentFail = firstHandoff.ContentFail,
+                    DeclaredVolumeCount = 138,
+                    DeclaredTotalBytes = 138L * 1024 * 1024 * 1024,
+                    SourceLayer = firstHandoff.SourceLayer,
+                    Source = firstHandoff.Source
+                };
+
+                List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(
+                    new[]
+                    {
+                        firstHandoff,
+                        Handoff(second, "P53-8", VolumeContentFormat.SevenZip, 2, false)
+                    },
+                    new[] { root });
+
+                GroupAnalysis.GroupCandidate group = Assert.Single(groups);
+                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, group.Verdict);
+                Assert.DoesNotContain("缺", group.Describe(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private static VolumeHandoffEntry Handoff(
             string path,
             string baseName,

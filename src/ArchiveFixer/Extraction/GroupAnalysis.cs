@@ -688,6 +688,33 @@ namespace ArchiveFixer.Extraction
                     ?.Path ?? string.Empty;
             }
 
+            /*
+             * 7z 的中间片内容里没有卷号；首卷自述片数/整包字节与实收对不上时，
+             * 只能证明“自述与实收不一致”，不能把自述片数减实收片数写成缺卷清单。
+             * 这一档在候选层也必须是 Unknown；最终完整性仍由 SevenZipFamilyAlgorithm 回答。
+             */
+            if (format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
+                && (declaredPieceCount > 0
+                    && (items.Count != declaredPieceCount
+                        || (declaredTotalBytes > 0 && receivedBytes != declaredTotalBytes))))
+            {
+                return new GroupCandidate
+                {
+                    BaseName = baseName,
+                    Format = format,
+                    Pieces = ordered.Select(item => item.Path).ToList(),
+                    EntryPath = entry,
+                    Verdict = GroupAnalysisVerdict.Unknown,
+                    MissingNumbers = Array.Empty<int>(),
+                    DeclaredPieceCount = declaredPieceCount,
+                    ReceivedPieceCount = items.Count,
+                    DeclaredTotalBytes = declaredTotalBytes,
+                    ReceivedBytes = receivedBytes,
+                    Evidence = $"{evidenceSource}自述 {declaredPieceCount} 片 / 整包 {declaredTotalBytes} 字节，"
+                        + $"实收 {items.Count} 片 / {receivedBytes} 字节 ⇒ 判不出，不能证明具体少哪几片"
+                };
+            }
+
             return new GroupCandidate
             {
                 BaseName = baseName,
