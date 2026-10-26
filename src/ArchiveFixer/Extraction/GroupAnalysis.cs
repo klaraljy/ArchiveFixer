@@ -256,10 +256,12 @@ namespace ArchiveFixer.Extraction
                 int index = groups.IndexOf(target);
                 groups[index] = enriched;
 
-                // 候选自己那一组如果只装着这一片，已经被合并进目标组，去掉重复组。
+                // 候选自己那一组如果整组都已经被并进目标组，去掉重复组。
                 groups.RemoveAll(group => !ReferenceEquals(group, enriched)
-                    && group.Pieces.Count == 1
-                    && string.Equals(group.Pieces[0], entry.Path, StringComparison.OrdinalIgnoreCase));
+                    && group.Pieces.Count > 0
+                    && group.Pieces.All(piece => enriched.Pieces.Contains(
+                        piece,
+                        StringComparer.OrdinalIgnoreCase)));
             }
         }
 
