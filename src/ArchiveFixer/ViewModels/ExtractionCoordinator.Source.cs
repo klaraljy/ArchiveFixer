@@ -1091,16 +1091,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 上溯的**上界 = 这一批的目标根**（`Settings.CustomOutputDirectory`，落点"每个包自己旁边"时为空）。
-             *
-             * ⚠ 为什么必须有这个上界（2026-10-03 实测踩过）：只按"最多上溯 3 层"爬，
-             * 浅形状（候选就在 `<目标根>\<包名>\` 里）会爬到**目标根之上**——测试机上那里躺着
-             * 造样本的脚手架目录（`mangle-inner-inner.7删除z\inner.7删除z`，基名同样是 `inner`），
-             * 于是闸门把一次**合法的**逐层回收误拦下来（既有用例 `InnerLayerContinuationTests.彻底删除档_链尾把内层包连其余物一起删掉` 当场变红）。
-             * 真机上那里可能是用户的**源目录**（原件还在），一样会误拦。
+             * 上溯的**上界 = 这一次真正允许看的那棵树**：
+             * · 「未指定位置」= 用户选中的文件夹（选单个文件时 = 文件所在目录）；
+             * · 「指定位置」= 用户指定的成品根。
+             * ⛔ 不再无条件拿 Settings.CustomOutputDirectory 当边界 —— 那一格在「未指定位置」时可能
+             * 是上一次留下的旧地址（真机 2026-10-26：旧值是 `H:\BaiduNetdiskDownload\大测试-...`，
+             * 而这一批实际在 `H:\BaiduNetdiskDownload\666` ⇒ 候选被判成"在边界外" ⇒ 上溯到 H:\ ⇒ 整盘扫）。
              */
-            string batchRoot = SafePathHelper.GetFullPathSafe(Settings?.CustomOutputDirectory ?? string.Empty)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string batchRoot = ResolveSplitGateScanBoundary(task);
 
             /*
              * 每个候选沿祖先链上溯。
@@ -1113,17 +1111,10 @@ namespace ArchiveFixer.ViewModels
              * ⇒ 判成"不是半套" ⇒ **放行 = 不可逆删除**（用例 `ChainLayerReclaimTests.用例H2` 钉的就是它：
              * 加回 3 层上限时那一组三卷当场被删光）。
              *
-             * 改法：候选**落在这一批的目标根里面**时，从它自己那一层一路上溯，**直到目标根为止**（含），
-             * 不再有层数上限。⛔ 两条界一个字都没动：**目标根**（不许爬进用户源目录的那一脚）与
-             * **盘根**（循环的绝对兜底，见下面 `parent == current` 那个 `break`）。
-             *
-             * ⚠ 候选**不在**目标根里面时仍按老口径最多上溯 `SplitGateAncestorLevels` 层，一个字不改：
-             * `Settings.CustomOutputDirectory` 并不总是"这一批的目标根" —— 「未指定位置」档只关开关、
-             * **不清这个字段**（`MainViewModel.SaveOneClickOptionsAsDefaults` 只在"指定位置"那两档里写它），
-             * 所以它可能是一份**上一次留下的旧地址**，而最外层**源包**那个候选本来就在源目录里、不在它里面。
-             * 这一档若顺着盘符一路爬到盘根，`DescribeBlockerForCandidates` 就会把 `C:\Users\…` 这种整棵巨树
-             * 扫一遍 —— 扫不动 ⇒ 判据兜底成"拦下" ⇒ 逐层回收**整体失效**，而扫到的全是对不上本批的东西。
-             * 多扫只该多拦，不该把功能扫死。
+             * 改法：候选**落在这一批的边界里面**时，从它自己那一层一路上溯，**直到边界为止**（含），
+             * 不再有层数上限。⛔ 候选**不在边界里面**时，只允许看它自己所在的那一层 ——
+             * 绝不顺着父目录爬到用户的上一层/盘根（2026-10-26 用户逐字：扫描范围只限于选中的文件夹
+             * 或指定的成品位置，其他地方没有资格动手）。
              */
             foreach (string candidate in candidates)
             {
@@ -1142,7 +1133,16 @@ namespace ArchiveFixer.ViewModels
                     if (batchRoot.Length > 0 &&
                         string.Equals(current, batchRoot, StringComparison.OrdinalIgnoreCase))
                     {
-                        break;   // 到这一批的目标根了，再往上就不是本次产出的地盘
+                        break;   // 到允许看的边界了，再往上不是本次的地盘
+                    }
+
+                    /*
+                     * 边界外 / 没有边界：只保留候选自己那一层，绝不上溯。
+                     * 同组片一定和候选在同一层（或选中文件夹的子目录里）；上溯只会扫到用户别的目录。
+                     */
+                    if (!insideBatchRoot || batchRoot.Length == 0)
+                    {
+                        break;
                     }
 
                     string? parent = Path.GetDirectoryName(current);
@@ -1151,11 +1151,6 @@ namespace ArchiveFixer.ViewModels
                         string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
                     {
                         break;   // 到盘根了（绝对兜底）
-                    }
-
-                    if (!insideBatchRoot && level + 1 >= SplitGateAncestorLevels)
-                    {
-                        break;   // 不在目标根里面 ⇒ 老口径：候选那一层 + 往上两层
                     }
 
                     directory = parent;
@@ -1180,22 +1175,54 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 候选**不在这一批的目标根里面**时，每个候选沿祖先链最多上溯几层（含它自己所在那一层）。
+        /// 「半套分卷」闸门允许看的**唯一一棵树**。
         ///
-        /// <para>⚠ 2026-10-03 第三轮起，这个数**只管"候选不在目标根里面"那一档**（典型：最外层**源包**自己，
-        /// 它就躺在用户的源目录里，而 `Settings.CustomOutputDirectory` 记的是别处的落点，甚至是一份旧地址）。
-        /// 候选落在目标根里面时**不再有层数上限** —— 一路上溯到目标根为止（用户批准的原话：
-        /// 「①（上界）取消 3 层上限」；漏的形状与用例见 <see cref="EnumerateSplitGateArtifactRoots"/> 里那段说明）。</para>
-        ///
-        /// <para>这一档取 3 = 候选自己那一层 + 往上两层：源包那一组卷都摆在源目录这一层（或它的子目录里），
-        /// 而真机上再往上就是用户的私人目录 —— 顺着盘符一路爬到盘根只会把整棵巨树扫一遍（扫不动就整体失效）。</para>
-        ///
-        /// <para>⛔ 这一档**不能**在"任务记下来的那几处"停下 —— 实测（2026-10-03）那几处
-        /// （`OutputPath` / `ContentDirectoryPath` / `ParentOutputDirectory`）在续解层上**就是那个太深的目录**
-        /// （`ParentOutputDirectory` 是"父任务交出来的落点"，`PathService.BuildOutputPath` 见到它就直接返回它，
-        /// 于是任务自己的输出目录 = 它），在它那儿停住等于又回到"只扫候选自己那一层"那个漏扫。</para>
+        /// <para>用户 2026-10-26 口径：选中文件夹时只能看这个文件夹里面；指定了解压位置时只能看那个位置。
+        /// ⛔ 不读「未指定位置」时那份可能已经过期的 <see cref="AppSettings.CustomOutputDirectory"/> ——
+        /// 旧代码就是拿它当边界，候选被判到边界外后上溯到 H:\，整盘扫到 UI 卡死。</para>
         /// </summary>
-        private const int SplitGateAncestorLevels = 3;
+        private string ResolveSplitGateScanBoundary(ArchiveTask task)
+        {
+            string Normalize(string? path) => SafePathHelper.GetFullPathSafe(path ?? string.Empty)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            bool customPlacement = Settings != null && !Settings.ExtractToOriginalDirectory;
+
+            if (customPlacement)
+            {
+                string customRoot = Normalize(Settings?.CustomOutputDirectory);
+
+                if (customRoot.Length > 0)
+                {
+                    return customRoot;
+                }
+
+                string? actualOutput = task.OutputPath;
+                string actualRoot = Normalize(actualOutput);
+
+                if (actualRoot.Length > 0)
+                {
+                    return actualRoot;
+                }
+            }
+
+            /*
+             * 「未指定位置」（默认）：用户选中的文件夹就是扫描边界。
+             * 选的是单个文件时，只看这个文件所在目录。
+             */
+            if (task.SourceSelectionKind == SourceSelectionKind.Folder
+                && !string.IsNullOrWhiteSpace(task.SourceSelectionRoot))
+            {
+                string selectedRoot = Normalize(task.SourceSelectionRoot);
+
+                if (selectedRoot.Length > 0 && Directory.Exists(selectedRoot))
+                {
+                    return selectedRoot;
+                }
+            }
+
+            return Normalize(Path.GetDirectoryName(task.CurrentPath));
+        }
 
         /// <summary>
         /// 删源包的执行体（<see cref="SourceCleanupService"/> 的实例持有者）。
