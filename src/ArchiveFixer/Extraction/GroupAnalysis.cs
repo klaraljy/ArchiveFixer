@@ -273,6 +273,57 @@ namespace ArchiveFixer.Extraction
             ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path);
 
         /// <summary>
+        /// 同目录里这一族是否**恰好只有一个**内容首卷。只有一个 ⇒ 可以用内容卡收兄弟片；
+        /// 多个 ⇒ 名字仍是必要的歧义消解，不能绕基名。
+        /// </summary>
+        private static bool HasSingleContentFirstInDirectory(
+            string? directory,
+            ArchiveFixer.Detection.VolumeContentFormat format)
+        {
+            if (string.IsNullOrWhiteSpace(directory)
+                || format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                || !Directory.Exists(directory))
+            {
+                return false;
+            }
+
+            int firsts = 0;
+
+            try
+            {
+                foreach (string path in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    ArchiveFixer.Detection.FileNatureCard card;
+
+                    try
+                    {
+                        card = ArchiveFixer.Detection.FileNature.Inspect(path);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (card.Format != format)
+                    {
+                        continue;
+                    }
+
+                    if (card.FirstVolumeFlag || card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece)
+                    {
+                        firsts++;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return firsts == 1;
+        }
+
+        /// <summary>
         /// 在扫描根里收"同基名、同内容族"的片（全树，去重按物理身份）。
         /// 内容族未知的片允许补位；已证实的异族片绝不并进这一组。
         /// </summary>
@@ -312,6 +363,13 @@ namespace ArchiveFixer.Extraction
                 scanRoots.Add(seedDirectory);
             }
 
+            /*
+             * 同目录里**只有一个内容首卷**的同族候选，可以绕过“同基名”入场：
+             * 内容卡已经证明它们属于这一族，名字只用于显示/规范名。
+             * 同目录出现多个首卷 ⇒ 名字仍是必要的歧义消解，回退同基名收片。
+             */
+            bool contentGrouping = HasSingleContentFirstInDirectory(seedDirectory, seedFormat);
+
             IEnumerable<string> source = scanRoots
                 .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -325,15 +383,38 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                if (!string.Equals(
-                        ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path),
-                        baseName,
-                        StringComparison.OrdinalIgnoreCase))
+                bool sameBase = string.Equals(
+                    ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path),
+                    baseName,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (!sameBase)
                 {
-                    continue;
+                    if (!contentGrouping || seedFormat == ArchiveFixer.Detection.VolumeContentFormat.Unknown)
+                    {
+                        continue;
+                    }
+
+                    ArchiveFixer.Detection.FileNatureCard contentCard;
+
+                    try
+                    {
+                        contentCard = ArchiveFixer.Detection.FileNature.Inspect(path);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (contentCard.Format != seedFormat
+                        || contentCard.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                    {
+                        continue;
+                    }
                 }
 
                 if (!seedHasVolumeMarker
+                    && !contentGrouping
                     && !ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
                 {
                     continue;
