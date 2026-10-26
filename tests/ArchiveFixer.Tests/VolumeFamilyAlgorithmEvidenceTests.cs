@@ -124,6 +124,76 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 组分析_内容卡证明第2卷但基名不同_按缺号补进唯一组()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "af-group-content-fill-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            string part1 = Path.Combine(root, "9953.part1.rar");
+            string part2 = Path.Combine(root, "other.part2.b2");
+            string part3 = Path.Combine(root, "9953.part3.c3");
+
+            try
+            {
+                File.WriteAllText(part1, "1");
+                File.WriteAllText(part2, "2");
+                File.WriteAllText(part3, "3");
+
+                var handoffs = new List<VolumeHandoffEntry>
+                {
+                    Handoff(part1, baseName: "9953", VolumeContentFormat.Rar, number: 1, first: true),
+                    Handoff(part2, baseName: "other", VolumeContentFormat.Rar, number: 2, first: false),
+                    Handoff(part3, baseName: "9953", VolumeContentFormat.Rar, number: 3, first: false)
+                };
+
+                List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(
+                    handoffs,
+                    new[] { root });
+
+                GroupAnalysis.GroupCandidate group = Assert.Single(
+                    groups,
+                    candidate => candidate.BaseName == "9953");
+                Assert.Equal(3, group.Pieces.Count);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static VolumeHandoffEntry Handoff(
+            string path,
+            string baseName,
+            VolumeContentFormat format,
+            int number,
+            bool first)
+        {
+            return new VolumeHandoffEntry
+            {
+                Path = path,
+                BaseName = baseName,
+                Format = format,
+                Size = 1,
+                BodyKind = first ? ArchiveBodyKind.VolumeFirstPiece : ArchiveBodyKind.VolumePiece,
+                VolumeNumber = number,
+                FirstVolumeFlag = first,
+                Membership = VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                ContentFail = VolumeNumberFail.None,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                Source = VolumeHandoffSource.ChainProduced
+            };
+        }
+
         private static GroupPieceFact Piece(
             string path,
             long size,

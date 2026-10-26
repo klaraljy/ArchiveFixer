@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
 {
@@ -180,7 +181,79 @@ namespace ArchiveFixer.Extraction
                 result.Add(Evaluate(baseName, pieces, handoffByPath));
             }
 
+            EnrichGroupsWithContentMembers(result, handoffByPath);
+
             return result;
+        }
+
+        /// <summary>
+        /// 内容卡补位：基名先分候选组之后，再把“内容已证明是这一族某卷、但名字/基名没进组”的片
+        /// 按**缺卷号**补进唯一匹配的组。名字在这里只用于“同目录歧义消解”，不再作为入场券。
+        ///
+        /// <para>只补能证明的缺口：候选必须是 VolumeMember，卷号非空，且目标组当前正好缺这个号；
+        /// 同目录同族有多个组同时缺这个号 ⇒ 判不出，不补。</para>
+        /// </summary>
+        private static void EnrichGroupsWithContentMembers(
+            List<GroupCandidate> groups,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+        {
+            if (handoffByPath == null || handoffByPath.Count == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in handoffByPath.Values)
+            {
+                if (entry == null
+                    || string.IsNullOrWhiteSpace(entry.Path)
+                    || !File.Exists(entry.Path)
+                    || entry.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    || entry.VolumeNumber is not int number
+                    || number < 1)
+                {
+                    continue;
+                }
+
+                string directory = SafePathHelper.GetFullPathSafe(entry.SourceLayer);
+
+                if (directory.Length == 0)
+                {
+                    directory = SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(entry.Path) ?? string.Empty);
+                }
+
+                List<GroupCandidate> targets = groups
+                    .Where(group => group.Format == entry.Format
+                        && string.Equals(
+                            SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(group.EntryPath) ?? string.Empty),
+                            directory,
+                            StringComparison.OrdinalIgnoreCase)
+                        && group.MissingNumbers.Contains(number))
+                    .ToList();
+
+                if (targets.Count != 1)
+                {
+                    continue;
+                }
+
+                GroupCandidate target = targets[0];
+                var pieces = new List<string>(target.Pieces);
+
+                if (pieces.Any(path => string.Equals(path, entry.Path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                pieces.Add(entry.Path);
+                GroupCandidate enriched = Evaluate(target.BaseName, pieces, handoffByPath);
+
+                int index = groups.IndexOf(target);
+                groups[index] = enriched;
+
+                // 候选自己那一组如果只装着这一片，已经被合并进目标组，去掉重复组。
+                groups.RemoveAll(group => !ReferenceEquals(group, enriched)
+                    && group.Pieces.Count == 1
+                    && string.Equals(group.Pieces[0], entry.Path, StringComparison.OrdinalIgnoreCase));
+            }
         }
 
         /// <summary>
