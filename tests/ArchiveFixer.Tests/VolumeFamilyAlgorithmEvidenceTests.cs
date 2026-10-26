@@ -171,6 +171,58 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 组分析_同目录两个组都缺同一个号_内容卡不补_防混组()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "af-group-ambiguous-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            string a1 = Path.Combine(root, "aaa.part1.rar");
+            string a3 = Path.Combine(root, "aaa.part3.c3");
+            string b1 = Path.Combine(root, "bbb.part1.rar");
+            string b3 = Path.Combine(root, "bbb.part3.c3");
+            string other2 = Path.Combine(root, "other.part2.b2");
+
+            try
+            {
+                File.WriteAllText(a1, "a1");
+                File.WriteAllText(a3, "a3");
+                File.WriteAllText(b1, "b1");
+                File.WriteAllText(b3, "b3");
+                File.WriteAllText(other2, "o2");
+
+                var handoffs = new List<VolumeHandoffEntry>
+                {
+                    Handoff(a1, "aaa", VolumeContentFormat.Rar, 1, true),
+                    Handoff(a3, "aaa", VolumeContentFormat.Rar, 3, false),
+                    Handoff(b1, "bbb", VolumeContentFormat.Rar, 1, true),
+                    Handoff(b3, "bbb", VolumeContentFormat.Rar, 3, false),
+                    Handoff(other2, "other", VolumeContentFormat.Rar, 2, false)
+                };
+
+                List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(
+                    handoffs,
+                    new[] { root });
+
+                Assert.Equal(2, groups.Single(group => group.BaseName == "aaa").Pieces.Count);
+                Assert.Equal(2, groups.Single(group => group.BaseName == "bbb").Pieces.Count);
+                Assert.Single(groups.Single(group => group.BaseName == "other").Pieces);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private static VolumeHandoffEntry Handoff(
             string path,
             string baseName,
