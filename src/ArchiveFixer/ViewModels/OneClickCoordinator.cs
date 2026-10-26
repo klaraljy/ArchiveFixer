@@ -1430,12 +1430,15 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         /*
-                         * 未接线/未建组的族：交界处仍按“候选必须 Complete”兜底，
-                         * 不允许把“候选 Missing/Unknown”的组交给旧路径。
+                         * 最终结论只认 VolumeGroupService + 族算法；GroupAnalysis 的 Verdict
+                         * 只是候选建议，不能拿来给未建组的候选兜底放行。
                          */
-                        if (committedUnit == null
-                            && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
+                        if (committedUnit == null)
                         {
+                            AppendLog(
+                                "WARN",
+                                $"[第二大步·组] {group.BaseName}：族算法没有建组"
+                                + $"（候选建议={group.SuggestedVerdict}）⇒ 不点名、不链接。");
                             continue;
                         }
 

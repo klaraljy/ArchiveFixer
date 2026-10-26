@@ -566,7 +566,7 @@ namespace ArchiveFixer.ViewModels
             foreach (ArchiveFixer.Extraction.GroupAnalysis.GroupCandidate group in groups)
             {
                 if (group == null
-                    || group.Verdict != ArchiveFixer.Extraction.GroupAnalysis.GroupAnalysisVerdict.Complete
+                    || group.SuggestedVerdict != ArchiveFixer.Extraction.GroupAnalysis.GroupAnalysisVerdict.Complete
                     || string.IsNullOrWhiteSpace(group.EntryPath))
                 {
                     continue;

@@ -104,18 +104,8 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 已接线的族：**由族算法判完整性**，候选日志只是建议（交界处不再当判据）。
-             * 未接线的族：仍按“候选必须 Complete”走 P0 行为，避免把未验证的组放进来。
+             * 已接线的族：**由族算法判完整性**；GroupAnalysis 的候选建议不参与最终结论。
              */
-            bool familyWired = family is VolumeNamingFamily.RarPart
-                or VolumeNamingFamily.ZipSpanned
-                or VolumeNamingFamily.ZipNumbered
-                or VolumeNamingFamily.SevenZipNumbered;
-
-            if (!familyWired && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
-            {
-                return null;
-            }
 
             string? ownerName = ownerTask == null
                 ? null

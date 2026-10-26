@@ -47,7 +47,14 @@ namespace ArchiveFixer.Extraction
 
             public string EntryPath { get; init; } = string.Empty;
 
-            public GroupAnalysisVerdict Verdict { get; init; }
+            /// <summary>
+            /// 候选建议，不是最终结论；⛔ 第二大步的完整性/缺片/规范名只认
+            /// <see cref="VolumeGroupService"/> + 族算法。保留 <see cref="Verdict"/> 只做旧调用兼容。
+            /// </summary>
+            public GroupAnalysisVerdict SuggestedVerdict { get; init; }
+
+            /// <summary>兼容旧调用：等价于 <see cref="SuggestedVerdict"/>；⛔ 不许当最终判据。</summary>
+            public GroupAnalysisVerdict Verdict => SuggestedVerdict;
 
             public string Evidence { get; init; } = string.Empty;
 
@@ -502,7 +509,7 @@ namespace ArchiveFixer.Extraction
                         .Select(item => item.Path)
                         .ToList(),
                     EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
-                    Verdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
+                    SuggestedVerdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -537,7 +544,7 @@ namespace ArchiveFixer.Extraction
                 Format = format,
                 Pieces = bySize.Select(item => item.Path).ToList(),
                 EntryPath = string.Empty,
-                Verdict = GroupAnalysisVerdict.Unknown,
+                SuggestedVerdict = GroupAnalysisVerdict.Unknown,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,
                 DeclaredTotalBytes = declaredTotalBytes,
@@ -704,7 +711,7 @@ namespace ArchiveFixer.Extraction
                     Format = format,
                     Pieces = ordered.Select(item => item.Path).ToList(),
                     EntryPath = entry,
-                    Verdict = GroupAnalysisVerdict.Unknown,
+                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -721,7 +728,7 @@ namespace ArchiveFixer.Extraction
                 Format = format,
                 Pieces = ordered.Select(item => item.Path).ToList(),
                 EntryPath = entry,
-                Verdict = contiguous ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
+                SuggestedVerdict = contiguous ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
                 MissingNumbers = missing,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,
