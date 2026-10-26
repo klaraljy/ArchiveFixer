@@ -415,6 +415,17 @@ namespace ArchiveFixer.Extraction
                         "源包路径里没有目录部分，无法判断\"当前目录\"");
                 }
 
+                /*
+                 * 用户可以从其余物/工作区里再次导入源包；那一层只是输入位置，
+                 * 产物不能再写回去（下一次清理会把那棵树当过程物删掉）。
+                 */
+                string visibleDirectory = ProcessArtifactLayout.LiftOutOfProcessArtifactDirectory(sourceDirectory);
+
+                if (!string.IsNullOrWhiteSpace(visibleDirectory))
+                {
+                    sourceDirectory = visibleDirectory;
+                }
+
                 return new OutputPlacementResult
                 {
                     Success = true,

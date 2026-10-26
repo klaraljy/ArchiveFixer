@@ -297,6 +297,68 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 把“程序自己会整份删掉”的目录段从**落点根**里剥掉，返回用户真正看得见的那一层。
+        ///
+        /// <para>用户可以从 `其余物` 里再次导入源包；那一层只是输入位置，**产物不能继续写回
+        /// `其余物` / `过程物` / 工作区**（下一批成功清理会把它们当过程物删掉）。</para>
+        /// </summary>
+        public static string LiftOutOfProcessArtifactDirectory(string? directory)
+        {
+            string full = SafePathHelper.GetFullPathSafe(directory);
+
+            if (full.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string root = Path.GetPathRoot(full) ?? string.Empty;
+                string[] segments = full[root.Length..]
+                    .Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+                for (int index = segments.Length - 1; index >= 0; index--)
+                {
+                    if (!string.Equals(segments[index], ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(segments[index], LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(segments[index], Detection.VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    bool isWorkspace =
+                        string.Equals(segments[index], Detection.VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase);
+
+                    if (isWorkspace)
+                    {
+                        return index == 0
+                            ? root
+                            : Path.Combine(root, Path.Combine(segments[..index]));
+                    }
+
+                    if (index == 0)
+                    {
+                        return segments.Length == 1
+                            ? root
+                            : Path.Combine(root, Path.Combine(segments[(index + 1)..]));
+                    }
+
+                    string[] visible = segments.Take(index)
+                        .Concat(segments.Skip(index + 1))
+                        .ToArray();
+
+                    return Path.Combine(root, Path.Combine(visible));
+                }
+            }
+            catch
+            {
+                // 判不出就原样返回：宁可保持旧落点，也不静默换到别处。
+            }
+
+            return full;
+        }
+
+        /// <summary>
         /// 给定目标目录 → 其余物目录的完整路径（<c>D\其余物</c>）。
         /// 目标目录为空时返回空串（不抛异常：规划阶段拿不到目标目录是调用方的常见状态）。
         ///

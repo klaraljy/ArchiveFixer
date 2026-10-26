@@ -19,7 +19,35 @@ namespace ArchiveFixer.Tests
         private static readonly Func<string, bool> DriveMissing = _ => false;
 
         /// <summary>
-        /// **落点目录不许等于源文件自己**（用户 2026-10-11 大测试 run-8888 实测：一整批因此不开工）。
+        /// 用户从其余物/工作区再次导入源包时，产物不许写回那些“程序会整份删掉”的目录：
+        /// 落点根要抬到其余物/工作区段之前（2026-10-26 真机 9953 位置放错）。
+        /// </summary>
+        [Theory]
+        [InlineData(@"C:\x\其余物\9953.part1.rar", @"C:\x\9953")]
+        [InlineData(@"C:\x\过程物\9953.part1.rar", @"C:\x\9953")]
+        [InlineData(@"C:\x\.ArchiveFixer.work\stage\9953.part1.rar", @"C:\x\9953")]
+        [InlineData(@"C:\x\normal\9953.part1.rar", @"C:\x\normal\9953")]
+        public void 落点根_从其余物或工作区抬到用户可见层(string source, string expected)
+        {
+            OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
+                source,
+                OutputPlacementMode.PerArchiveSubfolder);
+
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(expected, result.DestinationDirectory, ignoreCase: true);
+        }
+
+        [Theory]
+        [InlineData(@"C:\x\其余物", @"C:\x")]
+        [InlineData(@"C:\x\其余物\9953", @"C:\x\9953")]
+        [InlineData(@"C:\x\.ArchiveFixer.work", @"C:\x")]
+        [InlineData(@"C:\x\normal", @"C:\x\normal")]
+        public void 可见层_只剥程序自己会删除的目录段(string directory, string expected)
+        {
+            Assert.Equal(expected, ProcessArtifactLayout.LiftOutOfProcessArtifactDirectory(directory), ignoreCase: true);
+        }
+
+        /// <summary>
         ///
         /// <para>现场：就地档 + 源包 `…\8888\bbb\bbb-L4.zip删除` ⇒ 包基名按名字尺子算出来**就是整个文件名**
         /// （那一档刻意不归一"粘在归档后缀上的垃圾"，`ArchiveBaseNameTests` 逐格钉着）⇒
