@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using Xunit;
@@ -80,6 +81,47 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
             Assert.DoesNotContain("缺片", result.Evidence, System.StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 组分析候选_扫描根没覆盖种子目录_仍要收同目录内容片()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "af-group-seed-dir-" + System.Guid.NewGuid().ToString("N"));
+
+            string other = Path.Combine(root, "other");
+            string seedDir = Path.Combine(root, "rest");
+            Directory.CreateDirectory(other);
+            Directory.CreateDirectory(seedDir);
+
+            string seed = Path.Combine(seedDir, "9953.part1.rar");
+            string part2 = Path.Combine(seedDir, "9953.part2.b2");
+            string part3 = Path.Combine(seedDir, "9953.part3.c3");
+
+            try
+            {
+                File.WriteAllText(seed, "x");
+                File.WriteAllText(part2, "y");
+                File.WriteAllText(part3, "z");
+
+                List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(
+                    new[] { seed },
+                    new[] { other });
+
+                GroupAnalysis.GroupCandidate group = Assert.Single(groups);
+                Assert.Equal(3, group.Pieces.Count);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
         }
 
         private static GroupPieceFact Piece(

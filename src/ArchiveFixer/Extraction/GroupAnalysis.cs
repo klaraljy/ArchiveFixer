@@ -217,9 +217,23 @@ namespace ArchiveFixer.Extraction
                     + ":" + seedIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
-            IEnumerable<string> source = roots.Count == 0
-                ? Directory.EnumerateFiles(Path.GetDirectoryName(seed) ?? ".", "*", SearchOption.TopDirectoryOnly)
-                : roots.SelectMany(root => SafeEnumerate(root));
+            /*
+             * 种子自己所在目录**永远要扫**：组分析不能因为调用方传进来的 roots 没覆盖到
+             * 它这一层（例如同目录、不同产出层的兄弟片）就把同组片漏在候选池外。
+             * roots 仍然保留，用于跨目录收片；这里只补上 seed 的物理目录。
+             */
+            var scanRoots = new List<string>(roots);
+            string? seedDirectory = Path.GetDirectoryName(seed);
+
+            if (!string.IsNullOrWhiteSpace(seedDirectory))
+            {
+                scanRoots.Add(seedDirectory);
+            }
+
+            IEnumerable<string> source = scanRoots
+                .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(root => SafeEnumerate(root));
 
             foreach (string path in source)
             {
