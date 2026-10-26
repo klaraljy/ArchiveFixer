@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
@@ -23,6 +25,49 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>批首清账（与交接账同一处调用）。</summary>
         internal void ResetVolumeGroupService() => _volumeGroupService.Reset();
+
+        /// <summary>
+        /// 第二大步建组前的**试开顺序**：只对内容能定末片的族（通用分片 / 跨盘 ZIP）跑
+        /// <see cref="ProbeGatherGroupAsync"/>，赢的顺序作为 <see cref="VolumeGroupUnit.ConfirmedOrder"/>
+        /// 交给族算法；试不开/不适用 ⇒ 照旧不带顺序建组，由族算法判 Unknown。
+        /// </summary>
+        internal async Task<VolumeGroupUnit?> TryCommitVolumeGroupAsync(
+            GroupAnalysis.GroupCandidate? group,
+            ArchiveTask? ownerTask,
+            string? entryLayer,
+            CancellationToken cancellationToken = default)
+        {
+            if (group == null
+                || string.IsNullOrWhiteSpace(entryLayer)
+                || group.Pieces.Count < 2)
+            {
+                return TryCommitVolumeGroup(group, ownerTask, entryLayer);
+            }
+
+            GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
+                    group.Pieces,
+                    group.Pieces,
+                    entryLayer,
+                    group.EntryPath,
+                    group.BaseName,
+                    allowFallback: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            IReadOnlyList<string>? confirmedOrder = probe.Confirmed && probe.OrderedPieces.Count > 0
+                ? probe.OrderedPieces
+                : null;
+
+            if (probe.Confirmed)
+            {
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·组] {group.BaseName}：试开确认顺序 {confirmedOrder!.Count} 片"
+                    + $"（{probe.Reason}）⇒ 交给族算法");
+            }
+
+            return TryCommitVolumeGroup(group, ownerTask, entryLayer, confirmedOrder);
+        }
 
         /// <summary>
         /// **交界处 → 第二大步的唯一入口**：把一个“可证完整”的候选提交成 Unit。

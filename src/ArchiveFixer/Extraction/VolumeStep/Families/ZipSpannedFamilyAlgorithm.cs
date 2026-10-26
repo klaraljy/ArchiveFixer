@@ -102,6 +102,40 @@ namespace ArchiveFixer.Extraction
 
             int total = contentTotal.Value;
 
+            if (unit.ConfirmedOrder is { Count: > 0 } confirmedOrder
+                && confirmedOrder.Count == total)
+            {
+                var byPath = unit.Pieces.ToDictionary(
+                    piece => Path.GetFullPath(piece.Path),
+                    piece => piece,
+                    StringComparer.OrdinalIgnoreCase);
+
+                if (confirmedOrder
+                        .Select(Path.GetFullPath)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count() != total
+                    || confirmedOrder.Any(path => !byPath.ContainsKey(Path.GetFullPath(path))))
+                {
+                    return Unknown("跨盘 ZIP：试开确认顺序与片清单对不上 ⇒ 判不出");
+                }
+
+                List<GroupPieceFact> confirmed = confirmedOrder
+                    .Select(path => byPath[Path.GetFullPath(path)])
+                    .ToList();
+
+                if (!ReferenceEquals(confirmed[^1], zipPiece)
+                    || !confirmed[0].HasZipLocalHeader)
+                {
+                    return Unknown("跨盘 ZIP：试开确认顺序与“首片本地头 / 末片 .zip”对不上 ⇒ 判不出");
+                }
+
+                named = confirmed
+                    .Take(total - 1)
+                    .Select((piece, index) => (piece, index + 1))
+                    .ToList();
+                unnamed.Clear();
+            }
+
             List<int> indices = named
                 .Select(item => item.Index)
                 .OrderBy(index => index)

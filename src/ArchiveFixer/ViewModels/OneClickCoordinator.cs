@@ -1413,7 +1413,11 @@ namespace ArchiveFixer.ViewModels
                          * RAR 已接线；其它族未接线 ⇒ 保持 P0 行为（不判、不命名）。
                          */
                         ArchiveFixer.Extraction.VolumeGroupUnit? committedUnit =
-                            _extractionCoordinator.TryCommitVolumeGroup(group, entryTask, entryLayer);
+                            await _extractionCoordinator.TryCommitVolumeGroupAsync(
+                                group,
+                                entryTask,
+                                entryLayer)
+                                .ConfigureAwait(false);
 
                         if (committedUnit != null
                             && (committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing

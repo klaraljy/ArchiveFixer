@@ -338,6 +338,88 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 跨盘Zip_有试开确认顺序_两个无名中间片也按确认顺序()
+        {
+            string layer = Path.Combine(
+                Path.GetTempPath(),
+                "af-spanned-confirmed-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(layer);
+
+            string first = Path.Combine(layer, "a.bin");
+            string middle1 = Path.Combine(layer, "b.bin");
+            string middle2 = Path.Combine(layer, "c.bin");
+            string end = Path.Combine(layer, "组.zip");
+
+            try
+            {
+                File.WriteAllText(first, "1");
+                File.WriteAllText(middle1, "2");
+                File.WriteAllText(middle2, "3");
+                File.WriteAllText(end, "4");
+
+                var unit = new VolumeGroupUnit(
+                    "组",
+                    VolumeNamingFamily.ZipSpanned,
+                    layer,
+                    end)
+                {
+                    Pieces = new List<GroupPieceFact>
+                    {
+                        ZipSpannedPiece(first, first: true, end: false, total: 4),
+                        ZipSpannedPiece(middle1, first: false, end: false, total: 4),
+                        ZipSpannedPiece(middle2, first: false, end: false, total: 4),
+                        ZipSpannedPiece(end, first: false, end: true, total: 4)
+                    },
+                    ConfirmedOrder = new[] { first, middle1, middle2, end }
+                };
+
+                FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
+
+                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+                Assert.Equal(
+                    new[] { "组.z01", "组.z02", "组.z03", "组.zip" },
+                    result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(layer, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static GroupPieceFact ZipSpannedPiece(
+            string path,
+            bool first,
+            bool end,
+            int total)
+        {
+            return new GroupPieceFact(
+                path,
+                1,
+                VolumeContentFormat.Zip,
+                ArchiveBodyKind.VolumePiece,
+                end ? total : null,
+                first,
+                VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                VolumeNumberFail.None,
+                0,
+                end ? total : 0,
+                end ? total : null,
+                Path.GetDirectoryName(path) ?? string.Empty,
+                null,
+                FromHandoff: false,
+                HasZipEndRecord: end,
+                ZipEndRecordMeansSplit: end,
+                HasZipLocalHeader: first);
+        }
+
         private static GroupPieceFact ZipPiece(string path, bool first, bool end)
         {
             return new GroupPieceFact(
