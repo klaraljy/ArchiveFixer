@@ -123,8 +123,35 @@ namespace ArchiveFixer.Tests
         /// 真管线：一个 `.apk` 进任务表 ⇒ **不解压、产物一个字节都不写、源文件一个字节不动**、
         /// 终态「跳过」+ 那句人话。
         /// </summary>
+        [Fact]
+        public async Task 导入文件夹_真正的APK直接不进任务列表()
+        {
+            string folder = Path.Combine(_root, "folder-scan");
+            Directory.CreateDirectory(folder);
+
+            string apk = Path.Combine(folder, "安装包.apk");
+            WriteZip(apk, "AndroidManifest.xml", "classes.dex");
+
+            string normal = Path.Combine(folder, "普通包.zip");
+            WriteZip(normal, "readme.txt");
+
+            List<ArchiveTask> tasks = await new FileScanService().ScanPathsAsync(
+                new[] { folder },
+                new ScanOptions());
+
+            Assert.DoesNotContain(
+                tasks,
+                task => string.Equals(task.CurrentPath, apk, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                tasks,
+                task => string.Equals(task.CurrentPath, normal, StringComparison.OrdinalIgnoreCase));
+
+            // 只在列表里退出，磁盘上的 APK 一个字节都不动。
+            Assert.True(File.Exists(apk));
+        }
+
         [SevenZipFact]
-        public async Task 真管线_APK不被解开_源文件一个字节不动()
+        public async Task 真管线_APK在导入阶段直接不进任务列表_源文件一个字节不动()
         {
             RequireSevenZip();
 
@@ -137,32 +164,14 @@ namespace ArchiveFixer.Tests
             byte[] before = File.ReadAllBytes(apk);
             string beforeHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(before));
 
-            (MainViewModel vm, ExtractionCoordinator extraction, LogService logService) = BuildPipeline();
+            (MainViewModel vm, ExtractionCoordinator _, LogService _) = BuildPipeline();
 
             await vm.AddPathsAsync(new[] { apk });
 
-            ArchiveTask task = Assert.Single(
+            // ① 真正的 APK 在导入阶段就退出：完全不进任务列表。
+            Assert.DoesNotContain(
                 vm.Tasks,
                 item => item.CurrentPath.EndsWith("魔方.apk", StringComparison.Ordinal));
-
-            // 批量只跑勾选中的（与 ①页那颗勾选框同一件事）。
-            task.IsSelected = true;
-
-            await extraction.StartExtractAsync();
-
-            // 排障用：把这批日志原样打出来（先看清它到底走了哪条路，再谈判据）。
-            _output.WriteLine($"任务：状态={task.Status}｜终态={task.Outcome}｜勾选={task.IsSelected}｜错误={task.ErrorMessage}");
-            _output.WriteLine($"===== 本批日志（{logService.Logs.Count} 条）=====");
-
-            foreach (OperationLogItem entry in logService.Logs)
-            {
-                _output.WriteLine("  " + entry.DisplayText);
-            }
-
-            // ① 终态 = 跳过（不是失败、也不是成功），并且那句话说明白了为什么。
-            Assert.Equal(TaskOutcome.Skipped, task.Outcome);
-            Assert.Contains("Android 应用安装包", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("不解压", task.ErrorMessage, StringComparison.Ordinal);
 
             // ② 源文件一个字节不动（内容与名字都不动）。
             Assert.True(File.Exists(apk), "源文件必须还在原地");
@@ -178,11 +187,6 @@ namespace ArchiveFixer.Tests
                 .ToArray()!;
 
             Assert.Empty(leftovers);
-
-            // ④ 日志里那句 WARN 得在（成功任务只留一行，所以这一档必须写成 WARN 才看得见）。
-            Assert.Contains(
-                logService.Logs,
-                entry => entry.Level == "WARN" && entry.Message.Contains("Android 应用安装包", StringComparison.Ordinal));
         }
 
         // ================================================================ 真管线（递归层的内层包候选 = 第二条路）

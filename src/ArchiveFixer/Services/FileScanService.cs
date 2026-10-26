@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
@@ -123,6 +124,22 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 文件是不是真正的 Android 安装包（按内容判，`.apk` 后缀只是廉价的预筛）。
+        ///
+        /// <para>用户 2026-10-26：APK 不该进入处理列表 —— 它不是压缩包处理对象。
+        /// 判不出 / 读不动 ⇒ false（不拦），与 <see cref="AndroidPackageDetector"/> 同一口径。</para>
+        /// </summary>
+        private static bool IsRealApkFile(string filePath)
+        {
+            if (!string.Equals(Path.GetExtension(filePath), ".apk", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return AndroidPackageDetector.IsAndroidPackage(filePath);
+        }
+
+        /// <summary>
         /// 扫描单个文件。
         /// 如果符合扫描条件，返回 ArchiveTask。
         /// 否则返回 null。
@@ -145,6 +162,15 @@ namespace ArchiveFixer.Services
                 }
 
                 if (!ShouldIncludeFile(filePath, options))
+                {
+                    return null;
+                }
+
+                /*
+                 * 用户 2026-10-26：真正的 APK 直接退出，完全不进任务列表。
+                 * （直接选文件、选文件夹都走这里，所以两条入口都不再生成 APK 任务。）
+                 */
+                if (IsRealApkFile(filePath))
                 {
                     return null;
                 }
