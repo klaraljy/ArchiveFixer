@@ -442,6 +442,65 @@ namespace ArchiveFixer.Tests
                 HasZipLocalHeader: first);
         }
 
+        [Fact]
+        public void 七z_有试开确认顺序_名字不标准也按确认顺序()
+        {
+            string layer = Path.Combine(
+                Path.GetTempPath(),
+                "af-7z-confirmed-" + System.Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(layer);
+
+            string[] paths =
+            {
+                Path.Combine(layer, "a.bin"),
+                Path.Combine(layer, "b.bin"),
+                Path.Combine(layer, "c.bin"),
+                Path.Combine(layer, "d.bin")
+            };
+
+            try
+            {
+                foreach (string path in paths)
+                {
+                    File.WriteAllText(path, "x");
+                }
+
+                var unit = new VolumeGroupUnit(
+                    "P53-8",
+                    VolumeNamingFamily.SevenZipNumbered,
+                    layer,
+                    paths[0])
+                {
+                    Pieces = new List<GroupPieceFact>
+                    {
+                        Piece(paths[0], size: 100, number: null, first: true, declaredCount: 4, declaredBytes: 400),
+                        Piece(paths[1], size: 100, number: null, first: false, declaredCount: 0, declaredBytes: 0),
+                        Piece(paths[2], size: 100, number: null, first: false, declaredCount: 0, declaredBytes: 0),
+                        Piece(paths[3], size: 100, number: null, first: false, declaredCount: 0, declaredBytes: 0)
+                    },
+                    ConfirmedOrder = paths
+                };
+
+                FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
+
+                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+                Assert.Equal(
+                    new[] { "P53-8.7z.001", "P53-8.7z.002", "P53-8.7z.003", "P53-8.7z.004" },
+                    result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(layer, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private static VolumeHandoffEntry Handoff(
             string path,
             string baseName,

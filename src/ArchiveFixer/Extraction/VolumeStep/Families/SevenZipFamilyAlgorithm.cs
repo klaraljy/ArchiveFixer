@@ -51,6 +51,13 @@ namespace ArchiveFixer.Extraction
                 return Unknown("7z：首卷没自述整包字节数 ⇒ 判不出");
             }
 
+            FamilyResult? confirmed = TryCompleteFromConfirmedOrder(unit, first, total);
+
+            if (confirmed != null)
+            {
+                return confirmed;
+            }
+
             var slots = new Dictionary<int, GroupPieceFact> { [1] = first };
             var unassigned = new List<GroupPieceFact>();
 
@@ -182,7 +189,98 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 7z 片名序号（容忍尾巴里夹垃圾）：先走统一卷名解析；解析出的号**越界**（`…068^02` 这种
+        /// 试开只交顺序：校验顺序覆盖全部片、第一片是内容首卷、字节和与自述整包一致，
+        /// 就按确认顺序出 Complete；否则判不出。⛔ 试开不通过时不会走到这里。
+        /// </summary>
+        private static FamilyResult? TryCompleteFromConfirmedOrder(
+            VolumeGroupUnit unit,
+            GroupPieceFact first,
+            int total)
+        {
+            IReadOnlyList<string>? confirmed = unit.ConfirmedOrder;
+
+            if (confirmed == null || confirmed.Count == 0)
+            {
+                return null;
+            }
+
+            if (confirmed.Count != total)
+            {
+                return Unknown($"7z：试开确认顺序有 {confirmed.Count} 片，自述 {total} 片 ⇒ 判不出");
+            }
+
+            var byPath = unit.Pieces.ToDictionary(
+                piece => Path.GetFullPath(piece.Path),
+                piece => piece,
+                StringComparer.OrdinalIgnoreCase);
+
+            if (confirmed
+                    .Select(Path.GetFullPath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count() != total
+                || confirmed.Any(path => !byPath.ContainsKey(Path.GetFullPath(path))))
+            {
+                return Unknown("7z：试开确认顺序与片清单对不上 ⇒ 判不出");
+            }
+
+            List<GroupPieceFact> ordered = confirmed
+                .Select(path => byPath[Path.GetFullPath(path)])
+                .ToList();
+
+            if (!ReferenceEquals(ordered[0], first))
+            {
+                return Unknown("7z：试开确认顺序的第一片不是内容首卷 ⇒ 判不出");
+            }
+
+            long receivedBytes = ordered.Sum(piece => piece.Size);
+
+            if (receivedBytes != first.DeclaredTotalBytes)
+            {
+                return Unknown(
+                    $"7z 首卷自述整包 {first.DeclaredTotalBytes} 字节，确认顺序实收 {receivedBytes} 字节 ⇒ 判不出");
+            }
+
+            string stem = unit.BaseName;
+
+            if (string.IsNullOrWhiteSpace(stem))
+            {
+                return Unknown("7z：基名判不出 ⇒ 出不了规范名计划");
+            }
+
+            IReadOnlyList<string> targets = VolumeNumberFromContent.BuildStandardNames(
+                stem,
+                VolumeNamingFamily.SevenZipNumbered,
+                total);
+
+            if (targets.Count != total)
+            {
+                return Unknown("7z：规范名生成数量不符 ⇒ 判不出");
+            }
+
+            var items = new List<CanonicalNamePlanItem>();
+
+            for (int index = 0; index < total; index++)
+            {
+                items.Add(BuildItem(
+                    ordered[index].Path,
+                    targets[index],
+                    isEntry: index == 0,
+                    unit.SourceLayer));
+            }
+
+            return new FamilyResult(
+                GroupAnalysis.GroupAnalysisVerdict.Complete,
+                ordered.Select(piece => piece.Path).ToList(),
+                Array.Empty<int>(),
+                new CanonicalNamePlan
+                {
+                    Items = items,
+                    Evidence = $"7z 试开确认顺序 {total} 片 / {receivedBytes} 字节；与首卷自述一致"
+                },
+                $"7z 分卷按试开确认顺序连成 1..{total}（入口 = 首卷）");
+        }
+
+        /// <summary>
         /// 垃圾尾巴会被读成 68）⇒ 再取末尾 1–3 位数字，只要落在 2..total 就认。
         /// 仍判不出 ⇒ 返回 null（交给“剩一个槽位/末片更小”那两条消去法，⛔ 不硬猜）。
         /// </summary>
