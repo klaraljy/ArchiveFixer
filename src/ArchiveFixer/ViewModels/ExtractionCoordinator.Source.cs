@@ -857,6 +857,12 @@ namespace ArchiveFixer.ViewModels
                     detail: $"trigger={trigger}; subject=源包; message={cleanup.Message}");
             }
 
+            // 只删文件会把“其余物”留成空壳；这里只收拾已经被清空的那一层。
+            foreach (string deletedPath in cleanup.DeletedFiles)
+            {
+                RemoveEmptyRestShell(deletedPath, logEntries);
+            }
+
             task.SourcePackageMove = SourcePackageMoveState.Done;
 
             /*
@@ -894,7 +900,47 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一单的源包现在能不能删：独立任务/已跑完整条递归链才算；链/组还没收口就延期。
+        /// 删掉一个文件之后，如果它所在的“其余物”已经被彻底清空，就连空壳一起删。
+        /// ⛔ 只删名字逐字是“其余物”的那一层；非空一律不动，不往上删父目录。
+        /// </summary>
+        private static void RemoveEmptyRestShell(
+            string deletedPath,
+            List<(string Level, string Message)> logEntries)
+        {
+            try
+            {
+                string? directory = Path.GetDirectoryName(deletedPath);
+
+                for (int depth = 0; depth < 4 && !string.IsNullOrWhiteSpace(directory); depth++)
+                {
+                    if (string.Equals(
+                            Path.GetFileName(directory),
+                            ProcessArtifactLayout.ArtifactDirectoryName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Directory.Exists(directory) &&
+                            !Directory.EnumerateFileSystemEntries(directory).Any())
+                        {
+                            Directory.Delete(directory, recursive: false);
+                            logEntries.Add((
+                                "INFO",
+                                $"其余物已清空，删除空壳目录：{Path.GetFileName(directory)}"
+                                + $"（{directory}）"));
+                        }
+
+                        break;
+                    }
+
+                    directory = Path.GetDirectoryName(directory);
+                }
+            }
+            catch
+            {
+                // 空壳收拾失败不影响已完成的删除结论；下次运行还会再收拾。
+            }
+        }
+
+        /// <summary>
         /// ⛔ 只读事实位，不按名字或中文猜。
         /// </summary>
         private static bool CanDeleteRootSourceImmediately(ArchiveTask task, RecursionResult? recursion)

@@ -3979,7 +3979,7 @@ namespace ArchiveFixer.ViewModels
 
                 lines.Add(
                     $"{task.LogName} ｜ {task.Status} ｜ {task.Outcome}"
-                    + (error.Length > 0 ? $" ｜ {error}" : string.Empty));
+                    + (error.Length > 0 ? $" ｜ {CompactReportLine(error, 500)}" : string.Empty));
             }
 
             return lines;
@@ -3995,21 +3995,57 @@ namespace ArchiveFixer.ViewModels
 
             sections.Add("================ 一、失败 / 取消 / 部分完成 ================");
 
-            try
-            {
-                string failures = _taskSummaryService.BuildFailedListText(Tasks);
+            /*
+             * 失败专区只列**真正的根任务问题**：跟班卷（同一分卷组后续卷）即使状态是"跳过"、
+             * 甚至机器终态 Succeeded，也不是这一批的失败；把它们列进来会让用户误以为
+             * B250135/151 这些完整组也失败了。
+             */
+            List<ArchiveTask> problemTasks = Tasks
+                .Where(task => !task.IsVolumeGroupFollower
+                    && task.CountsTowardBatchOutcome
+                    && task.Outcome is TaskOutcome.Failed
+                        or TaskOutcome.Cancelled
+                        or TaskOutcome.PartiallyCompleted)
+                .ToList();
 
-                foreach (string line in failures.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+            if (problemTasks.Count == 0)
+            {
+                sections.Add("本批没有失败 / 取消 / 部分完成的根任务。");
+            }
+            else
+            {
+                foreach (ArchiveTask task in problemTasks)
                 {
-                    if (!string.IsNullOrWhiteSpace(line))
+                    sections.Add(
+                        $"[{task.Outcome}] {task.LogName} ｜ {task.Status}"
+                        + $"｜格式={task.DetectedFormat}"
+                        + (task.IsContinuationTask ? "｜续解内层包" : "｜根任务"));
+
+                    if (!string.IsNullOrWhiteSpace(task.ParentTaskName))
                     {
-                        sections.Add(line);
+                        sections.Add($"  父包：{task.ParentTaskName}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(task.OutputPath))
+                    {
+                        sections.Add($"  输出：{task.OutputPath}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(task.VolumeInfoText))
+                    {
+                        sections.Add($"  分卷：{CompactReportLine(task.VolumeInfoText, 500)}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(task.ErrorMessage))
+                    {
+                        sections.Add($"  原因：{CompactReportLine(task.ErrorMessage, 900)}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(task.EngineVerdict))
+                    {
+                        sections.Add($"  引擎：{CompactReportLine(task.EngineVerdict, 500)}");
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                sections.Add("失败清单生成失败：" + ex.Message);
             }
 
             sections.Add(string.Empty);
@@ -4029,26 +4065,34 @@ namespace ArchiveFixer.ViewModels
             {
                 foreach (IGrouping<string, ArchiveTask> group in volumeTasks.GroupBy(DescribeVolumeGroupKey))
                 {
-                    ArchiveTask first = group.First();
-                    string state = first.VolumeInfoText;
-                    string missing = first.MissingVolumeNames.Count > 0
-                        ? string.Join("、", first.MissingVolumeNames.Take(10))
-                        : "无";
-                    string pieces = first.VolumePaths.Count > 0
-                        ? string.Join("、", first.VolumePaths.Select(Path.GetFileName).Take(12))
-                        : "未登记";
+                    List<ArchiveTask> members = group.ToList();
+                    string state = members
+                        .Select(task => task.VolumeInfoText)
+                        .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? "未登记";
+
+                    int declared = members
+                        .Select(task => task.VolumePaths.Count)
+                        .Max();
+                    List<string> missing = members
+                        .SelectMany(task => task.MissingVolumeNames)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(10)
+                        .ToList();
+                    bool complete = members.Any(task => task.IsVolumeGroup
+                        && task.IsVolumeComplete);
 
                     sections.Add(
-                        $"组「{group.Key}」｜片数={Math.Max(1, first.VolumePaths.Count)}"
-                        + $"｜状态={state}"
-                        + $"｜缺片={missing}"
-                        + $"｜成员={pieces}");
+                        $"组「{group.Key}」｜成员={members.Count}｜已登记片={Math.Max(0, declared)}"
+                        + $"｜完整={complete}"
+                        + $"｜状态={CompactReportLine(state, 300)}"
+                        + $"｜缺片={(missing.Count > 0 ? string.Join("、", missing) : "无")}");
 
-                    foreach (ArchiveTask task in group)
+                    foreach (ArchiveTask task in members)
                     {
                         sections.Add(
                             $"  - {task.LogName} ｜ {task.Status} ｜ {task.Outcome}"
-                            + $"｜缺失={task.MissingVolumeNames.Count}");
+                            + (task.VolumePaths.Count > 0 ? $"｜片={task.VolumePaths.Count}" : string.Empty)
+                            + (task.MissingVolumeNames.Count > 0 ? $"｜缺={task.MissingVolumeNames.Count}" : string.Empty));
                     }
                 }
             }
@@ -4087,7 +4131,14 @@ namespace ArchiveFixer.ViewModels
                     sections.Add(
                         $"{task.LogName} ｜ {task.Outcome} ｜ 源包={(exists ? "仍在原处" : "当前不存在")}"
                         + $"｜处理状态={handling}"
-                        + (string.IsNullOrWhiteSpace(task.ErrorMessage) ? string.Empty : $"｜{task.ErrorMessage}"));
+                        + (string.IsNullOrWhiteSpace(task.ErrorMessage) ? string.Empty : $"｜{CompactReportLine(task.ErrorMessage, 600)}"));
+
+                    if (task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
+                    {
+                        sections.Add(
+                            "  源包保留原因：这一单所在的链/分卷组尚未证明完整，"
+                            + "按「整条链全部成功才删原包」规则不动它");
+                    }
                 }
             }
 
@@ -4096,17 +4147,27 @@ namespace ArchiveFixer.ViewModels
 
         private static string DescribeVolumeGroupKey(ArchiveTask task)
         {
-            if (!string.IsNullOrWhiteSpace(task.VolumeGroupKey))
+            string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath);
+
+            if (!string.IsNullOrWhiteSpace(baseName))
             {
-                return task.VolumeGroupKey;
+                return baseName;
             }
 
-            if (!string.IsNullOrWhiteSpace(task.VolumeInfoText))
+            if (!string.IsNullOrWhiteSpace(task.LogName))
             {
-                return task.VolumeInfoText;
+                return task.LogName;
             }
 
-            return string.IsNullOrWhiteSpace(task.LogName) ? "未命名组" : task.LogName;
+            return "未命名组";
+        }
+
+        /// <summary>报告里的长行截断：完整事实仍留在 data/log，txt 只保留可读的一段。</summary>
+        private static string CompactReportLine(string? text, int maxLength)
+        {
+            string value = (text ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+
+            return value.Length <= maxLength ? value : value[..maxLength] + "…";
         }
 
         /// <summary>

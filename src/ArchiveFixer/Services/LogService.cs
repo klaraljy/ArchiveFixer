@@ -367,7 +367,13 @@ namespace ArchiveFixer.Services
 
                 if (seen.Add(line))
                 {
-                    result.Add(line);
+                    /*
+                     * 缺卷清单可能有 100+ 个号码；正文里保留前一段即可，完整清单仍在
+                     * data/log 的任务详情与 trace 里。否则单文件报告会被一行几百个数字淹没。
+                     */
+                    result.Add(line.Length > 1200 && line.Contains("缺=", StringComparison.Ordinal)
+                        ? line[..1200] + "…（完整缺卷清单见 data\\logs）"
+                        : line);
                 }
             }
 
