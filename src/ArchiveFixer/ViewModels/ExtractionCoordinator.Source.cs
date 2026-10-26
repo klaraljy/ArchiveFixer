@@ -1182,23 +1182,26 @@ namespace ArchiveFixer.ViewModels
         /// 旧代码就是拿它当边界，候选被判到边界外后上溯到 H:\，整盘扫到 UI 卡死。</para>
         /// </summary>
         private string ResolveSplitGateScanBoundary(ArchiveTask task)
+            => ResolveSplitGateScanBoundary(task, Settings);
+
+        /// <summary>上面那个边界的**纯函数版**（单测直接调，不 new 协调器）。</summary>
+        internal static string ResolveSplitGateScanBoundary(ArchiveTask task, AppSettings? settings)
         {
             string Normalize(string? path) => SafePathHelper.GetFullPathSafe(path ?? string.Empty)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-            bool customPlacement = Settings != null && !Settings.ExtractToOriginalDirectory;
+            bool customPlacement = settings != null && !settings.ExtractToOriginalDirectory;
 
             if (customPlacement)
             {
-                string customRoot = Normalize(Settings?.CustomOutputDirectory);
+                string customRoot = Normalize(settings?.CustomOutputDirectory);
 
                 if (customRoot.Length > 0)
                 {
                     return customRoot;
                 }
 
-                string? actualOutput = task.OutputPath;
-                string actualRoot = Normalize(actualOutput);
+                string actualRoot = Normalize(task.OutputPath);
 
                 if (actualRoot.Length > 0)
                 {
