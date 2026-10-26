@@ -1,0 +1,110 @@
+using System.Collections.Generic;
+using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
+using Xunit;
+
+namespace ArchiveFixer.Tests
+{
+    /// <summary>
+    /// 分卷族算法的**证据边界**：族算法只能按内容/自述能证明的事实下结论；
+    /// 自述片数/字节与当前成员对不上时，不能把“识别不足”写成“缺片”。
+    /// </summary>
+    public sealed class VolumeFamilyAlgorithmEvidenceTests
+    {
+        [Fact]
+        public void 七z_自述片数与实际成员对不上_不能报缺片()
+        {
+            /*
+             * P53/P55 形状：首卷自述 138 片 / 一个很大的整包字节，
+             * 当前只收到 2 个成员。底层只能证明“自述与实收不一致”，
+             * 不能证明“缺 3..138 这 136 片” —— 大小不均匀/加密头都会造成这种表象。
+             */
+            var unit = new VolumeGroupUnit(
+                "P53-8",
+                VolumeNamingFamily.SevenZipNumbered,
+                @"C:\in",
+                @"C:\in\P53-8.7z.001");
+
+            unit.Pieces = new List<GroupPieceFact>
+            {
+                Piece(
+                    @"C:\in\P53-8.7z.001",
+                    size: 18 * 1024 * 1024,
+                    number: 1,
+                    first: true,
+                    declaredCount: 138,
+                    declaredBytes: 138L * 1024 * 1024 * 1024),
+                Piece(
+                    @"C:\in\P53-8.7z.002",
+                    size: 2_579_478_242,
+                    number: 2,
+                    first: false,
+                    declaredCount: 0,
+                    declaredBytes: 0)
+            };
+
+            FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.DoesNotContain("缺片", result.Evidence, System.StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 七z_片数对得上但字节对不上_不能报缺片()
+        {
+            var unit = new VolumeGroupUnit(
+                "P55-8",
+                VolumeNamingFamily.SevenZipNumbered,
+                @"C:\in",
+                @"C:\in\P55-8.7z.001");
+
+            unit.Pieces = new List<GroupPieceFact>
+            {
+                Piece(
+                    @"C:\in\P55-8.7z.001",
+                    size: 18 * 1024 * 1024,
+                    number: 1,
+                    first: true,
+                    declaredCount: 2,
+                    declaredBytes: 10_000_000_000),
+                Piece(
+                    @"C:\in\P55-8.7z.002",
+                    size: 3_535_025_138,
+                    number: 2,
+                    first: false,
+                    declaredCount: 0,
+                    declaredBytes: 0)
+            };
+
+            FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.DoesNotContain("缺片", result.Evidence, System.StringComparison.Ordinal);
+        }
+
+        private static GroupPieceFact Piece(
+            string path,
+            long size,
+            int? number,
+            bool first,
+            int declaredCount,
+            long declaredBytes)
+        {
+            return new GroupPieceFact(
+                path,
+                size,
+                VolumeContentFormat.SevenZip,
+                first ? ArchiveBodyKind.VolumeFirstPiece : ArchiveBodyKind.VolumePiece,
+                number,
+                first,
+                VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                VolumeNumberFail.None,
+                declaredBytes,
+                declaredCount,
+                number,
+                @"C:\in",
+                null,
+                FromHandoff: false);
+        }
+    }
+}

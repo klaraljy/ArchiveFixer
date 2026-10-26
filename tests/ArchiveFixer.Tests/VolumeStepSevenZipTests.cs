@@ -37,7 +37,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 首卷自述3片但只收到2片_判缺片()
+        public void 首卷自述3片但只收到2片_只能判不出_不能报缺片()
         {
             string layer = NewLayer();
 
@@ -50,12 +50,13 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Missing, result.Verdict);
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
             Assert.Null(result.NamePlan);
+            Assert.DoesNotContain("缺片", result.Evidence, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void 片数够但字节和小于自述整包_判缺片()
+        public void 片数够但字节和小于自述整包_只能判不出_不能报缺片()
         {
             string layer = NewLayer();
 
@@ -69,7 +70,8 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Missing, result.Verdict);
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.DoesNotContain("缺片", result.Evidence, StringComparison.Ordinal);
         }
 
         [Fact]

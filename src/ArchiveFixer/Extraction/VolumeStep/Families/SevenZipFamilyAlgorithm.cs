@@ -86,12 +86,14 @@ namespace ArchiveFixer.Extraction
 
             if (missingSlots.Count != unassigned.Count)
             {
-                return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Missing,
-                    slots.OrderBy(pair => pair.Key).Select(pair => pair.Value.Path).ToList(),
-                    missingSlots,
-                    null,
-                    $"7z 首卷自述 {total} 片；已认出 {slots.Count - 1 + unassigned.Count} 片（未定槽 {unassigned.Count} 片）");
+                /*
+                 * 自述片数与“当前能点名的槽位”对不上：7z 中间片内容没有卷号，
+                 * 既可能是真缺片，也可能是大小不均匀/加密头导致识别不足；
+                 * 这一档只能判“不知道”，⛔ 不能把自述片数减已收片数写成缺卷清单。
+                 */
+                return Unknown(
+                    $"7z 首卷自述 {total} 片；当前只认出 {slots.Count + unassigned.Count - 1} 片"
+                    + $"（未定槽 {unassigned.Count} 片）⇒ 判不出，不能证明具体缺哪几片");
             }
 
             if (unassigned.Count == 1)
@@ -127,12 +129,13 @@ namespace ArchiveFixer.Extraction
 
             if (receivedBytes < first.DeclaredTotalBytes)
             {
-                return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Missing,
-                    slots.OrderBy(pair => pair.Key).Select(pair => pair.Value.Path).ToList(),
-                    Array.Empty<int>(),
-                    null,
-                    $"7z 首卷自述整包 {first.DeclaredTotalBytes} 字节，只收到 {receivedBytes} 字节 ⇒ 缺片");
+                /*
+                 * 字节和小于自述整包：和片数不足同一条边界 —— 自述是“整包应该多大”，
+                 * 当前实收小不等于缺哪一片；大小不均匀/加密头/成员识别不足都可能。
+                 * 只有内容/试开能点名缺卷时才允许判 Missing；这里判不出。
+                 */
+                return Unknown(
+                    $"7z 首卷自述整包 {first.DeclaredTotalBytes} 字节，只收到 {receivedBytes} 字节 ⇒ 判不出，不能证明具体缺哪几片");
             }
 
             if (receivedBytes > first.DeclaredTotalBytes)
