@@ -1729,11 +1729,8 @@ namespace ArchiveFixer.ViewModels
 
                     lastResult = testResult;
 
-                    // 详细档：测试这一次的命令行与原话（与解压路径同一出口、同一措辞）。
-                    if (VerboseTaskLogEnabled)
-                    {
-                        EngineOutputLog.LogVerbose(AppendLog, task.FileName, testResult);
-                    }
+                    // 内部日志永远详细：普通档由任务缓冲只写文件、不上屏幕。
+                    EngineOutputLog.LogVerbose(AppendLog, task.FileName, testResult);
 
                     if (testResult.DetectedErrorType == "Cancelled" ||
                         testResult.Status == StatusText.Cancelled ||
@@ -2096,7 +2093,7 @@ namespace ArchiveFixer.ViewModels
                     if (removedEmpty > 0)
                     {
                         AppendLog(
-                            "INFO",
+                            "WARN",
                             $"{task.LogName}：这一包连文件名都加密（引擎说 {lastListErrorType}）—— 同样跳过「空密码」这一档。");
                     }
                 }
@@ -2293,10 +2290,8 @@ namespace ArchiveFixer.ViewModels
                      * 十个候选就是十条 ERROR —— 那是噪声，不是信号。失败原话在**结论那一处**
                      * 写一次（见下面 `conclusionResult` 那一段）。
                      */
-                    if (VerboseTaskLogEnabled)
-                    {
-                        EngineOutputLog.LogVerbose(AppendLog, task.FileName, extractResult);
-                    }
+                    // 内部日志永远详细：普通档由任务缓冲只写文件、不上屏幕。
+                    EngineOutputLog.LogVerbose(AppendLog, task.FileName, extractResult);
 
                     _vm.Logger.Event(
                         "engine.extract",

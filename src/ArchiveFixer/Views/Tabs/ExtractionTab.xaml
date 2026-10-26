@@ -260,7 +260,7 @@
                         <CheckBox Content="全速（最高 8 个）"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
-                                  ToolTip="本批忽略并发档，最多同时 8 个（不会无限开；8 是硬顶）。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复按并发档排队就把勾去掉）。慢盘上会让磁盘更忙。" />
+                                  ToolTip="本批忽略并发档，最多同时 8 个（不会无限开；8 是硬顶）。另有整机级闸门：同一台机器上所有 ArchiveFixer 进程合计最多同时跑 4 个外部引擎（7z/UnRAR/WinRAR），慢盘上不会再被多实例抢死。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复按并发档排队就把勾去掉）。" />
 
                         <Button Content="按空间算建议"
                                 Margin="16,0,0,0"

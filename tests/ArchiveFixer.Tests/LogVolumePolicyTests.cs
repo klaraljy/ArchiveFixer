@@ -205,7 +205,7 @@ namespace ArchiveFixer.Tests
 
             Assert.True(File.Exists(current), "当前日志文件应该已经建好");
 
-            // 造 40 份"很旧"的日志（每份 2 MB → 共 80 MB，超过 50 MB 上限），再各留一份的修改时间。
+            // 造 40 份"很旧"的日志（每份 2 MB → 共 80 MB，低于 100 MB 上限），再各留一份的修改时间。
             DateTime old = DateTime.UtcNow.AddDays(-90);
 
             for (int i = 0; i < 40; i++)

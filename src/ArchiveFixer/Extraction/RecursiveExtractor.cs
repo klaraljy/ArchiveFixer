@@ -1999,6 +1999,14 @@ namespace ArchiveFixer.Extraction
                 {
                     attemptedDirectTake = true;
 
+                    LayerOutcome? taken = await TryTakeSingleStoredEntryAsync(item, progress, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (taken != null)
+                    {
+                        return taken;
+                    }
+
                     LayerOutcome? direct = await TryTakeEmbeddedZipDirectAsync(
                             item,
                             candidates,
@@ -2010,9 +2018,6 @@ namespace ArchiveFixer.Extraction
                     {
                         return direct;
                     }
-
-                    LayerOutcome? taken = await TryTakeSingleStoredEntryAsync(item, progress, cancellationToken)
-                        .ConfigureAwait(false);
 
                     if (taken != null)
                     {
@@ -3816,8 +3821,10 @@ namespace ArchiveFixer.Extraction
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                if (!probe.Supported || probe.List == null)
+                if (!probe.Supported || probe.List == null || probe.ResolvedPasswordIndex <= 0)
                 {
+                    // 这一档只补 AES/加密 ZIP 的 7-Zip 编码缺口；未加密的单条目/多条目继续走
+                    // 既有近路（单条目直取 / 抠副本 + 引擎），不改它们的行为。
                     return null;
                 }
 

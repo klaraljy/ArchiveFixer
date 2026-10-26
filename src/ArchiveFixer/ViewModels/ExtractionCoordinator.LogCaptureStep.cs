@@ -39,10 +39,11 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void AppendTaskRowSnapshot()
         {
-            if (!Settings.VerboseLog)
-            {
-                return;
-            }
+            /*
+             * 详细档才上屏幕；普通档也要写进内部 `.log`（排查证据），但不污染用户看到的日志。
+             * 用户 2026-10-26：内部日志必须永远详细；用户选项只管显示/导出。
+             */
+            bool screenVisible = Settings.VerboseLog || KeepTaskDetailInLog;
 
             foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
             {
@@ -51,10 +52,17 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                AppendLog(
-                    "WARN",
-                    $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
-                        + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}");
+                string line = $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
+                    + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}";
+
+                if (screenVisible)
+                {
+                    AppendLog("WARN", line);
+                }
+                else
+                {
+                    _vm.AppendLogFileOnly("WARN", line);
+                }
             }
         }
 
@@ -130,7 +138,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>详细日志：设置里的开关（默认关）或测试/排查用的显式口子。</summary>
         private bool VerboseTaskLogEnabled => KeepTaskDetailInLog || Settings.VerboseLog;
 
-        private void FlushTaskLogBuffer(TaskLogCapture capture)
+        private void FlushTaskLogBuffer(TaskLogCapture capture, bool screenVisible = true)
         {
             if (capture.Buffer.Count == 0)
             {
@@ -139,7 +147,15 @@ namespace ArchiveFixer.ViewModels
 
             foreach ((string level, string message) in capture.Buffer)
             {
-                _vm.AppendLog(level, message);
+                if (screenVisible)
+                {
+                    _vm.AppendLog(level, message);
+                }
+                else
+                {
+                    // 成功任务不把细节推上屏幕，但内部 `.log` / `.jsonl` 必须留全。
+                    _vm.AppendLogFileOnly(level, message);
+                }
             }
 
             capture.Buffer.Clear();
@@ -165,11 +181,12 @@ namespace ArchiveFixer.ViewModels
 
                 if (succeeded)
                 {
-                    capture.Buffer.Clear();   // 成功：样板与进度全丢，只留下面那一行
+                    // 成功：屏幕只留摘要；内部详细日志照常落盘（用户 2026-10-26 口径）。
+                    FlushTaskLogBuffer(capture, screenVisible: false);
                 }
                 else
                 {
-                    FlushTaskLogBuffer(capture);   // 失败 / 取消 / 部分完成：细节全留
+                    FlushTaskLogBuffer(capture);   // 失败 / 取消 / 部分完成：细节全留（屏幕也留）
                 }
             }
 
@@ -293,29 +310,19 @@ namespace ArchiveFixer.ViewModels
         private void AppendLog(string level, string message)
         {
             TaskLogCapture? capture = _currentTaskLog.Value;
-            if (capture != null && !string.IsNullOrEmpty(message))
+
+            /*
+             * 用户选普通档时：INFO 细节进缓冲（成功只写内部文件，失败再补上屏幕）；
+             * WARN / ERROR 是用户必须当场看见的结论，直接上屏幕，⛔ 不因为细节缓冲被推迟。
+             *
+             * 详细档 capture == null，所有行照旧直接走屏幕 + 文件。
+             */
+            bool isInfo = string.Equals(level, "INFO", StringComparison.OrdinalIgnoreCase);
+
+            if (capture != null && isInfo && !string.IsNullOrEmpty(message))
             {
-                bool isInfo = string.Equals(level, "INFO", StringComparison.OrdinalIgnoreCase);
-
-                if (isInfo && IsProgressNoise(message))
-                {
-                    // 进度：攒着（失败时才有用），成功时随缓冲一起丢。
-                    capture.Buffer.Add((level, message));
-                    return;
-                }
-
-                if (isInfo && !capture.DetailsVisible)
-                {
-                    capture.Buffer.Add((level, message));
-                    return;
-                }
-
-                if (!isInfo && !capture.DetailsVisible)
-                {
-                    // WARN / ERROR：先把"之前发生了什么"吐出来，再把这一行放出去（顺序才对得上）。
-                    FlushTaskLogBuffer(capture);
-                    capture.DetailsVisible = true;
-                }
+                capture.Buffer.Add((level, message));
+                return;
             }
 
             _vm.AppendLog(level, message);

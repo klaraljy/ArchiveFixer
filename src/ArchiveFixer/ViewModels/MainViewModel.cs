@@ -3420,10 +3420,30 @@ namespace ArchiveFixer.ViewModels
 
         public void AppendLog(string level, string message)
         {
+            WriteLogCore(level, message, fileOnly: false);
+        }
+
+        /// <summary>
+        /// 只写内部详细日志（`.log` / `.jsonl`），不进屏幕、不进普通档 `.user.log`。
+        /// 用于用户选择普通档时仍然保留排查细节；导出普通档不会看到这些行。
+        /// </summary>
+        internal void AppendLogFileOnly(string level, string message)
+        {
+            WriteLogCore(level, message, fileOnly: true);
+        }
+
+        private void WriteLogCore(string level, string message, bool fileOnly)
+        {
             string safeMessage = message ?? string.Empty;
 
             try
             {
+                if (fileOnly)
+                {
+                    _logService.WriteFileOnly(level, safeMessage);
+                    return;
+                }
+
                 switch (level)
                 {
                     case "ERROR":
@@ -4106,7 +4126,10 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                (int lineCount, bool fromMarker) = _logService.ExportOperationLog(path, BuildLogExportHeader());
+                (int lineCount, bool fromMarker) = _logService.ExportOperationLog(
+                    path,
+                    BuildLogExportHeader(),
+                    includeDetails: Settings.VerboseLog);
 
                 AppendLog("INFO", $"日志已导出（本次操作）：{path}（{lineCount} 行）");
 
@@ -4144,7 +4167,9 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                (int fileCount, int lineCount) = _logService.ExportAllLogs(path);
+                (int fileCount, int lineCount) = _logService.ExportAllLogs(
+                    path,
+                    includeDetails: Settings.VerboseLog);
 
                 AppendLog("INFO", $"全部历史日志已导出：{path}（{fileCount} 份 / {lineCount} 行）");
 

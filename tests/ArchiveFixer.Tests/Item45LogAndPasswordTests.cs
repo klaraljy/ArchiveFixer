@@ -215,7 +215,10 @@ namespace ArchiveFixer.Tests
             Assert.True(
                 emptyPasswordAttempts.Length == 0,
                 "整包（含文件名）已加密时不该再试空密码，命中的行：" + string.Join(" ｜ ", emptyPasswordAttempts));
-            Assert.Contains(lines, line => line.Contains("连文件名都加密", StringComparison.Ordinal));
+            Assert.Contains(
+                "连文件名都加密",
+                File.ReadAllText(harness.Log.CurrentLogFilePath),
+                StringComparison.Ordinal);
 
             ArchiveTask task = Assert.Single(harness.Vm.Tasks);
             Assert.Equal(TaskOutcome.Succeeded, task.Outcome);

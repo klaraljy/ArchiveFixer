@@ -55,6 +55,13 @@ namespace ArchiveFixer.Services
         private readonly object _lockObj = new();
 
         private string _currentLogFilePath = string.Empty;
+
+        /// <summary>
+        /// 普通档（用户看到的/导出的）日志文件：只写普通行，不含详细探针。
+        /// 内部排查用的 `.log` 仍然全量详细；两者用同一个时间戳基名，靠后缀区分。
+        /// </summary>
+        private string _currentUserLogFilePath = string.Empty;
+
         private string _currentJsonlFilePath = string.Empty;
         private string _currentTraceFilePath = string.Empty;
         private bool _enableFileLog = true;
@@ -170,8 +177,14 @@ namespace ArchiveFixer.Services
         /// <summary>本次操作在日志文件里的起始**行号**（-1 = 没标记 / 不在同一个文件里）。</summary>
         private int _operationStartFileLine = -1;
 
+        /// <summary>同一次操作在普通档 `.user.log` 里的起始行（详细档与普通档行数不同，不能共用）。</summary>
+        private int _operationStartUserFileLine = -1;
+
         /// <summary>标记所在的那个日志文件（换文件之后旧行号就不能用了）。</summary>
         private string _operationStartFile = string.Empty;
+
+        /// <summary>普通档 `.user.log` 的操作起点（文件换名后旧行号不能复用）。</summary>
+        private string _operationStartUserFile = string.Empty;
 
         /// <summary>
         /// 标记"一次新的操作开始了"（用户点了一次处理 / 一次扫描）。
@@ -186,6 +199,8 @@ namespace ArchiveFixer.Services
             _operationStartIndex = Math.Max(0, Logs.Count - 1);
             _operationStartFile = _currentLogFilePath;
             _operationStartFileLine = TryCountLines(_currentLogFilePath) - 1;
+            _operationStartUserFile = _currentUserLogFilePath;
+            _operationStartUserFileLine = TryCountLines(_currentUserLogFilePath) - 1;
         }
 
         /// <summary>把"本次操作开始"写进日志（屏幕 + 文件；关掉文件日志时只进屏幕日志）。</summary>
@@ -212,7 +227,8 @@ namespace ArchiveFixer.Services
         /// <returns>导出的行数，以及是不是"本次操作"的范围（false = 退回了整份当前日志）。</returns>
         public (int Lines, bool FromOperationMarker) ExportOperationLog(
             string targetPath,
-            IReadOnlyList<string>? headerLines = null)
+            IReadOnlyList<string>? headerLines = null,
+            bool includeDetails = true)
         {
             if (string.IsNullOrWhiteSpace(targetPath))
             {
@@ -246,16 +262,26 @@ namespace ArchiveFixer.Services
                 builder.AppendLine();
             }
 
-            if (!string.IsNullOrWhiteSpace(_currentLogFilePath) && File.Exists(_currentLogFilePath))
+            string selectedFile = includeDetails
+                ? _currentLogFilePath
+                : _currentUserLogFilePath;
+            int selectedStart = includeDetails
+                ? _operationStartFileLine
+                : _operationStartUserFileLine;
+            string selectedOperationFile = includeDetails
+                ? _operationStartFile
+                : _operationStartUserFile;
+
+            if (!string.IsNullOrWhiteSpace(selectedFile) && File.Exists(selectedFile))
             {
-                string[] all = File.ReadAllLines(_currentLogFilePath);
+                string[] all = File.ReadAllLines(selectedFile);
                 int start = 0;
 
-                if (_operationStartFileLine >= 0 &&
-                    string.Equals(_operationStartFile, _currentLogFilePath, StringComparison.OrdinalIgnoreCase) &&
-                    _operationStartFileLine < all.Length)
+                if (selectedStart >= 0 &&
+                    string.Equals(selectedOperationFile, selectedFile, StringComparison.OrdinalIgnoreCase) &&
+                    selectedStart < all.Length)
                 {
-                    start = _operationStartFileLine;
+                    start = selectedStart;
                     fromMarker = true;
                 }
 
@@ -282,7 +308,9 @@ namespace ArchiveFixer.Services
              * 批次清单/任务事实/文件操作/引擎原话不能丢。它**不计入**上面的“日志行数”
              * （那个数字仍然只数人读正文，与既有导出头的口径一致）。
              */
-            if (!string.IsNullOrWhiteSpace(_currentTraceFilePath) && File.Exists(_currentTraceFilePath))
+            if (includeDetails &&
+                !string.IsNullOrWhiteSpace(_currentTraceFilePath) &&
+                File.Exists(_currentTraceFilePath))
             {
                 string[] traceLines = File.ReadAllLines(_currentTraceFilePath);
 
@@ -331,6 +359,7 @@ namespace ArchiveFixer.Services
 
                 string fileName = $"ArchiveFixer_{FormatFileTimestamp(DateTime.Now)}.log";
                 _currentLogFilePath = Path.Combine(LogDirectory, fileName);
+                _currentUserLogFilePath = Path.ChangeExtension(_currentLogFilePath, ".user.log");
                 _currentJsonlFilePath = Path.ChangeExtension(_currentLogFilePath, ".jsonl");
                 _currentTraceFilePath = Path.ChangeExtension(_currentLogFilePath, ".trace.jsonl");
 
@@ -440,6 +469,7 @@ namespace ArchiveFixer.Services
             {
                 var files = new DirectoryInfo(LogDirectory)
                     .GetFiles("ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
+                    .Where(file => !file.Name.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase))
                     .Where(file => !string.Equals(file.FullName, _currentLogFilePath, StringComparison.OrdinalIgnoreCase))
                     .OrderBy(file => file.LastWriteTimeUtc)
                     .ToList();
@@ -450,7 +480,10 @@ namespace ArchiveFixer.Services
                 }
 
                 DateTime cutoffUtc = DateTime.UtcNow - TimeSpan.FromDays(LogRetentionDays);
-                long totalBytes = files.Sum(file => file.Length);
+                long totalBytes = files.Sum(file => file.Length
+                    + TwinLength(file.FullName, ".user.log")
+                    + TwinLength(file.FullName, ".jsonl")
+                    + TwinLength(file.FullName, ".trace.jsonl"));
                 int deleted = 0;
                 long freedBytes = 0;
 
@@ -483,6 +516,7 @@ namespace ArchiveFixer.Services
                          * 孪生文件跟着人读日志一起收：否则 `.jsonl` / `.trace.jsonl` 只增不减，
                          * 而用户看到的是“日志已经清过了”。当前这一份三件套永远不在这里的 files 里。
                          */
+                        freedBytes += TryDeleteLogTwin(file.FullName, ".user.log");
                         freedBytes += TryDeleteLogTwin(file.FullName, ".jsonl");
                         freedBytes += TryDeleteLogTwin(file.FullName, ".trace.jsonl");
                     }
@@ -508,8 +542,22 @@ namespace ArchiveFixer.Services
             }
         }
 
+        /// <summary>孪生文件的长度（用于 100 MB 总量口径；没有就是 0）。</summary>
+        private static long TwinLength(string logPath, string extension)
+        {
+            try
+            {
+                string twin = Path.ChangeExtension(logPath, extension);
+                return File.Exists(twin) ? new FileInfo(twin).Length : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         /// <summary>
-        /// 删掉人读日志的孪生文件（`.jsonl` / `.trace.jsonl`），返回释放字节数。
+        /// 删掉人读日志的孪生文件（`.user.log` / `.jsonl` / `.trace.jsonl`），返回释放字节数。
         /// 只由保留策略调用；当前这一份永远不会走到这里。
         /// </summary>
         private static long TryDeleteLogTwin(string logPath, string extension)
@@ -537,7 +585,7 @@ namespace ArchiveFixer.Services
         internal const int LogRetentionDays = 30;
 
         /// <summary>日志目录总量上限（超过就从最旧的开始删）。</summary>
-        internal const long LogRetentionTotalBytes = 50L * 1024 * 1024;
+        internal const long LogRetentionTotalBytes = 100L * 1024 * 1024;
 
         /// <summary>无论如何至少留最近这么多份（用户随时可能要看"昨天那一次"）。</summary>
         internal const int LogRetentionMinFiles = 10;
@@ -621,6 +669,23 @@ namespace ArchiveFixer.Services
 
             string text = $"任务[{fileName}] {message}";
             Write("ERROR", text, task.CurrentPath);
+        }
+
+        /// <summary>
+        /// 详细日志：**只写内部 `.log` / `.jsonl`，不进屏幕、也不进普通 `.user.log`**。
+        /// 供任务级细节在用户选择普通档时仍然留下排查证据。
+        /// </summary>
+        public void WriteFileOnly(string level, string message)
+        {
+            level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
+            message = Sanitize(message);
+
+            var item = new OperationLogItem(level, message);
+
+            lock (_lockObj)
+            {
+                WriteFileLog(item, includeUserLog: false);
+            }
         }
 
         /// <summary>
@@ -866,7 +931,8 @@ namespace ArchiveFixer.Services
         private void WriteFileLog(
             OperationLogItem item,
             CriterionFields? criterion = null,
-            LogEventFields? evidence = null)
+            LogEventFields? evidence = null,
+            bool includeUserLog = true)
         {
             if (!_enableFileLog)
             {
@@ -884,6 +950,14 @@ namespace ArchiveFixer.Services
                     _currentLogFilePath,
                     FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
                     Encoding.UTF8);
+
+                if (includeUserLog && _currentUserLogFilePath.Length > 0)
+                {
+                    File.AppendAllText(
+                        _currentUserLogFilePath,
+                        FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
+                        Encoding.UTF8);
+                }
 
                 /*
                  * **人读行与机器读行一比一**：同一处写入 ⇒ 行数永远相等（守门用例 `LogSchemaTests` 钉着）。
@@ -1183,7 +1257,7 @@ namespace ArchiveFixer.Services
         /// <para>读不出来的那一份**跳过但记一行**（被别的程序占用 / 权限）：绝不因为一份坏了就什么都不导。</para>
         /// </summary>
         /// <returns>导出的日志份数与行数（写成 <c>(0, 0)</c> 表示日志目录里一份都没有）。</returns>
-        public (int FileCount, int LineCount) ExportAllLogs(string targetPath)
+        public (int FileCount, int LineCount) ExportAllLogs(string targetPath, bool includeDetails = true)
         {
             if (string.IsNullOrWhiteSpace(targetPath))
             {
@@ -1210,13 +1284,22 @@ namespace ArchiveFixer.Services
 
             foreach (string file in EnumerateLogFilesOldestFirst())
             {
-                string fileName = Path.GetFileName(file);
+                string selectedFile = includeDetails
+                    ? file
+                    : Path.ChangeExtension(file, ".user.log");
+
+                if (!File.Exists(selectedFile))
+                {
+                    selectedFile = file;
+                }
+
+                string fileName = Path.GetFileName(selectedFile);
 
                 string[] lines;
 
                 try
                 {
-                    lines = File.ReadAllLines(file);
+                    lines = File.ReadAllLines(selectedFile);
                 }
                 catch (Exception ex)
                 {
@@ -1233,28 +1316,31 @@ namespace ArchiveFixer.Services
                     builder.AppendLine(line);
                 }
 
-                string tracePath = Path.ChangeExtension(file, ".trace.jsonl");
-
-                if (File.Exists(tracePath))
+                if (includeDetails)
                 {
-                    try
+                    string tracePath = Path.ChangeExtension(file, ".trace.jsonl");
+
+                    if (File.Exists(tracePath))
                     {
-                        string[] traceLines = File.ReadAllLines(tracePath);
-
-                        if (traceLines.Length > 0)
+                        try
                         {
-                            builder.AppendLine();
-                            builder.AppendLine($"# {Path.GetFileName(tracePath)}（诊断事件 {traceLines.Length} 行）");
+                            string[] traceLines = File.ReadAllLines(tracePath);
 
-                            foreach (string traceLine in traceLines)
+                            if (traceLines.Length > 0)
                             {
-                                builder.AppendLine(traceLine);
+                                builder.AppendLine();
+                                builder.AppendLine($"# {Path.GetFileName(tracePath)}（诊断事件 {traceLines.Length} 行）");
+
+                                foreach (string traceLine in traceLines)
+                                {
+                                    builder.AppendLine(traceLine);
+                                }
                             }
                         }
-                    }
-                    catch
-                    {
-                        // 诊断事件读不出不影响人读日志的导出。
+                        catch
+                        {
+                            // 诊断事件读不出不影响人读日志的导出。
+                        }
                     }
                 }
 
@@ -1289,6 +1375,7 @@ namespace ArchiveFixer.Services
                 }
 
                 return Directory.EnumerateFiles(LogDirectory, "ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
+                    .Where(file => !file.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(x => Path.GetFileName(x), StringComparer.OrdinalIgnoreCase)
                     .ToList();
             }

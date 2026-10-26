@@ -93,7 +93,11 @@ namespace ArchiveFixer.ViewModels
              * 只按值回查密码列表的话，「本批已成功 / 密码本命中 / 密码本整行 / 说明文件旁路 /
              * 手动输入的密码」全都会被印成"尝试密码列表第 N 项"（说话不实，排障时看错方向）。
              */
-            extractor.VerboseLog = VerboseTaskLogEnabled;
+            /*
+             * 内部日志永远详细：递归核心始终生成逐层明细；用户选普通档时由任务日志缓冲
+             * 把它们只写进 `.log` / `.jsonl`，不上屏幕（用户 2026-10-26 口径）。
+             */
+            extractor.VerboseLog = true;
             extractor.DescribeCandidate = (value, index) =>
                 _passwordService.BuildTryPasswordLogText(
                     new PasswordItem { Value = value, Source = ResolveCandidateSourceForLog(value, candidateSources) },
@@ -301,7 +305,14 @@ namespace ArchiveFixer.ViewModels
             var task = new ArchiveTask(first)
             {
                 FileName = Path.GetFileName(first),
-                IsArchive = true
+                IsArchive = true,
+
+                /*
+                 * 这一层的过程物就躺在这一层的产物目录里；把这一层当"成品目录树"。
+                 * 不设它 ⇒ ResolveSplitGateScanBoundary 取不到树 ⇒ 半套分卷闸门判不出 ⇒
+                 * 每层都一个字节不删（ChainSpaceReclaimTests 对照组实测 0/3）。
+                 */
+                OutputPath = Path.GetDirectoryName(first) ?? string.Empty
             };
 
             if (files.Count > 1)

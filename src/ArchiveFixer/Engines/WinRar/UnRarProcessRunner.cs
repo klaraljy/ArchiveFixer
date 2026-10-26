@@ -395,6 +395,10 @@ namespace ArchiveFixer.Engines.WinRar
                 return CreateEngineMissingResult();
             }
 
+            using IDisposable throttleLease = await GlobalExtractionThrottle
+                .AcquireAsync(cancellationToken)
+                .ConfigureAwait(false);
+
             var stopwatch = Stopwatch.StartNew();
             var outputBuilder = new StringBuilder();
             var errorBuilder = new StringBuilder();

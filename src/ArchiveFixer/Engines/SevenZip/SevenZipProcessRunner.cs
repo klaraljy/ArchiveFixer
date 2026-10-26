@@ -301,6 +301,10 @@ namespace ArchiveFixer.Engines.SevenZip
                 return CreateSevenZipMissingResult();
             }
 
+            using IDisposable throttleLease = await GlobalExtractionThrottle
+                .AcquireAsync(cancellationToken)
+                .ConfigureAwait(false);
+
             var stopwatch = Stopwatch.StartNew();
             var outputBuilder = new StringBuilder();
             var errorBuilder = new StringBuilder();
