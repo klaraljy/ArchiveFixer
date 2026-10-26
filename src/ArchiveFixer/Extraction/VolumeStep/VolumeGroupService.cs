@@ -110,10 +110,15 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 源层红线（用户六条之二）：入口层只能是“该开这一组的那一层”，
-             * 其余物 / 工作区 / 暂存目录永远不能当入口层。判不出 ⇒ 不建组。
+             * 源层红线（用户六条之二）：链产出/暂存的片不能把其余物 / 工作区当入口层。
+             * 但用户**明确从其余物导入**的原件，那一层就是用户的源层；不能因为目录名带
+             * “其余物”就把整组拒掉（2026-10-26 真机：9953 就在 其余物 下被拒）。
              */
-            if (IsForbiddenLayer(sourceLayer))
+            bool allUserImported = pieces.All(piece =>
+                piece.FromHandoff
+                && piece.Source == ArchiveFixer.Detection.VolumeHandoffSource.UserImported);
+
+            if (IsForbiddenLayer(sourceLayer) && !allUserImported)
             {
                 return null;
             }
