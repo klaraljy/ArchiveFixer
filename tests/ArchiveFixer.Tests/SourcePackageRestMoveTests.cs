@@ -508,26 +508,11 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_彻底删除档_链没跑完时不许动源包_延期到链尾()
+        public async Task 一键处理_独立包成功立刻删源包_不再等整批结束()
         {
             /*
-             * ⛔ **红线（不变量 1 + 用户 2026-10-14 口径）**：一键处理的源包处理**延期到整条链跑完**。
-             *
-             * <para>用户逐字：「源包操作只针对**成功得到内容物**的情况，部分完成或者失败自动保留，
-             * 放在原来位置不要移动」⇒ 一轮跑完时"内容物已经得到"这件事**还没成立**（链可能还有下一层）
-             * ⇒ ⛔ 绝不在这一刻删源包。</para>
-             *
-             * <para>⚠ 2026-10-15：这一条是**守门逮出来的真缺陷** —— 我第一版走
-             * `commit.MovedContentCount == 0` 那道闸门（老实现的判据），而它在**新递归模型下失效**：
-             * 第 0 层解出来的 `inner.7z.001`（还要接着解的过程物）被归类成"内容物"
-             * （实测日志逐字：`outer.7z：本次内容物 —— inner.7z.001`）⇒ 闸门不触发 ⇒ 源包在半路被删。
-             * ⇒ 收紧成"**一键处理一律延期**"。</para>
-             *
-             * <para>⛔ 已知缺口（如实记账，下一刀补）：链尾那一站目前**还删不掉** ——
-             * 它调 `PurgeLayerSourcePackage` 时手上没有"这一单的定稿 / 输出校验"两份结构化事实，
-             * 于是那道闸门判不出 ⇒ 什么都不做（兜底正确，但功能缺口）。要让"彻底删除"在链尾真生效，
-             * 得把链尾已经验过的那套事实（内容物已定稿 + 全链校验通过 + 目录里确实有内容物 + 未取消）
-             * 以**结构化证据**的形式喂进去，⛔ 不是把闸门放宽。</para>
+             * 用户 2026-10-26 口径：删除看**这一单自己**是否成功，不看整批是否全成功。
+             * 独立单包成功、校验通过、定稿完成 ⇒ 立刻删自己的源包，不拖到批末。
              */
             Harness harness = CreateHarness(
                 settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
@@ -538,10 +523,8 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractForOneClickAsync();
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-
-            // ⛔ 链还没跑完 ⇒ 源包**必须还在**。
-            Assert.True(File.Exists(source), "一键处理半路不许动源包（哪怕用户选了彻底删除）");
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, task.SourcePackageMove);
+            Assert.False(File.Exists(source), "独立包成功后应当立刻删除自己的源包");
+            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
         }
 
         [Fact]

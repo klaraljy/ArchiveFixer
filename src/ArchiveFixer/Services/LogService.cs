@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -183,6 +184,9 @@ namespace ArchiveFixer.Services
         /// <summary>标记所在的那个日志文件（换文件之后旧行号就不能用了）。</summary>
         private string _operationStartFile = string.Empty;
 
+        /// <summary>本次操作开始的时间（固定格式字符串；导出时用它过滤 trace 旧事件）。</summary>
+        private string _operationStartTimestamp = string.Empty;
+
         /// <summary>普通档 `.user.log` 的操作起点（文件换名后旧行号不能复用）。</summary>
         private string _operationStartUserFile = string.Empty;
 
@@ -201,6 +205,7 @@ namespace ArchiveFixer.Services
             _operationStartFileLine = TryCountLines(_currentLogFilePath) - 1;
             _operationStartUserFile = _currentUserLogFilePath;
             _operationStartUserFileLine = TryCountLines(_currentUserLogFilePath) - 1;
+            _operationStartTimestamp = FormatTimestamp(DateTime.Now);
         }
 
         /// <summary>把"本次操作开始"写进日志（屏幕 + 文件；关掉文件日志时只进屏幕日志）。</summary>
@@ -228,7 +233,8 @@ namespace ArchiveFixer.Services
         public (int Lines, bool FromOperationMarker) ExportOperationLog(
             string targetPath,
             IReadOnlyList<string>? headerLines = null,
-            bool includeDetails = true)
+            bool includeDetails = true,
+            IReadOnlyList<string>? extraSections = null)
         {
             if (string.IsNullOrWhiteSpace(targetPath))
             {
@@ -262,6 +268,22 @@ namespace ArchiveFixer.Services
                 builder.AppendLine();
             }
 
+            /*
+             * 用户 2026-10-26：这份 txt 是唯一可能拿到的文件，所以先放“能直接定位问题”的区块：
+             * 失败/取消/部分完成、分卷组、源包处理。它们由 MainViewModel 从任务事实生成，
+             * 不再靠把整份 trace 倒进来。
+             */
+            if (extraSections != null && extraSections.Count > 0)
+            {
+                foreach (string line in extraSections)
+                {
+                    builder.AppendLine(line);
+                }
+
+                builder.AppendLine();
+            }
+
+            var body = new List<string>();
             string selectedFile = includeDetails
                 ? _currentLogFilePath
                 : _currentUserLogFilePath;
@@ -287,8 +309,7 @@ namespace ArchiveFixer.Services
 
                 for (int i = start; i < all.Length; i++)
                 {
-                    builder.AppendLine(all[i]);
-                    lines++;
+                    body.Add(all[i]);
                 }
             }
             else
@@ -298,37 +319,195 @@ namespace ArchiveFixer.Services
 
                 for (int i = start; i < Logs.Count; i++)
                 {
-                    builder.AppendLine(Logs[i].DisplayText);
-                    lines++;
+                    body.Add(Logs[i].DisplayText);
                 }
+            }
+
+            builder.AppendLine("================ 以下是日志正文（已去重；任务行快照已移到上面的任务明细） ================");
+
+            foreach (string line in DeduplicateReportBody(body))
+            {
+                builder.AppendLine(line);
+                lines++;
             }
 
             /*
-             * 诊断事件（`.trace.jsonl`）一并附在导出文件末尾：用户只发这一份 txt 时，
-             * 批次清单/任务事实/文件操作/引擎原话不能丢。它**不计入**上面的“日志行数”
-             * （那个数字仍然只数人读正文，与既有导出头的口径一致）。
+             * 只附**本次操作范围内、精简后的关键事件**：组事实 / 文件操作 / 异常。
+             * ⛔ 不再把 batch.start / batch.end 的整张任务表或 batch 的 JSON 原样塞进来 ——
+             * 那正是旧导出“几十行 JSON 占六成体积、目录重复几十遍”的根因。
              */
-            if (includeDetails &&
-                !string.IsNullOrWhiteSpace(_currentTraceFilePath) &&
-                File.Exists(_currentTraceFilePath))
-            {
-                string[] traceLines = File.ReadAllLines(_currentTraceFilePath);
-
-                if (traceLines.Length > 0)
-                {
-                    builder.AppendLine();
-                    builder.AppendLine("================ 以下是结构化诊断事件（机器可读 JSONL，不是错误清单；先看上面的任务明细和正文） ================");
-
-                    foreach (string traceLine in traceLines)
-                    {
-                        builder.AppendLine(traceLine);
-                    }
-                }
-            }
+            AppendCompactDiagnosticEvents(builder);
 
             File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
 
             return (lines, fromMarker);
+        }
+
+        /// <summary>
+        /// 人读正文去重：去掉任务行快照（上面已有任务明细）与完全相同的重复行。
+        /// 保留时间顺序，不改变任何一行的内容。
+        /// </summary>
+        private static List<string> DeduplicateReportBody(IReadOnlyList<string> body)
+        {
+            var result = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (string line in body)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (line.Contains("] [WARN] [行] ", StringComparison.Ordinal)
+                    || line.Contains("] [INFO] [行] ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (seen.Add(line))
+                {
+                    result.Add(line);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 追加本次操作范围内的关键结构化事件（不含批量任务数组）。
+        /// 目的：用户只给一个 txt 时仍能看见组事实与文件操作，又不会被重复路径淹没。
+        /// </summary>
+        private void AppendCompactDiagnosticEvents(StringBuilder builder)
+        {
+            if (string.IsNullOrWhiteSpace(_currentTraceFilePath) ||
+                !File.Exists(_currentTraceFilePath))
+            {
+                return;
+            }
+
+            string[] traceLines;
+
+            try
+            {
+                traceLines = File.ReadAllLines(_currentTraceFilePath);
+            }
+            catch
+            {
+                return;
+            }
+
+            var emitted = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (string traceLine in traceLines)
+            {
+                if (traceLine.Length == 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using JsonDocument document = JsonDocument.Parse(traceLine);
+                    JsonElement root = document.RootElement;
+
+                    string timestamp = root.TryGetProperty("ts", out JsonElement ts) ? ts.GetString() ?? string.Empty : string.Empty;
+
+                    if (!string.IsNullOrWhiteSpace(_operationStartTimestamp) &&
+                        !string.IsNullOrWhiteSpace(timestamp) &&
+                        string.CompareOrdinal(timestamp, _operationStartTimestamp) < 0)
+                    {
+                        continue;
+                    }
+
+                    string eventName = root.TryGetProperty("event", out JsonElement eventElement)
+                        ? eventElement.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    if (eventName.Length == 0 ||
+                        eventName == "batch.start" ||
+                        eventName == "batch.end" ||
+                        eventName == "task.begin" ||
+                        eventName == "session.settings" ||
+                        eventName == "session.environment")
+                    {
+                        continue;
+                    }
+
+                    string message = root.TryGetProperty("msg", out JsonElement msgElement)
+                        ? msgElement.GetString() ?? string.Empty
+                        : eventName;
+
+                    // 组事件展开成一行组事实；其余关键事件只留人话。
+                    if (eventName == "group.linked" &&
+                        root.TryGetProperty("detail", out JsonElement detailElement) &&
+                        detailElement.ValueKind == JsonValueKind.String)
+                    {
+                        string? detailJson = detailElement.GetString();
+
+                        if (!string.IsNullOrWhiteSpace(detailJson))
+                        {
+                            using JsonDocument detail = JsonDocument.Parse(detailJson);
+                            JsonElement d = detail.RootElement;
+                            string group = GetString(d, "group");
+                            string family = GetString(d, "family");
+                            string state = GetString(d, "state");
+                            string verdict = GetString(d, "verdict");
+                            int pieces = d.TryGetProperty("pieces", out JsonElement piecesElement) &&
+                                         piecesElement.ValueKind == JsonValueKind.Array
+                                ? piecesElement.GetArrayLength()
+                                : 0;
+                            string missing = d.TryGetProperty("missing", out JsonElement missingElement) &&
+                                             missingElement.ValueKind == JsonValueKind.Array
+                                ? string.Join(",", missingElement.EnumerateArray().Select(x => x.ToString()))
+                                : string.Empty;
+
+                            message = $"组「{group}」｜族={family}｜状态={state}｜片={pieces}"
+                                + (missing.Length > 0 ? $"｜缺={missing}" : string.Empty)
+                                + (verdict.Length > 0 ? $"｜{verdict}" : string.Empty);
+                        }
+                    }
+
+                    string line = $"[{timestamp}] [{eventName}] {message}";
+
+                    if (seen.Add(line))
+                    {
+                        emitted.Add(line);
+                    }
+                }
+                catch
+                {
+                    // trace 单行坏了不影响导出；诊断事件只是辅助。
+                }
+            }
+
+            if (emitted.Count == 0)
+            {
+                return;
+            }
+
+            const int maxEvents = 200;
+
+            builder.AppendLine();
+            builder.AppendLine("================ 关键诊断事件（本次操作范围；已去掉整批任务数组） ================");
+
+            foreach (string line in emitted.Take(maxEvents))
+            {
+                builder.AppendLine(line);
+            }
+
+            if (emitted.Count > maxEvents)
+            {
+                builder.AppendLine($"……还有 {emitted.Count - maxEvents} 条关键事件未展开（完整原始事件见 data\\logs 的 .trace.jsonl）");
+            }
+        }
+
+        private static string GetString(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement value)
+                ? value.GetString() ?? string.Empty
+                : string.Empty;
         }
 
         /// <summary>数一个文件有多少行（读不了返回 0）。</summary>

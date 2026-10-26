@@ -71,8 +71,9 @@ namespace ArchiveFixer.Tests
             JsonElement first = detail.RootElement.GetProperty("tasks")[0];
 
             Assert.Equal(sample, first.GetProperty("current_path").GetString());
-            Assert.Equal(8L, first.GetProperty("file").GetProperty("size").GetInt64());
-            Assert.False(string.IsNullOrWhiteSpace(first.GetProperty("file").GetProperty("identity").GetString()));
+            Assert.Equal("已识别", first.GetProperty("status").GetString());
+            Assert.Equal("7Z", first.GetProperty("detected_format").GetString());
+            Assert.False(first.TryGetProperty("file", out _));
 
             JsonElement taskSnapshot = FindEvent(jsonl, "task.begin");
             using JsonDocument taskDetail =

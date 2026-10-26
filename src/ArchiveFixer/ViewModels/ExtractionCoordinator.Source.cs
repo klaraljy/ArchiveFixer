@@ -416,29 +416,19 @@ namespace ArchiveFixer.ViewModels
                  * 那一条已经随用户口径删除。
                  */
                 /*
-                 * ⛔⛔ **红线**：**一键处理一律把源包的处理延期到整条链跑完**（⛔ 不在半路删）。
-                 *
-                 * <para>用户 2026-10-14 口径逐字：「源包操作**只针对成功得到内容物的情况**，
-                 * 部分完成或者失败自动保留，放在原来位置不要移动」⇒ 一键处理的链可能还有下一层，
-                 * 半路那一轮里"内容物已经得到"这件事**根本还没成立**。</para>
-                 *
-                 * <para>老实现（`MoveSourcePackageIntoRest`）用的是 `commit.MovedContentCount == 0`
-                 * 来判"本轮只出过程物"；⚠ 那条判据**在新递归模型下失效**（运行期实测，2026-10-15）：
-                 * 第 0 层解出来的 `inner.7z.001`（还要接着解的过程物）被**归类成"内容物"**
-                 * （日志逐字：`outer.7z：本次内容物 —— inner.7z.001`）⇒ `MovedContentCount == 1`
-                 * ⇒ 闸门不触发 ⇒ **源包在链还没跑完时就被删了**。⇒ 现在不看"本轮有没有内容物"，
-                 * 只要是一键处理就延期（更安全，且与老口径"留到链尾"一致）。</para>
-                 *
-                 * <para>⚠ 这一道是**守门用例逮出来的**：`形状B_内容物没出来_源包留在原地_即使选了彻底删除`
-                 * 当场红（`SourcePackageMove` 变成 `Done` = 已删）⇒ 收紧成"一键处理一律延期"。</para>
+                 * 用户 2026-10-26 口径：**并不是所有一键处理都延期**。
+                 * 独立任务/整条链已经完整成功 ⇒ 当场删自己的源包；
+                 * 只有链没跑完（递归未 Completed）、分卷组未完整、或还有未完成卷组时才延期。
+                 * 这样一批里某个 300MB 失败，不会拖着 9G/5G/3G 那些已经成功任务的源包。
                  */
-                if (oneClickRun)
+                if (oneClickRun && !CanDeleteRootSourceImmediately(task, recursion))
                 {
                     task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
 
                     logEntries.Add((
                         "INFO",
-                        $"{task.LogName}：源包先留在原地 —— 一键处理要等整条续解链跑完才按「源包操作 = 彻底删除」处理"
+                        $"{task.LogName}：源包先留在原地 —— 这一单所在的链还没跑完，"
+                        + "等内容物完整确认后才按「源包操作 = 彻底删除」处理"
                         + "（链没跑完就动源包＝在「内容物可能不全」时动用户唯一无法再生的东西）。"));
                 }
                 else
@@ -901,6 +891,87 @@ namespace ArchiveFixer.ViewModels
                       + tail));
 
             return null;
+        }
+
+        /// <summary>
+        /// 这一单的源包现在能不能删：独立任务/已跑完整条递归链才算；链/组还没收口就延期。
+        /// ⛔ 只读事实位，不按名字或中文猜。
+        /// </summary>
+        private static bool CanDeleteRootSourceImmediately(ArchiveTask task, RecursionResult? recursion)
+        {
+            if (task == null)
+            {
+                return false;
+            }
+
+            if (task.HasUnresolvedVolumeGroup)
+            {
+                return false;
+            }
+
+            if (task.IsVolumeGroup && !task.IsVolumeComplete)
+            {
+                return false;
+            }
+
+            if (recursion != null &&
+                (!recursion.Completed ||
+                 recursion.PartiallyCompleted ||
+                 recursion.UnexpandedNames.Count > 0))
+            {
+                return false;
+            }
+
+            /*
+             * 一键处理的“链”可能不是递归核心里展开的：第一层只把 inner.7z.001 当内容物落出来，
+             * 再交给下一轮续解。源码层看不出“后面还有没有一层”，所以这里看盘上事实：
+             * 产物树里还有归档/分卷候选 ⇒ 这一单还没到最终内容物，源包必须留着。
+             */
+            return !OutputLooksLikeIntermediateArchive(task.OutputPath);
+        }
+
+        private static bool OutputLooksLikeIntermediateArchive(string? outputDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+            {
+                return true;
+            }
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(
+                             outputDirectory,
+                             "*",
+                             SearchOption.AllDirectories).Take(2000))
+                {
+                    string name = Path.GetFileName(file);
+
+                    if (FileNameHelper.IsVolumePartFileName(name))
+                    {
+                        return true;
+                    }
+
+                    string extension = Path.GetExtension(name);
+
+                    if (extension.Equals(".7z", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".rar", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".zip", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".tar", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".gz", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".bz2", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".xz", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // 读不出来就无法证明是最终内容物 ⇒ 保留源包（兜底方向是“不删”）。
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>

@@ -34,6 +34,41 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 单文件报告_不再倒整份trace_保留专区和关键事件()
+        {
+            var pathService = new PathService { DataRootDirectory = Path.Combine(_root, "data") };
+            var log = new LogService(pathService);
+
+            log.Initialize(enableFileLog: true);
+            log.MarkOperationStart("单文件报告");
+
+            log.WriteInfo("普通正文");
+            log.Event(
+                "group.linked",
+                "组「G」：Linked",
+                detail: "{\"group\":\"G\",\"family\":\"SevenZip\",\"state\":\"Linked\",\"verdict\":\"ok\",\"pieces\":[]}",
+                group: "G",
+                result: "Linked");
+
+            string export = Path.Combine(_root, "report.txt");
+
+            log.ExportOperationLog(
+                export,
+                headerLines: new[] { "HEAD" },
+                includeDetails: true,
+                extraSections: new[] { "一、失败专区" });
+
+            string text = File.ReadAllText(export);
+
+            Assert.Contains("HEAD", text, StringComparison.Ordinal);
+            Assert.Contains("一、失败专区", text, StringComparison.Ordinal);
+            Assert.Contains("普通正文", text, StringComparison.Ordinal);
+            Assert.Contains("关键诊断事件", text, StringComparison.Ordinal);
+            Assert.Contains("组「G」", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"schema\"", text, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void 普通档_内部日志保留详细行_普通导出与详细导出分开()
         {
             var pathService = new PathService { DataRootDirectory = Path.Combine(_root, "data") };

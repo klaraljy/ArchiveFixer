@@ -270,11 +270,8 @@ namespace ArchiveFixer.Tests
                     Directory.Exists(task.RestDirectoryPath),
                     $"选了彻底删除，链尾必须把其余物那一份删掉，实际还在：{task.RestDirectoryPath}");
 
-                // 2026-10-18 口径订正：现在日志写的是「链结束后的补搬」+「已立刻永久删除源包」；
-                // 旧的「链结束后的其余物处理」那句已经不存在（同一次改口径，行为断言不变）。
-                Assert.Contains(
-                    harness.Log.Logs,
-                    x => x.Message.Contains("链结束后的补搬", StringComparison.Ordinal));
+                // 2026-10-26 口径：整条递归链已完成、内容物已出来、校验通过 ⇒ 当场删源包；
+                // 不再等批末“链结束后的补搬”。
                 Assert.Contains(
                     harness.Log.Logs,
                     x => x.Message.Contains("已立刻永久删除源包", StringComparison.Ordinal));

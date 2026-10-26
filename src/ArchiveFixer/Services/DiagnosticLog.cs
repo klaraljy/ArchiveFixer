@@ -47,7 +47,7 @@ namespace ArchiveFixer.Services
                     source,
                     task_count = tasks?.Count ?? 0,
                     generated_at = LogService.FormatTimestamp(DateTime.Now),
-                    tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(task => DescribeTask(task, includeContentCard: false)).ToList()
+                    tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(DescribeTaskCompact).ToList()
                 };
 
                 log.Event(
@@ -83,7 +83,7 @@ namespace ArchiveFixer.Services
                     generated_at = LogService.FormatTimestamp(DateTime.Now),
                     summary,
                     task_count = tasks?.Count ?? 0,
-                    tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(task => DescribeTask(task, includeContentCard: false)).ToList()
+                    tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(DescribeTaskCompact).ToList()
                 };
 
                 log.Event(
@@ -299,6 +299,32 @@ namespace ArchiveFixer.Services
             };
 
             return result;
+        }
+
+        /// <summary>
+        /// 批级事件用的**紧凑任务卡**：保留定位一个任务所需的最小事实，不重复整份文件对象/内容卡。
+        /// 全量任务事实仍在 `.jsonl` 与单任务事件里。
+        /// </summary>
+        private static Dictionary<string, object?> DescribeTaskCompact(ArchiveTask task)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["name"] = task.DisplayFileName,
+                ["current_path"] = task.CurrentPath,
+                ["output_path"] = task.OutputPath,
+                ["parent_output_directory"] = task.ParentOutputDirectory,
+                ["root_source_path"] = task.RootSourcePath,
+                ["parent_task_name"] = task.ParentTaskName,
+                ["is_continuation"] = task.IsContinuationTask,
+                ["status"] = task.Status,
+                ["outcome"] = task.Outcome.ToString(),
+                ["error"] = task.ErrorMessage,
+                ["detected_format"] = task.DetectedFormat,
+                ["is_volume_group"] = task.IsVolumeGroup,
+                ["volume_paths"] = task.VolumePaths?.ToList(),
+                ["missing_volume_names"] = task.MissingVolumeNames?.ToList(),
+                ["volume_info"] = task.VolumeInfoText
+            };
         }
 
         private static Dictionary<string, object?> DescribeFile(string path)

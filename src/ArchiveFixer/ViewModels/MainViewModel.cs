@@ -3959,11 +3959,10 @@ namespace ArchiveFixer.ViewModels
             }
 
             lines.Add(
-                "细节在哪看：①页任务行的「详情 / 右键复制任务信息」= 单任务全过程；"
-                + "「导出失败清单」= 每个失败包的原因与所用引擎；"
-                + "③页「工作区残留」= 失败时留下的中间产物（要先在③页打开「失败时保留中间产物」）；"
-                + "本次导出末尾已附「诊断事件（trace.jsonl）」= 批次清单/任务文件事实/判据/文件操作/引擎原话，"
-                + "以后排查只发这一份日志即可；⑥设置的「详细日志（排查用）」也仍可用。");
+                "细节在哪看：先看下面的「失败 / 取消 / 部分完成」「分卷组」「源包处理」三个专区；"
+                + "完整的逐层过程在日志正文里；末尾只保留本次操作的关键诊断事件（不再倒整份 trace）。"
+                + "如果专区里仍判不出，再让用户补 data\\logs 的详细文件。"
+                + "⑥设置的「详细日志（排查用）」仍控制屏幕与普通/详细导出。");
 
             /*
              * 导出文件必须和①页看到的一致：至少把每一单的名字/状态/机器终态列出来。
@@ -3983,9 +3982,131 @@ namespace ArchiveFixer.ViewModels
                     + (error.Length > 0 ? $" ｜ {error}" : string.Empty));
             }
 
-            lines.Add("================ 以下是日志正文 ================");
-
             return lines;
+        }
+
+        /// <summary>
+        /// 单文件报告的**问题专区**（用户 2026-10-26：只给一个 txt 也要能定位）。
+        /// 顺序固定：失败/取消/部分完成 → 分卷组 → 源包处理。
+        /// </summary>
+        internal IReadOnlyList<string> BuildLogExportSections()
+        {
+            var sections = new List<string>();
+
+            sections.Add("================ 一、失败 / 取消 / 部分完成 ================");
+
+            try
+            {
+                string failures = _taskSummaryService.BuildFailedListText(Tasks);
+
+                foreach (string line in failures.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        sections.Add(line);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                sections.Add("失败清单生成失败：" + ex.Message);
+            }
+
+            sections.Add(string.Empty);
+            sections.Add("================ 二、分卷组 ================");
+
+            var volumeTasks = Tasks
+                .Where(task => task.IsVolumeGroup
+                    || task.IsVolumeGroupFollower
+                    || task.VolumePaths.Count > 0)
+                .ToList();
+
+            if (volumeTasks.Count == 0)
+            {
+                sections.Add("本批没有识别到分卷组。");
+            }
+            else
+            {
+                foreach (IGrouping<string, ArchiveTask> group in volumeTasks.GroupBy(DescribeVolumeGroupKey))
+                {
+                    ArchiveTask first = group.First();
+                    string state = first.VolumeInfoText;
+                    string missing = first.MissingVolumeNames.Count > 0
+                        ? string.Join("、", first.MissingVolumeNames.Take(10))
+                        : "无";
+                    string pieces = first.VolumePaths.Count > 0
+                        ? string.Join("、", first.VolumePaths.Select(Path.GetFileName).Take(12))
+                        : "未登记";
+
+                    sections.Add(
+                        $"组「{group.Key}」｜片数={Math.Max(1, first.VolumePaths.Count)}"
+                        + $"｜状态={state}"
+                        + $"｜缺片={missing}"
+                        + $"｜成员={pieces}");
+
+                    foreach (ArchiveTask task in group)
+                    {
+                        sections.Add(
+                            $"  - {task.LogName} ｜ {task.Status} ｜ {task.Outcome}"
+                            + $"｜缺失={task.MissingVolumeNames.Count}");
+                    }
+                }
+            }
+
+            sections.Add(string.Empty);
+            sections.Add("================ 三、源包处理 ================");
+
+            var roots = Tasks.Where(task => !task.IsContinuationTask).ToList();
+
+            if (roots.Count == 0)
+            {
+                sections.Add("本批没有根任务。");
+            }
+            else
+            {
+                foreach (ArchiveTask task in roots)
+                {
+                    bool exists = false;
+
+                    try
+                    {
+                        exists = !string.IsNullOrWhiteSpace(task.CurrentPath) && File.Exists(task.CurrentPath);
+                    }
+                    catch
+                    {
+                        // 源包状态只是报告信息，不参与任何结论。
+                    }
+
+                    string handling = task.SourcePackageMove switch
+                    {
+                        SourcePackageMoveState.DeferredToChainEnd => "延期到链尾",
+                        SourcePackageMoveState.Done => "已处理",
+                        _ => "未处理"
+                    };
+
+                    sections.Add(
+                        $"{task.LogName} ｜ {task.Outcome} ｜ 源包={(exists ? "仍在原处" : "当前不存在")}"
+                        + $"｜处理状态={handling}"
+                        + (string.IsNullOrWhiteSpace(task.ErrorMessage) ? string.Empty : $"｜{task.ErrorMessage}"));
+                }
+            }
+
+            return sections;
+        }
+
+        private static string DescribeVolumeGroupKey(ArchiveTask task)
+        {
+            if (!string.IsNullOrWhiteSpace(task.VolumeGroupKey))
+            {
+                return task.VolumeGroupKey;
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.VolumeInfoText))
+            {
+                return task.VolumeInfoText;
+            }
+
+            return string.IsNullOrWhiteSpace(task.LogName) ? "未命名组" : task.LogName;
         }
 
         /// <summary>
@@ -4129,7 +4250,8 @@ namespace ArchiveFixer.ViewModels
                 (int lineCount, bool fromMarker) = _logService.ExportOperationLog(
                     path,
                     BuildLogExportHeader(),
-                    includeDetails: Settings.VerboseLog);
+                    includeDetails: Settings.VerboseLog,
+                    extraSections: BuildLogExportSections());
 
                 AppendLog("INFO", $"日志已导出（本次操作）：{path}（{lineCount} 行）");
 
