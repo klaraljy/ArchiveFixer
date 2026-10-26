@@ -1067,6 +1067,23 @@ namespace ArchiveFixer.ViewModels
                 string full = SafePathHelper.GetFullPathSafe(directory)
                     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+                /*
+                 * ⛔ 盘根永远不是"成品目录树"：候选不在这一批目标根里面时，上溯 3 层可能正好走到
+                 * H:\ / D:\。把盘根交给下面的递归枚举 = 整盘扫一遍（真机 2026-10-26：H:\ 上
+                 * System Volume Information 读不动，UI 线程卡到 Windows 判定 AppHang）。
+                 * 判不出就什么都不做，绝不拿"扫不动"去换一次不可逆删除。
+                 */
+                string? driveRoot = Path.GetPathRoot(full);
+
+                if (!string.IsNullOrWhiteSpace(driveRoot)
+                    && string.Equals(
+                        full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        driveRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
                 if (full.Length > 0 && seen.Add(full))
                 {
                     roots.Add(full);
@@ -1422,8 +1439,14 @@ namespace ArchiveFixer.ViewModels
                      * 后台重活（目录遍历 + 可能的整包跨盘拷贝 + 链尾那一档"其余物处理"），
                      * 日志先收集、回到 UI 线程再写。
                      */
-                    DeferredSourceMoveWork work = await RunDeferredSourceMoveWorkAsync(
-                        rootTask, chainTasks, sourceHandling, cancellationToken);
+                    DeferredSourceMoveWork work = await Task.Run(
+                            () => RunDeferredSourceMoveWorkAsync(
+                                rootTask,
+                                chainTasks,
+                                sourceHandling,
+                                cancellationToken),
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     foreach ((string level, string message) in work.LogEntries)
                     {
