@@ -935,12 +935,14 @@ namespace ArchiveFixer.ViewModels
                      * 源文件完全可能已经换了一份（不变量 11 的快照只挡"大小/修改时间变了"）。
                      * 真正拍板必须用**此刻**这一份的结论。
                      */
-                    directZip = EmbeddedZipStreamExtractor.Probe(
-                        task.CurrentPath,
-                        task.EmbeddedArchiveOffset,
-                        task.EmbeddedArchiveEnd,
-                        engineOutputPath,
-                        candidatePasswords,
+                    directZip = await Task.Run(
+                        () => EmbeddedZipStreamExtractor.Probe(
+                            task.CurrentPath,
+                            task.EmbeddedArchiveOffset,
+                            task.EmbeddedArchiveEnd,
+                            engineOutputPath,
+                            candidatePasswords,
+                            cancellationToken),
                         cancellationToken);
 
                     if (directZip.Supported)

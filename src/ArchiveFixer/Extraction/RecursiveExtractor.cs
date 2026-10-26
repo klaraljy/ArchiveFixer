@@ -3805,13 +3805,16 @@ namespace ArchiveFixer.Extraction
                     .Take(Math.Max(1, _limits.MaxPasswordAttemptsPerLayer))
                     .ToList();
 
-                EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(
-                    item.ArchivePath,
-                    info.Offset,
-                    info.ArchiveEnd,
-                    item.Layer.OutputPath,
-                    limitedCandidates,
-                    cancellationToken);
+                EmbeddedZipProbeResult probe = await Task.Run(
+                        () => EmbeddedZipStreamExtractor.Probe(
+                            item.ArchivePath,
+                            info.Offset,
+                            info.ArchiveEnd,
+                            item.Layer.OutputPath,
+                            limitedCandidates,
+                            cancellationToken),
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (!probe.Supported || probe.List == null)
                 {
