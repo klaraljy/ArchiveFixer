@@ -21,7 +21,8 @@ namespace ArchiveFixer.Engines.SevenZip
     /// </summary>
     public sealed class SevenZipProcessRunner
     {
-        private static readonly TimeSpan DefaultSevenZipTimeout = TimeSpan.FromMinutes(30);
+        /// <summary>连续无引擎输出的硬上限（不是总运行时间；进度会刷新它）。</summary>
+        private static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
 
         /// <summary>等两路输出泵收完的上限（进程已经退出，正常情况下是毫秒级）。</summary>
         private static readonly TimeSpan PumpDrainTimeout = TimeSpan.FromSeconds(3);
@@ -323,20 +324,26 @@ namespace ArchiveFixer.Engines.SevenZip
             ArchiveProgressReporter reporter = new(progressContext?.Progress);
 
             /*
-             * 卡住监视器：只有上层要求提示时才建（没有接收端时它什么都不做，没必要每 5 秒醒一次）。
-             * ⛔ 它**没有杀进程的能力**，只把一个事实报出去（见 EngineOutputActivityMonitor）。
+             * 卡住监视器：始终建（即使没有 WARN 回调）—— 它同时是下面 30 分钟超时的“最后活动”时钟。
+             * ⛔ 它**没有杀进程的能力**，只记录活动；真正的杀进程只在超时/取消分支里做。
              */
-            EngineOutputActivityMonitor? monitor = progressContext?.Stalled != null
-                ? new EngineOutputActivityMonitor(progressContext.StallThreshold, progressContext.Stalled)
-                : null;
+            EngineOutputActivityMonitor monitor = new(
+                progressContext?.StallThreshold ?? EngineOutputActivityMonitor.DefaultStallThreshold,
+                progressContext?.Stalled);
 
             var outputCollector = new EngineOutputCollector(outputBuilder, outputLock, progressParser, reporter, monitor);
             var errorCollector = new EngineOutputCollector(errorBuilder, errorLock, progressParser, reporter, monitor);
 
-            using var timeoutCts = new CancellationTokenSource(DefaultSevenZipTimeout);
+            /*
+             * 30 分钟是**连续无输出**的硬上限，不是“总运行时间”上限：
+             * 大包在慢盘上可以跑很久，只要 7-Zip 还在吐进度，就不该在第 30 分钟被当成卡死杀掉。
+             * 真机 2026-10-26：8 个大包并发、盘被抢满，几个包 30 分钟只到 1%–9%，全被总时长超时误杀。
+             */
+            using var timeoutCts = new CancellationTokenSource();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 timeoutCts.Token);
+            Task timeoutWatch = WatchIdleTimeoutAsync(monitor, DefaultIdleTimeout, timeoutCts);
 
             using var watchdogCts = new CancellationTokenSource();
 
@@ -537,6 +544,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 try
                 {
                     watchdogCts.Cancel();
+                    timeoutCts.Cancel();
                 }
                 catch
                 {
@@ -545,11 +553,19 @@ namespace ArchiveFixer.Engines.SevenZip
                 await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
 
                 reporter.Complete();
-                monitor?.Complete();
+                monitor.Complete();
 
                 try
                 {
                     await watchdog.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    await timeoutWatch.ConfigureAwait(false);
                 }
                 catch
                 {
@@ -602,6 +618,38 @@ namespace ArchiveFixer.Engines.SevenZip
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 30 分钟的**无输出**超时：只在连续 <paramref name="idleTimeout"/> 没有任何引擎输出时取消进程。
+        /// 只要 7-Zip 还在吐进度，计时就被 <see cref="EngineOutputActivityMonitor.MarkActivity"/> 刷新。
+        /// </summary>
+        private static async Task WatchIdleTimeoutAsync(
+            EngineOutputActivityMonitor monitor,
+            TimeSpan idleTimeout,
+            CancellationTokenSource timeoutCts)
+        {
+            try
+            {
+                while (!timeoutCts.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), timeoutCts.Token).ConfigureAwait(false);
+
+                    if (monitor.IdleFor >= idleTimeout)
+                    {
+                        timeoutCts.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 正常收口 / 超时。
+            }
+            catch
+            {
+                // 看门狗自身出问题不允许影响解压结论。
+            }
         }
 
         /// <summary>
