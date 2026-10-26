@@ -1052,6 +1052,14 @@ namespace ArchiveFixer.ViewModels
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             /*
+             * 这一次允许看的唯一一棵树（口径见 ResolveSplitGateScanBoundary）：
+             * · 选文件夹 = 选中的文件夹；
+             * · 选单个压缩包 = 它旁边/指定位置里那个以包基名命名的成品文件夹；
+             * · 选单个文件且任务已算出 OutputPath = 那个实际成品文件夹。
+             */
+            string batchRoot = ResolveSplitGateScanBoundary(task);
+
+            /*
              * ⚠ 这一张去重表**只能服务于 `roots` 这一份清单**（2026-10-03 实测踩过）：
              * 一开始让"任务记下来的那几处"和"祖先链"共用同一张表，于是祖先链上那几层
              * （它们本来就等于任务自己的输出目录）全被判成"已经加过了" ⇒ `roots` 空 ⇒
@@ -1084,6 +1092,15 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
+                /*
+                 * 边界外的任何地方都不进扫描清单 —— 用户的源包/别的目录没有资格被扫。
+                 */
+                if (batchRoot.Length > 0
+                    && !ArchivePathGuard.IsInsideRoot(batchRoot, full, out _))
+                {
+                    return;
+                }
+
                 if (full.Length > 0 && seen.Add(full))
                 {
                     roots.Add(full);
@@ -1092,13 +1109,14 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 上溯的**上界 = 这一次真正允许看的那棵树**：
-             * · 「未指定位置」= 用户选中的文件夹（选单个文件时 = 文件所在目录）；
-             * · 「指定位置」= 用户指定的成品根。
+             * · 「未指定位置」+ 选文件夹 = 用户选中的文件夹；
+             * · 「未指定位置」+ 选单个压缩包 = 这个包基名的成品文件夹；
+             * · 「指定位置」+ 选单个压缩包 = 指定位置里这个包基名的成品文件夹；
+             * · 「指定位置」+ 选文件夹 = 用户指定的成品根。
              * ⛔ 不再无条件拿 Settings.CustomOutputDirectory 当边界 —— 那一格在「未指定位置」时可能
              * 是上一次留下的旧地址（真机 2026-10-26：旧值是 `H:\BaiduNetdiskDownload\大测试-...`，
              * 而这一批实际在 `H:\BaiduNetdiskDownload\666` ⇒ 候选被判成"在边界外" ⇒ 上溯到 H:\ ⇒ 整盘扫）。
              */
-            string batchRoot = ResolveSplitGateScanBoundary(task);
 
             /*
              * 每个候选沿祖先链上溯。
@@ -1128,6 +1146,15 @@ namespace ArchiveFixer.ViewModels
                 {
                     string current = directory!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+                    /*
+                     * 边界外的候选（例如单文件模式下的原包自己）不扫它的父目录：
+                     * 用户明确说"外面只有原包，不用管其他地方"。只扫边界内那一棵成品树。
+                     */
+                    if (batchRoot.Length > 0 && !insideBatchRoot)
+                    {
+                        break;
+                    }
+
                     Add(current);
 
                     if (batchRoot.Length > 0 &&
@@ -1138,7 +1165,6 @@ namespace ArchiveFixer.ViewModels
 
                     /*
                      * 边界外 / 没有边界：只保留候选自己那一层，绝不上溯。
-                     * 同组片一定和候选在同一层（或选中文件夹的子目录里）；上溯只会扫到用户别的目录。
                      */
                     if (!insideBatchRoot || batchRoot.Length == 0)
                     {
@@ -1177,9 +1203,11 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 「半套分卷」闸门允许看的**唯一一棵树**。
         ///
-        /// <para>用户 2026-10-26 口径：选中文件夹时只能看这个文件夹里面；指定了解压位置时只能看那个位置。
-        /// ⛔ 不读「未指定位置」时那份可能已经过期的 <see cref="AppSettings.CustomOutputDirectory"/> ——
-        /// 旧代码就是拿它当边界，候选被判到边界外后上溯到 H:\，整盘扫到 UI 卡死。</para>
+        /// <para>用户 2026-10-26 口径：
+        /// · 选文件夹 = 这个文件夹里面；
+        /// · 选单个压缩包 = 它旁边/指定位置里那个**以包基名命名的成品文件夹**；
+        /// · 指定位置 = 只在这个成品位置里面，绝不看源包外面的其他目录。</para>
+        /// ⛔ 不读「未指定位置」时那份可能已经过期的 <see cref="AppSettings.CustomOutputDirectory"/>。
         /// </summary>
         private string ResolveSplitGateScanBoundary(ArchiveTask task)
             => ResolveSplitGateScanBoundary(task, Settings);
@@ -1190,11 +1218,35 @@ namespace ArchiveFixer.ViewModels
             string Normalize(string? path) => SafePathHelper.GetFullPathSafe(path ?? string.Empty)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+            string baseName = task.CurrentPath.Length > 0
+                ? OutputPlacement.ResolveArchiveBaseName(task.CurrentPath)
+                : string.Empty;
+
+            bool fileSelection = task.SourceSelectionKind != SourceSelectionKind.Folder;
             bool customPlacement = settings != null && !settings.ExtractToOriginalDirectory;
 
             if (customPlacement)
             {
                 string customRoot = Normalize(settings?.CustomOutputDirectory);
+
+                /*
+                 * 指定位置 + 选单个压缩包：只在「指定位置\<包基名>\」里扫
+                 * （用户例子：指定位置\111\，绝不扫指定位置的上一层/别的包）。
+                 */
+                if (fileSelection)
+                {
+                    string actualOutput = Normalize(task.OutputPath);
+
+                    if (actualOutput.Length > 0 && Directory.Exists(actualOutput))
+                    {
+                        return actualOutput;
+                    }
+
+                    if (customRoot.Length > 0 && baseName.Length > 0)
+                    {
+                        return Normalize(Path.Combine(customRoot, baseName));
+                    }
+                }
 
                 if (customRoot.Length > 0)
                 {
@@ -1210,8 +1262,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 「未指定位置」（默认）：用户选中的文件夹就是扫描边界。
-             * 选的是单个文件时，只看这个文件所在目录。
+             * 「未指定位置」+ 选文件夹：这个文件夹就是边界（每个包各自的成品文件夹都在它下面）。
              */
             if (task.SourceSelectionKind == SourceSelectionKind.Folder
                 && !string.IsNullOrWhiteSpace(task.SourceSelectionRoot))
@@ -1224,7 +1275,22 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            return Normalize(Path.GetDirectoryName(task.CurrentPath));
+            /*
+             * 「未指定位置」+ 选单个压缩包：H:\111.rar → H:\111\，只扫这个成品文件夹。
+             * 源包自己就在外面，用户明确说"外面只有原包，不用管其他"。
+             */
+            string actualFileOutput = Normalize(task.OutputPath);
+
+            if (actualFileOutput.Length > 0 && Directory.Exists(actualFileOutput))
+            {
+                return actualFileOutput;
+            }
+
+            string sourceDirectory = Normalize(Path.GetDirectoryName(task.CurrentPath));
+
+            return baseName.Length > 0
+                ? Normalize(Path.Combine(sourceDirectory, baseName))
+                : sourceDirectory;
         }
 
         /// <summary>

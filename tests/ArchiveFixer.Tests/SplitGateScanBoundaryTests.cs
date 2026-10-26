@@ -56,7 +56,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 未指定位置_选中单个文件_边界就是文件所在目录()
+        public void 未指定位置_选中单个文件_边界是包基名成品文件夹()
         {
             string selected = Path.Combine(_root, "单个");
             Directory.CreateDirectory(selected);
@@ -74,12 +74,12 @@ namespace ArchiveFixer.Tests
             };
 
             Assert.Equal(
-                Path.GetFullPath(selected).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(Path.Combine(selected, "pack")).TrimEnd(Path.DirectorySeparatorChar),
                 ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
         }
 
         [Fact]
-        public void 指定位置_边界就是用户指定的根()
+        public void 指定位置_选单个文件_边界是包基名成品文件夹()
         {
             string outputRoot = Path.Combine(_root, "指定位置");
             Directory.CreateDirectory(outputRoot);
@@ -92,7 +92,7 @@ namespace ArchiveFixer.Tests
             };
 
             Assert.Equal(
-                Path.GetFullPath(outputRoot).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(Path.Combine(outputRoot, "pack")).TrimEnd(Path.DirectorySeparatorChar),
                 ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
         }
     }
