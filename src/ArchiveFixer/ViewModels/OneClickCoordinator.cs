@@ -235,6 +235,57 @@ namespace ArchiveFixer.ViewModels
         private readonly ArchiveDetectService _detectService = new();
 
         /// <summary>
+        /// 已经判成“内容物”的产出文件缓存：同一路径 + 大小 + 修改时间不再打开。
+        /// 轮次扫描/批末确认读到它就直接跳过，避免图片、视频在每一轮被重复嗅探。
+        /// </summary>
+        private readonly Dictionary<string, (long Length, long Ticks, string How)> _terminalProducedContent =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private bool TryGetTerminalProducedContent(string file, out string how)
+        {
+            how = string.Empty;
+
+            try
+            {
+                var info = new FileInfo(file);
+
+                if (!info.Exists)
+                {
+                    return false;
+                }
+
+                if (_terminalProducedContent.TryGetValue(file, out (long Length, long Ticks, string How) fact)
+                    && fact.Length == info.Length
+                    && fact.Ticks == info.LastWriteTimeUtc.Ticks)
+                {
+                    how = fact.How;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private void RememberTerminalProducedContent(string file, string how)
+        {
+            try
+            {
+                var info = new FileInfo(file);
+
+                if (info.Exists)
+                {
+                    _terminalProducedContent[file] = (info.Length, info.LastWriteTimeUtc.Ticks, how);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>
         /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹确认框。
         ///
         /// <para>⚠ 2026-09-24 第 17 条之后它还有一个**落盘**的孪生兄弟
@@ -2793,6 +2844,15 @@ namespace ArchiveFixer.ViewModels
                     newFileCount++;
 
                     /*
+                     * 已经判成内容物的文件（同一路径 + 大小 + 修改时间）不再打开：
+                     * 轮次扫描、批末确认反复枚举到它时直接跳过，避免图片/视频被重复嗅探。
+                     */
+                    if (TryGetTerminalProducedContent(file, out _))
+                    {
+                        continue;
+                    }
+
+                    /*
                      * ===== 「内容物保留关键词」：命中就**不当内层归档**（用户 2026-10-04 的新功能）=====
                      *
                      * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
@@ -2889,6 +2949,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (!isArchive)
                     {
+                        RememberTerminalProducedContent(file, how);
                         skippedLines.Add($"{file}（{how}）");
                         continue;
                     }
