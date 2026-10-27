@@ -1311,6 +1311,39 @@ namespace ArchiveFixer.Services
                 logEntries.Add(("WARN", $"{task.LogName}：已覆盖（原文件按两阶段落位删除）：{overwrittenPath}"));
             }
 
+            /*
+             * 轮次输入账本：只记**定稿计划里属于内容物**的落地文件。
+             * 下一轮不再递归扫输出目录；目录形式的移动在这里展开一次，仍然只碰本次真正搬过的目标。
+             */
+            var producedFiles = new List<string>();
+
+            foreach ((string From, string To) in moved)
+            {
+                if (plan.ProcessArtifactSources.Contains(From))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (Directory.Exists(To))
+                    {
+                        producedFiles.AddRange(Directory.EnumerateFiles(
+                            To,
+                            "*",
+                            SearchOption.AllDirectories));
+                    }
+                    else if (File.Exists(To))
+                    {
+                        producedFiles.Add(To);
+                    }
+                }
+                catch
+                {
+                    // 读不了就只留目录级事实；下一轮兼容扫描仍能兜底。
+                }
+            }
+
             return new StageCommitResult
             {
                 Attempted = true,
@@ -1329,6 +1362,7 @@ namespace ArchiveFixer.Services
                 FailedCount = failures.Count,
                 Failures = failures,
                 Message = summary,
+                ProducedFiles = producedFiles,
                 LogEntries = logEntries
             };
         }

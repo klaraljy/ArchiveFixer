@@ -2741,45 +2741,72 @@ namespace ArchiveFixer.ViewModels
                 });
             }
 
-            List<(string OutputDirectory, List<string> Files)> scanned = await Task.Run(() =>
-            {
-                var results = new List<(string, List<string>)>();
+            /*
+             * 轮次输入账本：本轮成功任务的定稿计划已经登记了实际落地的内容物。
+             * 全部父任务都有账本 ⇒ 下一轮只吃这些路径，不扫输出目录树；
+             * 有一个任务没有账本（旧任务 / 定稿未走计划）才回落到目录扫描。
+             */
+            bool useProducedLedger = parents.Count > 0
+                && parents.All(parent => parent.Task.ProducedFiles.Count > 0);
 
-                // 扫描发生在后台线程上，先把当前生效的工作区根读出来（读的是批首定好的那一个）。
+            List<(string OutputDirectory, List<string> Files)> scanned;
+
+            if (useProducedLedger)
+            {
                 string workRoot = _vm.CurrentWorkspaceRoot;
 
-                foreach ((ArchiveTask _, string outputDirectory) in parents)
+                scanned = parents
+                    .Select(parent => (
+                        parent.OutputDirectory,
+                        parent.Task.ProducedFiles
+                            .Where(File.Exists)
+                            .Where(file => !WorkspaceTree.IsInsideWorkspace(file, workRoot))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList()))
+                    .ToList();
+            }
+            else
+            {
+                scanned = await Task.Run(() =>
                 {
-                    if (!Directory.Exists(outputDirectory))
+                    var results = new List<(string, List<string>)>();
+
+                    // 扫描发生在后台线程上，先把当前生效的工作区根读出来（读的是批首定好的那一个）。
+                    string workRoot = _vm.CurrentWorkspaceRoot;
+
+                    foreach ((ArchiveTask _, string outputDirectory) in parents)
                     {
-                        continue;
+                        if (!Directory.Exists(outputDirectory))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            /*
+                             * ⛔ 第 N 层产物扫描**必须排除工作区自己那棵树**（用户 2026-09-30）：
+                             * 工作区默认就建在目标目录里面（<目标目录>\.ArchiveFixer.work），
+                             * 里面躺着抠出来的内嵌归档副本、逐层的中间包 —— 它们**全都能被识别成归档**。
+                             * 不排除的话，程序会把工作区里的中间产物当成"用户的内层包"继续解，
+                             * 解完再把它们当内容物搬出去：不可逆的事故。
+                             *
+                             * ⚠ 「其余物」**不许整棵排除**（2026-10-05 实测）：默认档（只解当前这一层 +
+                             * 一键处理续解）下，上一层产出的内层包正是**收进其余物之后**才被这一轮扫描认出来、
+                             * 当下一个任务接着解的 —— 排掉整棵树等于把续解链砍掉
+                             * （`InnerLayerContinuationTests` / `ChainManifestCompletenessTests` 当场 18 条红）。
+                             * 真机那 857 vs 855 的噪声改由 <see cref="ShouldScanProducedFile"/> 那一处收口。
+                             */
+                            results.Add((outputDirectory, WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
+                        }
+                        catch
+                        {
+                            // 读不了这个目录：跳过（快照阶段已经写过一条 WARN，不重复打扰用户）。
+                        }
                     }
 
-                    try
-                    {
-                        /*
-                         * ⛔ 第 N 层产物扫描**必须排除工作区自己那棵树**（用户 2026-09-30）：
-                         * 工作区默认就建在目标目录里面（<目标目录>\.ArchiveFixer.work），
-                         * 里面躺着抠出来的内嵌归档副本、逐层的中间包 —— 它们**全都能被识别成归档**。
-                         * 不排除的话，程序会把工作区里的中间产物当成"用户的内层包"继续解，
-                         * 解完再把它们当内容物搬出去：不可逆的事故。
-                         *
-                         * ⚠ 「其余物」**不许整棵排除**（2026-10-05 实测）：默认档（只解当前这一层 +
-                         * 一键处理续解）下，上一层产出的内层包正是**收进其余物之后**才被这一轮扫描认出来、
-                         * 当下一个任务接着解的 —— 排掉整棵树等于把续解链砍掉
-                         * （`InnerLayerContinuationTests` / `ChainManifestCompletenessTests` 当场 18 条红）。
-                         * 真机那 857 vs 855 的噪声改由 <see cref="ShouldScanProducedFile"/> 那一处收口。
-                         */
-                        results.Add((outputDirectory, WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
-                    }
-                    catch
-                    {
-                        // 读不了这个目录：跳过（快照阶段已经写过一条 WARN，不重复打扰用户）。
-                    }
-                }
-
-                return results;
-            });
+                    return results;
+                });
+            }
 
             var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
 

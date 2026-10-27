@@ -840,6 +840,12 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
+        /// 本次解压**实际落地**的内容物绝对路径（定稿计划执行出来的那几条）。
+        /// 下一轮只从这个账本找归档候选，不再扫输出目录树；空表 = 老任务没有账本，走兼容扫描。
+        /// </summary>
+        public List<string> ProducedFiles { get; } = new();
+
+        /// <summary>
         /// 当前操作。
         /// 等待 / 扫描 / 改名 / 测试 / 解压 / 跳过 / 完成。
         /// </summary>

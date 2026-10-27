@@ -561,6 +561,45 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 轮次输入账本：定稿计划实际落地的内容物文件。
+             * 归集把整棵树搬走时，路径前缀跟着换到归集目标；下一轮不再扫输出目录。
+             */
+            if (work.Commit != null)
+            {
+                string sourceRoot = task.OutputPath;
+                string destinationRoot = work.Collected is { Success: true }
+                    ? work.Collected.DestinationPath
+                    : sourceRoot;
+
+                task.ProducedFiles.Clear();
+
+                foreach (string produced in work.Commit.ProducedFiles)
+                {
+                    if (string.IsNullOrWhiteSpace(produced))
+                    {
+                        continue;
+                    }
+
+                    string mapped = produced;
+
+                    if (!string.IsNullOrWhiteSpace(sourceRoot)
+                        && !string.IsNullOrWhiteSpace(destinationRoot)
+                        && !string.Equals(sourceRoot, destinationRoot, StringComparison.OrdinalIgnoreCase)
+                        && produced.StartsWith(
+                            sourceRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        mapped = Path.Combine(
+                            destinationRoot,
+                            produced.Substring(sourceRoot.Length)
+                                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    }
+
+                    task.ProducedFiles.Add(mapped);
+                }
+            }
+
+            /*
              * 记下**这一轮定稿实际使用的其余物目录**。
              *
              * 为什么必须记：真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出过程物，

@@ -61,6 +61,9 @@ namespace ArchiveFixer.Extraction
 
         public string Message { get; init; } = string.Empty;
 
+        /// <summary>实际落地的内容物文件（由定稿计划的目标路径展开；下一轮输入账本用）。</summary>
+        public IReadOnlyList<string> ProducedFiles { get; init; } = Array.Empty<string>();
+
         /// <summary>要带回 UI 线程写日志的行（后台线程不许直接写界面集合）。</summary>
         public List<(string Level, string Message)> LogEntries { get; init; } = new();
     }
