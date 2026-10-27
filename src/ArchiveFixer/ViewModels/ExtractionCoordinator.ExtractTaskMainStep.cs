@@ -103,6 +103,12 @@ namespace ArchiveFixer.ViewModels
                  * 它仍然是"内容卡证明的入口卷 + 第二大步点名"两个事实同时成立。
                  */
                 bool isSecondStepEntry = IsSecondStepTask(task);
+                string entryName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
+                bool nameOnlyVolumeCandidate =
+                    entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                    && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                    && ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
+                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) != null;
 
                 AppendLog(
                     "INFO",
@@ -110,7 +116,8 @@ namespace ArchiveFixer.ViewModels
 
                 if (!isSecondStepEntry
                     && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece))
+                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                        || nameOnlyVolumeCandidate))
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
