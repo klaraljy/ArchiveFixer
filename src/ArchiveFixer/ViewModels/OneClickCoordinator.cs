@@ -1194,11 +1194,10 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        List<string> groupRoots = innerArchives
-                            .Select(candidate => candidate.ParentOutputDirectory)
-                            .Concat(Tasks.Select(task => task.OutputPath))
-                            .Concat(Tasks.Select(task => Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
-                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.SourceLayer))
+                        List<string> groupRoots = _extractionCoordinator.VolumeHandoffEntries
+                            .Select(entry => entry.SourceLayer)
+                            .Concat(_extractionCoordinator.VolumeHandoffEntries
+                                .Select(entry => Path.GetDirectoryName(entry.Path ?? string.Empty) ?? string.Empty))
                             .Where(directory => !string.IsNullOrWhiteSpace(directory))
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
@@ -1218,7 +1217,7 @@ namespace ArchiveFixer.ViewModels
                                 foreach (string file in Directory.EnumerateFiles(
                                              root,
                                              "*",
-                                             SearchOption.AllDirectories))
+                                             SearchOption.TopDirectoryOnly))
                                 {
                                     if (IsVolumeCandidateSeed(file))
                                     {

@@ -921,7 +921,7 @@ namespace ArchiveFixer.Extraction
         {
             try
             {
-                return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories);
+                return Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly);
             }
             catch
             {
