@@ -401,6 +401,17 @@ namespace ArchiveFixer.Detection
                 return VolumeNamingFamily.ZipNumbered;
             }
 
+            /*
+             * 标准跨盘名本身就是强证据：`.z01…` + `.zip` 这一族，
+             * 内容卡只能在末片 EOCD 盘号 > 0 时才“证明”它是跨盘；
+             * 合成/外部工具做的跨盘 ZIP 常常只留下 `ZipEndRecordMeansSplit` 或判不出。
+             * 没有 `.zip.00N` 通用名时，不允许把 `.z01` 这一族降级成 ZipNumbered（那会 2 片直接判不出）。
+             */
+            if (anySpannedVolumeName && !anyGenericSplitName)
+            {
+                return VolumeNamingFamily.ZipSpanned;
+            }
+
             if (pieces.Any(card => card.ZipEndRecordMeansSplit))
             {
                 return pieces.Any(card =>

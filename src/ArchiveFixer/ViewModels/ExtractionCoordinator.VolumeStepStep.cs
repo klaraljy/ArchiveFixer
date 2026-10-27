@@ -140,7 +140,51 @@ namespace ArchiveFixer.ViewModels
                 $"[第二大步·组] 建组 {unit.BaseName}｜族={unit.Family}｜入口={FileNameHelper.GetFileName(unit.EntryPath)}"
                 + $"｜片={unit.Pieces.Count}｜owner={unit.OwnerTaskFileName}｜状态={unit.State}｜{unit.Verdict}");
 
+            if (ownerTask != null)
+            {
+                MarkFollowerTasksForGroup(unit, ownerTask);
+            }
+
             return unit;
+        }
+
+        /// <summary>
+        /// 入口已定 ⇒ 同组其余片的任务先落“跟班”事实。
+        /// 这样它们开跑前就不会再撞“源文件已变化”，也不会各自解一遍整组。
+        /// </summary>
+        private void MarkFollowerTasksForGroup(VolumeGroupUnit unit, ArchiveTask owner)
+        {
+            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
+                ? owner.FileName
+                : owner.DisplayFileName;
+
+            foreach (GroupPieceFact piece in unit.Pieces)
+            {
+                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+                    candidate != null
+                    && !ReferenceEquals(candidate, owner)
+                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
+                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
+
+                if (pieceTask == null)
+                {
+                    continue;
+                }
+
+                pieceTask.IsVolumeGroupFollower = true;
+                pieceTask.SettledWithGroupUnitName = ownerName;
+
+                if (pieceTask.Outcome == TaskOutcome.Pending)
+                {
+                    pieceTask.Outcome = TaskOutcome.Skipped;
+                    pieceTask.EndTime = DateTime.Now;
+                    pieceTask.MarkSkipped(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGroupFollowerSkippedFormat,
+                        ownerName));
+                }
+            }
         }
 
         /// <summary>链接完成后回写 Unit（唯一写者：Service）。</summary>
