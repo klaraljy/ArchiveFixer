@@ -194,9 +194,17 @@ namespace ArchiveFixer.ViewModels
                 path => IsUserImportedSourcePath(path),
                 (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
 
+            /*
+             * prepared 组的标准名硬链接在源卷临时入口目录里：收完片把这一组自己的空壳也删掉。
+             * TryDelete 只认 `.ArchiveFixer.work\group-entry` 下的目录，普通源层目录一律不碰。
+             */
+            bool removedEntryDirectory = ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+
             AppendLog(
                 "INFO",
-                $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片（用户原件不删）。");
+                $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片（用户原件不删）"
+                + (removedEntryDirectory ? "；临时标准名目录已清理" : string.Empty)
+                + "。");
 
             MarkVolumeHandoffVerdict(
                 work.Pieces,

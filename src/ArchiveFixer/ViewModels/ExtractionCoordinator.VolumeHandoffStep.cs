@@ -38,7 +38,17 @@ namespace ArchiveFixer.ViewModels
         /// **边界解析管线**（共用骨架）：族 resolver 从这里注册；骨架阶段未注册任何族，
         /// 因此 `ResolveAllAsync` 返回空，既有行为一个字不变。
         /// </summary>
-        private readonly VolumeBoundaryPipeline _volumeBoundaryPipeline = new();
+        private readonly VolumeBoundaryPipeline _volumeBoundaryPipeline = CreateVolumeBoundaryPipeline();
+
+        private static VolumeBoundaryPipeline CreateVolumeBoundaryPipeline()
+        {
+            var pipeline = new VolumeBoundaryPipeline();
+
+            // 7z 先接；RAR/ZIP 各自支线再接，⛔ 不在共享层写族特判。
+            pipeline.Register(new SevenZipBoundaryResolver());
+
+            return pipeline;
+        }
 
         /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;

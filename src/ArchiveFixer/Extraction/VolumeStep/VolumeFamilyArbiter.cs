@@ -47,9 +47,7 @@ namespace ArchiveFixer.Extraction
 
             bool sevenZip = entries.Any(entry =>
                 entry.Format == VolumeContentFormat.SevenZip
-                && (entry.BodyKind == ArchiveBodyKind.VolumeFirstPiece
-                    || entry.BodyKind == ArchiveBodyKind.VolumePiece
-                    || entry.DeclaredTotalBytes > 0));
+                && entry.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece);
 
             bool rar = entries.Any(entry =>
                 entry.Format == VolumeContentFormat.Rar

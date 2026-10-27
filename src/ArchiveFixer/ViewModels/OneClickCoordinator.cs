@@ -1319,6 +1319,40 @@ namespace ArchiveFixer.ViewModels
 
                         if (preparedGroups.Count > 0)
                         {
+                            /*
+                             * 标准名硬链接必须在 GroupAnalysis 之前建好：GroupAnalysis 只吃临时入口层。
+                             * 建不出来 ⇒ 这一组落 Unknown（⛔ 不退回脏名硬拼、⛔ 不猜）。
+                             */
+                            var materialized = new List<PreparedVolumeGroup>();
+
+                            foreach (PreparedVolumeGroup prepared in preparedGroups)
+                            {
+                                if (prepared.State != PreparedGroupState.Complete)
+                                {
+                                    materialized.Add(prepared);
+                                    continue;
+                                }
+
+                                PreparedVolumeGroup? linked = VolumeGroupEntryDirectory.TryMaterialize(
+                                    prepared,
+                                    null,
+                                    (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
+                                    out string linkError);
+
+                                if (linked == null)
+                                {
+                                    materialized.Add(prepared.WithState(
+                                        PreparedGroupState.Unknown,
+                                        $"标准名硬链接没建好：{linkError}"));
+                                }
+                                else
+                                {
+                                    materialized.Add(linked);
+                                }
+                            }
+
+                            preparedGroups = materialized;
+
                             var preparedBaseNames = new HashSet<string>(
                                 preparedGroups.Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
@@ -1421,7 +1455,8 @@ namespace ArchiveFixer.ViewModels
 
                         if (preUnit != null
                             && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
-                                || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown))
+                                || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
+                                || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly))
                         {
                             AppendLog(
                                 "INFO",
@@ -1429,15 +1464,24 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
+                        // 引擎读临时标准名；任务表/落点/source 处理只认原始入口。
                         string entryPath = preUnit?.NamePlan?.Items.FirstOrDefault(item => item.IsEntry)?.PiecePath
                             ?? group.EntryPath;
+
+                        string originalEntryPath = group.PreparedGroup?.OriginalEntryPath
+                            ?? group.OriginalEntryPath;
+
+                        if (string.IsNullOrWhiteSpace(originalEntryPath))
+                        {
+                            originalEntryPath = entryPath;
+                        }
 
                         ArchiveTask? entryTask = null;
 
                         foreach (ArchiveTask candidate in Tasks)
                         {
                             if (candidate != null
-                                && SafePathHelper.PathEquals(candidate.CurrentPath, entryPath))
+                                && SafePathHelper.PathEquals(candidate.CurrentPath, originalEntryPath))
                             {
                                 entryTask = candidate;
                                 break;
@@ -1455,7 +1499,7 @@ namespace ArchiveFixer.ViewModels
                             if (preUnit != null
                                 && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
                                     || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
-                                && File.Exists(entryPath))
+                                && File.Exists(originalEntryPath))
                             {
                                 /*
                                  * ⛔ 父目录必须取**这一片自己所在的那一层**，不能取组分析入口那一层的目录：
@@ -1464,14 +1508,14 @@ namespace ArchiveFixer.ViewModels
                                  * OutputPath 写进原包树（真机 8888：内容全部落到原包树、判据树里没有）。
                                  */
                                 string entryTaskLayer =
-                                    Path.GetDirectoryName(entryPath) ?? entryLayer;
+                                    Path.GetDirectoryName(originalEntryPath) ?? entryLayer;
 
                                 secondStepEntryCandidates.Add(new InnerArchiveCandidate
                                 {
-                                    Path = entryPath,
+                                    Path = originalEntryPath,
                                     ParentOutputDirectory = entryTaskLayer,
                                     ParentTaskName = group.BaseName,
-                                    RootSourcePath = entryPath
+                                    RootSourcePath = originalEntryPath
                                 });
                                 secondStepEntryGroups.Add((group, preUnit));
 
@@ -1554,7 +1598,8 @@ namespace ArchiveFixer.ViewModels
 
                         if (committedUnit != null
                             && (committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
-                                || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown))
+                                || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
+                                || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly))
                         {
                             AppendLog(
                                 "INFO",
@@ -1576,7 +1621,14 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
-                        _extractionCoordinator.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名");
+
+                        IReadOnlyList<string> consumedPaths = group.PreparedGroup?.Pieces
+                            .Select(piece => piece.OriginalPath)
+                            .Where(path => !string.IsNullOrWhiteSpace(path))
+                            .ToList()
+                            ?? group.Pieces;
+
+                        _extractionCoordinator.MarkVolumeHandoffConsumed(consumedPaths, "第二大步·点名");
 
                         /*
                          * ===== C 段：把片放进入口层，**一律只建硬链接** =====
@@ -1584,7 +1636,27 @@ namespace ArchiveFixer.ViewModels
                          * ⛔ 规范卷名/改名是**第二大步自己的算法**，不在这里做（用户 2026-10-24 拍板：
                          * 交界处只负责把片送到入口层；"名字该怎么写"属第二大步）。
                          */
-                        if (entryLayer.Length > 0)
+                        if (group.PreparedGroup is not null)
+                        {
+                            /*
+                             * prepared 组的标准名已由边界 resolver 在临时入口层建好；
+                             * 这里只把引擎入口指过去，⛔ 不再搬/链接一次、⛔ 不再造第二套名字。
+                             */
+                            entryTask.EngineEntryPathOverride = entryPath;
+
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·标准名] {group.BaseName}：prepared 组入口 = "
+                                + $"{FileNameHelper.GetFileName(entryPath)}（原始入口 {FileNameHelper.GetFileName(originalEntryPath)}；"
+                                + "源文件未动）");
+
+                            _extractionCoordinator.RememberVolumeStepGroupWork(
+                                entryTask,
+                                group.BaseName,
+                                entryLayer,
+                                group.Pieces);
+                        }
+                        else if (entryLayer.Length > 0)
                         {
                             if (committedUnit?.NamePlan is { IsEmpty: false } namePlan)
                             {

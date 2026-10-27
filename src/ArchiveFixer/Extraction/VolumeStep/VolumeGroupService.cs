@@ -244,6 +244,15 @@ namespace ArchiveFixer.Extraction
 
             if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
             {
+                // prepared 组先由边界解析建一次（owner 为空），任务表里找到入口后只补写一次 owner。
+                if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
+                    && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
+                    && existing.State == VolumeGroupState.Complete)
+                {
+                    existing.OwnerTaskFileName = ownerTaskFileName;
+                    existing.State = VolumeGroupState.OwnerAssigned;
+                }
+
                 return existing;
             }
 
@@ -256,6 +265,22 @@ namespace ArchiveFixer.Extraction
                     : prepared.CanonicalEntryPath)
             {
                 State = MapPreparedState(prepared.State),
+                Pieces = prepared.Pieces.Select(piece => new GroupPieceFact(
+                        piece.OriginalPath,
+                        piece.Size,
+                        FormatForFamily(prepared.Family),
+                        ArchiveBodyKind.Unknown,
+                        null,
+                        false,
+                        VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+                        VolumeNumberFail.NotAnArchive,
+                        0,
+                        0,
+                        null,
+                        prepared.OriginalSourceLayer,
+                        piece.Source,
+                        true))
+                    .ToList(),
                 OrderedPieces = prepared.Pieces
                     .Select(piece => string.IsNullOrWhiteSpace(prepared.EntryLayer)
                         ? piece.OriginalPath
@@ -292,6 +317,17 @@ namespace ArchiveFixer.Extraction
 
             unit.State = VolumeGroupState.SizeAnomaly;
             unit.Verdict = detail ?? string.Empty;
+        }
+
+        private static VolumeContentFormat FormatForFamily(VolumeNamingFamily? family)
+        {
+            return family switch
+            {
+                VolumeNamingFamily.SevenZipNumbered => VolumeContentFormat.SevenZip,
+                VolumeNamingFamily.RarPart => VolumeContentFormat.Rar,
+                VolumeNamingFamily.ZipSpanned or VolumeNamingFamily.ZipNumbered => VolumeContentFormat.Zip,
+                _ => VolumeContentFormat.Unknown
+            };
         }
 
         private static VolumeGroupState MapPreparedState(PreparedGroupState state)

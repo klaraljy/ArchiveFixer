@@ -120,6 +120,25 @@ namespace ArchiveFixer.Extraction
             };
         }
 
+        /// <summary>同一组事实改成另一个结论（例如标准名硬链接建不出来 ⇒ Unknown）。</summary>
+        public PreparedVolumeGroup WithState(PreparedGroupState state, string evidence)
+        {
+            return new PreparedVolumeGroup
+            {
+                BaseName = BaseName,
+                Family = Family,
+                OriginalSourceLayer = OriginalSourceLayer,
+                EntryLayer = EntryLayer,
+                OriginalEntryPath = OriginalEntryPath,
+                EntryCanonicalName = EntryCanonicalName,
+                Pieces = Pieces,
+                MissingNumbers = MissingNumbers,
+                State = state,
+                Evidence = evidence,
+                SizeAnomalyDetail = SizeAnomalyDetail
+            };
+        }
+
         /// <summary>给人看的一行（日志/判据输入共用；⛔ 不猜）。</summary>
         public string Describe()
         {

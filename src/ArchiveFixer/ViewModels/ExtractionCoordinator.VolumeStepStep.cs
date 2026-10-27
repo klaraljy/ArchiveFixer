@@ -49,13 +49,13 @@ namespace ArchiveFixer.ViewModels
                     standardNameFastPath: standardNameFastPath);
             }
 
-            if (standardNameFastPath)
+            if (group.PreparedGroup != null || standardNameFastPath)
             {
                 return TryCommitVolumeGroup(
                     group,
                     ownerTask,
                     entryLayer,
-                    standardNameFastPath: true);
+                    standardNameFastPath: standardNameFastPath);
             }
 
             GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
@@ -100,6 +100,45 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
+            string? ownerName = ownerTask == null
+                ? null
+                : FileNameHelper.GetFileName(ownerTask.CurrentPath ?? string.Empty);
+
+            string outputLayer = ownerTask != null
+                ? Path.GetDirectoryName(ownerTask.CurrentPath ?? string.Empty) ?? string.Empty
+                : Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
+            /*
+             * 共用骨架：prepared 组已经由边界 resolver 定序/校验/出标准名，
+             * ⛔ 不再走族算法二次定序，也不再把临时标准名当族证据重读。
+             */
+            if (group.PreparedGroup is { } prepared)
+            {
+                VolumeGroupUnit? preparedUnit =
+                    _volumeGroupService.TryCommitPrepared(prepared, ownerName, outputLayer);
+
+                if (preparedUnit == null)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步·组] {group.BaseName}：prepared 组建组被拒（源层/入口/片清单不完整）⇒ 不动作。");
+                    return null;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·组] prepared 建组 {preparedUnit.BaseName}｜族={preparedUnit.Family}"
+                    + $"｜入口={FileNameHelper.GetFileName(preparedUnit.EntryPath)}"
+                    + $"｜owner={preparedUnit.OwnerTaskFileName}｜状态={preparedUnit.State}｜{preparedUnit.Verdict}");
+
+                if (ownerTask != null)
+                {
+                    MarkFollowerTasksForPreparedGroup(prepared, ownerTask);
+                }
+
+                return preparedUnit;
+            }
+
             VolumeNamingFamily? family;
 
             try
@@ -121,15 +160,6 @@ namespace ArchiveFixer.ViewModels
             /*
              * 已接线的族：**由族算法判完整性**；GroupAnalysis 的候选建议不参与最终结论。
              */
-
-            string? ownerName = ownerTask == null
-                ? null
-                : FileNameHelper.GetFileName(ownerTask.CurrentPath ?? string.Empty);
-
-            string outputLayer = ownerTask != null
-                ? Path.GetDirectoryName(ownerTask.CurrentPath ?? string.Empty) ?? string.Empty
-                : Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
-
             VolumeGroupUnit? unit = _volumeGroupService.TryCommit(
                 group.BaseName,
                 family,
@@ -182,6 +212,41 @@ namespace ArchiveFixer.ViewModels
                     && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
                     && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
                         || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
+
+                if (pieceTask == null)
+                {
+                    continue;
+                }
+
+                pieceTask.IsVolumeGroupFollower = true;
+                pieceTask.SettledWithGroupUnitName = ownerName;
+            }
+        }
+
+        /// <summary>
+        /// prepared 组的跟班标记：按**原始路径**找任务（⛔ 不拿临时标准名去找）。
+        /// </summary>
+        private void MarkFollowerTasksForPreparedGroup(
+            PreparedVolumeGroup prepared,
+            ArchiveTask owner)
+        {
+            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
+                ? owner.FileName
+                : owner.DisplayFileName;
+
+            foreach (PreparedVolumePiece piece in prepared.Pieces)
+            {
+                if (string.IsNullOrWhiteSpace(piece.OriginalPath))
+                {
+                    continue;
+                }
+
+                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+                    candidate != null
+                    && !ReferenceEquals(candidate, owner)
+                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.OriginalPath)
+                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.OriginalPath)));
 
                 if (pieceTask == null)
                 {
