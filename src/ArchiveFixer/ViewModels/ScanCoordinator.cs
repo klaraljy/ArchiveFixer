@@ -408,9 +408,21 @@ namespace ArchiveFixer.ViewModels
                          * 所以下面那些碰 `Tasks` 集合的动作（并组、写日志、刷汇总）照旧在 UI 线程上做。
                          * ⛔ 识别结论一个字都没改，只是换了个线程去算。
                          */
-                        await Task.Run(
-                            () => _archiveDetectService.ApplyDetectResultAsync(task, _operationCts.Token),
+                        using var detectTimeout = CancellationTokenSource.CreateLinkedTokenSource(
                             _operationCts.Token);
+                        detectTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+
+                        await Task.Run(
+                            () => _archiveDetectService.ApplyDetectResultAsync(task, detectTimeout.Token),
+                            detectTimeout.Token);
+
+                        if (detectTimeout.IsCancellationRequested
+                            && !_operationCts.Token.IsCancellationRequested)
+                        {
+                            AppendLog(
+                                "WARN",
+                                $"{task.FileName}：识别超过 10 秒，按判不出处理，继续后面的文件。");
+                        }
 
                         // 「首卷补齐后并组」：这一行若是"只有后续卷"，而它的首卷就在列表里 → 并入首卷那一行。
                         MergeLaterVolumeIntoFirstVolumeRow(task);

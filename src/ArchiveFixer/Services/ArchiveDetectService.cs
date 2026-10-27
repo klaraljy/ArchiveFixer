@@ -111,6 +111,79 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 头部像常见媒体容器（MP4/JPEG/PNG/GIF/RIFF/EBML/FLV/MPEG/ID3）。
+        /// ⛔ 只用于**限制深度顺序扫的窗口**，不用于判定"不是归档"；
+        /// 媒体前缀 + 尾部归档仍由尾部路先回答。
+        /// </summary>
+        private static bool LooksLikeMediaHeader(ReadOnlySpan<byte> header)
+        {
+            if (header.Length >= 12
+                && header[4] == (byte)'f'
+                && header[5] == (byte)'t'
+                && header[6] == (byte)'y'
+                && header[7] == (byte)'p')
+            {
+                return true;
+            }
+
+            if (header.Length >= 3
+                && header[0] == 0xFF
+                && header[1] == 0xD8
+                && header[2] == 0xFF)
+            {
+                return true;
+            }
+
+            if (header.Length >= 8
+                && header[0] == 0x89
+                && header[1] == 0x50
+                && header[2] == 0x4E
+                && header[3] == 0x47)
+            {
+                return true;
+            }
+
+            if (header.Length >= 6
+                && (header[0] == (byte)'G' && header[1] == (byte)'I' && header[2] == (byte)'F')
+                || (header.Length >= 4
+                    && header[0] == (byte)'R' && header[1] == (byte)'I' && header[2] == (byte)'F' && header[3] == (byte)'F'))
+            {
+                return true;
+            }
+
+            if (header.Length >= 4
+                && header[0] == 0x1A
+                && header[1] == 0x45
+                && header[2] == 0xDF
+                && header[3] == 0xA3)
+            {
+                return true;
+            }
+
+            if (header.Length >= 4
+                && header[0] == (byte)'F'
+                && header[1] == (byte)'L'
+                && header[2] == (byte)'V')
+            {
+                return true;
+            }
+
+            if (header.Length >= 4
+                && header[0] == 0x00
+                && header[1] == 0x00
+                && header[2] == 0x01
+                && header[3] == 0xBA)
+            {
+                return true;
+            }
+
+            return header.Length >= 3
+                && header[0] == (byte)'I'
+                && header[1] == (byte)'D'
+                && header[2] == (byte)'3';
+        }
+
+        /// <summary>
         /// 读文件**尾部**若干字节（只给缓存键算指纹用）。读不到 / 空文件返回空数组（那就这一档不缓存）。
         ///
         /// <para>文件比这个长度还短时读到的就是整个文件，所以小文件的键天然是"整份内容"。</para>
@@ -349,7 +422,12 @@ namespace ArchiveFixer.Services
                  * ⚠ 这一遍就是"识别慢"的大头（实测 2 GiB 认不出格式的文件要 3.5 秒）——
                  * 所以上面那道缓存键才必须包含"文件尾 256 KB 的指纹"。
                  */
-                TailArchiveScanResult scan = TailArchiveScanner.Scan(filePath);
+                TailArchiveScanResult scan = TailArchiveScanner.Scan(
+                    filePath,
+                    cancellationToken,
+                    LooksLikeMediaHeader(header)
+                        ? 64L * 1024 * 1024
+                        : TailArchiveScanner.MaxScanBytes);
 
                 /*
                  * 优先级：**自洽校验通过的 ZIP 优先于一个孤零零的魔数**。

@@ -134,7 +134,10 @@ namespace ArchiveFixer.Detection
         ///
         /// <para>读不了 / 出错一律返回空结果（识别兜底分支不允许把扫描炸掉）。</para>
         /// </summary>
-        public static TailArchiveScanResult Scan(string? filePath, CancellationToken cancellationToken = default)
+        public static TailArchiveScanResult Scan(
+            string? filePath,
+            CancellationToken cancellationToken = default,
+            long maxScanBytes = MaxScanBytes)
         {
             TailArchiveSignature? archive = null;
             var eocdOffsets = new List<long>();
@@ -163,7 +166,7 @@ namespace ArchiveFixer.Detection
                     FileOptions.SequentialScan);
 
                 long fileLength = stream.Length;
-                long limit = Math.Min(fileLength, MaxScanBytes);
+                long limit = Math.Min(fileLength, Math.Max(0, maxScanBytes));
 
                 byte[] buffer = new byte[ScanChunkBytes + Rar5Signature.Length];
                 long position = 0;
