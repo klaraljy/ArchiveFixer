@@ -53,6 +53,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>特定解压独立管线用的引擎（只读转发，不另造实例）。</summary>
         internal IArchiveEngine SpecificExtractionEngine => _archiveEngine;
 
+        /// <summary>边界 resolver 试开用的引擎（只读转发；⛔ 不另造实例）。</summary>
+        internal IArchiveEngine ArchiveEngine => _archiveEngine;
+
         /// <summary>特定解压批次开工时清空“本次导入内已成功”的两本账。</summary>
         internal void BeginSpecificPasswordBatch() => _passwordService.BeginBatch();
 

@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using Xunit;
 
@@ -287,6 +290,82 @@ namespace ArchiveFixer.Tests
             Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
         }
 
+        [SevenZipFact]
+        public async Task 七z_resolver_两片名字丢了_硬链接试开定序()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "af-sevenzip-trial-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string build = Path.Combine(root, "build");
+                Directory.CreateDirectory(build);
+
+                var payload = new byte[2_500_000];
+                new Random(20261027).NextBytes(payload);
+                string payloadPath = Path.Combine(build, "payload.bin");
+                File.WriteAllBytes(payloadPath, payload);
+
+                string archive = Path.Combine(root, "111.7z");
+                RunSevenZip(build, "a", "-t7z", "-mx0", "-v1m", archive, "payload.bin");
+
+                List<string> parts = Directory.GetFiles(root, "111.7z.*")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                Assert.Equal(3, parts.Count);
+
+                // 中间/末片名字都丢掉；基名仍是 111，内容判不出。
+                string middle = parts[1];
+                string tail = parts[2];
+                File.Move(middle, Path.Combine(root, "111.中间"));
+                File.Move(tail, Path.Combine(root, "111.尾巴"));
+
+                string first = parts[0];
+                var ledger = new FirstStepFileLedger();
+
+                foreach (string path in new[]
+                         {
+                             first,
+                             Path.Combine(root, "111.中间"),
+                             Path.Combine(root, "111.尾巴")
+                         })
+                {
+                    ledger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                        FileNature.Inspect(path),
+                        "trial",
+                        VolumeHandoffSource.UserImported));
+                }
+
+                PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                    new VolumeBoundaryContext
+                    {
+                        Ledger = ledger,
+                        BaseName = "111",
+                        Engine = new SevenZipEngine(),
+                        WorkspaceRoot = root
+                    });
+
+                Assert.NotNull(group);
+                Assert.Equal(PreparedGroupState.Complete, group!.State);
+                Assert.Equal(3, group.Pieces.Count);
+                Assert.Equal("111.7z.001", group.EntryCanonicalName);
+                Assert.Equal(first, group.Pieces[0].OriginalPath);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
         [Fact]
         public void VolumeGroupService_prepared组_直接登记结论_不再调族算法()
         {
@@ -406,6 +485,33 @@ namespace ArchiveFixer.Tests
             }
 
             return ledger;
+        }
+
+        private static void RunSevenZip(string workDirectory, params string[] args)
+        {
+            string? sevenZip = SevenZipFactAttribute.LocateSevenZipPath();
+
+            Assert.False(string.IsNullOrWhiteSpace(sevenZip), "找不到内置 7z.exe");
+
+            var startInfo = new ProcessStartInfo(sevenZip!)
+            {
+                WorkingDirectory = workDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            foreach (string arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("7z 起不来");
+            string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "7z 超时");
+            Assert.True(process.ExitCode == 0, $"7z 失败（{process.ExitCode}）：{output}");
         }
 
         private static FirstStepFileLedgerEntry SevenZipEntry(

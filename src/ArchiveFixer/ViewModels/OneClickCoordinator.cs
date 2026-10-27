@@ -1309,6 +1309,8 @@ namespace ArchiveFixer.ViewModels
                                     {
                                         Ledger = _extractionCoordinator.FirstStepLedger,
                                         BaseName = baseName,
+                                        Engine = _extractionCoordinator.ArchiveEngine,
+                                        WorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot,
                                         OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
                                             .SameBase(baseName)
                                             .Select(entry => entry.SourceLayer)

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -25,7 +26,7 @@ namespace ArchiveFixer.Extraction
     {
         public VolumeNamingFamily Family => VolumeNamingFamily.SevenZipNumbered;
 
-        public Task<PreparedVolumeGroup?> ResolveAsync(
+        public async Task<PreparedVolumeGroup?> ResolveAsync(
             VolumeBoundaryContext context,
             CancellationToken cancellationToken = default)
         {
@@ -33,7 +34,7 @@ namespace ArchiveFixer.Extraction
 
             if (context == null || context.Ledger == null || string.IsNullOrWhiteSpace(context.BaseName))
             {
-                return Task.FromResult<PreparedVolumeGroup?>(null);
+                return (null);
             }
 
             List<FirstStepFileLedgerEntry> candidates = context.Ledger
@@ -51,7 +52,7 @@ namespace ArchiveFixer.Extraction
 
             if (firsts.Count != 1)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     Unknown(
                         context.BaseName,
                         unique,
@@ -63,7 +64,7 @@ namespace ArchiveFixer.Extraction
 
             if (first.Size <= 0 || first.DeclaredTotalBytes <= 0 || total < 2)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     Unknown(context.BaseName, unique, "7z 首卷自述的大小/片数不成立 ⇒ 判不出"));
             }
 
@@ -87,7 +88,7 @@ namespace ArchiveFixer.Extraction
 
                 if (slot.Value < 2 || slot.Value > total)
                 {
-                    return Task.FromResult<PreparedVolumeGroup?>(
+                    return (
                         SizeAnomaly(
                             context.BaseName,
                             unique,
@@ -96,7 +97,7 @@ namespace ArchiveFixer.Extraction
 
                 if (slots.ContainsKey(slot.Value))
                 {
-                    return Task.FromResult<PreparedVolumeGroup?>(
+                    return (
                         SizeAnomaly(
                             context.BaseName,
                             unique,
@@ -108,7 +109,7 @@ namespace ArchiveFixer.Extraction
 
             if (unique.Count != total)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     SizeAnomaly(
                         context.BaseName,
                         unique,
@@ -122,7 +123,7 @@ namespace ArchiveFixer.Extraction
 
             if (missing.Count != unassigned.Count)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     SizeAnomaly(
                         context.BaseName,
                         unique,
@@ -133,44 +134,39 @@ namespace ArchiveFixer.Extraction
             {
                 slots[missing[0]] = unassigned[0];
             }
-            else if (unassigned.Count > 1 && missing.Contains(total))
+            else if (unassigned.Count > 1)
             {
-                List<FirstStepFileLedgerEntry> bySize = unassigned
-                    .OrderBy(entry => entry.Size)
-                    .ToList();
+                Dictionary<int, FirstStepFileLedgerEntry>? probed =
+                    await TryProbeUnassignedOrderAsync(
+                            context,
+                            first,
+                            missing,
+                            unassigned,
+                            total,
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-                if (bySize[0].Size < bySize[1].Size)
+                if (probed == null)
                 {
-                    slots[total] = bySize[0];
-
-                    if (missing.Count != 2)
-                    {
-                        return Task.FromResult<PreparedVolumeGroup?>(
-                            Unknown(
-                                context.BaseName,
-                                unique,
-                                $"7z 有 {unassigned.Count} 片未定槽、缺 {missing.Count} 个槽，顺序不明 ⇒ 判不出"));
-                    }
-
-                    slots[missing.First(number => number != total)] = bySize[1];
+                    return (
+                        Unknown(
+                            context.BaseName,
+                            unique,
+                            $"7z 有 {unassigned.Count} 片未定槽、缺 {missing.Count} 个槽，"
+                            + "顺序不明且没有可用的试开条件 ⇒ 判不出"));
                 }
-                else
+
+                foreach (KeyValuePair<int, FirstStepFileLedgerEntry> pair in probed)
                 {
-                    return Task.FromResult<PreparedVolumeGroup?>(
-                        Unknown(context.BaseName, unique, "7z 最后两片一样大，末片与中间片分不出 ⇒ 判不出"));
+                    slots[pair.Key] = pair.Value;
                 }
-            }
-            else if (unassigned.Count > 0)
-            {
-                return Task.FromResult<PreparedVolumeGroup?>(
-                    Unknown(context.BaseName, unique, $"7z 有 {unassigned.Count} 片未定槽 ⇒ 顺序不明"));
             }
 
             long receivedBytes = unique.Sum(entry => entry.Size);
 
             if (receivedBytes != first.DeclaredTotalBytes)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     SizeAnomaly(
                         context.BaseName,
                         unique,
@@ -181,7 +177,7 @@ namespace ArchiveFixer.Extraction
             {
                 if (slots[slot].Size != first.Size)
                 {
-                    return Task.FromResult<PreparedVolumeGroup?>(
+                    return (
                         SizeAnomaly(
                             context.BaseName,
                             unique,
@@ -191,7 +187,7 @@ namespace ArchiveFixer.Extraction
 
             if (slots[total].Size > first.Size)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     SizeAnomaly(
                         context.BaseName,
                         unique,
@@ -205,7 +201,7 @@ namespace ArchiveFixer.Extraction
 
             if (targets.Count != total)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
+                return (
                     Unknown(context.BaseName, unique, "7z 标准名生成数量不符 ⇒ 判不出"));
             }
 
@@ -223,7 +219,7 @@ namespace ArchiveFixer.Extraction
                 });
             }
 
-            return Task.FromResult<PreparedVolumeGroup?>(new PreparedVolumeGroup
+            return (new PreparedVolumeGroup
             {
                 BaseName = context.BaseName,
                 Family = Family,
@@ -234,6 +230,141 @@ namespace ArchiveFixer.Extraction
                 State = PreparedGroupState.Complete,
                 Evidence = $"7z 首卷自述 {total} 片 / {first.DeclaredTotalBytes} 字节；字节和、中间片大小、末片大小均对上"
             });
+        }
+
+        /// <summary>
+        /// 7z 中间片名字读不出时的**高概率顺序试开**：最多 3 个未定槽 ⇒ 最多 6 种排列，
+        /// 用硬链接让引擎真的开一遍；赢的那一版才锁槽。没有引擎/工作区/跨卷 ⇒ null（判不出，不猜）。
+        /// </summary>
+        private static async Task<Dictionary<int, FirstStepFileLedgerEntry>?> TryProbeUnassignedOrderAsync(
+            VolumeBoundaryContext context,
+            FirstStepFileLedgerEntry first,
+            IReadOnlyList<int> missing,
+            IReadOnlyList<FirstStepFileLedgerEntry> unassigned,
+            int total,
+            CancellationToken cancellationToken)
+        {
+            if (context.Engine == null
+                || string.IsNullOrWhiteSpace(context.WorkspaceRoot)
+                || missing.Count == 0
+                || missing.Count != unassigned.Count
+                || unassigned.Count > 3)
+            {
+                return null;
+            }
+
+            var orderings = new List<IReadOnlyList<VolumeCandidate>>();
+
+            foreach (IReadOnlyList<FirstStepFileLedgerEntry> permutation in Permute(unassigned))
+            {
+                var rest = new List<VolumeCandidate>(permutation.Count);
+
+                for (int index = 0; index < permutation.Count; index++)
+                {
+                    rest.Add(new VolumeCandidate
+                    {
+                        Path = permutation[index].Path,
+                        Size = permutation[index].Size
+                    });
+                }
+
+                orderings.Add(rest);
+            }
+
+            if (orderings.Count == 0)
+            {
+                return null;
+            }
+
+            VolumeProbeOutcome outcome = await new VolumeProbeVerifier(context.Engine)
+                .VerifyAsync(
+                    first.Path,
+                    orderings,
+                    cancellationToken,
+                    context.WorkspaceRoot,
+                    VolumeContentFormat.SevenZip)
+                .ConfigureAwait(false);
+
+            if (!outcome.Confirmed
+                || outcome.OrderedVolumes.Count != total)
+            {
+                return null;
+            }
+
+            var byPath = new Dictionary<string, FirstStepFileLedgerEntry>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (FirstStepFileLedgerEntry entry in unassigned.Append(first))
+            {
+                byPath[Path.GetFullPath(entry.Path)] = entry;
+            }
+
+            var resolved = new Dictionary<int, FirstStepFileLedgerEntry>();
+
+            for (int index = 0; index < outcome.OrderedVolumes.Count; index++)
+            {
+                string path = Path.GetFullPath(outcome.OrderedVolumes[index].Path);
+
+                if (!byPath.TryGetValue(path, out FirstStepFileLedgerEntry? entry))
+                {
+                    return null;
+                }
+
+                int slot = index + 1;
+
+                if (resolved.ContainsKey(slot))
+                {
+                    return null;
+                }
+
+                resolved[slot] = entry;
+            }
+
+            return resolved.Count == total ? resolved : null;
+        }
+
+        private static IEnumerable<IReadOnlyList<FirstStepFileLedgerEntry>> Permute(
+            IReadOnlyList<FirstStepFileLedgerEntry> items)
+        {
+            if (items.Count == 0)
+            {
+                yield return Array.Empty<FirstStepFileLedgerEntry>();
+                yield break;
+            }
+
+            var used = new bool[items.Count];
+            var current = new FirstStepFileLedgerEntry[items.Count];
+
+            IEnumerable<IReadOnlyList<FirstStepFileLedgerEntry>> Fill(int position)
+            {
+                if (position == items.Count)
+                {
+                    yield return current.ToArray();
+                    yield break;
+                }
+
+                for (int index = 0; index < items.Count; index++)
+                {
+                    if (used[index])
+                    {
+                        continue;
+                    }
+
+                    used[index] = true;
+                    current[position] = items[index];
+
+                    foreach (IReadOnlyList<FirstStepFileLedgerEntry> result in Fill(position + 1))
+                    {
+                        yield return result;
+                    }
+
+                    used[index] = false;
+                }
+            }
+
+            foreach (IReadOnlyList<FirstStepFileLedgerEntry> result in Fill(0))
+            {
+                yield return result;
+            }
         }
 
         private static bool IsSevenZipCandidate(FirstStepFileLedgerEntry entry)

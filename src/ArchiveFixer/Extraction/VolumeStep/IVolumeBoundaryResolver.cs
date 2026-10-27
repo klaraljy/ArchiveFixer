@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
 {
@@ -21,6 +22,9 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>本单目标工作区根（可空；没有它就不做任何试开）。</summary>
         public string? WorkspaceRoot { get; init; }
+
+        /// <summary>试开用的引擎（可空；没有它就不做任何试开）。</summary>
+        public IArchiveEngine? Engine { get; init; }
 
         public IReadOnlyList<string> PasswordCandidates { get; init; } = Array.Empty<string>();
 
