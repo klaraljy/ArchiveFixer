@@ -367,6 +367,89 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task RAR5_resolver_绝对卷号三片_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part1.rar", 1, RarVariant.Rar5, first: true, size: 100));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part2.rar", 2, RarVariant.Rar5, size: 100));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part3.rar", 3, RarVariant.Rar5, size: 50));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal(3, group.Pieces.Count);
+            Assert.Equal("111.part1.rar", group.EntryCanonicalName);
+        }
+
+        [Fact]
+        public async Task RAR5_resolver_缺一个卷号_Missing点名()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part1.rar", 1, RarVariant.Rar5, first: true));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part3.rar", 3, RarVariant.Rar5));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Missing, group!.State);
+            Assert.Equal(new[] { 2 }, group.MissingNumbers);
+        }
+
+        [Fact]
+        public async Task RAR4新编号_resolver_卷尾字段两片_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part1.rar", 1, RarVariant.Rar4New, first: true));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part2.rar", 2, RarVariant.Rar4New));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+        }
+
+        [Fact]
+        public async Task RAR4老编号_resolver_rar加r00加r01_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.rar", null, RarVariant.Rar4Old, first: true));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.r00", null, RarVariant.Rar4Old));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.r01", null, RarVariant.Rar4Old));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal(
+                new[] { "111.rar", "111.r00", "111.r01" },
+                group.Pieces.Select(piece => piece.CanonicalName));
+        }
+
+        [Fact]
+        public async Task RAR_resolver_同基名混两个变体_SizeAnomaly()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part1.rar", 1, RarVariant.Rar5, first: true));
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part2.rar", 2, RarVariant.Rar4New));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
+        }
+
+        [Fact]
         public void VolumeGroupService_prepared组_直接登记结论_不再调族算法()
         {
             var service = new VolumeGroupService();
@@ -512,6 +595,29 @@ namespace ArchiveFixer.Tests
 
             Assert.True(process.WaitForExit(120_000), "7z 超时");
             Assert.True(process.ExitCode == 0, $"7z 失败（{process.ExitCode}）：{output}");
+        }
+
+        private static FirstStepFileLedgerEntry RarEntry(
+            string path,
+            int? number,
+            RarVariant variant,
+            bool first = false,
+            long size = 10)
+        {
+            return new FirstStepFileLedgerEntry
+            {
+                Path = path,
+                BaseName = "111",
+                Size = size,
+                Format = VolumeContentFormat.Rar,
+                BodyKind = first ? ArchiveBodyKind.VolumeFirstPiece : ArchiveBodyKind.Unknown,
+                Membership = VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                VolumeNumber = number,
+                FirstVolumeFlag = first,
+                RarVariant = variant,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                IsGatePassed = true
+            };
         }
 
         private static FirstStepFileLedgerEntry SevenZipEntry(

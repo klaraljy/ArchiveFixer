@@ -44,8 +44,9 @@ namespace ArchiveFixer.ViewModels
         {
             var pipeline = new VolumeBoundaryPipeline();
 
-            // 7z 先接；RAR/ZIP 各自支线再接，⛔ 不在共享层写族特判。
+            // 7z / RAR 先接；ZIP 支线再接，⛔ 不在共享层写族特判。
             pipeline.Register(new SevenZipBoundaryResolver());
+            pipeline.Register(new RarBoundaryResolver());
 
             return pipeline;
         }

@@ -128,11 +128,17 @@ namespace ArchiveFixer.ViewModels
                 bool contentVolumeCandidate =
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
                     || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
-                    // 文件不在时 FileNatureCard 是默认值（Membership 默认枚举值 = VolumeMember），
-                    // ⛔ 不能把"读不到"当成内容证据；必须有格式/大小才算。
-                    || (entryCard.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                    /*
+                     * RAR4 老编号的 `.r00` 卡上没有 BodyKind，但 Membership 可靠；
+                     * ZIP 的 `Membership=VolumeMember` 只说明"开头像 zip 流"（普通单卷也成立），
+                     * ⛔ 不能单凭它把 `pipe.zip` 这类单卷挡在第一大步外。ZIP 只认 split EOCD。
+                     */
+                    || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
                         && entryCard.Size > 0
-                        && entryCard.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+                        && entryCard.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                    || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip
+                        && entryCard.Size > 0
+                        && entryCard.ZipEndRecordMeansSplit);
 
                 string handoffEvidence = contentVolumeCandidate
                     ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven.ToString()
