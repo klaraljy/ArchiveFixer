@@ -32,21 +32,41 @@ namespace ArchiveFixer.ViewModels
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
 
         /// <summary>
-        /// 第二大步入口的**纯后缀清洗**：只把交接单里文件名第一个点之后那段中的
-        /// 非 ASCII 杂质删掉，基名/内容不动；目标名被占就不改。
+        /// 第二大步入口的**纯后缀清洗**：任务/交接单里所有文件都看，只把文件名第一个点之后
+        /// 那段中的非 ASCII 杂质删掉，基名/内容不动；目标名被占就不改。
         /// </summary>
         internal int CleanupSuffixJunkAtSecondStep(IReadOnlyCollection<ArchiveTask>? tasks)
         {
             int renamed = 0;
+            var paths = new List<string>();
+
+            if (tasks != null)
+            {
+                foreach (ArchiveTask task in tasks)
+                {
+                    if (!string.IsNullOrWhiteSpace(task.CurrentPath))
+                    {
+                        paths.Add(task.CurrentPath);
+                    }
+                }
+            }
 
             foreach (VolumeHandoffEntry entry in _volumeHandoffEntries)
             {
-                if (string.IsNullOrWhiteSpace(entry.Path) || !File.Exists(entry.Path))
+                if (!string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    paths.Add(entry.Path);
+                }
+            }
+
+            foreach (string path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(path))
                 {
                     continue;
                 }
 
-                string fileName = Path.GetFileName(entry.Path);
+                string fileName = Path.GetFileName(path);
 
                 if (!VolumeNameRepair.TryStripSuffixJunk(fileName, out string cleaned)
                     || string.IsNullOrWhiteSpace(cleaned))
@@ -54,11 +74,11 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                string directory = Path.GetDirectoryName(entry.Path) ?? string.Empty;
+                string directory = Path.GetDirectoryName(path) ?? string.Empty;
                 string target = Path.Combine(directory, cleaned);
 
                 if (File.Exists(target)
-                    || string.Equals(target, entry.Path, StringComparison.OrdinalIgnoreCase))
+                    || string.Equals(target, path, StringComparison.OrdinalIgnoreCase))
                 {
                     AppendLog(
                         "WARN",
@@ -68,24 +88,30 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    File.Move(entry.Path, target);
-
-                    string oldPath = entry.Path;
-                    entry.Path = target;
+                    File.Move(path, target);
                     renamed++;
+                    NoteSourceFileRenamed(path, target);
+
+                    foreach (VolumeHandoffEntry entry in _volumeHandoffEntries)
+                    {
+                        if (SafePathHelper.PathEquals(entry.Path, path))
+                        {
+                            entry.Path = target;
+                        }
+                    }
 
                     if (tasks != null)
                     {
                         foreach (ArchiveTask task in tasks)
                         {
-                            if (SafePathHelper.PathEquals(task.CurrentPath, oldPath))
+                            if (SafePathHelper.PathEquals(task.CurrentPath, path))
                             {
                                 task.CurrentPath = target;
                             }
 
                             for (int index = 0; index < task.VolumePaths.Count; index++)
                             {
-                                if (SafePathHelper.PathEquals(task.VolumePaths[index], oldPath))
+                                if (SafePathHelper.PathEquals(task.VolumePaths[index], path))
                                 {
                                     task.VolumePaths[index] = target;
                                 }
