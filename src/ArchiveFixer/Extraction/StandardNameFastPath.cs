@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
@@ -25,6 +26,19 @@ namespace ArchiveFixer.Extraction
             SevenZip,
             ZipNumbered,
             ZipSpanned
+        }
+
+        /// <summary>快通道名字族 → 既有命名族（⛔ 不改变族算法，只给快通道一个入口）。</summary>
+        internal static VolumeNamingFamily? ToNamingFamily(Family family)
+        {
+            return family switch
+            {
+                Family.RarPart or Family.RarOld => VolumeNamingFamily.RarPart,
+                Family.SevenZip => VolumeNamingFamily.SevenZipNumbered,
+                Family.ZipNumbered => VolumeNamingFamily.ZipNumbered,
+                Family.ZipSpanned => VolumeNamingFamily.ZipSpanned,
+                _ => null
+            };
         }
 
         internal sealed class Group
@@ -220,6 +234,9 @@ namespace ArchiveFixer.Extraction
             family = default;
             index = 0;
 
+            // 用户口径：标准名最多在后缀里夹中文字符；只清后缀，基名一个字符不动。
+            fileName = StripNonAsciiAfterFirstDot(fileName);
+
             Match match = RarPartPattern.Match(fileName);
 
             if (match.Success)
@@ -291,6 +308,32 @@ namespace ArchiveFixer.Extraction
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 只清**后缀段**的非 ASCII 杂质（含中文），保留基名原样。
+        /// 例：<c>小明.part1.rar删除</c> → <c>小明.part1.rar</c>。
+        /// </summary>
+        private static string StripNonAsciiAfterFirstDot(string fileName)
+        {
+            int firstDot = fileName.IndexOf('.');
+
+            if (firstDot < 0 || firstDot + 1 >= fileName.Length)
+            {
+                return fileName;
+            }
+
+            string prefix = fileName[..(firstDot + 1)];
+            string suffix = fileName[(firstDot + 1)..];
+
+            if (suffix.All(ch => ch < 0x80))
+            {
+                return fileName;
+            }
+
+            string cleaned = new string(suffix.Where(ch => ch < 0x80).ToArray());
+
+            return cleaned.Length == 0 ? fileName : prefix + cleaned;
         }
 
         private sealed class GroupKeyComparer : IEqualityComparer<(string Directory, string Base, Family Family)>

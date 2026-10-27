@@ -78,6 +78,43 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 后缀夹中文_仍然按标准名识别_基名不动()
+        {
+            string directory = @"C:\in";
+            var groups = StandardNameFastPath.Find(new[]
+            {
+                Path.Combine(directory, "小明.par删除t1.ra除r"),
+                Path.Combine(directory, "小明.part2.rar删除")
+            });
+
+            StandardNameFastPath.Group group = Assert.Single(groups);
+            Assert.Equal("小明", group.BaseName);
+            Assert.Equal(StandardNameFastPath.Family.RarPart, group.Family);
+            Assert.Equal(Path.Combine(directory, "小明.par删除t1.ra除r"), group.EntryPath);
+            Assert.Equal(2, group.Pieces.Count);
+        }
+
+        [Fact]
+        public void 快通道名字族_映射到既有命名族_不要求内容卡定族()
+        {
+            Assert.Equal(
+                ArchiveFixer.Detection.VolumeNamingFamily.RarPart,
+                StandardNameFastPath.ToNamingFamily(StandardNameFastPath.Family.RarPart));
+            Assert.Equal(
+                ArchiveFixer.Detection.VolumeNamingFamily.RarPart,
+                StandardNameFastPath.ToNamingFamily(StandardNameFastPath.Family.RarOld));
+            Assert.Equal(
+                ArchiveFixer.Detection.VolumeNamingFamily.SevenZipNumbered,
+                StandardNameFastPath.ToNamingFamily(StandardNameFastPath.Family.SevenZip));
+            Assert.Equal(
+                ArchiveFixer.Detection.VolumeNamingFamily.ZipNumbered,
+                StandardNameFastPath.ToNamingFamily(StandardNameFastPath.Family.ZipNumbered));
+            Assert.Equal(
+                ArchiveFixer.Detection.VolumeNamingFamily.ZipSpanned,
+                StandardNameFastPath.ToNamingFamily(StandardNameFastPath.Family.ZipSpanned));
+        }
+
+        [Fact]
         public void 跨盘Zip_标准入口是末片zip()
         {
             string directory = @"C:\in";

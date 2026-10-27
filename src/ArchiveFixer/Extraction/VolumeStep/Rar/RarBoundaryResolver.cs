@@ -116,6 +116,15 @@ namespace ArchiveFixer.Extraction
 
             FirstStepFileLedgerEntry first = firsts[0];
 
+            /*
+             * 只有一片的 RAR 不能因为"卷号连成 1..1"就当完整：
+             * 真机 FFF 的 `111_.part1.rar` 就是这一档，引擎随后报 Missing volume。
+             */
+            if (unique.Count < 2)
+            {
+                return Unknown(baseName, unique, "RAR 只有 1 片，不能证明整组完整 ⇒ 判不出");
+            }
+
             if (unique.Any(entry => entry.VolumeNumber == null))
             {
                 return Unknown(baseName, unique, "RAR 有片内容卷号判不出 ⇒ 判不出");
@@ -214,6 +223,11 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<FirstStepFileLedgerEntry> candidates)
         {
             List<FirstStepFileLedgerEntry> unique = CollapsePhysicalDuplicates(candidates);
+
+            if (unique.Count < 2)
+            {
+                return Unknown(baseName, unique, "RAR 老编号只有 1 片，不能证明整组完整 ⇒ 判不出");
+            }
 
             FirstStepFileLedgerEntry? first = unique.FirstOrDefault(entry =>
                 entry.FirstVolumeFlag

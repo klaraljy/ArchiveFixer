@@ -669,6 +669,20 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task RAR5_resolver_只有一片_不能当Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(RarEntry(@"C:\in\111.part1.rar", 1, RarVariant.Rar5, first: true));
+
+            PreparedVolumeGroup? group = await new RarBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Unknown, group!.State);
+        }
+
+        [Fact]
         public async Task RAR5_resolver_缺一个卷号_Missing点名()
         {
             var ledger = new FirstStepFileLedger();

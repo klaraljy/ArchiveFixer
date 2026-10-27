@@ -36,7 +36,8 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask? ownerTask,
             string? entryLayer,
             bool standardNameFastPath = false,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            VolumeNamingFamily? standardFamily = null)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer)
@@ -46,7 +47,8 @@ namespace ArchiveFixer.ViewModels
                     group,
                     ownerTask,
                     entryLayer,
-                    standardNameFastPath: standardNameFastPath);
+                    standardNameFastPath: standardNameFastPath,
+                    standardFamily: standardFamily);
             }
 
             if (group.PreparedGroup != null || standardNameFastPath)
@@ -55,7 +57,8 @@ namespace ArchiveFixer.ViewModels
                     group,
                     ownerTask,
                     entryLayer,
-                    standardNameFastPath: standardNameFastPath);
+                    standardNameFastPath: standardNameFastPath,
+                    standardFamily: standardFamily);
             }
 
             GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
@@ -92,7 +95,8 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask? ownerTask,
             string? entryLayer,
             IReadOnlyList<string>? confirmedOrder = null,
-            bool standardNameFastPath = false)
+            bool standardNameFastPath = false,
+            VolumeNamingFamily? standardFamily = null)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer))
@@ -141,14 +145,25 @@ namespace ArchiveFixer.ViewModels
 
             VolumeNamingFamily? family;
 
-            try
+            if (standardNameFastPath && standardFamily != null)
             {
-                family = ArchiveFixer.Detection.VolumePiecesFromCards.ResolveNamingFamily(group.Cards);
+                /*
+                 * 用户 2026-10-27：同目录标准名组不再要求内容卡定族；
+                 * 名字族已经由 StandardNameFastPath 唯一出口给出，直接用它去试解。
+                 */
+                family = standardFamily;
             }
-            catch (Exception ex)
+            else
             {
-                AppendLog("WARN", $"[第二大步·组] {group.BaseName}：定族失败（{ex.GetType().Name}）⇒ 不建组。");
-                return null;
+                try
+                {
+                    family = ArchiveFixer.Detection.VolumePiecesFromCards.ResolveNamingFamily(group.Cards);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", $"[第二大步·组] {group.BaseName}：定族失败（{ex.GetType().Name}）⇒ 不建组。");
+                    return null;
+                }
             }
 
             if (family == null)

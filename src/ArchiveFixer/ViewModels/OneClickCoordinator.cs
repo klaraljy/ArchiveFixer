@@ -1399,6 +1399,7 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 只影响控制路径，不写内容卡事实。
                      */
                     var fastReadyEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var fastReadyFamilies = new Dictionary<string, VolumeNamingFamily?>(StringComparer.OrdinalIgnoreCase);
 
                     foreach (ArchiveFixer.Extraction.StandardNameFastPath.Decision decision
                              in ArchiveFixer.Extraction.StandardNameFastPath.Decide(
@@ -1407,6 +1408,8 @@ namespace ArchiveFixer.ViewModels
                         if (decision.Kind == ArchiveFixer.Extraction.StandardNameFastPath.DecisionKind.Ready)
                         {
                             fastReadyEntries.Add(decision.Group.EntryPath);
+                            fastReadyFamilies[decision.Group.EntryPath] =
+                                ArchiveFixer.Extraction.StandardNameFastPath.ToNamingFamily(decision.Group.Family);
                             AppendLog(
                                 "INFO",
                                 $"[第二大步·标准名快通道] {decision.Group.BaseName}：{decision.Reason}"
@@ -1448,12 +1451,18 @@ namespace ArchiveFixer.ViewModels
                             && ArchiveFixer.Extraction.StandardNameFastPath.Find(group.Pieces)
                                 .Any(standard => standard.Pieces.Count == group.Pieces.Count);
 
+                        VolumeNamingFamily? fastFamily = standardNameFastPath
+                            && fastReadyFamilies.TryGetValue(group.EntryPath, out VolumeNamingFamily? familyFromName)
+                                ? familyFromName
+                                : null;
+
                         ArchiveFixer.Extraction.VolumeGroupUnit? preUnit =
                             _extractionCoordinator.TryCommitVolumeGroup(
                                 group,
                                 null,
                                 entryLayer,
-                                standardNameFastPath: standardNameFastPath);
+                                standardNameFastPath: standardNameFastPath,
+                                standardFamily: fastFamily);
 
                         if (preUnit != null
                             && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
@@ -1595,7 +1604,8 @@ namespace ArchiveFixer.ViewModels
                                 group,
                                 entryTask,
                                 entryLayer,
-                                standardNameFastPath)
+                                standardNameFastPath,
+                                standardFamily: fastFamily)
                                 .ConfigureAwait(false);
 
                         if (committedUnit != null
