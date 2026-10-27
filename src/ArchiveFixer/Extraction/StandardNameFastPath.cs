@@ -40,6 +40,68 @@ namespace ArchiveFixer.Extraction
             public IReadOnlyList<string> Pieces { get; init; } = Array.Empty<string>();
         }
 
+        /// <summary>
+        /// 快通道控制结果。⛔ 与内容卡事实分离：Incomplete 只表示“这次不完整、交回正常第二大步”，
+        /// 绝不写 FileNatureCard/VolumeGroupUnit 的 Unknown/Missing。
+        /// </summary>
+        internal enum DecisionKind
+        {
+            Ready,
+            Incomplete,
+            Unhandleable
+        }
+
+        internal sealed class Decision
+        {
+            public Group Group { get; init; } = new();
+
+            public DecisionKind Kind { get; init; }
+
+            public string Reason { get; init; } = string.Empty;
+        }
+
+        /// <summary>
+        /// 给每个标准名组下控制结论。同目录 001–004、同基名同族的 005 在别处 ⇒ Incomplete，
+        /// 不能拿本目录这一组直接快通道。
+        /// </summary>
+        internal static IReadOnlyList<Decision> Decide(IEnumerable<string>? paths)
+        {
+            List<string> all = (paths ?? Enumerable.Empty<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .ToList();
+
+            var parsed = new List<(string Path, string Directory, string Base, Family Family, int Index)>();
+
+            foreach (string path in all)
+            {
+                if (TryParse(Path.GetFileName(path), out string baseName, out Family family, out int index))
+                {
+                    parsed.Add((path, Path.GetDirectoryName(path) ?? string.Empty, baseName, family, index));
+                }
+            }
+
+            var result = new List<Decision>();
+
+            foreach (Group group in Find(all))
+            {
+                bool externalSibling = parsed.Any(item =>
+                    item.Family == group.Family
+                    && string.Equals(item.Base, group.BaseName, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(item.Directory, group.Directory, StringComparison.OrdinalIgnoreCase));
+
+                result.Add(new Decision
+                {
+                    Group = group,
+                    Kind = externalSibling ? DecisionKind.Incomplete : DecisionKind.Ready,
+                    Reason = externalSibling
+                        ? "同基名同族的其他标准片不在本目录 ⇒ 交回正常第二大步"
+                        : "同目录标准名组，可试快通道"
+                });
+            }
+
+            return result;
+        }
+
         private static readonly Regex RarPartPattern = new(
             @"^(?<base>.+)\.part(?<num>[1-9]\d*)\.rar$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

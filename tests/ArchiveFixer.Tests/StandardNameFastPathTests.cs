@@ -9,6 +9,40 @@ namespace ArchiveFixer.Tests
     public sealed class StandardNameFastPathTests
     {
         [Fact]
+        public void 同目录001到004_同基名005在别处_判Incomplete不判内容缺片()
+        {
+            string a = @"C:\in-a";
+            string b = @"C:\in-b";
+            var paths = new[]
+            {
+                Path.Combine(a, "9953.part1.rar"),
+                Path.Combine(a, "9953.part2.rar"),
+                Path.Combine(a, "9953.part3.rar"),
+                Path.Combine(a, "9953.part4.rar"),
+                Path.Combine(b, "9953.part5.rar")
+            };
+
+            IReadOnlyList<StandardNameFastPath.Decision> decisions = StandardNameFastPath.Decide(paths);
+
+            Assert.Single(decisions);
+            Assert.Equal(StandardNameFastPath.DecisionKind.Incomplete, decisions[0].Kind);
+        }
+
+        [Fact]
+        public void 同目录完整标准组_判Ready()
+        {
+            string directory = @"C:\in";
+            IReadOnlyList<StandardNameFastPath.Decision> decisions = StandardNameFastPath.Decide(new[]
+            {
+                Path.Combine(directory, "9953.part1.rar"),
+                Path.Combine(directory, "9953.part2.rar")
+            });
+
+            StandardNameFastPath.Decision decision = Assert.Single(decisions);
+            Assert.Equal(StandardNameFastPath.DecisionKind.Ready, decision.Kind);
+        }
+
+        [Fact]
         public void Rar标准partN_同目录同基名一组_入口part1()
         {
             string directory = @"C:\in";
