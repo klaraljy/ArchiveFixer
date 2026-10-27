@@ -1297,6 +1297,46 @@ namespace ArchiveFixer.ViewModels
                             handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
                         }
+
+                        /*
+                         * 共用骨架接线点：族 resolver 先出 prepared 组，再让 GroupAnalysis 只吃标准名。
+                         * 骨架阶段一个族都没注册 ⇒ 返回空，下面的过滤与追加都不会发生，既有行为不变。
+                         */
+                        IReadOnlyList<PreparedVolumeGroup> preparedGroups =
+                            await _extractionCoordinator.VolumeBoundaryPipeline.ResolveAllAsync(
+                                    _extractionCoordinator.FirstStepLedger,
+                                    baseName => new VolumeBoundaryContext
+                                    {
+                                        Ledger = _extractionCoordinator.FirstStepLedger,
+                                        BaseName = baseName,
+                                        OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
+                                            .SameBase(baseName)
+                                            .Select(entry => entry.SourceLayer)
+                                            .FirstOrDefault(layer => !string.IsNullOrWhiteSpace(layer))
+                                            ?? string.Empty
+                                    })
+                                .ConfigureAwait(true);
+
+                        if (preparedGroups.Count > 0)
+                        {
+                            var preparedBaseNames = new HashSet<string>(
+                                preparedGroups.Select(group => group.BaseName),
+                                StringComparer.OrdinalIgnoreCase);
+
+                            // prepared 组一旦存在，同一基名的旧组分析候选让位（⛔ 不两套同时消费）。
+                            handoffGroups.RemoveAll(group =>
+                                preparedBaseNames.Contains(group.BaseName)
+                                && group.PreparedGroup == null);
+
+                            List<GroupAnalysis.GroupCandidate> preparedCandidates =
+                                GroupAnalysis.AnalyzePrepared(preparedGroups);
+
+                            foreach (GroupAnalysis.GroupCandidate group in preparedCandidates)
+                            {
+                                handoffGroups.Add(group);
+                                AppendLog("INFO", $"[第二大步·prepared] {group.Describe()}");
+                            }
+                        }
                     }
                     catch (Exception probeError)
                     {

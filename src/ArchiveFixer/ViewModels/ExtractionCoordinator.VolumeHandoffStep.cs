@@ -34,8 +34,17 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly FirstStepFileLedger _firstStepFileLedger = new();
 
+        /// <summary>
+        /// **边界解析管线**（共用骨架）：族 resolver 从这里注册；骨架阶段未注册任何族，
+        /// 因此 `ResolveAllAsync` 返回空，既有行为一个字不变。
+        /// </summary>
+        private readonly VolumeBoundaryPipeline _volumeBoundaryPipeline = new();
+
         /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
+
+        /// <summary>边界解析管线（第二大步/测试用）。</summary>
+        internal VolumeBoundaryPipeline VolumeBoundaryPipeline => _volumeBoundaryPipeline;
 
         /// <summary>本批的第一大步文件账本（只读给第二大步/日志用）。</summary>
         internal FirstStepFileLedger FirstStepLedger => _firstStepFileLedger;
