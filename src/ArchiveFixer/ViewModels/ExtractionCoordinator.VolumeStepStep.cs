@@ -35,19 +35,13 @@ namespace ArchiveFixer.ViewModels
             GroupAnalysis.GroupCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
-            bool standardNameFastPath = false,
             CancellationToken cancellationToken = default)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer)
                 || group.Pieces.Count < 2)
             {
-                return TryCommitVolumeGroup(group, ownerTask, entryLayer, standardNameFastPath: standardNameFastPath);
-            }
-
-            if (standardNameFastPath)
-            {
-                return TryCommitVolumeGroup(group, ownerTask, entryLayer, standardNameFastPath: true);
+                return TryCommitVolumeGroup(group, ownerTask, entryLayer);
             }
 
             GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
@@ -83,8 +77,7 @@ namespace ArchiveFixer.ViewModels
             GroupAnalysis.GroupCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
-            IReadOnlyList<string>? confirmedOrder = null,
-            bool standardNameFastPath = false)
+            IReadOnlyList<string>? confirmedOrder = null)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer))
@@ -134,8 +127,7 @@ namespace ArchiveFixer.ViewModels
                 group.DeclaredPieceCount > 0 ? group.DeclaredPieceCount : null,
                 group.DeclaredTotalBytes > 0 ? group.DeclaredTotalBytes : null,
                 outputLayer,
-                confirmedOrder,
-                standardNameFastPath);
+                confirmedOrder);
 
             if (unit == null)
             {
@@ -299,8 +291,7 @@ namespace ArchiveFixer.ViewModels
              * 其它族（计划为空）仍走旧收片账 —— 否则链接是按原文件名建的、收片却按 LinkedNames 删，
              * 两边对不上（V01–V04 回归当场变红）。
              */
-            if (unit == null
-                || (unit.NamePlan == null && !unit.IsStandardNameFastPath))
+            if (unit == null || unit.NamePlan == null)
             {
                 return false;
             }
@@ -443,51 +434,6 @@ namespace ArchiveFixer.ViewModels
                     moveSources: true,
                     pieceSettleLogs,
                     producedPiecePath: piece.Path);
-            }
-
-            /*
-             * 标准名快通道没有走族算法的 NamePlan，跟班卷可能停在“已跳过/不是压缩包”。
-             * 入口已经成功 ⇒ 这些片按跟班卷收场，和正常组成功同一个事实口径。
-             */
-            if (unit.IsStandardNameFastPath)
-            {
-                string ownerDisplayName = string.IsNullOrWhiteSpace(task.DisplayFileName)
-                    ? task.FileName
-                    : task.DisplayFileName;
-
-                foreach (GroupPieceFact piece in unit.Pieces)
-                {
-                    ArchiveTask? pieceTask = taskSnapshot.FirstOrDefault(candidate =>
-                        candidate != null
-                        && candidate != task
-                        && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                        && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
-                            || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
-
-                    if (pieceTask == null
-                        || pieceTask.IsVolumeGroupFollower
-                        || pieceTask.Outcome == TaskOutcome.Succeeded)
-                    {
-                        continue;
-                    }
-
-                    pieceTask.IsOutputVerified = false;
-                    pieceTask.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                    pieceTask.OutputPath = string.Empty;
-                    pieceTask.Outcome = TaskOutcome.Succeeded;
-                    pieceTask.IsVolumeGroupFollower = true;
-                    pieceTask.SettledWithGroupUnitName = ownerDisplayName;
-                    pieceTask.MarkSkipped(string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.PieceSettledWithGroupFormat,
-                        ownerDisplayName));
-                    pieceSettleLogs.Add((
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.PieceSettledWithGroupFormat,
-                            ownerDisplayName)));
-                }
             }
 
             foreach ((string level, string message) in pieceSettleLogs)

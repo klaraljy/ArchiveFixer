@@ -1192,13 +1192,6 @@ namespace ArchiveFixer.ViewModels
                      */
                     var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
 
-                    /*
-                     * 第二大步入口先做一次**纯后缀清洗**：只去文件名第一个点之后那一段里的
-                     * 非 ASCII 杂质，基名/内容不动；目标名被占或判不出就不改。
-                     * ⛔ 不在这里判完整性，也不写内容卡。
-                     */
-                    _extractionCoordinator.CleanupSuffixJunkAtSecondStep(Tasks);
-
                     try
                     {
                         List<string> groupRoots = innerArchives
@@ -1267,33 +1260,6 @@ namespace ArchiveFixer.ViewModels
                     var secondStepEntryGroups =
                         new List<(GroupAnalysis.GroupCandidate Group, ArchiveFixer.Extraction.VolumeGroupUnit Unit)>();
 
-                    /*
-                     * 标准名前置快通道的控制名单：只把“同目录全部标准名、且同基名没有
-                     * 标准片散在别处”的组放进来；Incomplete 组不在这里，交回正常第二大步。
-                     * ⛔ 这里只影响控制路径，不写内容卡事实。
-                     */
-                    var fastReadyEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                    foreach (ArchiveFixer.Extraction.StandardNameFastPath.Decision decision
-                             in ArchiveFixer.Extraction.StandardNameFastPath.Decide(
-                                 _extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.Path)))
-                    {
-                        if (decision.Kind == ArchiveFixer.Extraction.StandardNameFastPath.DecisionKind.Ready)
-                        {
-                            fastReadyEntries.Add(decision.Group.EntryPath);
-                            AppendLog(
-                                "INFO",
-                                $"[第二大步·标准名快通道] {decision.Group.BaseName}：{decision.Reason}"
-                                + $"｜入口={FileNameHelper.GetFileName(decision.Group.EntryPath)}");
-                        }
-                        else
-                        {
-                            AppendLog(
-                                "INFO",
-                                $"[第二大步·标准名快通道] {decision.Group.BaseName}：{decision.Kind}（{decision.Reason}）⇒ 交回正常第二大步");
-                        }
-                    }
-
                     foreach (GroupAnalysis.GroupCandidate group in handoffGroups)
                     {
                         /*
@@ -1318,16 +1284,8 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
-                        bool standardNameFastPath = fastReadyEntries.Contains(group.EntryPath)
-                            && ArchiveFixer.Extraction.StandardNameFastPath.Find(group.Pieces)
-                                .Any(standard => standard.Pieces.Count == group.Pieces.Count);
-
                         ArchiveFixer.Extraction.VolumeGroupUnit? preUnit =
-                            _extractionCoordinator.TryCommitVolumeGroup(
-                                group,
-                                null,
-                                entryLayer,
-                                standardNameFastPath: standardNameFastPath);
+                            _extractionCoordinator.TryCommitVolumeGroup(group, null, entryLayer);
 
                         if (preUnit != null
                             && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
@@ -1458,8 +1416,7 @@ namespace ArchiveFixer.ViewModels
                             await _extractionCoordinator.TryCommitVolumeGroupAsync(
                                 group,
                                 entryTask,
-                                entryLayer,
-                                standardNameFastPath)
+                                entryLayer)
                                 .ConfigureAwait(false);
 
                         if (committedUnit != null

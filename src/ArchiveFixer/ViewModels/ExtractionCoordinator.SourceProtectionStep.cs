@@ -131,28 +131,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// 第二大步入口的后缀清洗是**用户明确要的改名**，保护快照也要跟着换成新路径；
-        /// 否则批末会把刚洗干净的源名又按旧名补回来。
-        /// </summary>
-        internal void NoteSourceFileRenamed(string oldPath, string newPath)
-        {
-            if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath))
-            {
-                return;
-            }
-
-            for (int index = 0; index < _keepSourceSnapshots.Count; index++)
-            {
-                (string original, string backup) = _keepSourceSnapshots[index];
-
-                if (SafePathHelper.PathEquals(original, oldPath))
-                {
-                    _keepSourceSnapshots[index] = (newPath, backup);
-                }
-            }
-        }
-
         internal void RestoreKeepInPlaceSourceNames()
         {
             if (_vm.SpaceTightMode)

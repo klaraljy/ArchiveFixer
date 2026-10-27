@@ -57,64 +57,6 @@ namespace ArchiveFixer.Tests
             Assert.Null(unit);
         }
 
-        [Fact]
-        public void 标准名快通道_跳过族算法完整性_不写内容Unknown()
-        {
-            const string layer = @"C:\in";
-            var service = new VolumeGroupService();
-            IReadOnlyList<GroupPieceFact> pieces = new List<GroupPieceFact>
-            {
-                Piece(layer, 1, first: true, VolumeHandoffSource.UserImported),
-                Piece(layer, 3, first: false, VolumeHandoffSource.UserImported)
-            };
-
-            VolumeGroupUnit? fast = service.TryCommit(
-                "9953",
-                VolumeNamingFamily.RarPart,
-                layer,
-                Path.Combine(layer, "9953.part1.rar"),
-                ownerTaskFileName: "9953.part1.rar",
-                pieces,
-                missingNumbers: new[] { 2 },
-                evidence: "标准名快通道",
-                declaredPieceCount: null,
-                declaredTotalBytes: null,
-                outputLayer: layer,
-                standardNameFastPath: true);
-
-            Assert.NotNull(fast);
-            Assert.Equal(VolumeGroupState.OwnerAssigned, fast!.State);
-            Assert.Empty(fast.MissingNumbers);
-        }
-
-        [Fact]
-        public void 非快通道_缺片仍由族算法判()
-        {
-            const string layer = @"C:\in";
-            var service = new VolumeGroupService();
-            IReadOnlyList<GroupPieceFact> pieces = new List<GroupPieceFact>
-            {
-                Piece(layer, 1, first: true, VolumeHandoffSource.UserImported),
-                Piece(layer, 3, first: false, VolumeHandoffSource.UserImported)
-            };
-
-            VolumeGroupUnit? normal = service.TryCommit(
-                "9953",
-                VolumeNamingFamily.RarPart,
-                layer,
-                Path.Combine(layer, "9953.part1.rar"),
-                ownerTaskFileName: null,
-                pieces,
-                missingNumbers: new[] { 2 },
-                evidence: "正常组分析",
-                declaredPieceCount: null,
-                declaredTotalBytes: null,
-                outputLayer: layer);
-
-            Assert.NotNull(normal);
-            Assert.Equal(VolumeGroupState.Missing, normal!.State);
-        }
-
         private static IReadOnlyList<GroupPieceFact> Pieces(
             string layer,
             VolumeHandoffSource source)

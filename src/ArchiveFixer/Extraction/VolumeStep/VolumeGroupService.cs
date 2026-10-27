@@ -97,8 +97,7 @@ namespace ArchiveFixer.Extraction
             int? declaredPieceCount,
             long? declaredTotalBytes,
             string outputLayer,
-            IReadOnlyList<string>? confirmedOrder = null,
-            bool standardNameFastPath = false)
+            IReadOnlyList<string>? confirmedOrder = null)
         {
             if (string.IsNullOrWhiteSpace(baseName)
                 || family == null
@@ -178,24 +177,11 @@ namespace ArchiveFixer.Extraction
             };
 
             /*
-             * 标准名前置快通道：不拿内容卡/族算法做完整性判决，直接按入口试一层。
-             * 这是**控制路径**，不写内容卡 Unknown/Missing；失败由调用方保留源包并收场。
-             */
-            if (standardNameFastPath)
-            {
-                unit.OrderedPieces = pieces.Select(piece => piece.Path).ToList();
-                unit.NamePlan = null;
-                unit.MissingNumbers = Array.Empty<int>();
-                unit.Verdict = "标准名快通道：按入口直接试解，不判内容完整性";
-                unit.State = VolumeGroupState.Complete;
-                unit.IsStandardNameFastPath = true;
-            }
-            /*
              * 族已接线 ⇒ 由族算法回答“顺序 / 片数 / 完整性 / 规范名计划”。
              * ⛔ 只有 Complete 才继续；Missing/Unknown 把 Unit 留在账上（判不出就不动），
              * 由调用方负责“不点名、不链接、不解压”。
              */
-            else if (_algorithms.TryGetValue(family.Value, out IVolumeFamilyAlgorithm? algorithm))
+            if (_algorithms.TryGetValue(family.Value, out IVolumeFamilyAlgorithm? algorithm))
             {
                 FamilyResult result = algorithm.Evaluate(unit);
 
