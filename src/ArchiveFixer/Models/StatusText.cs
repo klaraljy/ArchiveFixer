@@ -91,6 +91,10 @@ namespace ArchiveFixer.Models
         public const string ExtractSuccessAsGroup = "这一组解压成功";
 
         public const string VolumeMissing = "分卷缺失";
+
+        /// <summary>分卷结构异常（数量/槽位/大小/混族矛盾）：只显示，不处理。</summary>
+        public const string VolumeSizeAnomaly = "分卷结构异常";
+
         public const string PathTooLong = "路径过长";
         public const string UnknownError = "未知错误";
         public const string SevenZipMissing = "7z不存在";

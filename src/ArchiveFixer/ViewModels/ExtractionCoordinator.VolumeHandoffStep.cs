@@ -28,8 +28,71 @@ namespace ArchiveFixer.ViewModels
         /// <summary>第一大步的交接事实表（第二大步的组分析从这里取候选）。</summary>
         private readonly List<ArchiveFixer.Detection.VolumeHandoffEntry> _volumeHandoffEntries = new();
 
+        /// <summary>
+        /// **第一大步文件账本**（共用骨架）：闸门通过的每一份文件都登记，
+        /// 包括内容 Unknown 的中间片；族 resolver 从这里取候选。
+        /// </summary>
+        private readonly FirstStepFileLedger _firstStepFileLedger = new();
+
         /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
+
+        /// <summary>本批的第一大步文件账本（只读给第二大步/日志用）。</summary>
+        internal FirstStepFileLedger FirstStepLedger => _firstStepFileLedger;
+
+        /// <summary>
+        /// 第一大步闸门通过后登记账本（不判定分卷、不碰盘）。
+        /// 同一路径在一轮里重复登记时保留后到的内容卡（改名/补片后事实会变）。
+        /// </summary>
+        internal FirstStepFileLedgerEntry RegisterFirstStepLedgerEntry(
+            ArchiveTask task,
+            ArchiveFixer.Detection.FileNatureCard card)
+        {
+            string path = task.CurrentPath ?? string.Empty;
+            int? nameSlot = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                FileNameHelper.GetFileName(path));
+
+            ZipVariant zipVariant = ResolveZipVariant(card);
+
+            FirstStepFileLedgerEntry entry = FirstStepFileLedgerEntry.FromCard(
+                card,
+                task.LogName,
+                task.IsContinuationTask
+                    ? ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced
+                    : ArchiveFixer.Detection.VolumeHandoffSource.UserImported,
+                gatePassed: true,
+                rarVariant: RarVariant.Unknown,
+                zipVariant: zipVariant,
+                nameSlot: nameSlot);
+
+            return _firstStepFileLedger.AddOrReplace(entry);
+        }
+
+        /// <summary>
+        /// ZIP 两族的**初步**变体（只读内容卡现有的三件事；RAR/7z 不在这里判）。
+        /// 最终族结论仍由 <see cref="VolumeFamilyArbiter"/> 给。
+        /// </summary>
+        private static ZipVariant ResolveZipVariant(ArchiveFixer.Detection.FileNatureCard card)
+        {
+            if (card.Format != ArchiveFixer.Detection.VolumeContentFormat.Zip)
+            {
+                return ZipVariant.Unknown;
+            }
+
+            if (card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                && card.VolumeNumber is int number
+                && number >= 2)
+            {
+                return ZipVariant.Spanned;
+            }
+
+            if (card.ZipEndRecordMeansSplit || card.HasZipLocalHeader)
+            {
+                return ZipVariant.Numbered;
+            }
+
+            return ZipVariant.Unknown;
+        }
 
         /// <summary>
         /// 第二大步入口的**纯后缀清洗**：只把文件名第一个点之后那段中的
@@ -199,6 +262,7 @@ namespace ArchiveFixer.ViewModels
         internal void ClearVolumeHandoffLedger()
         {
             _volumeHandoffEntries.Clear();
+            _firstStepFileLedger.Clear();
         }
 
         /// <summary>

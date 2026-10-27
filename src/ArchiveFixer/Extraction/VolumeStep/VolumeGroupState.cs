@@ -31,6 +31,12 @@ namespace ArchiveFixer.Extraction
         Succeeded = 7,
 
         /// <summary>没解开（密码错/缺卷/失败）。</summary>
-        Failed = 8
+        Failed = 8,
+
+        /// <summary>
+        /// **分卷结构异常**（数量/槽位/大小/混族矛盾）：任务列表可见，但不处理、不删源、不解压。
+        /// ⛔ 不是失败；批末不算红。
+        /// </summary>
+        SizeAnomaly = 9
     }
 }

@@ -275,7 +275,8 @@ namespace ArchiveFixer.Services
                 return SummaryBucket.OtherFailed;
             }
 
-            if (status == StatusText.Skipped)
+            if (status == StatusText.Skipped
+                || status == StatusText.VolumeSizeAnomaly)
             {
                 return SummaryBucket.Skipped;
             }

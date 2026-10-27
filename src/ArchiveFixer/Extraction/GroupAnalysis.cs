@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -76,6 +77,15 @@ namespace ArchiveFixer.Extraction
             /// <summary>每片的原始事实（第二大步建组用；卷号可为空，⛔ 不在这里补）。</summary>
             public IReadOnlyList<GroupPieceFact> PieceFacts { get; set; } = Array.Empty<GroupPieceFact>();
 
+            /// <summary>
+            /// 边界 resolver 已经解析好的组（骨架阶段可能为 null）。
+            /// 有它时，入口/顺序/标准名以它为准，⛔ 不再从脏名重排。
+            /// </summary>
+            public PreparedVolumeGroup? PreparedGroup { get; init; }
+
+            /// <summary>入口片的原始路径（任务表/落点/source 处理用；临时标准名不算）。</summary>
+            public string OriginalEntryPath { get; init; } = string.Empty;
+
             /// <summary>每片的底层内容卡（族判定唯一出口要用它；已登记的片由交接单还原，⛔ 不重读盘）。</summary>
             public IReadOnlyList<ArchiveFixer.Detection.FileNatureCard> Cards { get; set; } =
                 Array.Empty<ArchiveFixer.Detection.FileNatureCard>();
@@ -142,6 +152,70 @@ namespace ArchiveFixer.Extraction
             }
 
             return AnalyzeCore(seeds, scanRoots, handoffByPath);
+        }
+
+        /// <summary>
+        /// **吃边界 resolver 的 prepared 组**（共用骨架的新入口）：
+        /// 只把已经标准化的片收成候选，⛔ 不再扫用户源目录、⛔ 不再从脏名重排。
+        /// 旧 <see cref="Analyze(IEnumerable{string}?, IEnumerable{string}?)"/> 保留给未迁移族。
+        /// </summary>
+        public static List<GroupCandidate> AnalyzePrepared(IReadOnlyList<PreparedVolumeGroup>? groups)
+        {
+            var result = new List<GroupCandidate>();
+
+            foreach (PreparedVolumeGroup group in groups ?? Array.Empty<PreparedVolumeGroup>())
+            {
+                if (group == null || string.IsNullOrWhiteSpace(group.BaseName))
+                {
+                    continue;
+                }
+
+                List<string> pieces = group.Pieces
+                    .Select(piece => string.IsNullOrWhiteSpace(group.EntryLayer)
+                        ? piece.OriginalPath
+                        : Path.Combine(group.EntryLayer, piece.CanonicalName))
+                    .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                    .ToList();
+
+                string entryPath = !string.IsNullOrWhiteSpace(group.CanonicalEntryPath)
+                    ? group.CanonicalEntryPath
+                    : group.OriginalEntryPath;
+
+                var candidate = new GroupCandidate
+                {
+                    BaseName = group.BaseName,
+                    Format = FormatForFamily(group.Family),
+                    Pieces = pieces,
+                    EntryPath = entryPath,
+                    SuggestedVerdict = group.State switch
+                    {
+                        PreparedGroupState.Complete => GroupAnalysisVerdict.Complete,
+                        PreparedGroupState.Missing => GroupAnalysisVerdict.Missing,
+                        _ => GroupAnalysisVerdict.Unknown
+                    },
+                    Evidence = group.Describe(),
+                    MissingNumbers = group.MissingNumbers,
+                    ReceivedPieceCount = pieces.Count,
+                    PreparedGroup = group,
+                    OriginalEntryPath = group.OriginalEntryPath
+                };
+
+                result.Add(candidate);
+            }
+
+            return result;
+        }
+
+        private static ArchiveFixer.Detection.VolumeContentFormat FormatForFamily(VolumeNamingFamily? family)
+        {
+            return family switch
+            {
+                VolumeNamingFamily.SevenZipNumbered => ArchiveFixer.Detection.VolumeContentFormat.SevenZip,
+                VolumeNamingFamily.RarPart => ArchiveFixer.Detection.VolumeContentFormat.Rar,
+                VolumeNamingFamily.ZipSpanned or VolumeNamingFamily.ZipNumbered
+                    => ArchiveFixer.Detection.VolumeContentFormat.Zip,
+                _ => ArchiveFixer.Detection.VolumeContentFormat.Unknown
+            };
         }
 
         private static List<GroupCandidate> AnalyzeCore(

@@ -89,6 +89,12 @@ namespace ArchiveFixer.ViewModels
                     ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath ?? string.Empty);
 
                 /*
+                 * 共用骨架：第一大步**每一份闸门通过的文件**都进账本，包括内容 Unknown 的中间片。
+                 * 这一步只登记事实，⛔ 不判分卷、不碰盘、不改变任何既有分支。
+                 */
+                RegisterFirstStepLedgerEntry(task, entryCard);
+
+                /*
                  * 第二大步入口（2026-10-23）：内容卡证明这一份就是分卷组的**入口卷** ⇒ 这一单就是
                  * 第二大步的入口任务：登记任务级事实位（让递归只解一层），交给单层路解这一组。
                  * ⛔ 仍只读内容卡，不按名字猜；非入口卷照旧跳过、原地不动。

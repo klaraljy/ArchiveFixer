@@ -165,6 +165,63 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void GroupAnalysis_吃prepared组_只收标准名_不扫用户源目录()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "af-prepared-group-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string entryLayer = Path.Combine(root, "entry");
+                Directory.CreateDirectory(entryLayer);
+
+                string canonical = Path.Combine(entryLayer, "111.7z.001");
+                File.WriteAllBytes(canonical, new byte[] { 1, 2, 3 });
+
+                var group = new PreparedVolumeGroup
+                {
+                    BaseName = "111",
+                    Family = VolumeNamingFamily.SevenZipNumbered,
+                    OriginalEntryPath = Path.Combine(root, "src", "111.7z.001"),
+                    EntryCanonicalName = "111.7z.001",
+                    EntryLayer = entryLayer,
+                    State = PreparedGroupState.Complete,
+                    Pieces = new[]
+                    {
+                        new PreparedVolumePiece
+                        {
+                            CanonicalName = "111.7z.001",
+                            OriginalPath = Path.Combine(root, "src", "111.7z.001"),
+                            Size = 3
+                        }
+                    }
+                };
+
+                GroupAnalysis.GroupCandidate candidate = Assert.Single(
+                    GroupAnalysis.AnalyzePrepared(new[] { group }));
+
+                Assert.Equal("111", candidate.BaseName);
+                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, candidate.SuggestedVerdict);
+                Assert.Equal(canonical, candidate.EntryPath);
+                Assert.Equal(group.OriginalEntryPath, candidate.OriginalEntryPath);
+                Assert.Same(group, candidate.PreparedGroup);
+                Assert.Single(candidate.Pieces);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        [Fact]
         public void 临时入口目录_只建硬链接_源文件不变_跑完清理()
         {
             string root = Path.Combine(Path.GetTempPath(), "af-volume-entry-" + Guid.NewGuid().ToString("N"));

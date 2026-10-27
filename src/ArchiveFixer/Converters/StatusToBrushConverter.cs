@@ -159,6 +159,8 @@ namespace ArchiveFixer.Converters
                  * 这就不是程序的错误」。与「部分完成」同色同档；"缺哪几卷 + 下一步：补卷"写在错误信息与批末诊断里。
                  */
                 StatusText.VolumeMissing or
+                // 结构异常：不处理，但必须让人一眼看见；不是失败色。
+                StatusText.VolumeSizeAnomaly or
                 // 文件名已加密同理：包本身可能没问题，只是内容无法判定、需要正确密码 ——
                 // 给警告色（与"部分完成"同分桶同色），不要用"文件损坏"的错误色把人引去重下。
                 StatusText.EncryptedHeaders or
