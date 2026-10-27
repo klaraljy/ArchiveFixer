@@ -93,6 +93,12 @@ namespace ArchiveFixer.Detection
         /// <summary>内容自证"完整的单卷 / 某组的第一片 / 某组的一片"（见 <see cref="ArchiveBodyKind"/>）。</summary>
         public ArchiveBodyKind BodyKind { get; init; }
 
+        /// <summary>RAR 族内细分（RAR5 / RAR4 新 / RAR4 老 / 加密头）；判不出 = Unknown。</summary>
+        public RarVariant RarVariant { get; init; }
+
+        /// <summary>加密结论（RAR 读头；其它族保持 Unknown；判不出 = Unknown，⛔ 不猜）。</summary>
+        public ArchiveEncryptionState Encryption { get; init; }
+
         /// <summary>
         /// **7z 起始头明文自述的整包字节数**（<c>32 + NextHeaderOffset + NextHeaderSize</c>）；判不出 = 0。
         ///
@@ -192,7 +198,7 @@ namespace ArchiveFixer.Detection
 
             return $"「{System.IO.Path.GetFileName(Path)}」｜内容：格式={Format} 分卷身份={Membership}"
                 + $" 卷号={number} 首卷标志={FirstVolumeFlag} 原始卷号字段={(RawVolumeField.HasValue ? RawVolumeField.Value.ToString(CultureInfo.InvariantCulture) : "判不出")} 结论={ContentFail}"
-                + $" 专属算法：单卷/分卷={BodyKind}"
+                + $" 专属算法：单卷/分卷={BodyKind} RAR变体={RarVariant} 加密={Encryption}"
                 + (DeclaredTotalBytes > 0 ? $" 自述整包={DeclaredTotalBytes} 字节" : string.Empty)
                 + (DeclaredVolumeCount > 0 ? $" 按内容算的片数={DeclaredVolumeCount}" : string.Empty)
                 + $"｜名字：卷号={byName} 本族第1卷={FirstVolumeNameByName ?? "判不出"} 规范名={CanonicalVolumeName}"
@@ -436,6 +442,18 @@ namespace ArchiveFixer.Detection
 
                 membership = VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
             }
+
+            ArchiveEncryptionState encryption = ArchiveEncryptionState.Unknown;
+
+            if (format == VolumeContentFormat.Rar)
+            {
+                /*
+                 * RAR 单卷/多卷的加密头只有这一条判据答得出；失败的读法一律 Unknown，
+                 * ⛔ 不把"读不出"当成"没加密"。
+                 */
+                encryption = RarEncryptionReader.Read(path).State;
+            }
+
             return new FileNatureCard
             {
                 Path = path!,
@@ -446,6 +464,8 @@ namespace ArchiveFixer.Detection
                 FirstVolumeFlag = reading.FirstVolumeFlag,
                 ContentFail = reading.Fail,
                 BodyKind = bodyKind,
+                RarVariant = reading.RarVariant,
+                Encryption = encryption,
                 DeclaredTotalBytes = declaredTotalBytes,
                 DeclaredVolumeCount = declaredVolumeCount,
                 EmbeddedOffset = embeddedOffset,

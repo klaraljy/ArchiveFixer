@@ -80,7 +80,7 @@ namespace ArchiveFixer.ViewModels
                     ? ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced
                     : ArchiveFixer.Detection.VolumeHandoffSource.UserImported,
                 gatePassed: true,
-                rarVariant: RarVariant.Unknown,
+                rarVariant: card.RarVariant,
                 zipVariant: zipVariant,
                 nameSlot: nameSlot);
 

@@ -165,6 +165,9 @@ namespace ArchiveFixer.Detection
         /// <summary>RAR 1.5–4.x 主头的编号族。</summary>
         public RarNumberingFamily RarNumbering { get; init; }
 
+        /// <summary>RAR 族内细分（RAR5 / RAR4 新 / RAR4 老 / 加密头）；判不出 = Unknown。</summary>
+        public RarVariant RarVariant { get; init; }
+
         /// <summary>读不出来 / 认不出来时是哪一档。</summary>
         public VolumeNumberFail Fail { get; init; }
 
@@ -651,7 +654,14 @@ namespace ArchiveFixer.Detection
             if (headerType == Rar5EncryptionHeaderType)
             {
                 // 头被加密：卷号在密文里，读不出来（如实说不认，绝不猜）。
-                return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.HeadersUnreadable);
+                return new VolumeNumberReading
+                {
+                    Path = filePath,
+                    Format = VolumeContentFormat.Rar,
+                    Size = LengthOf(filePath),
+                    RarVariant = RarVariant.Rar5HeadersEncrypted,
+                    Fail = VolumeNumberFail.HeadersUnreadable
+                };
             }
 
             if (headerType != Rar5MainHeaderType)
@@ -717,6 +727,7 @@ namespace ArchiveFixer.Detection
                  */
                 FirstVolumeFlag = number == 1,
                 RarNumbering = RarNumberingFamily.New,
+                RarVariant = RarVariant.Rar5,
                 Fail = VolumeNumberFail.None
             };
         }
@@ -788,6 +799,7 @@ namespace ArchiveFixer.Detection
                     RawField = null,
                     FirstVolumeFlag = firstVolume,
                     RarNumbering = RarNumberingFamily.Old,
+                    RarVariant = RarVariant.Rar4Old,
                     Fail = VolumeNumberFail.RarOldNumbering
                 };
             }
@@ -821,6 +833,7 @@ namespace ArchiveFixer.Detection
                     RawField = volumeField,
                     FirstVolumeFlag = firstVolume,
                     RarNumbering = RarNumberingFamily.New,
+                    RarVariant = RarVariant.Rar4New,
                     Fail = VolumeNumberFail.HeadersUnreadable
                 };
             }
@@ -835,6 +848,7 @@ namespace ArchiveFixer.Detection
                 RawField = volumeField,
                 FirstVolumeFlag = firstVolume,
                 RarNumbering = RarNumberingFamily.New,
+                RarVariant = RarVariant.Rar4New,
                 Fail = VolumeNumberFail.None
             };
         }
