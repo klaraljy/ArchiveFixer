@@ -91,6 +91,60 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 名字槽 &gt; 1 的未知内容片：只有当**同基名、同批**里真有一份内容自证的第一卷时，
+        /// 才把它当第二大步候选。这样既不用 `.7z` 字面量，也不会把普通的 `作用域.002` 挡在第一大步外。
+        /// </summary>
+        private bool HasContentProvenVolumeFirstSibling(ArchiveTask task, string entryName)
+        {
+            string baseName = FileNameHelper.SecondStepBaseName(task.CurrentPath ?? string.Empty);
+
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate == null
+                    || ReferenceEquals(candidate, task)
+                    || string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    || !File.Exists(candidate.CurrentPath))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(
+                        FileNameHelper.SecondStepBaseName(candidate.CurrentPath),
+                        baseName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ArchiveFixer.Detection.FileNatureCard card =
+                        ArchiveFixer.Detection.FileNature.Inspect(candidate.CurrentPath);
+
+                    if (card.Size > 0
+                        && card.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                        && (card.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                                or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                            || card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // 兄弟片读不动 ⇒ 不因它放行。
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// ZIP 两族的**初步**变体（只读内容卡现有的三件事；RAR/7z 不在这里判）。
         /// 最终族结论仍由 <see cref="VolumeFamilyArbiter"/> 给。
         /// </summary>

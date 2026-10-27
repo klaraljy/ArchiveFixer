@@ -124,9 +124,7 @@ namespace ArchiveFixer.ViewModels
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
                     && nameSlotIndex > 1
-                    && System.Text.RegularExpressions.Regex.IsMatch(
-                        entryName,
-                        @"(?i)\.7z\.\d{3}$");
+                    && HasContentProvenVolumeFirstSibling(task, entryName);
 
                 /*
                  * RAR 加密头卷号读不出（Membership=Unknown），但标准名仍是唯一的第二大步门票；
