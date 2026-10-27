@@ -180,7 +180,38 @@ namespace ArchiveFixer.Extraction
             }
 
             CleanupDirectory(directory, root);
+            RemoveEmptyParents(directory);
             return !Directory.Exists(directory);
+        }
+
+        /// <summary>删掉组目录后，把这次自己建出来的空 <c>group-entry</c> / <c>.ArchiveFixer.work</c> 也收掉。</summary>
+        private static void RemoveEmptyParents(string directory)
+        {
+            try
+            {
+                string? groupEntry = Path.GetDirectoryName(directory);
+                string? work = string.IsNullOrWhiteSpace(groupEntry)
+                    ? null
+                    : Path.GetDirectoryName(groupEntry);
+
+                if (!string.IsNullOrWhiteSpace(groupEntry)
+                    && Directory.Exists(groupEntry)
+                    && !Directory.EnumerateFileSystemEntries(groupEntry).Any())
+                {
+                    Directory.Delete(groupEntry);
+                }
+
+                if (!string.IsNullOrWhiteSpace(work)
+                    && Directory.Exists(work)
+                    && !Directory.EnumerateFileSystemEntries(work).Any())
+                {
+                    Directory.Delete(work);
+                }
+            }
+            catch
+            {
+                // 收不掉空壳只影响整洁，不影响这一组已经处理完的事实。
+            }
         }
 
         private static string BuildDefaultEntryRoot(string sourcePath)
