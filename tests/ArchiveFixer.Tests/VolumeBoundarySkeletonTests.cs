@@ -222,6 +222,72 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 七z_resolver_标准三片_字节和与中间片大小对上_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.001", size: 100, declaredBytes: 250, declaredCount: 3, first: true));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.002", size: 100));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.003", size: 50));
+
+            PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal(3, group.Pieces.Count);
+            Assert.Equal("111.7z.001", group.EntryCanonicalName);
+            Assert.Equal(@"C:\in\111.7z.001", group.OriginalEntryPath);
+        }
+
+        [Fact]
+        public async Task 七z_resolver_数量少于自述_SizeAnomaly()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.001", size: 100, declaredBytes: 250, declaredCount: 3, first: true));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.002", size: 100));
+
+            PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
+        }
+
+        [Fact]
+        public async Task 七z_resolver_字节和不等于自述_SizeAnomaly()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.001", size: 100, declaredBytes: 250, declaredCount: 3, first: true));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.002", size: 100));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.003", size: 49));
+
+            PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
+        }
+
+        [Fact]
+        public async Task 七z_resolver_中间片大小不等于首卷_SizeAnomaly()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.001", size: 100, declaredBytes: 250, declaredCount: 3, first: true));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.002", size: 99));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.003", size: 51));
+
+            PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
+        }
+
+        [Fact]
         public void VolumeGroupService_prepared组_直接登记结论_不再调族算法()
         {
             var service = new VolumeGroupService();
@@ -340,6 +406,28 @@ namespace ArchiveFixer.Tests
             }
 
             return ledger;
+        }
+
+        private static FirstStepFileLedgerEntry SevenZipEntry(
+            string path,
+            long size,
+            long declaredBytes = 0,
+            int declaredCount = 0,
+            bool first = false)
+        {
+            return new FirstStepFileLedgerEntry
+            {
+                Path = path,
+                BaseName = "111",
+                Size = size,
+                Format = VolumeContentFormat.SevenZip,
+                BodyKind = first ? ArchiveBodyKind.VolumeFirstPiece : ArchiveBodyKind.Unknown,
+                Membership = VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+                DeclaredTotalBytes = declaredBytes,
+                DeclaredVolumeCount = declaredCount,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                IsGatePassed = true
+            };
         }
 
         private static FirstStepFileLedgerEntry Entry(
