@@ -1192,6 +1192,13 @@ namespace ArchiveFixer.ViewModels
                      */
                     var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
 
+                    /*
+                     * 第二大步入口先做一次**纯后缀清洗**：只去文件名第一个点之后那一段里的
+                     * 非 ASCII 杂质，基名/内容不动；目标名被占或判不出就不改。
+                     * ⛔ 不在这里判完整性，也不写内容卡。
+                     */
+                    _extractionCoordinator.CleanupSuffixJunkAtSecondStep(Tasks);
+
                     try
                     {
                         List<string> groupRoots = innerArchives

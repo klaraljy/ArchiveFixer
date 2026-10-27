@@ -22,7 +22,7 @@ namespace ArchiveFixer.Detection
     /// </summary>
     public sealed class VolumeHandoffEntry
     {
-        public string Path { get; init; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
 
         /// <summary>基名（唯一出口 `FileNameHelper.GetArchiveBaseName`）。</summary>
         public string BaseName { get; init; } = string.Empty;

@@ -31,6 +31,83 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
         internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
 
+        /// <summary>
+        /// 第二大步入口的**纯后缀清洗**：只把交接单里文件名第一个点之后那段中的
+        /// 非 ASCII 杂质删掉，基名/内容不动；目标名被占就不改。
+        /// </summary>
+        internal int CleanupSuffixJunkAtSecondStep(IReadOnlyCollection<ArchiveTask>? tasks)
+        {
+            int renamed = 0;
+
+            foreach (VolumeHandoffEntry entry in _volumeHandoffEntries)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Path) || !File.Exists(entry.Path))
+                {
+                    continue;
+                }
+
+                string fileName = Path.GetFileName(entry.Path);
+
+                if (!VolumeNameRepair.TryStripSuffixJunk(fileName, out string cleaned)
+                    || string.IsNullOrWhiteSpace(cleaned))
+                {
+                    continue;
+                }
+
+                string directory = Path.GetDirectoryName(entry.Path) ?? string.Empty;
+                string target = Path.Combine(directory, cleaned);
+
+                if (File.Exists(target)
+                    || string.Equals(target, entry.Path, StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步·后缀清洗] {fileName}：目标名已被占用或没有变化 ⇒ 不改名。");
+                    continue;
+                }
+
+                try
+                {
+                    File.Move(entry.Path, target);
+
+                    string oldPath = entry.Path;
+                    entry.Path = target;
+                    renamed++;
+
+                    if (tasks != null)
+                    {
+                        foreach (ArchiveTask task in tasks)
+                        {
+                            if (SafePathHelper.PathEquals(task.CurrentPath, oldPath))
+                            {
+                                task.CurrentPath = target;
+                            }
+
+                            for (int index = 0; index < task.VolumePaths.Count; index++)
+                            {
+                                if (SafePathHelper.PathEquals(task.VolumePaths[index], oldPath))
+                                {
+                                    task.VolumePaths[index] = target;
+                                }
+                            }
+                        }
+                    }
+
+                    AppendLog(
+                        "INFO",
+                        $"[第二大步·后缀清洗] {fileName} → {cleaned}（只改后缀，基名/内容未动）");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步·后缀清洗] {fileName}：改名失败（{ex.Message}）⇒ 保留原名。");
+                }
+            }
+
+            return renamed;
+        }
+
         private ArchiveFixer.Detection.VolumeHandoffEntry RegisterVolumeHandoff(
             ArchiveTask task,
             ArchiveFixer.Detection.FileNatureCard card)
