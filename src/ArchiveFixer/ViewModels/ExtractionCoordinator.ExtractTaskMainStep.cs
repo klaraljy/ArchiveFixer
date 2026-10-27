@@ -110,24 +110,42 @@ namespace ArchiveFixer.ViewModels
                  */
                 bool isSecondStepEntry = IsSecondStepTask(task);
                 string entryName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
-                bool nameOnlyVolumeCandidate =
+                /*
+                 * ⚠ 暂时仍只对 `.7z.NNN` 放行这一档：通用 NameSlot 闸门会把
+                 * `作用域.002` 这类普通文件也挡在第一大步外（WorkspaceRoot / SourceChange 用例当场红）。
+                 * 7z 中间片没有魔数，这一档是入口；等通用的"同组首卷已由内容证实"判据接上后再放宽。
+                 */
+                bool nameSlotVolumeCandidate =
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
                     && ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
-                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) is int nameOnlyIndex
-                    && nameOnlyIndex > 1
+                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) is int nameSlotIndex
+                    && nameSlotIndex > 1
                     && System.Text.RegularExpressions.Regex.IsMatch(
                         entryName,
                         @"(?i)\.7z\.\d{3}$");
 
+                bool contentVolumeCandidate =
+                    entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                    // 文件不在时 FileNatureCard 是默认值（Membership 默认枚举值 = VolumeMember），
+                    // ⛔ 不能把"读不到"当成内容证据；必须有格式/大小才算。
+                    || (entryCard.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                        && entryCard.Size > 0
+                        && entryCard.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+
+                string handoffEvidence = contentVolumeCandidate
+                    ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven.ToString()
+                    : nameSlotVolumeCandidate
+                        ? ArchiveFixer.Detection.VolumeHandoffEvidence.NameSlot.ToString()
+                        : ArchiveFixer.Detection.VolumeHandoffEvidence.Unknown.ToString();
+
                 AppendLog(
                     "INFO",
-                    $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
+                    $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，内容身份={entryCard.BodyKind}，"
+                    + $"族={entryCard.Format}，交接证据={handoffEvidence}。");
 
-                if (!isSecondStepEntry
-                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
-                        || nameOnlyVolumeCandidate))
+                if (!isSecondStepEntry && (contentVolumeCandidate || nameSlotVolumeCandidate))
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 

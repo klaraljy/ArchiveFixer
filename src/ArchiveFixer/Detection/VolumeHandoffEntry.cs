@@ -2,6 +2,17 @@ using System;
 
 namespace ArchiveFixer.Detection
 {
+    /// <summary>
+    /// 交接证据强度（用户 2026-10-24 口径）：内容可证 / 名字槽位 / 判不出。
+    /// ⛔ 这只是**登记理由**，不是"它一定是分卷"的结论。
+    /// </summary>
+    public enum VolumeHandoffEvidence
+    {
+        Unknown = 0,
+        ContentProven = 1,
+        NameSlot = 2
+    }
+
     /// <summary>这一份文件是从哪来的（交接单要用它决定"搬还是只建链接"）。</summary>
     public enum VolumeHandoffSource
     {
@@ -33,6 +44,9 @@ namespace ArchiveFixer.Detection
 
         /// <summary>内容身份：`VolumeFirstPiece` / `VolumePiece` / `Unknown`。</summary>
         public ArchiveBodyKind BodyKind { get; init; }
+
+        /// <summary>交接登记理由：内容可证 / 名字槽位 / 判不出。</summary>
+        public VolumeHandoffEvidence Evidence { get; init; }
 
         /// <summary>内容卷号（判不出 = null，⛔ 不编）。</summary>
         public int? VolumeNumber { get; init; }
@@ -92,7 +106,7 @@ namespace ArchiveFixer.Detection
 
         /// <summary>给人看的一行（日志与判据输入共用；⛔ 不猜，判不出的字段如实写"判不出"）。</summary>
         public string Describe() =>
-            $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 内容身份={BodyKind}"
+            $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 交接证据={Evidence} ｜ 内容身份={BodyKind}"
             + $" ｜ 成员判定={Membership}"
             + $" ｜ 卷号={(VolumeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
             + $"（原始字段={(RawVolumeField?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
