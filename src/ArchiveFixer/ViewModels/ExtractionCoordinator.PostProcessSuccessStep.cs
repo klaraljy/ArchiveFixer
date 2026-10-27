@@ -669,6 +669,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
+                UiActivity.Mark("收尾", task.LogName, "清理中间工作区");
                 await Task.Run(() => CleanupTaskWorkspaceDirectory(task, stageDirectory));
             }
 

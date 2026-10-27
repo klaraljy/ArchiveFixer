@@ -1282,6 +1282,7 @@ namespace ArchiveFixer.ViewModels
                             }
                         }
 
+                        UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
                         foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
                                      _extractionCoordinator.VolumeHandoffEntries,
                                      groupRoots,

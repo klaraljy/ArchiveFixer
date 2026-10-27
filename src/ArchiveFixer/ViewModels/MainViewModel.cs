@@ -875,6 +875,9 @@ namespace ArchiveFixer.ViewModels
 
         private System.Windows.Threading.DispatcherTimer? _settingsAutoSaveTimer;
 
+        /// <summary>UI 响应心跳；只在 WPF 宿主里有 Dispatcher。</summary>
+        private UiResponsivenessMonitor? _uiResponsivenessMonitor;
+
         /// <summary>自动保存的间隔：够短（改完几乎立刻落盘）又够长（拖滑块/连点勾选框时不会写几十次盘）。</summary>
         internal static readonly TimeSpan SettingsAutoSaveInterval = TimeSpan.FromMilliseconds(800);
 
@@ -2020,6 +2023,13 @@ namespace ArchiveFixer.ViewModels
             ApplyEngineSettings();
 
             StartSettingsAutoSaveTimer();
+
+            if (Application.Current?.Dispatcher != null)
+            {
+                _uiResponsivenessMonitor = UiResponsivenessMonitor.Start(
+                    Application.Current.Dispatcher,
+                    message => AppendLog("WARN", message));
+            }
 
             /*
              * 设置编辑器（选项卡②③④⑥绑它）与打包编辑器（⑤绑它）。
