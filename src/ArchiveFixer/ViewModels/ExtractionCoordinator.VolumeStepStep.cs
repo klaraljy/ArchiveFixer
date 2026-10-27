@@ -35,13 +35,19 @@ namespace ArchiveFixer.ViewModels
             GroupAnalysis.GroupCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
+            bool standardNameFastPath = false,
             CancellationToken cancellationToken = default)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer)
                 || group.Pieces.Count < 2)
             {
-                return TryCommitVolumeGroup(group, ownerTask, entryLayer);
+                return TryCommitVolumeGroup(group, ownerTask, entryLayer, standardNameFastPath: standardNameFastPath);
+            }
+
+            if (standardNameFastPath)
+            {
+                return TryCommitVolumeGroup(group, ownerTask, entryLayer, standardNameFastPath: true);
             }
 
             GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
@@ -77,7 +83,8 @@ namespace ArchiveFixer.ViewModels
             GroupAnalysis.GroupCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
-            IReadOnlyList<string>? confirmedOrder = null)
+            IReadOnlyList<string>? confirmedOrder = null,
+            bool standardNameFastPath = false)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(entryLayer))
@@ -127,7 +134,8 @@ namespace ArchiveFixer.ViewModels
                 group.DeclaredPieceCount > 0 ? group.DeclaredPieceCount : null,
                 group.DeclaredTotalBytes > 0 ? group.DeclaredTotalBytes : null,
                 outputLayer,
-                confirmedOrder);
+                confirmedOrder,
+                standardNameFastPath);
 
             if (unit == null)
             {
