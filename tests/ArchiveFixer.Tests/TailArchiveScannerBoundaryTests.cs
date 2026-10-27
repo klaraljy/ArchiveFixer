@@ -53,6 +53,28 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>媒体前缀的深度扫必须受 maxScanBytes 上限约束：窗口外不命中，窗口内命中。</summary>
+        [Fact]
+        public void 顺序扫窗口_按maxScanBytes截断()
+        {
+            string file = BuildFile("media-cap.bin", 8192, Rar4Magic);
+
+            TailArchiveScanResult capped = TailArchiveScanner.Scan(
+                file,
+                cancellationToken: default,
+                maxScanBytes: 4096);
+
+            Assert.Null(capped.Archive);
+
+            TailArchiveScanResult full = TailArchiveScanner.Scan(
+                file,
+                cancellationToken: default,
+                maxScanBytes: 16384);
+
+            Assert.NotNull(full.Archive);
+            Assert.Equal(8192, full.Archive!.Offset);
+        }
+
         /// <summary>
         /// 签名**骑在 4 MiB 分块边界上**（最后一个字节落在下一块的第一字节）：
         /// 上一轮只剩 7 个字节带进下一轮，这正是最容易被改坏的地方。
