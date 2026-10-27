@@ -54,9 +54,32 @@ namespace ArchiveFixer.Extraction
 
             var result = new List<PreparedVolumeGroup>();
 
+            /*
+             * 标准名快通道优先：同目录、同基名、每一片都是标准名的组，
+             * 不再让族 resolver 用内容卡先接管；交给既有 StandardNameFastPath
+             * 直接按入口试密码/试解。非标准名组仍走下面的 resolver。
+             */
+            var fastReadyKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (StandardNameFastPath.Decision decision
+                     in StandardNameFastPath.Decide(ledger.Entries.Select(entry => entry.Path)))
+            {
+                if (decision.Kind == StandardNameFastPath.DecisionKind.Ready)
+                {
+                    fastReadyKeys.Add(decision.Group.BaseName + "|" + decision.Group.Directory);
+                }
+            }
+
             foreach (string baseName in ledger.BaseNames())
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                string sourceLayer = FirstSourceLayer(ledger, baseName);
+
+                if (fastReadyKeys.Contains(baseName + "|" + sourceLayer))
+                {
+                    continue;
+                }
 
                 VolumeFamilySelection selection = VolumeFamilyArbiter.Select(ledger, baseName);
 

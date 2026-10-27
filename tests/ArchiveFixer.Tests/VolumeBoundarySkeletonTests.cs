@@ -109,7 +109,7 @@ namespace ArchiveFixer.Tests
             var ledger = new FirstStepFileLedger();
 
             ledger.AddOrReplace(Entry(
-                @"C:\in\111.7z.001",
+                @"C:\in\111.7z.bad",
                 "111",
                 VolumeContentFormat.SevenZip,
                 body: ArchiveBodyKind.VolumeFirstPiece));
