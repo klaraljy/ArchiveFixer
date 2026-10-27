@@ -291,6 +291,70 @@ namespace ArchiveFixer.Tests
         }
 
         [SevenZipFact]
+        public async Task 七z_resolver_非等大两片_字节和精确_试开通过()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "af-sevenzip-nonuniform-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string build = Path.Combine(root, "build");
+                Directory.CreateDirectory(build);
+
+                byte[] payload = new byte[2_000_000];
+                new Random(20261029).NextBytes(payload);
+                File.WriteAllBytes(Path.Combine(build, "payload.bin"), payload);
+
+                string archive = Path.Combine(root, "111.7z");
+                RunSevenZip(build, "a", "-t7z", "-mx0", archive, "payload.bin");
+
+                byte[] all = File.ReadAllBytes(archive);
+                int cut = 100_000;
+                Assert.True(all.Length > cut + 1, "样本必须足够大");
+
+                string first = Path.Combine(root, "111.7z.001");
+                string second = Path.Combine(root, "111.7z.002");
+                File.WriteAllBytes(first, all[..cut]);
+                File.WriteAllBytes(second, all[cut..]);
+
+                var ledger = new FirstStepFileLedger();
+
+                foreach (string path in new[] { first, second })
+                {
+                    ledger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                        FileNature.Inspect(path),
+                        "nonuniform",
+                        VolumeHandoffSource.UserImported));
+                }
+
+                PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                    new VolumeBoundaryContext
+                    {
+                        Ledger = ledger,
+                        BaseName = "111",
+                        Engine = new SevenZipEngine(),
+                        WorkspaceRoot = root
+                    });
+
+                Assert.NotNull(group);
+                Assert.Equal(PreparedGroupState.Complete, group!.State);
+                Assert.Equal(2, group.Pieces.Count);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        [SevenZipFact]
         public async Task 七z_resolver_两片名字丢了_硬链接试开定序()
         {
             string root = Path.Combine(Path.GetTempPath(), "af-sevenzip-trial-" + Guid.NewGuid().ToString("N"));

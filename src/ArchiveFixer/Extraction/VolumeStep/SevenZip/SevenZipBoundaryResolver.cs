@@ -109,6 +109,25 @@ namespace ArchiveFixer.Extraction
 
             if (unique.Count != total)
             {
+                /*
+                 * 真实样本里存在**非等大两片切分**：首卷自述 36 片只是按"每片等于首片大小"
+                 * 算出来的，实际 2 片字节和精确等于自述整包。字节守恒比公式 N 更强；
+                 * 仍必须由引擎试开确认，⛔ 不靠尺寸猜。
+                 */
+                long byteSum = unique.Sum(entry => entry.Size);
+
+                if (unique.Count >= 2 && byteSum == first.DeclaredTotalBytes)
+                {
+                    PreparedVolumeGroup? nonUniform =
+                        await TryResolveNonUniformAsync(context, first, unique, cancellationToken)
+                            .ConfigureAwait(false);
+
+                    if (nonUniform != null)
+                    {
+                        return nonUniform;
+                    }
+                }
+
                 return (
                     SizeAnomaly(
                         context.BaseName,
@@ -230,6 +249,135 @@ namespace ArchiveFixer.Extraction
                 State = PreparedGroupState.Complete,
                 Evidence = $"7z 首卷自述 {total} 片 / {first.DeclaredTotalBytes} 字节；字节和、中间片大小、末片大小均对上"
             });
+        }
+
+        /// <summary>
+        /// **非等大 7z 切分**：数量不等于公式 N、但字节和精确等于首卷自述整包。
+        /// 用实际片数和名字槽建标准名，交给引擎试开；试开通过才 Complete。
+        /// </summary>
+        private static async Task<PreparedVolumeGroup?> TryResolveNonUniformAsync(
+            VolumeBoundaryContext context,
+            FirstStepFileLedgerEntry first,
+            IReadOnlyList<FirstStepFileLedgerEntry> pieces,
+            CancellationToken cancellationToken)
+        {
+            int count = pieces.Count;
+
+            if (count < 2
+                || context.Engine == null
+                || string.IsNullOrWhiteSpace(context.WorkspaceRoot))
+            {
+                return null;
+            }
+
+            var bySlot = new Dictionary<int, FirstStepFileLedgerEntry> { [1] = first };
+
+            foreach (FirstStepFileLedgerEntry entry in pieces)
+            {
+                if (ReferenceEquals(entry, first))
+                {
+                    continue;
+                }
+
+                int? slot = ResolveSlot(entry, count);
+
+                if (slot == null || slot.Value < 2 || slot.Value > count || bySlot.ContainsKey(slot.Value))
+                {
+                    return null;
+                }
+
+                bySlot[slot.Value] = entry;
+            }
+
+            if (bySlot.Count != count
+                || Enumerable.Range(1, count).Any(slot => !bySlot.ContainsKey(slot)))
+            {
+                return null;
+            }
+
+            var rest = new List<VolumeCandidate>();
+
+            for (int slot = 2; slot <= count; slot++)
+            {
+                rest.Add(new VolumeCandidate
+                {
+                    Path = bySlot[slot].Path,
+                    Size = bySlot[slot].Size
+                });
+            }
+
+            VolumeProbeOutcome outcome = await new VolumeProbeVerifier(context.Engine)
+                .VerifyAsync(
+                    first.Path,
+                    new List<IReadOnlyList<VolumeCandidate>> { rest },
+                    cancellationToken,
+                    context.WorkspaceRoot,
+                    VolumeContentFormat.SevenZip)
+                .ConfigureAwait(false);
+
+            if (!outcome.Confirmed || outcome.OrderedVolumes.Count != count)
+            {
+                return null;
+            }
+
+            var ordered = new List<FirstStepFileLedgerEntry>(count);
+            var byPath = new Dictionary<string, FirstStepFileLedgerEntry>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (FirstStepFileLedgerEntry entry in pieces)
+            {
+                byPath[Path.GetFullPath(entry.Path)] = entry;
+            }
+
+            foreach (VolumeCandidate volume in outcome.OrderedVolumes)
+            {
+                if (!byPath.TryGetValue(Path.GetFullPath(volume.Path), out FirstStepFileLedgerEntry? entry))
+                {
+                    return null;
+                }
+
+                ordered.Add(entry);
+            }
+
+            if (ordered.Count != count || !ReferenceEquals(ordered[0], first))
+            {
+                return null;
+            }
+
+            IReadOnlyList<string> targets = VolumeNumberFromContent.BuildStandardNames(
+                context.BaseName,
+                VolumeNamingFamily.SevenZipNumbered,
+                count);
+
+            if (targets.Count != count)
+            {
+                return null;
+            }
+
+            var prepared = new List<PreparedVolumePiece>();
+
+            for (int index = 0; index < count; index++)
+            {
+                prepared.Add(new PreparedVolumePiece
+                {
+                    CanonicalName = targets[index],
+                    OriginalPath = ordered[index].Path,
+                    Size = ordered[index].Size,
+                    Source = ordered[index].Source
+                });
+            }
+
+            return new PreparedVolumeGroup
+            {
+                BaseName = context.BaseName,
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = first.SourceLayer,
+                OriginalEntryPath = first.Path,
+                EntryCanonicalName = targets[0],
+                Pieces = prepared,
+                State = PreparedGroupState.Complete,
+                Evidence = $"7z 自述 {first.DeclaredVolumeCount} 片，但实际 {count} 片字节和精确等于 "
+                    + $"{first.DeclaredTotalBytes} 字节；按非等大切分试开通过"
+            };
         }
 
         /// <summary>
