@@ -109,7 +109,10 @@ namespace ArchiveFixer.ViewModels
                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
                     && ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
                     && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) is int nameOnlyIndex
-                    && nameOnlyIndex > 1;
+                    && nameOnlyIndex > 1
+                    && System.Text.RegularExpressions.Regex.IsMatch(
+                        entryName,
+                        @"(?i)\.7z\.\d{3}$");
 
                 AppendLog(
                     "INFO",
