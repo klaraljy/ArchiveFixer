@@ -2871,6 +2871,24 @@ namespace ArchiveFixer.Extraction
         /// <param name="candidatePaths">这一层产物目录里已被认成归档的候选（我们自己解出来的副本）。</param>
         /// <param name="log">日志回调 (级别, 文案)；为空则不写日志。</param>
         /// <returns>还原之后的路径清单（顺序与数量与入参完全一致；没还原的项原样返回）。</returns>
+        /// <summary>
+        /// **第二大步入口的纯后缀清洗**：只把第一个点之后那一段里的非 ASCII 杂质删掉，
+        /// 基名一个字不动；判不出/清洗后不是规范形态 ⇒ 不改。
+        ///
+        /// <para>公开只给交界处调用；执行仍走 <see cref="TryApply"/>，不另写一套改名。</para>
+        /// </summary>
+        public static bool TryStripSuffixJunk(string? fileName, out string cleaned)
+        {
+            cleaned = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            return TryStripNonAsciiJunkFromTailSegment(fileName, out cleaned);
+        }
+
         public static IReadOnlyList<string> RestoreDisguisedInnerPackageNames(
             IReadOnlyList<string>? candidatePaths,
             Action<string, string>? log = null)

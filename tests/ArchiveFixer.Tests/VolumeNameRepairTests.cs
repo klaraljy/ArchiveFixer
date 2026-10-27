@@ -1227,6 +1227,16 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 第二大步入口_只洗后缀非ASCII_基名中文不动()
+        {
+            Assert.True(VolumeNameRepair.TryStripSuffixJunk("111_.par删t1.ra除r", out string cleaned));
+            Assert.Equal("111_.part1.rar", cleaned);
+
+            Assert.False(VolumeNameRepair.TryStripSuffixJunk("中文基名.part1.rar", out _));
+            Assert.False(VolumeNameRepair.TryStripSuffixJunk("9953.part2.b2", out _));
+        }
+
         private sealed class Harness
         {
             public Harness(MainViewModel vm, ExtractionCoordinator coordinator, LogService log, string outputRoot)
