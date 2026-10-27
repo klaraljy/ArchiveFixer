@@ -390,7 +390,18 @@ namespace ArchiveFixer.Extraction
 
                 if (!sameBase)
                 {
-                    if (!contentGrouping || seedFormat == ArchiveFixer.Detection.VolumeContentFormat.Unknown)
+                    /*
+                     * 内容卡绕基名收片只允许**种子自己的物理目录**：跨 roots 的目录里
+                     * 可能是已解出的内容物树（PNG/MP4）；对每个文件做 FileNature.Inspect
+                     * 会把 UI 线程拖死（2026-10-27 真机 19 组时卡在 PNG 嗅探）。
+                     */
+                    if (!contentGrouping
+                        || seedFormat == ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                        || string.IsNullOrWhiteSpace(seedDirectory)
+                        || !string.Equals(
+                            SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(path) ?? string.Empty),
+                            SafePathHelper.GetFullPathSafe(seedDirectory),
+                            StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
