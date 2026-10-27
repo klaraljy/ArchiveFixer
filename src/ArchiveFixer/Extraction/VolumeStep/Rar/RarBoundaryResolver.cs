@@ -59,8 +59,12 @@ namespace ArchiveFixer.Extraction
 
             if (variant == RarVariant.Unknown)
             {
-                return Task.FromResult<PreparedVolumeGroup?>(
-                    Unknown(context.BaseName, candidates, "RAR 变体判不出（RAR5/4 新/4 老）⇒ 不动"));
+                /*
+                 * 只有 RAR 签名、没有可读主头（普通单卷 / 假头 / 头加密但连变体都判不出）：
+                 * 这不是本 resolver 能接的分卷组，交回第一大步/标准名快通道。
+                 * ⛔ 返回 null，不返回 Unknown 组：否则会把单卷任务从第一大步结果里“重开”一次。
+                 */
+                return Task.FromResult<PreparedVolumeGroup?>(null);
             }
 
             if (candidates.Any(entry => entry.RarVariant != RarVariant.Unknown

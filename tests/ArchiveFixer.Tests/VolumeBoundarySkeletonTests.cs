@@ -367,6 +367,43 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 只有RAR签名没有头_内容卡不能当成RAR分卷()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "af-fake-rar-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(root);
+                string path = Path.Combine(root, "pipe.rar");
+                File.WriteAllBytes(path, new byte[] { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00 });
+
+                FileNatureCard card = FileNature.Inspect(path);
+
+                Assert.Equal(VolumeContentFormat.Rar, card.Format);
+                Assert.Equal(ArchiveBodyKind.Unknown, card.BodyKind);
+                Assert.Equal(RarVariant.Unknown, card.RarVariant);
+                Assert.NotEqual(
+                    VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                    card.Membership);
+                Assert.Equal(1, ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex("pipe.rar"));
+                Assert.False(ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName("pipe.rar"));
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        [Fact]
         public async Task RAR5_resolver_绝对卷号三片_Complete()
         {
             var ledger = new FirstStepFileLedger();

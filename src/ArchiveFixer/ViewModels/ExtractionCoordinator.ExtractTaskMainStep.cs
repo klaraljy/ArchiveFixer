@@ -115,15 +115,27 @@ namespace ArchiveFixer.ViewModels
                  * `作用域.002` 这类普通文件也挡在第一大步外（WorkspaceRoot / SourceChange 用例当场红）。
                  * 7z 中间片没有魔数，这一档是入口；等通用的"同组首卷已由内容证实"判据接上后再放宽。
                  */
+                int? nameSlotIndex =
+                    ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
+                        ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName)
+                        : null;
+
                 bool nameSlotVolumeCandidate =
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
-                    && ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
-                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) is int nameSlotIndex
                     && nameSlotIndex > 1
                     && System.Text.RegularExpressions.Regex.IsMatch(
                         entryName,
                         @"(?i)\.7z\.\d{3}$");
+
+                /*
+                 * RAR 加密头卷号读不出（Membership=Unknown），但标准名仍是唯一的第二大步门票；
+                 * 多卷加密头按用户口径走标准名快速通道。⛔ 只收 RAR 标准名，不扩到所有 .002。
+                 */
+                bool rarNameSlotCandidate =
+                    entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
+                    && entryCard.Size > 0
+                    && nameSlotIndex > 1;
 
                 bool contentVolumeCandidate =
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
@@ -142,7 +154,7 @@ namespace ArchiveFixer.ViewModels
 
                 string handoffEvidence = contentVolumeCandidate
                     ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven.ToString()
-                    : nameSlotVolumeCandidate
+                    : nameSlotVolumeCandidate || rarNameSlotCandidate
                         ? ArchiveFixer.Detection.VolumeHandoffEvidence.NameSlot.ToString()
                         : ArchiveFixer.Detection.VolumeHandoffEvidence.Unknown.ToString();
 
@@ -151,7 +163,8 @@ namespace ArchiveFixer.ViewModels
                     $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，内容身份={entryCard.BodyKind}，"
                     + $"族={entryCard.Format}，交接证据={handoffEvidence}。");
 
-                if (!isSecondStepEntry && (contentVolumeCandidate || nameSlotVolumeCandidate))
+                if (!isSecondStepEntry
+                    && (contentVolumeCandidate || nameSlotVolumeCandidate || rarNameSlotCandidate))
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
