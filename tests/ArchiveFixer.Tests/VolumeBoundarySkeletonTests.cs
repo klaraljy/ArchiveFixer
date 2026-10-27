@@ -222,6 +222,42 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void VolumeGroupService_prepared组_直接登记结论_不再调族算法()
+        {
+            var service = new VolumeGroupService();
+
+            var prepared = new PreparedVolumeGroup
+            {
+                BaseName = "111",
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = @"C:\in",
+                OriginalEntryPath = @"C:\in\111.7z.001",
+                EntryCanonicalName = "111.7z.001",
+                EntryLayer = @"C:\tmp\entry\111",
+                State = PreparedGroupState.Complete,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece
+                    {
+                        CanonicalName = "111.7z.001",
+                        OriginalPath = @"C:\in\111.7z.001",
+                        Size = 10
+                    }
+                }
+            };
+
+            VolumeGroupUnit? unit = service.TryCommitPrepared(prepared, "111.7z.001", @"C:\out");
+
+            Assert.NotNull(unit);
+            Assert.Equal(VolumeGroupState.OwnerAssigned, unit!.State);
+            Assert.Equal("111.7z.001", unit.OwnerTaskFileName);
+            Assert.Single(unit.OrderedPieces);
+
+            VolumeGroupUnit? same = service.TryCommitPrepared(prepared, "another", @"C:\out");
+            Assert.Same(unit, same);
+        }
+
+        [Fact]
         public void 临时入口目录_只建硬链接_源文件不变_跑完清理()
         {
             string root = Path.Combine(Path.GetTempPath(), "af-volume-entry-" + Guid.NewGuid().ToString("N"));

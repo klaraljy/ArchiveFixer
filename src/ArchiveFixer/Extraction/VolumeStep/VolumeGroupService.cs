@@ -222,6 +222,89 @@ namespace ArchiveFixer.Extraction
             return unit;
         }
 
+        /// <summary>
+        /// **prepared 组的建组入口**（共用骨架）：边界 resolver 已经给出顺序/标准名/结论，
+        /// 这里只把结论登记成 Unit；⛔ 不再调用族算法重排、⛔ 不再读盘。
+        /// </summary>
+        public VolumeGroupUnit? TryCommitPrepared(
+            PreparedVolumeGroup? prepared,
+            string? ownerTaskFileName,
+            string outputLayer)
+        {
+            if (prepared == null
+                || string.IsNullOrWhiteSpace(prepared.BaseName)
+                || prepared.Family == null
+                || prepared.Pieces.Count == 0
+                || string.IsNullOrWhiteSpace(prepared.OriginalSourceLayer))
+            {
+                return null;
+            }
+
+            string key = BuildKey(prepared.BaseName, prepared.Family.Value);
+
+            if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
+            {
+                return existing;
+            }
+
+            var unit = new VolumeGroupUnit(
+                prepared.BaseName,
+                prepared.Family,
+                prepared.OriginalSourceLayer,
+                string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath)
+                    ? prepared.OriginalEntryPath
+                    : prepared.CanonicalEntryPath)
+            {
+                State = MapPreparedState(prepared.State),
+                OrderedPieces = prepared.Pieces
+                    .Select(piece => string.IsNullOrWhiteSpace(prepared.EntryLayer)
+                        ? piece.OriginalPath
+                        : System.IO.Path.Combine(prepared.EntryLayer, piece.CanonicalName))
+                    .ToList(),
+                ConfirmedOrder = prepared.Pieces
+                    .Select(piece => string.IsNullOrWhiteSpace(prepared.EntryLayer)
+                        ? piece.OriginalPath
+                        : System.IO.Path.Combine(prepared.EntryLayer, piece.CanonicalName))
+                    .ToList(),
+                MissingNumbers = prepared.MissingNumbers,
+                Verdict = prepared.Describe(),
+                OutputLayer = outputLayer
+            };
+
+            if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
+                && unit.State == VolumeGroupState.Complete)
+            {
+                unit.OwnerTaskFileName = ownerTaskFileName;
+                unit.State = VolumeGroupState.OwnerAssigned;
+            }
+
+            _units[key] = unit;
+            return unit;
+        }
+
+        /// <summary>prepared 结论是结构异常时，登记一次可见状态（不做任何盘上动作）。</summary>
+        public void MarkSizeAnomaly(VolumeGroupUnit? unit, string detail)
+        {
+            if (unit == null)
+            {
+                return;
+            }
+
+            unit.State = VolumeGroupState.SizeAnomaly;
+            unit.Verdict = detail ?? string.Empty;
+        }
+
+        private static VolumeGroupState MapPreparedState(PreparedGroupState state)
+        {
+            return state switch
+            {
+                PreparedGroupState.Complete => VolumeGroupState.Complete,
+                PreparedGroupState.Missing => VolumeGroupState.Missing,
+                PreparedGroupState.SizeAnomaly => VolumeGroupState.SizeAnomaly,
+                _ => VolumeGroupState.Unknown
+            };
+        }
+
         /// <summary>按 Unit 回写状态（唯一写者；⛔ 调用方不许直接改 Unit 的 State）。</summary>
         public void MarkState(VolumeGroupUnit? unit, VolumeGroupState state, string? verdict = null)
         {
