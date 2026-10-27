@@ -488,6 +488,77 @@ namespace ArchiveFixer.Tests
                 group.Pieces.Select(piece => piece.CanonicalName));
         }
 
+        [SevenZipFact]
+        public async Task 通用ZIP_resolver_中间片名字丢了_硬链接试开定序()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "af-zip-resolver-trial-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string build = Path.Combine(root, "build");
+                Directory.CreateDirectory(build);
+
+                var payload = new byte[3 * 1024 * 1024];
+                new Random(20261028).NextBytes(payload);
+                File.WriteAllBytes(Path.Combine(build, "payload.bin"), payload);
+
+                string archive = Path.Combine(root, "archive.zip");
+                RunSevenZip(build, "a", "-tzip", "-mx=0", "-v1m", archive, "payload.bin");
+
+                List<string> pieces = Directory.GetFiles(root, "archive.zip.*")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                Assert.InRange(pieces.Count, 4, 5);
+
+                var ledger = new FirstStepFileLedger();
+
+                for (int index = 0; index < pieces.Count; index++)
+                {
+                    string path = pieces[index];
+
+                    if (index > 0 && index < pieces.Count - 1)
+                    {
+                        string renamed = Path.Combine(root, $"archive.middle{index}.bin");
+                        File.Move(path, renamed);
+                        path = renamed;
+                    }
+
+                    ledger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                        FileNature.Inspect(path),
+                        "zip-trial",
+                        VolumeHandoffSource.UserImported));
+                }
+
+                PreparedVolumeGroup? group = await new ZipNumberedBoundaryResolver().ResolveAsync(
+                    new VolumeBoundaryContext
+                    {
+                        Ledger = ledger,
+                        BaseName = "archive",
+                        Engine = new SevenZipEngine(),
+                        WorkspaceRoot = root
+                    });
+
+                Assert.NotNull(group);
+                Assert.Equal(PreparedGroupState.Complete, group!.State);
+                Assert.Equal(pieces.Count, group.Pieces.Count);
+                Assert.Equal("archive.zip.001", group.EntryCanonicalName);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
         [Fact]
         public async Task 通用ZIP_resolver_同槽两份不同文件_SizeAnomaly()
         {
