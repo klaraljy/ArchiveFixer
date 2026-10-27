@@ -211,7 +211,8 @@ namespace ArchiveFixer.ViewModels
                 cancellationToken,
                 verification.Verified,
                 specialExtraction,
-                recursion);
+                recursion,
+                stageFilesAreProducedContent: true);
 
             if (commit.Attempted)
             {

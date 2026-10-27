@@ -76,7 +76,8 @@ namespace ArchiveFixer.Services
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null)
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false)
         {
             string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
 
@@ -175,7 +176,7 @@ namespace ArchiveFixer.Services
                  * （`_groupPieceProducers`）⇒ 那些组基名的片一律放行，交给收卷那一档。
                  */
                 assembledVolumeBaseNames: _host.SnapshotGroupPieceProducerBaseNames(),
-                allStageFilesAreContent: _host.ManualSingleLayerThisRun);
+                allStageFilesAreContent: _host.ManualSingleLayerThisRun || stageFilesAreProducedContent);
         }
 
         /// <summary>
@@ -762,7 +763,8 @@ namespace ArchiveFixer.Services
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null)
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false)
         {
             var precheck = new ConflictPrecheck();
 
@@ -777,7 +779,15 @@ namespace ArchiveFixer.Services
 
             try
             {
-                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout, specialExtraction, recursion);
+                plan = PlanFinalLayoutForTask(
+                    task,
+                    stageDirectory,
+                    destinationDirectory,
+                    sharedOutputRoot,
+                    terminalLayout,
+                    specialExtraction,
+                    recursion,
+                    stageFilesAreProducedContent);
             }
             catch
             {
@@ -844,7 +854,8 @@ namespace ArchiveFixer.Services
             CancellationToken cancellationToken,
             bool verificationPassed = true,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null)
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -876,7 +887,8 @@ namespace ArchiveFixer.Services
                     sharedOutputRoot,
                     terminalLayout,
                     specialExtraction,
-                    recursion);
+                    recursion,
+                    stageFilesAreProducedContent);
             }
             catch (Exception ex)
             {

@@ -23,7 +23,8 @@ namespace ArchiveFixer.ViewModels
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null) =>
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false) =>
             _placementStep.PlanFinalLayoutForTask(
                 task,
                 stageDirectory,
@@ -31,7 +32,8 @@ namespace ArchiveFixer.ViewModels
                 sharedOutputRoot,
                 terminalLayout,
                 specialExtraction,
-                recursion);
+                recursion,
+                stageFilesAreProducedContent);
 
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
@@ -78,7 +80,8 @@ namespace ArchiveFixer.ViewModels
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null) =>
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false) =>
             _placementStep.PrecheckFinalLayoutConflicts(
                 task,
                 stageDirectory,
@@ -86,7 +89,8 @@ namespace ArchiveFixer.ViewModels
                 sharedOutputRoot,
                 terminalLayout,
                 specialExtraction,
-                recursion);
+                recursion,
+                stageFilesAreProducedContent);
 
         private StageCommitResult ExecuteFinalLayout(
             ArchiveTask task,
@@ -99,7 +103,8 @@ namespace ArchiveFixer.ViewModels
             CancellationToken cancellationToken,
             bool verificationPassed = true,
             SpecialExtractionPlan? specialExtraction = null,
-            RecursionResult? recursion = null) =>
+            RecursionResult? recursion = null,
+            bool stageFilesAreProducedContent = false) =>
             _placementStep.ExecuteFinalLayout(
                 task,
                 stageDirectory,
@@ -111,7 +116,8 @@ namespace ArchiveFixer.ViewModels
                 cancellationToken,
                 verificationPassed,
                 specialExtraction,
-                recursion);
+                recursion,
+                stageFilesAreProducedContent);
 
         AppSettings IPlacementStepHost.Settings => Settings;
 

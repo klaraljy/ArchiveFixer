@@ -322,7 +322,8 @@ namespace ArchiveFixer.ViewModels
                             sharedOutputRoot,
                             terminalLayout,
                             specialExtraction,
-                            recursion),
+                            recursion,
+                            stageFilesAreProducedContent: true),
                         cancellationToken);
 
                     if (precheck.TotalCount > 0)

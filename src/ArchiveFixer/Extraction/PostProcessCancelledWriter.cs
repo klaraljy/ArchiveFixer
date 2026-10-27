@@ -23,6 +23,7 @@ namespace ArchiveFixer.Extraction
             task.ErrorMessage = failureMessage;
             task.VerifyMessage = failureMessage;
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            task.OutputManifestCrossChecked = false;
             task.Outcome = TaskOutcome.Cancelled;
             task.LastUpdatedTime = DateTime.Now;
 

@@ -1283,10 +1283,14 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
-                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
-                                     _extractionCoordinator.VolumeHandoffEntries,
-                                     groupRoots,
-                                     extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase)))
+                        List<GroupAnalysis.GroupCandidate> analyzedGroups = await Task.Run(
+                            () => GroupAnalysis.Analyze(
+                                _extractionCoordinator.VolumeHandoffEntries,
+                                groupRoots,
+                                extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase)).ToList());
+                        UiActivity.Mark("空闲");
+
+                        foreach (GroupAnalysis.GroupCandidate group in analyzedGroups)
                         {
                             handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");

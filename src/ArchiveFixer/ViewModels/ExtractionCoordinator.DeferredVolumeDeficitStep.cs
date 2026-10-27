@@ -858,6 +858,7 @@ namespace ArchiveFixer.ViewModels
              */
             task.IsOutputVerified = false;
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            task.OutputManifestCrossChecked = false;
             task.OutputPath = string.Empty;
             task.Outcome = TaskOutcome.Skipped;
             task.IsVolumeGroupFollower = true;

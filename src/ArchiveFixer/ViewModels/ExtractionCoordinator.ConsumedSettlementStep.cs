@@ -441,6 +441,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     piece.IsOutputVerified = false;
                     piece.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    piece.OutputManifestCrossChecked = false;
                     piece.OutputPath = string.Empty;
                     piece.Outcome = TaskOutcome.Succeeded;
                     piece.IsVolumeGroupFollower = true;

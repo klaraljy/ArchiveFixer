@@ -108,7 +108,8 @@ namespace ArchiveFixer.ViewModels
                     entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
                     && ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
-                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) != null;
+                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) is int nameOnlyIndex
+                    && nameOnlyIndex > 1;
 
                 AppendLog(
                     "INFO",
@@ -351,6 +352,7 @@ namespace ArchiveFixer.ViewModels
                 if (task.Outcome == TaskOutcome.Pending)
                 {
                     task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    task.OutputManifestCrossChecked = false;
                     task.OutputPath = string.Empty;
                     task.Outcome = TaskOutcome.Skipped;
                     task.EndTime = DateTime.Now;
@@ -489,6 +491,7 @@ namespace ArchiveFixer.ViewModels
              * 那正是本次要根治的那类错误（拿旧结论决定不可逆动作）。
              */
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            task.OutputManifestCrossChecked = false;
             task.Outcome = TaskOutcome.Pending;
             task.VerifyMessage = string.Empty;
 
