@@ -190,16 +190,37 @@ namespace ArchiveFixer.ViewModels
 
                 pieceTask.IsVolumeGroupFollower = true;
                 pieceTask.SettledWithGroupUnitName = ownerName;
+            }
+        }
 
-                if (pieceTask.Outcome == TaskOutcome.Pending)
+        /// <summary>入口没成功 ⇒ 先标过跟班的片不能继续显示“随整组解开”。</summary>
+        private void MarkFollowerTasksGroupFailed(VolumeGroupUnit unit, ArchiveTask owner)
+        {
+            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
+                ? owner.FileName
+                : owner.DisplayFileName;
+
+            foreach (GroupPieceFact piece in unit.Pieces)
+            {
+                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+                    candidate != null
+                    && !ReferenceEquals(candidate, owner)
+                    && candidate.IsVolumeGroupFollower
+                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
+                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
+
+                if (pieceTask == null || pieceTask.Outcome == TaskOutcome.Succeeded)
                 {
-                    pieceTask.Outcome = TaskOutcome.Skipped;
-                    pieceTask.EndTime = DateTime.Now;
-                    pieceTask.MarkSkipped(string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumeGroupFollowerSkippedFormat,
-                        ownerName));
+                    continue;
                 }
+
+                pieceTask.Outcome = TaskOutcome.Skipped;
+                pieceTask.EndTime = DateTime.Now;
+                pieceTask.MarkSkipped(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    "同组入口「{0}」没有成功，这一片没有单独解（源包原样保留）。",
+                    ownerName));
             }
         }
 
@@ -364,6 +385,7 @@ namespace ArchiveFixer.ViewModels
                     unit,
                     VolumeGroupState.Failed,
                     "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
+                MarkFollowerTasksGroupFailed(unit, task);
                 MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
                 AppendLog(
                     "WARN",

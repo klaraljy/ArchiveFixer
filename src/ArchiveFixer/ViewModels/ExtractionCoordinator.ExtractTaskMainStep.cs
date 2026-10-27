@@ -352,19 +352,6 @@ namespace ArchiveFixer.ViewModels
              */
             if (task.IsVolumeGroupFollower)
             {
-                if (task.Outcome == TaskOutcome.Pending)
-                {
-                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                    task.OutputManifestCrossChecked = false;
-                    task.OutputPath = string.Empty;
-                    task.Outcome = TaskOutcome.Skipped;
-                    task.EndTime = DateTime.Now;
-                    task.MarkSkipped(string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumeGroupFollowerSkippedFormat,
-                        task.SettledWithGroupUnitName));
-                }
-
                 return;
             }
 
