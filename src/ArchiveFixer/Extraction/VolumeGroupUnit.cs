@@ -76,6 +76,9 @@ namespace ArchiveFixer.Extraction
         /// <summary>组状态（唯一写者 = <see cref="VolumeGroupService"/>；⛔ 交界处不许写）。</summary>
         public VolumeGroupState State { get; set; } = VolumeGroupState.Candidate;
 
+        /// <summary>是不是标准名前置快通道建的组（只影响收场：跟班卷要按“随组解开”收）。</summary>
+        public bool IsStandardNameFastPath { get; set; }
+
         /// <summary>这一组的片（原始事实；卷号可为空，由族算法决定怎么用）。</summary>
         public IReadOnlyList<GroupPieceFact> Pieces { get; set; } = Array.Empty<GroupPieceFact>();
 

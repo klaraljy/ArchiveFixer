@@ -188,6 +188,7 @@ namespace ArchiveFixer.Extraction
                 unit.MissingNumbers = Array.Empty<int>();
                 unit.Verdict = "标准名快通道：按入口直接试解，不判内容完整性";
                 unit.State = VolumeGroupState.Complete;
+                unit.IsStandardNameFastPath = true;
             }
             /*
              * 族已接线 ⇒ 由族算法回答“顺序 / 片数 / 完整性 / 规范名计划”。
