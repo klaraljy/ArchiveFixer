@@ -2122,6 +2122,60 @@ namespace ArchiveFixer.ViewModels
             int before = Tasks.Count;
 
             /*
+             * 同一基名 + 同一卷号如果用户已经导入过源片，链产出副本不再加成任务。
+             * P53 真机：输入 P53-8 与成品 P53-8 各有一份 .001/.002，输出副本被加成一单
+             * ⇒ 这一单先跑失败，第二大步入口反而选了它，而不是用户源片。
+             * 判据只读“用户导入”与卷号，不按路径猜。
+             */
+            var userVolumeSlots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveTask existing in Tasks)
+            {
+                if (existing == null
+                    || existing.IsContinuationTask
+                    || string.IsNullOrWhiteSpace(existing.CurrentPath))
+                {
+                    continue;
+                }
+
+                int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    FileNameHelper.GetFileName(existing.CurrentPath));
+
+                if (index.HasValue)
+                {
+                    userVolumeSlots.Add(
+                        ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(existing.CurrentPath)
+                        + "|" + index.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+
+            List<InnerArchiveCandidate> tasksToAdd = candidates
+                .Where(candidate =>
+                {
+                    if (string.IsNullOrWhiteSpace(candidate.Path))
+                    {
+                        return false;
+                    }
+
+                    int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        FileNameHelper.GetFileName(candidate.Path));
+
+                    return !index.HasValue
+                        || !userVolumeSlots.Contains(
+                            ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(candidate.Path)
+                            + "|" + index.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                })
+                .ToList();
+
+            if (tasksToAdd.Count < candidates.Count)
+            {
+                AppendLog(
+                    "INFO",
+                    $"一键处理：跳过 {candidates.Count - tasksToAdd.Count} 个内层包 —— "
+                    + "同基名同卷号的用户源片已在任务表里，链产出副本不重复当原包。");
+            }
+
+            /*
              * ⚠ 这里必须是**追加**（ImportMode.Append）。
              *
              * 「添加文件 / 添加文件夹」的默认语义是"清空整张表再加"（用户 2026-09-24 第 12 条），
@@ -2130,7 +2184,7 @@ namespace ArchiveFixer.ViewModels
              * 就是为了让这种调用点必须把意图写出来。
              */
             await _scanCoordinator.AddPathsAsync(
-                candidates.Select(c => c.Path).ToList(),
+                tasksToAdd.Select(c => c.Path).ToList(),
                 ImportMode.Append,
                 suppressAutoScan: true);
 

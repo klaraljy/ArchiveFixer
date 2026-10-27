@@ -113,6 +113,12 @@ namespace ArchiveFixer.ViewModels
             ArchiveFixer.Detection.FileNatureCard card)
         {
             string path = task.CurrentPath ?? string.Empty;
+            string baseName = FileNameHelper.SecondStepBaseName(path);
+            int? volumeIndex = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                FileNameHelper.GetFileName(path));
+            bool userImported = !task.IsContinuationTask;
+
+            ArchiveFixer.Detection.VolumeHandoffEntry? dropChainDuplicate = null;
 
             foreach (ArchiveFixer.Detection.VolumeHandoffEntry existing in _volumeHandoffEntries)
             {
@@ -120,16 +126,51 @@ namespace ArchiveFixer.ViewModels
                 {
                     return existing;
                 }
+
+                /*
+                 * 同一个基名、同一个卷号的两份来源：用户源片优先，输出层副本不重复进第二大步。
+                 * P53 真机：输入 P53-8 与成品 P53-8 各有一份 .001/.002，两份都进交接
+                 * ⇒ 组分析看到 4 片、快通道判 Incomplete。判据只读真实来源与卷号。
+                 */
+                int? existingIndex = existing.NameVolumeIndex
+                    ?? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        FileNameHelper.GetFileName(existing.Path));
+
+                if (!string.Equals(existing.BaseName, baseName, StringComparison.OrdinalIgnoreCase)
+                    || !volumeIndex.HasValue
+                    || existingIndex != volumeIndex)
+                {
+                    continue;
+                }
+
+                if (userImported
+                    && existing.Source == ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced)
+                {
+                    dropChainDuplicate = existing;
+                    break;
+                }
+
+                if (!userImported
+                    && existing.Source == ArchiveFixer.Detection.VolumeHandoffSource.UserImported)
+                {
+                    return existing;
+                }
+            }
+
+            if (dropChainDuplicate != null)
+            {
+                _volumeHandoffEntries.Remove(dropChainDuplicate);
             }
 
             var entry = new ArchiveFixer.Detection.VolumeHandoffEntry
             {
                 Path = path,
-                BaseName = FileNameHelper.SecondStepBaseName(path),
+                BaseName = baseName,
                 Format = card.Format,
                 Size = card.Size,
                 BodyKind = card.BodyKind,
                 VolumeNumber = card.VolumeNumber,
+                NameVolumeIndex = volumeIndex,
                 FirstVolumeFlag = card.FirstVolumeFlag,
                 /* 底层识别事实（用户 2026-10-24：第二大步要用的判据必须随交接单过来） */
                 Membership = card.Membership,

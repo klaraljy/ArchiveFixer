@@ -37,6 +37,9 @@ namespace ArchiveFixer.Detection
         /// <summary>内容卷号（判不出 = null，⛔ 不编）。</summary>
         public int? VolumeNumber { get; init; }
 
+        /// <summary>文件名里的卷号（只用于交接去重；内容卷号仍然只认 <see cref="VolumeNumber"/>）。</summary>
+        public int? NameVolumeIndex { get; init; }
+
         /// <summary>首卷标记（RAR4 主头 / RAR5 卷号=1）。</summary>
         public bool FirstVolumeFlag { get; init; }
 

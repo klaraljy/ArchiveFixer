@@ -72,6 +72,45 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        private static bool HasSameBaseVolumeSibling(string path)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(path) ?? string.Empty;
+                string baseName = FileNameHelper.SecondStepBaseName(path);
+
+                if (directory.Length == 0 || baseName.Length == 0)
+                {
+                    return false;
+                }
+
+                foreach (string other in Directory.EnumerateFiles(directory))
+                {
+                    if (string.Equals(other, path, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(
+                            FileNameHelper.SecondStepBaseName(other),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        FileNameHelper.GetFileName(other));
+
+                    if (index.HasValue && index.Value > 1)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
         private async Task ProcessExtractTaskAsync(ArchiveTask task, bool oneClickRun)
         {
             var taskCts = new CancellationTokenSource();
@@ -113,6 +152,15 @@ namespace ArchiveFixer.ViewModels
                     && System.Text.RegularExpressions.Regex.IsMatch(
                         entryName,
                         @"(?i)\.7z\.\d{3}$");
+                if (!nameOnlyVolumeCandidate
+                    && entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                    && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                    && ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName) == 1
+                    && System.Text.RegularExpressions.Regex.IsMatch(entryName, @"(?i)\.7z\.001$")
+                    && HasSameBaseVolumeSibling(task.CurrentPath ?? string.Empty))
+                {
+                    nameOnlyVolumeCandidate = true;
+                }
 
                 AppendLog(
                     "INFO",
