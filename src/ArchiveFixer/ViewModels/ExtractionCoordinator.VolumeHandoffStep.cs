@@ -87,7 +87,85 @@ namespace ArchiveFixer.ViewModels
                 zipVariant: zipVariant,
                 nameSlot: nameSlot);
 
-            return _firstStepFileLedger.AddOrReplace(entry);
+            FirstStepFileLedgerEntry registered = _firstStepFileLedger.AddOrReplace(entry);
+
+            /*
+             * 账本不能只收"任务表里那一份"：同目录的 `.002` 可能只是上一轮解出来的兄弟片，
+             * 没有独立任务；7z 中间片内容又没有魔数，不补进来就只剩 1 片可判。
+             * 只扫同基名、卷标记候选，且只在当前项本身像分卷时才扫。
+             */
+            if (card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
+                || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                || card.Format == VolumeContentFormat.SevenZip)
+            {
+                RegisterSiblingLedgerEntries(task, card);
+            }
+
+            return registered;
+        }
+
+        private void RegisterSiblingLedgerEntries(
+            ArchiveTask task,
+            ArchiveFixer.Detection.FileNatureCard currentCard)
+        {
+            string currentPath = task.CurrentPath ?? string.Empty;
+            string directory = Path.GetDirectoryName(currentPath) ?? string.Empty;
+            string baseName = FileNameHelper.SecondStepBaseName(currentPath);
+
+            if (directory.Length == 0 || baseName.Length == 0)
+            {
+                return;
+            }
+
+            string[] siblings;
+
+            try
+            {
+                siblings = Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch
+            {
+                return;
+            }
+
+            foreach (string sibling in siblings)
+            {
+                if (SafePathHelper.PathEquals(sibling, currentPath))
+                {
+                    continue;
+                }
+
+                string name = FileNameHelper.GetFileName(sibling);
+
+                if (!FileNameHelper.IsVolumePartFileName(name)
+                    || !string.Equals(
+                        FileNameHelper.SecondStepBaseName(sibling),
+                        baseName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ArchiveFixer.Detection.FileNatureCard card =
+                        ArchiveFixer.Detection.FileNature.Inspect(sibling);
+
+                    _firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                        card,
+                        task.LogName,
+                        task.IsContinuationTask
+                            ? VolumeHandoffSource.ChainProduced
+                            : VolumeHandoffSource.UserImported,
+                        gatePassed: true,
+                        rarVariant: card.RarVariant,
+                        zipVariant: ResolveZipVariant(card)));
+                }
+                catch
+                {
+                    // 兄弟片读不动 ⇒ 不登记，不影响当前项。
+                }
+            }
         }
 
         /// <summary>
