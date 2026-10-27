@@ -57,15 +57,15 @@ namespace ArchiveFixer.Extraction
 
             bool zipSpanned = entries.Any(entry =>
                 entry.Format == VolumeContentFormat.Zip
-                && entry.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
-                && entry.VolumeNumber is int number
-                && number >= 2);
+                && (entry.ZipVariant == ZipVariant.Spanned
+                    || (entry.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                        && entry.VolumeNumber is int number
+                        && number >= 2)));
 
             bool zipNumbered = entries.Any(entry =>
                 entry.Format == VolumeContentFormat.Zip
-                && !(entry.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
-                     && entry.VolumeNumber is int number
-                     && number >= 2)
+                && entry.ZipVariant != ZipVariant.Spanned
+                && entry.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
                 && (entry.ZipEndRecordMeansSplit
                     || entry.HasZipLocalHeader
                     || entry.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece));
@@ -86,7 +86,8 @@ namespace ArchiveFixer.Extraction
             {
                 families.Add(VolumeNamingFamily.ZipSpanned);
             }
-            else if (zipNumbered)
+
+            if (zipNumbered)
             {
                 families.Add(VolumeNamingFamily.ZipNumbered);
             }

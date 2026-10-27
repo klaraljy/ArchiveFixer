@@ -47,6 +47,8 @@ namespace ArchiveFixer.ViewModels
             // 7z / RAR 先接；ZIP 支线再接，⛔ 不在共享层写族特判。
             pipeline.Register(new SevenZipBoundaryResolver());
             pipeline.Register(new RarBoundaryResolver());
+            pipeline.Register(new ZipSpannedBoundaryResolver());
+            pipeline.Register(new ZipNumberedBoundaryResolver());
 
             return pipeline;
         }
@@ -103,6 +105,24 @@ namespace ArchiveFixer.ViewModels
                 && card.VolumeNumber is int number
                 && number >= 2)
             {
+                return ZipVariant.Spanned;
+            }
+
+            string name = FileNameHelper.GetFileName(card.Path);
+            int lastDot = name.LastIndexOf('.');
+
+            if (lastDot >= 0
+                && lastDot + 1 < name.Length
+                && ArchiveFixer.Helpers.ExtensionHelper.TrySplitVolumeSegmentTolerant(
+                    name[(lastDot + 1)..],
+                    out string canonical,
+                    out _)
+                && canonical.Length == 3
+                && (canonical[0] == 'z' || canonical[0] == 'Z')
+                && char.IsAsciiDigit(canonical[1])
+                && char.IsAsciiDigit(canonical[2]))
+            {
+                // `.z01` 是跨盘族的第 1 片；⛔ 不能用 `.zip`=1 的那套名字口径。
                 return ZipVariant.Spanned;
             }
 

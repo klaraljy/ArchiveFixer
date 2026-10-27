@@ -404,6 +404,118 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 跨盘ZIP_resolver_末片盘号三片_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.z01",
+                ZipVariant.Spanned,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                hasLocalHeader: true));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.z02",
+                ZipVariant.Spanned,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip",
+                ZipVariant.Spanned,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                number: 3,
+                zipEndMeansSplit: true));
+
+            PreparedVolumeGroup? group = await new ZipSpannedBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal("111.zip", group.EntryCanonicalName);
+            Assert.Equal(
+                new[] { "111.z01", "111.z02", "111.zip" },
+                group.Pieces.Select(piece => piece.CanonicalName));
+        }
+
+        [Fact]
+        public async Task 跨盘ZIP_resolver_少一片_Missing点名()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.z01",
+                ZipVariant.Spanned,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                hasLocalHeader: true));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip",
+                ZipVariant.Spanned,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                number: 3,
+                zipEndMeansSplit: true));
+
+            PreparedVolumeGroup? group = await new ZipSpannedBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Missing, group!.State);
+            Assert.Equal(new[] { 2 }, group.MissingNumbers);
+        }
+
+        [Fact]
+        public async Task 通用ZIP_resolver_首末内容定序三片_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.001",
+                ZipVariant.Numbered,
+                hasLocalHeader: true));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.002",
+                ZipVariant.Numbered));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.003",
+                ZipVariant.Numbered,
+                zipEndMeansSplit: true));
+
+            PreparedVolumeGroup? group = await new ZipNumberedBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal("111.zip.001", group.EntryCanonicalName);
+            Assert.Equal(
+                new[] { "111.zip.001", "111.zip.002", "111.zip.003" },
+                group.Pieces.Select(piece => piece.CanonicalName));
+        }
+
+        [Fact]
+        public async Task 通用ZIP_resolver_同槽两份不同文件_SizeAnomaly()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.001",
+                ZipVariant.Numbered,
+                hasLocalHeader: true));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.002",
+                ZipVariant.Numbered));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\other\111.zip.002",
+                ZipVariant.Numbered));
+            ledger.AddOrReplace(ZipEntry(
+                @"C:\in\111.zip.003",
+                ZipVariant.Numbered,
+                zipEndMeansSplit: true));
+
+            PreparedVolumeGroup? group = await new ZipNumberedBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.SizeAnomaly, group!.State);
+        }
+
+        [Fact]
         public async Task RAR5_resolver_绝对卷号三片_Complete()
         {
             var ledger = new FirstStepFileLedger();
@@ -632,6 +744,32 @@ namespace ArchiveFixer.Tests
 
             Assert.True(process.WaitForExit(120_000), "7z 超时");
             Assert.True(process.ExitCode == 0, $"7z 失败（{process.ExitCode}）：{output}");
+        }
+
+        private static FirstStepFileLedgerEntry ZipEntry(
+            string path,
+            ZipVariant variant,
+            VolumeNumberFromContent.VolumeMembershipVerdict membership =
+                VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+            int? number = null,
+            bool hasLocalHeader = false,
+            bool zipEndMeansSplit = false,
+            long size = 10)
+        {
+            return new FirstStepFileLedgerEntry
+            {
+                Path = path,
+                BaseName = "111",
+                Size = size,
+                Format = VolumeContentFormat.Zip,
+                Membership = membership,
+                VolumeNumber = number,
+                HasZipLocalHeader = hasLocalHeader,
+                ZipEndRecordMeansSplit = zipEndMeansSplit,
+                ZipVariant = variant,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                IsGatePassed = true
+            };
         }
 
         private static FirstStepFileLedgerEntry RarEntry(
