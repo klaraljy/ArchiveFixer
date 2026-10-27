@@ -295,6 +295,8 @@ namespace ArchiveFixer.Extraction
                 {
                     Directory.Delete(directory, recursive: true);
                 }
+
+                RemoveEmptyParents(directory);
             }
             catch
             {
