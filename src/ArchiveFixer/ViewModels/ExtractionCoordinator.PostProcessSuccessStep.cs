@@ -669,7 +669,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
-                CleanupTaskWorkspaceDirectory(task, stageDirectory);
+                await Task.Run(() => CleanupTaskWorkspaceDirectory(task, stageDirectory));
             }
 
             /*

@@ -255,7 +255,7 @@ namespace ArchiveFixer.ViewModels
                     task,
                     cancelled: taskCts.IsCancellationRequested);
 
-                CleanupFailedTaskWorkspace(task, keepWorkspaceForUnpublished);
+                await Task.Run(() => CleanupFailedTaskWorkspace(task, keepWorkspaceForUnpublished));
 
                 /*
                  * ⛔ **任务收尾：实时进度清零**（`ArchiveTask.ProgressPercent` 的契约逐字：「它是**瞬时状态**：
@@ -335,6 +335,27 @@ namespace ArchiveFixer.ViewModels
              *
              * 没有基准的老任务在这里补拍（见 EnsureSourceSnapshot），不会被误拦。
              */
+            /*
+             * 同一组的后续卷：入口已经定下来 ⇒ 这一单不再检查源文件、不再试密码、不再解压。
+             * 它要报的是“随整组解开”，不是“源文件不见了”。
+             */
+            if (task.IsVolumeGroupFollower)
+            {
+                if (task.Outcome == TaskOutcome.Pending)
+                {
+                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    task.OutputPath = string.Empty;
+                    task.Outcome = TaskOutcome.Skipped;
+                    task.EndTime = DateTime.Now;
+                    task.MarkSkipped(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGroupFollowerSkippedFormat,
+                        task.SettledWithGroupUnitName));
+                }
+
+                return;
+            }
+
             EnsureSourceSnapshot(task);
 
             if (StopIfSourceChanged(task))
