@@ -322,6 +322,42 @@ namespace ArchiveFixer.Tests
                 move => move.To.StartsWith(occupiedPrefix, StringComparison.OrdinalIgnoreCase));
         }
 
+        [Fact]
+        public void 子任务把分卷组解开后_父任务从缺卷回写为成功()
+        {
+            string outer = Path.Combine(_root, "outer.mp4");
+            string entry = Path.Combine(_root, "inner.7z.001");
+
+            var parent = new ArchiveTask(outer, 1)
+            {
+                Status = StatusText.VolumeMissing,
+                Outcome = TaskOutcome.PartiallyCompleted,
+                IsVolumeDeficitDeferred = true
+            };
+
+            parent.ProducedFiles.Add(entry);
+
+            var child = new ArchiveTask(entry, 1)
+            {
+                Status = StatusText.ExtractSuccess,
+                Outcome = TaskOutcome.Succeeded,
+                IsVolumeGroup = true,
+                IsVolumeComplete = true,
+                ParentTaskName = parent.FileName
+            };
+
+            ExtractionCoordinator coordinator = CreateCoordinator();
+
+            _vm.Tasks.Add(parent);
+            _vm.Tasks.Add(child);
+
+            coordinator.SettleParentOfSucceededVolumeGroupForTests();
+
+            Assert.Equal(TaskOutcome.Succeeded, parent.Outcome);
+            Assert.Equal(StatusText.ExtractSuccess, parent.Status);
+            Assert.False(parent.IsVolumeDeficitDeferred);
+        }
+
         /// <summary>无界面宿主里默认"没人点过 = 不确认"；这里注入"用户点了确定"（与真机那一档一致）。</summary>
         private sealed class ConfirmingDialogService : DialogService
         {

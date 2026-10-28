@@ -822,6 +822,89 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 内层分卷组由子任务解开后，**产出该组的父任务**也要收场。
+        ///
+        /// <para>真机 23.5：`导数的几何意义-polyflix.mp4` 先把 `.001/.002/.003` 解出来，
+        /// 因为 `.003` 被误当独立包，父任务停在 `VolumeMissing/PartiallyCompleted`；
+        /// 后来 `.001` 那一单成功，父任务却没人回写。判据只读两条既有事实：
+        /// ① 子任务可证完整且成功；② 父任务的 `ProducedFiles` 里确实有这一组的片。
+        /// ⛔ 不按名字猜、不碰源包、不改变其他父任务。</para>
+        /// </summary>
+        internal void SettleParentOfSucceededVolumeGroupForTests() =>
+            SettleParentOfSucceededVolumeGroup();
+
+        private void SettleParentOfSucceededVolumeGroup()
+        {
+            foreach (ArchiveTask consumer in SnapshotTaskTable(Tasks))
+            {
+                if (consumer == null
+                    || consumer.Outcome != TaskOutcome.Succeeded
+                    || !consumer.IsVolumeGroup
+                    || !consumer.IsVolumeComplete)
+                {
+                    continue;
+                }
+
+                string groupBase = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty);
+
+                if (groupBase.Length == 0)
+                {
+                    continue;
+                }
+
+                ArchiveTask[] tasks = SnapshotTaskTable(Tasks);
+
+                ArchiveTask? parent = tasks.FirstOrDefault(
+                    candidate => candidate != null
+                        && !ReferenceEquals(candidate, consumer)
+                        && (!string.IsNullOrWhiteSpace(consumer.ParentTaskName)
+                            && (string.Equals(candidate.FileName, consumer.ParentTaskName, StringComparison.Ordinal)
+                                || string.Equals(candidate.DisplayFileName, consumer.ParentTaskName, StringComparison.Ordinal))));
+
+                /*
+                 * 第二大步补建的入口任务，ParentTaskName 可能是**组基名**而不是父任务文件名
+                 * （真机 23.5：入口任务是组边界补建的，父任务名不在任务表里）。
+                 * ⇒ 再按既有事实找：谁的 ProducedFiles 里确实有这一组的片，谁就是产出方父任务。
+                 */
+                parent ??= tasks.FirstOrDefault(candidate =>
+                    candidate != null
+                    && !ReferenceEquals(candidate, consumer)
+                    && candidate.ProducedFiles.Any(path =>
+                        string.Equals(
+                            FileNameHelper.GetArchiveBaseName(path),
+                            groupBase,
+                            StringComparison.OrdinalIgnoreCase)));
+
+                if (parent == null
+                    || parent.Outcome is TaskOutcome.Succeeded or TaskOutcome.Skipped or TaskOutcome.Cancelled
+                    || (parent.Outcome == TaskOutcome.Failed && parent.Status != StatusText.VolumeMissing))
+                {
+                    continue;
+                }
+
+                if (!parent.ProducedFiles.Any(path =>
+                        string.Equals(
+                            FileNameHelper.GetArchiveBaseName(path),
+                            groupBase,
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                parent.Outcome = TaskOutcome.Succeeded;
+                parent.Status = StatusText.ExtractSuccess;
+                parent.IsVolumeDeficitDeferred = false;
+                _volumeDeficitDeferred.Remove(parent);
+                _volumeDeficitFinalPass.Remove(parent);
+
+                AppendLog(
+                    "INFO",
+                    $"{parent.LogName}：产出分卷组「{groupBase}」的子任务「{consumer.LogName}」已成功，"
+                    + "父任务不再按缺卷/部分完成收场。");
+            }
+        }
+
+        /// <summary>
         /// **已验证组里的跟班片**：源片按「彻底删除」收掉（2026-10-18 用户 `&&` 口径，`22222222` 现场）。
         ///
         /// <para>跟班片（<see cref="ArchiveTask.IsVolumeGroupFollower"/> + 机器终态成功）的源片有时

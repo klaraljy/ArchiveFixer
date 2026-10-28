@@ -121,9 +121,16 @@ namespace ArchiveFixer.ViewModels
                         : null;
 
                 bool nameSlotVolumeCandidate =
-                    entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
-                    && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
-                    && nameSlotIndex > 1
+                    nameSlotIndex > 1
+                    &&
+                    /*
+                     * 7z 的中间片/末片没有卷号，内容卡常落 SingleComplete / Unknown；
+                     * 名字槽 + 同批内容自证的首卷就是它们唯一的门票。⛔ 不能只收
+                     * Unknown/Unknown，否则 `.003` 会被递归器当成独立包去解。
+                     */
+                    (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                     && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                     || entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip)
                     && HasContentProvenVolumeFirstSibling(task, entryName);
 
                 /*

@@ -35,6 +35,7 @@ namespace ArchiveFixer.ViewModels
              * 位置在名单判据之前 —— 与"缺卷留到最后再判"那份名单无关，幂等。
              */
             SettleSucceededGroupPieceProducers();
+            SettleParentOfSucceededVolumeGroup();
 
             /*
              * ⛔ **已验证组里的跟班片也在这里收场**（2026-10-18 用户 `&&` 口径，`22222222` 现场）：

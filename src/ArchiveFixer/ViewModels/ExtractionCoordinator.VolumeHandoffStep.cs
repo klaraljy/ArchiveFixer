@@ -181,6 +181,36 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            string currentPath = task.CurrentPath ?? string.Empty;
+            string currentDirectory = Path.GetDirectoryName(currentPath) ?? string.Empty;
+
+            /*
+             * 递归层刚解出的中间片可能还没有独立任务（真机 23.5：`.003` 被扫到的时候
+             * `.001` 只是一份文件，不在任务表里）⇒ 先查第一大步账本；账本里的兄弟片
+             * 正是 RegisterSiblingLedgerEntries 刚补进来的。
+             */
+            foreach (ArchiveFixer.Detection.FirstStepFileLedgerEntry entry
+                     in _firstStepFileLedger.SameBase(baseName))
+            {
+                if (SafePathHelper.PathEquals(entry.Path, currentPath)
+                    || !string.Equals(
+                        Path.GetDirectoryName(entry.Path) ?? string.Empty,
+                        currentDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (entry.Size > 0
+                    && entry.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                    && (entry.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                            or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                        || entry.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember))
+                {
+                    return true;
+                }
+            }
+
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
                 if (candidate == null
