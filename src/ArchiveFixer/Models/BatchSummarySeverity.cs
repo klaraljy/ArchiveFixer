@@ -30,12 +30,13 @@ namespace ArchiveFixer.Models
     ///
     /// <para><b>三档的边界（刻意定死在这里，别处不许再判断一次）</b>：</para>
     /// <list type="number">
-    /// <item><description><b>红（<see cref="BatchSummarySeverity.Failed"/>）</b>：只要有一个任务落成
+    /// <item><description><b>红（<see cref="BatchSummarySeverity.Failed"/>）</b>：有任务落成
     /// <see cref="TaskOutcome.Failed"/>（或校验枚举已经是 <see cref="OutputVerificationOutcome.Failed"/>），
-    /// 整批就是红 —— 部分成功不许显示成成功（不变量 6）。</description></item>
-    /// <item><description><b>橙（<see cref="BatchSummarySeverity.Partial"/>）</b>：没有失败，但存在
-    /// <see cref="TaskOutcome.PartiallyCompleted"/> / <see cref="TaskOutcome.Skipped"/> /
-    /// <see cref="TaskOutcome.Cancelled"/> / <see cref="TaskOutcome.Pending"/>（还没结论 = 没轮到）。</description></item>
+    /// **而且整批一个内容物都没解出来** —— 部分成功不许显示成成功（不变量 6）。</description></item>
+    /// <item><description><b>橙（<see cref="BatchSummarySeverity.Partial"/>）</b>：有失败，但整批已经有
+    /// <see cref="TaskOutcome.Succeeded"/> / <see cref="TaskOutcome.PartiallyCompleted"/>
+    /// （有内容物被解出）；或没有失败但存在部分完成 / 跳过 / 取消 / 没轮到。
+    /// 用户 2026-10-28 口径：「既然解压出了这么多，汇总应该是部分完成，因为有内容物被解出」。</description></item>
     /// <item><description><b>蓝（<see cref="BatchSummarySeverity.Success"/>）</b>：其余情况 ——
     /// 包括"一个任务都没有"（没有失败、也没有没做成的事，用蓝的"什么都没发生"最诚实）。</description></item>
     /// </list>
@@ -83,38 +84,71 @@ namespace ArchiveFixer.Models
                 }
             }
 
-            return verificationFailed
-                ? BatchSummarySeverity.Failed
-                : FromOutcomes(outcomes);
+            return Evaluate(outcomes, verificationFailed);
         }
 
         /// <summary>按机器终态算汇总严重度（纯函数，单独可测）。</summary>
-        public static BatchSummarySeverity FromOutcomes(IEnumerable<TaskOutcome>? outcomes)
+        public static BatchSummarySeverity FromOutcomes(IEnumerable<TaskOutcome>? outcomes) =>
+            Evaluate(outcomes, verificationFailed: false);
+
+        private static BatchSummarySeverity Evaluate(
+            IEnumerable<TaskOutcome>? outcomes,
+            bool verificationFailed)
         {
-            var severity = BatchSummarySeverity.Success;
+            bool hasFailure = verificationFailed;
+            bool hasContent = false;
+            bool hasPartial = false;
 
             foreach (TaskOutcome outcome in outcomes ?? Array.Empty<TaskOutcome>())
             {
                 switch (outcome)
                 {
                     case TaskOutcome.Failed:
-                        // 有失败就是红，后面的不用再看了。
-                        return BatchSummarySeverity.Failed;
+                        hasFailure = true;
+                        break;
+
+                    case TaskOutcome.Succeeded:
+                        // 成功 = 至少一个任务真的产出了内容物。
+                        hasContent = true;
+                        break;
 
                     case TaskOutcome.PartiallyCompleted:
+                        // 部分完成一定以内容物为前提，它本身就是"这一批有内容物"的证据。
+                        hasContent = true;
+                        hasPartial = true;
+                        break;
+
                     case TaskOutcome.Skipped:
                     case TaskOutcome.Cancelled:
                     case TaskOutcome.Pending:
-                        severity = BatchSummarySeverity.Partial;
-                        break;
-
-                    default:
-                        // Succeeded：不动档位。
+                        hasPartial = true;
                         break;
                 }
             }
 
-            return severity;
+            /*
+             * 校验判否是更硬的一档：产物没有被证明可用，不能因为别的任务成功就降成橙。
+             */
+            if (verificationFailed)
+            {
+                return BatchSummarySeverity.Failed;
+            }
+
+            /*
+             * 用户 2026-10-28 新口径（覆盖旧的「只要一个 Failed 就红」）：
+             * 失败 + 整批已有内容物 ⇒ 橙（部分完成），因为用户已经拿到了东西；
+             * 失败 + 一个内容物都没有 ⇒ 红（整批确实什么也没做成）。
+             */
+            if (hasFailure)
+            {
+                return hasContent
+                    ? BatchSummarySeverity.Partial
+                    : BatchSummarySeverity.Failed;
+            }
+
+            return hasPartial
+                ? BatchSummarySeverity.Partial
+                : BatchSummarySeverity.Success;
         }
     }
 }

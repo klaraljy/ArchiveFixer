@@ -73,12 +73,21 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 汇总严重度_有失败是红_哪怕别的都成功()
+        public void 汇总严重度_有失败但已经有内容物_算橙()
+        {
+            Assert.Equal(
+                BatchSummarySeverity.Partial,
+                BatchSummarySeverityRules.FromOutcomes(
+                    new[] { TaskOutcome.Succeeded, TaskOutcome.Succeeded, TaskOutcome.Failed }));
+        }
+
+        [Fact]
+        public void 汇总严重度_有失败且一个内容物都没有_才算红()
         {
             Assert.Equal(
                 BatchSummarySeverity.Failed,
                 BatchSummarySeverityRules.FromOutcomes(
-                    new[] { TaskOutcome.Succeeded, TaskOutcome.Succeeded, TaskOutcome.Failed }));
+                    new[] { TaskOutcome.Skipped, TaskOutcome.Failed }));
         }
 
         /// <summary>

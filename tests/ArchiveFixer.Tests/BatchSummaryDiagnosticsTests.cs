@@ -327,7 +327,7 @@ namespace ArchiveFixer.Tests
             BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(tasks);
 
             Assert.Equal(BatchSummarySeverityRules.FromTasks(tasks), report.Severity);
-            Assert.Equal(BatchSummarySeverity.Failed, report.Severity);
+            Assert.Equal(BatchSummarySeverity.Partial, report.Severity);
 
             // 只有"跳过"那一批是橙：清单照样点名（颜色管颜色、文字管文字，两者互不代替）。
             BatchSummaryReport orange = BatchSummaryDiagnosticsRules.Build(new[] { Succeeded("a.7z"), Skipped("junk.txt") });
@@ -627,7 +627,8 @@ namespace ArchiveFixer.Tests
 
             (string Message, BatchSummarySeverity Severity) summary = Assert.Single(harness.Dialog.BatchSummaries);
 
-            Assert.Equal(BatchSummarySeverity.Failed, summary.Severity);
+            // 有成功内容物 + 两个失败 ⇒ 橙（部分完成），不是红。
+            Assert.Equal(BatchSummarySeverity.Partial, summary.Severity);
             Assert.StartsWith("一键处理", summary.Message, StringComparison.Ordinal);
 
             Assert.Contains(StatusText.BatchDiagnosticsTitle, summary.Message, StringComparison.Ordinal);
