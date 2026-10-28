@@ -17,10 +17,12 @@
       v0.1.2（用户 2026-10-04 拍板）：分卷族系统化识别 A~D + 骨架相似 + 改名反向修复 +
       真引擎端到端验证 + 逐层回收/空壳不进回收站/空间需求净增量，外加安装器的
       升级提示 / 卸载保留 data\ / 默认装到第一个非系统盘（逐条见 CHANGELOG.md）。
+      v0.2.1（用户 2026-10-28 拍板）：共用分卷骨架 + 7z/RAR/ZIP 三族串行；
+      标准名快通道、RAR 内容卡规范名、7z 末卷闸门、父任务回写、内容感知汇总。
     -->
-    <Version>0.1.2</Version>
-    <AssemblyVersion>0.1.2.0</AssemblyVersion>
-    <FileVersion>0.1.2.0</FileVersion>
+    <Version>0.2.1</Version>
+    <AssemblyVersion>0.2.1.0</AssemblyVersion>
+    <FileVersion>0.2.1.0</FileVersion>
     <Authors>ArchiveFixer</Authors>
     <Company>ArchiveFixer</Company>
     <Product>ArchiveFixer</Product>

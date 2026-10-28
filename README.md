@@ -2,13 +2,11 @@
 
 **把一批来源不明、后缀被改坏、加密、分卷、层层嵌套的压缩包，用最少的操作变成整理好、结果可追踪的文件。**
 
-当前版本：**v0.1.2**（分卷识别系统化 + 安装器升级/卸载，见 [CHANGELOG](CHANGELOG.md)）
+当前版本：**v0.2.1**（共用分卷骨架 + 7z/RAR/ZIP 三族串行，见 [CHANGELOG](CHANGELOG.md)）
 
-> v0.1.2 做两件事：① 把**分卷族的识别与改名**收成一整套（基名唯一出口 / 递归层还原伪装名 /
-> 改名不再反向 / 骨架相似 / **真 7-Zip 与真 UnRAR 端到端验证解得开**），外加逐层回收、
-> 空壳不进回收站、空间需求改按净增量算；② 把**安装包**补成能正经升级的：默认装到第一个非系统盘
-> （不再往 C 盘塞你的密码本）、装新版本时问一次"覆盖还是先卸载旧版"、卸载时问一次"保留还是全删"。
-> ⚠ **真机未验** —— 证据是合成夹具 + 本机真引擎用例。
+> v0.2.1 把分卷识别与解压收成一套共用骨架：第一大步账本、边界 resolver、PreparedVolumeGroup、
+> 临时标准名硬链接、原始路径映射和 SizeAnomaly 状态；再按 7z → RAR → ZIP 三族串行。
+> 新增标准名快通道、RAR 内容卡规范名、7z 末卷闸门、父任务回写，以及“有失败但已有内容物 ⇒ 部分完成”的汇总口径。
 
 Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联网 · **绿色目录版**解压即用、**不写注册表**（**安装包**会写 `HKCU` 两条键：卸载信息 + `Software\ArchiveFixer`）
 
@@ -16,29 +14,30 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 
 ## 这一版修了什么
 
-| 修的地方 | 一句话 |
+| 改的地方 | 一句话 |
 |---|---|
-| 分卷改名 | 不再出现"把干净名改成脏名"；相似算法认得 `333.78a8fuaz.003` 这种被改烂的卷标记，且**必须整组自洽**才改名 |
-| 分卷解开 | 改名之后**真 7-Zip / 真 UnRAR 确实解得开**（端到端用例，不是只断言到计划层）；7z"中间卷名字全丢"也接住了 |
-| 空间 | 需求**按净增量**算（内层包不再被算两遍），实测同一套三层链的放行需求减半 |
-| 回收 | 续解链**逐层**回收过程物（只在「彻底删除」档）；空壳不再往回收站里堆 |
-| 安装包 | 默认装到**第一个非系统盘**；装新版本**问一次**（覆盖 / 先卸旧版 / 取消）；卸载**问一次**（保留 `data\` 默认 / 全删） |
+| 分卷骨架 | 第一大步账本、边界 resolver、PreparedVolumeGroup、临时标准名硬链接、SizeAnomaly 收成一套 |
+| 7z | 首卷自述片数/整包字节/末片/排列试开；非等大两片必须字节和精确且引擎试开通过 |
+| RAR | RAR5/4 新/4 老分流；规范名直接消费内容卡的 `CanonicalVolumeName`，不再复制 `.a1/.b2/.c3` |
+| ZIP | 跨盘 `.z01/.zip` 与通用 `.zip.001` 分族；名字槽 + 高概率顺序 + 试开 |
+| 标准名快通道 | 同目录标准名组直接按入口试解，不再先做内容完整性判断；后缀夹中文只清后缀段 |
+| 汇总 | 有失败但整批已有内容物 ⇒ 部分完成；只有整批一个内容物都没有才失败；校验判否仍红 |
 
-细节逐条见 [CHANGELOG](CHANGELOG.md) 的 v0.1.2 段。
+细节逐条见 [CHANGELOG](CHANGELOG.md) 的 v0.2.1 段。
 
 ---
 
 ## 30 秒上手
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
-   `ArchiveFixer-0.1.2-setup.exe`（**安装包**，双击一路下一步）、
-   `ArchiveFixer-0.1.2-standalone.zip`（**独立版**，什么都不用装，解压即用）
-   或 `ArchiveFixer-0.1.2-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
+   `ArchiveFixer-0.2.1-setup.exe`（**安装包**，双击一路下一步）、
+   `ArchiveFixer-0.2.1-standalone.zip`（**独立版**，什么都不用装，解压即用）
+   或 `ArchiveFixer-0.2.1-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
    自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
-   `ArchiveFixer-0.1.2-框架依赖.zip` / `ArchiveFixer-0.1.2-独立.zip` / `ArchiveFixer-0.1.2-setup.exe`
+   `ArchiveFixer-0.2.1-框架依赖.zip` / `ArchiveFixer-0.2.1-独立.zip` / `ArchiveFixer-0.2.1-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
 
-   **安装包怎么用**（`ArchiveFixer-0.1.2-setup.exe`）：
+   **安装包怎么用**（`ArchiveFixer-0.2.1-setup.exe`）：
 
    - **装到哪**：默认装到**本机第一个非系统固定盘**的 `\ArchiveFixer`（例如 `D:\ArchiveFixer`）；
      本机没有第二个固定盘时才退到 `%LOCALAPPDATA%\Programs\ArchiveFixer`，向导会**明说**这一点。

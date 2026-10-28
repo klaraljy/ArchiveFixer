@@ -37,7 +37,7 @@ SetCompressorDictSize 64
 
 ; ---------------------------------------------------------------- 可变参数（由命令行传入）
 !ifndef APPVERSION
-    !define APPVERSION "0.1.0"
+    !define APPVERSION "0.2.1"
 !endif
 !ifndef SRCDIR
     !error "必须用 /DSRCDIR=<发布目录> 指定要打包的内容"
