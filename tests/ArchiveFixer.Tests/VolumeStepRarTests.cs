@@ -43,6 +43,50 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 内容卡给出规范名时_命名计划直接采用卡上事实()
+        {
+            string layer = NewLayer();
+            string entry = Path.Combine(layer, "9953.part1.a1");
+
+            var unit = NewUnit(
+                "9953",
+                layer,
+                entry,
+                Fact(entry, 1, "9953.part1.rar", "9953"),
+                Fact(Path.Combine(layer, "9953.part2.b2"), 2, "9953.part2.rar", "9953"),
+                Fact(Path.Combine(layer, "9953.part3.c3"), 3, "9953.part3.rar", "9953"));
+
+            FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "9953.part1.rar", "9953.part2.rar", "9953.part3.rar" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+        }
+
+        [Fact]
+        public void 入口后缀被改成a1_b2_c3_规范名仍然全部是rar()
+        {
+            string layer = NewLayer();
+            string entry = Path.Combine(layer, "9953.part1.a1");
+
+            var unit = NewUnit(
+                "9953",
+                layer,
+                entry,
+                Fact(entry, 1),
+                Fact(Path.Combine(layer, "9953.part2.b2"), 2),
+                Fact(Path.Combine(layer, "9953.part3.c3"), 3));
+
+            FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "9953.part1.rar", "9953.part2.rar", "9953.part3.rar" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+        }
+
+        [Fact]
         public void 内容卷号缺第2片_判缺卷_不出规范名计划()
         {
             string layer = NewLayer();
@@ -147,7 +191,11 @@ namespace ArchiveFixer.Tests
             return unit;
         }
 
-        private static GroupPieceFact Fact(string path, int? volumeNumber) =>
+        private static GroupPieceFact Fact(
+            string path,
+            int? volumeNumber,
+            string? canonicalVolumeName = null,
+            string? archiveBaseName = null) =>
             new(
                 path,
                 10,
@@ -162,6 +210,8 @@ namespace ArchiveFixer.Tests
                 null,
                 Path.GetDirectoryName(path) ?? string.Empty,
                 VolumeHandoffSource.UserImported,
-                true);
+                true,
+                CanonicalVolumeName: canonicalVolumeName ?? string.Empty,
+                ArchiveBaseName: archiveBaseName ?? string.Empty);
     }
 }

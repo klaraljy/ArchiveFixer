@@ -279,7 +279,9 @@ namespace ArchiveFixer.Extraction
                         null,
                         prepared.OriginalSourceLayer,
                         piece.Source,
-                        true))
+                        true,
+                        CanonicalVolumeName: piece.CanonicalName,
+                        ArchiveBaseName: prepared.BaseName))
                     .ToList(),
                 OrderedPieces = prepared.Pieces
                     .Select(piece => string.IsNullOrWhiteSpace(prepared.EntryLayer)

@@ -814,7 +814,10 @@ namespace ArchiveFixer.Extraction
                 item.Handoff != null,
                 item.Card.HasZipEndRecord,
                 item.Card.ZipEndRecordMeansSplit,
-                item.Card.HasZipLocalHeader);
+                item.Card.HasZipLocalHeader,
+                item.Card.CanonicalVolumeName,
+                item.Card.FirstVolumeNameByName,
+                item.Card.ArchiveBaseName);
 
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
         private static GroupCandidate Judge(

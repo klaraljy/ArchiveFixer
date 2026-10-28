@@ -26,5 +26,8 @@ namespace ArchiveFixer.Extraction
         bool FromHandoff,
         bool HasZipEndRecord = false,
         bool ZipEndRecordMeansSplit = false,
-        bool HasZipLocalHeader = false);
+        bool HasZipLocalHeader = false,
+        string CanonicalVolumeName = "",
+        string? FirstVolumeNameByName = null,
+        string ArchiveBaseName = "");
 }

@@ -149,6 +149,65 @@ namespace ArchiveFixer.Extraction
                 $"RAR 内容卷号连成 1..{max}（入口 = 第 1 卷）");
         }
 
+        /// <summary>
+        /// 每片内容卡上的规范名直接当目标名；缺一片、基名不一致、后缀不是 `.rar/.rNN`
+        /// 都返回 null，交给后面的按名字兜底。⛔ 不在这里猜后缀。
+        /// </summary>
+        private static List<string>? TryBuildCanonicalTargets(
+            List<(GroupPieceFact Fact, int Number)> numbered)
+        {
+            if (numbered.Count == 0)
+            {
+                return null;
+            }
+
+            var targets = new List<string>();
+            string? baseName = null;
+
+            foreach ((GroupPieceFact fact, _) in numbered)
+            {
+                string canonical = Path.GetFileName(fact.CanonicalVolumeName ?? string.Empty);
+
+                if (canonical.Length == 0)
+                {
+                    return null;
+                }
+
+                bool isRarName = canonical.EndsWith(".rar", StringComparison.OrdinalIgnoreCase)
+                    || Regex.IsMatch(canonical, @"(?i)\.r\d{2}$");
+
+                if (!isRarName)
+                {
+                    return null;
+                }
+
+                string factBase = fact.ArchiveBaseName ?? string.Empty;
+
+                if (factBase.Length == 0)
+                {
+                    return null;
+                }
+
+                if (baseName == null)
+                {
+                    baseName = factBase;
+                }
+                else if (!string.Equals(baseName, factBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                targets.Add(canonical);
+            }
+
+            if (targets.Distinct(StringComparer.OrdinalIgnoreCase).Count() != targets.Count)
+            {
+                return null;
+            }
+
+            return targets;
+        }
+
         private static CanonicalNamePlan BuildNamePlan(
             VolumeGroupUnit unit,
             List<(GroupPieceFact Fact, int Number)> numbered)
@@ -171,52 +230,71 @@ namespace ArchiveFixer.Extraction
             List<string>? targets = null;
             string namingEvidence = "RAR 入口名认不出卷标记 ⇒ 不出规范名计划";
 
-            Match part = PartPattern.Match(entryName);
+            /*
+             * **内容卡已经给出的规范名优先**：每片卡上的 CanonicalVolumeName 是
+             * `VolumeGroupResolver.TryGetCanonicalVolumeName` 的唯一出口算出来的；
+             * 8.15 的根因就是这一层没有把卡上的规范名带进 GroupPieceFact，族算法只能
+             * 拿入口名 `9953.part1.a1` 的 `.a1` 后缀去猜。
+             */
+            targets = TryBuildCanonicalTargets(numbered);
 
-            if (part.Success)
+            if (targets != null)
             {
-                string prefix = part.Groups["prefix"].Value;
-                string suffix = part.Groups["suffix"].Value;
-                int width = part.Groups["num"].Value.Length;
-
-                targets = new List<string>();
-
-                for (int index = 1; index <= numbered.Count; index++)
-                {
-                    targets.Add(
-                        prefix
-                        + index.ToString(
-                            "D" + width.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                            System.Globalization.CultureInfo.InvariantCulture)
-                        + suffix);
-                }
-
-                namingEvidence = $"RAR 新编号（{prefix}partN{suffix}，宽度 {width}）";
+                namingEvidence = "RAR 采用内容卡规范名（按卷号映射）";
             }
             else
             {
-                Match dirty = DirtyPartPattern.Match(entryName);
+                Match part = PartPattern.Match(entryName);
 
-                if (dirty.Success
-                    && dirty.Groups["prefix"].Value.IndexOf("pa", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (part.Success)
                 {
-                    string dirtyPrefix = dirty.Groups["prefix"].Value;
-                    string dirtySuffix = dirty.Groups["suffix"].Value;
-                    int dirtyWidth = dirty.Groups["num"].Value.Length;
+                    string prefix = part.Groups["prefix"].Value;
+                    int width = part.Groups["num"].Value.Length;
+
+                    /*
+                     * 规范名必须是 RAR 的 `.rar`，不能把入口原来的后缀（`.a1`/`.b2`/`.c3`）
+                     * 原样带进每一片。
+                     */
+                    const string suffix = ".rar";
 
                     targets = new List<string>();
 
                     for (int index = 1; index <= numbered.Count; index++)
                     {
                         targets.Add(
-                            dirtyPrefix
+                            prefix
                             + index.ToString(
-                                "D" + dirtyWidth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                "D" + width.ToString(System.Globalization.CultureInfo.InvariantCulture),
                                 System.Globalization.CultureInfo.InvariantCulture)
-                            + dirtySuffix);
+                            + suffix);
                     }
 
-                    namingEvidence = $"RAR 脏卷标记（保留前缀 {dirtyPrefix}，只换末尾卷号）";
+                    namingEvidence = $"RAR 新编号（{prefix}partN.rar，宽度 {width}）";
+                }
+                else
+                {
+                    Match dirty = DirtyPartPattern.Match(entryName);
+
+                    if (dirty.Success
+                        && dirty.Groups["prefix"].Value.IndexOf("pa", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        string dirtyPrefix = dirty.Groups["prefix"].Value;
+                        int dirtyWidth = dirty.Groups["num"].Value.Length;
+
+                        targets = new List<string>();
+
+                        for (int index = 1; index <= numbered.Count; index++)
+                        {
+                            targets.Add(
+                                dirtyPrefix
+                                + index.ToString(
+                                    "D" + dirtyWidth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                    System.Globalization.CultureInfo.InvariantCulture)
+                                + ".rar");
+                        }
+
+                        namingEvidence = $"RAR 脏卷标记（保留前缀 {dirtyPrefix}，卷标记归一到 partN.rar）";
+                    }
                 }
             }
 
