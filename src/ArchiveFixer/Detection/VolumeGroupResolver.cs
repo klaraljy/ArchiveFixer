@@ -428,7 +428,10 @@ namespace ArchiveFixer.Detection
                 candidates.Add(new VolumeCandidate { Path = entry.Path, Size = entry.Size });
             }
 
-            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(candidates);
+            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(
+                candidates,
+                ProveDisguisedGroupByContent);
+
             VolumeGroup? group = FindAnchorGroup(groups, anchor);
 
             if (group == null)
@@ -440,6 +443,42 @@ namespace ArchiveFixer.Detection
             }
 
             return ResolveGroup(anchor, entries, group);
+        }
+
+        /// <summary>
+        /// 伪装名字 + 大小不规律的组，只有内容能证明才放行：
+        /// 7z 首卷起始头自述整包字节数 == 组内各卷实际字节和。
+        /// RAR/ZIP 这里不冒充内容证明，仍走旧的尺寸规律闸门。
+        /// </summary>
+        private static bool ProveDisguisedGroupByContent(IReadOnlyList<VolumeCandidate> pieces)
+        {
+            if (pieces == null || pieces.Count < 2)
+            {
+                return false;
+            }
+
+            long actual = 0;
+            FileNatureCard? first = null;
+
+            foreach (VolumeCandidate piece in pieces)
+            {
+                if (piece.Size <= 0)
+                {
+                    return false;
+                }
+
+                actual += piece.Size;
+
+                FileNatureCard card = FileNature.Inspect(piece.Path);
+
+                if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
+                    && card.DeclaredTotalBytes > 0)
+                {
+                    first = card;
+                }
+            }
+
+            return first != null && actual == first.DeclaredTotalBytes;
         }
 
         /// <summary>

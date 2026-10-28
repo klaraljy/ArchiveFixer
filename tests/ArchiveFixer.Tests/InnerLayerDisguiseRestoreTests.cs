@@ -368,7 +368,7 @@ namespace ArchiveFixer.Tests
             FileNatureCard firstCard = FileNature.Inspect(firstVolume);
             Assert.Equal(ArchiveBodyKind.VolumeFirstPiece, firstCard.BodyKind);
             Assert.True(firstCard.DeclaredTotalBytes > firstCard.Size, "第一片：自述整包字节数应当大于自己");
-            Assert.True(firstCard.DeclaredVolumeCount >= 2, "第一片：按内容应当算得出「共几片」（≥ 2）");
+            Assert.Equal(0, firstCard.DeclaredVolumeCount); // 7z 没有片数字段，非均匀时不能按等大反推
 
             // ⛔ 中间片与"判不出"那一档：内容里没有身份信息 ⇒ 只能 Unknown（不许猜成"不是分卷"）。
             FileNatureCard middleCard = FileNature.Inspect(volumeBase + ".002");

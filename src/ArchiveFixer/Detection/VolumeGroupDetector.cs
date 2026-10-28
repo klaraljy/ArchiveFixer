@@ -1,4 +1,5 @@
 using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -138,7 +139,9 @@ namespace ArchiveFixer.Detection
         private const int MaxMissingNamesInNote = 5;
 
         /// <summary>把一个目录下的候选文件按分卷组归并；非分卷文件不返回。</summary>
-        public static IReadOnlyList<VolumeGroup> Group(IEnumerable<VolumeCandidate> files)
+        public static IReadOnlyList<VolumeGroup> Group(
+            IEnumerable<VolumeCandidate> files,
+            Func<IReadOnlyList<VolumeCandidate>, bool>? contentProof = null)
         {
             if (files == null)
             {
@@ -188,7 +191,11 @@ namespace ArchiveFixer.Detection
              * 宽松的名字判据有可能把"碰巧带数字段"的一堆文件凑成一组，而尺寸规律是**与名字无关**的硬证据；
              * 一旦认错组，一键处理就会去改一批不相干文件的名字 —— 认错比不认糟得多。
              */
-            survivors = survivors.Where(b => !b.HasDisguisedName || b.HasRegularVolumeSizes).ToList();
+            survivors = survivors
+                .Where(b => !b.HasDisguisedName
+                            || b.HasRegularVolumeSizes
+                            || (contentProof != null && contentProof(b.Candidates)))
+                .ToList();
 
             if (survivors.Count == 0)
             {
@@ -434,6 +441,9 @@ namespace ArchiveFixer.Detection
             public string BaseName { get; }
 
             public VolumeFamily Family { get; }
+
+            /// <summary>桶里当前保留的候选（只给“内容证明”这种组级判据读；不参与命名）。</summary>
+            public IReadOnlyList<VolumeCandidate> Candidates => _byIndex.Values.ToList();
 
             /// <summary>
             /// 这个桶里除了"干净的本体"以外，还有没有别的分卷成员

@@ -46,8 +46,7 @@ namespace ArchiveFixer.Extraction
 
             List<FirstStepFileLedgerEntry> firsts = unique
                 .Where(entry => entry.BodyKind == ArchiveBodyKind.VolumeFirstPiece
-                    && entry.DeclaredTotalBytes > 0
-                    && entry.DeclaredVolumeCount >= 2)
+                    && entry.DeclaredTotalBytes > 0)
                 .ToList();
 
             if (firsts.Count != 1)
@@ -60,7 +59,14 @@ namespace ArchiveFixer.Extraction
             }
 
             FirstStepFileLedgerEntry first = firsts[0];
-            int total = first.DeclaredVolumeCount;
+            int declaredTotal = first.DeclaredVolumeCount;
+
+            /*
+             * 7z 没有“共几片”字段；`DeclaredVolumeCount` 可能被判不出（0）。
+             * 这时不编 N，也不把“只找到几片”当完整：用实际候选数做工作集，
+             * 后面仍必须过字节和 + 引擎试开/名字定序。
+             */
+            int total = declaredTotal >= 2 ? declaredTotal : unique.Count;
 
             if (first.Size <= 0 || first.DeclaredTotalBytes <= 0 || total < 2)
             {
@@ -190,6 +196,22 @@ namespace ArchiveFixer.Extraction
                         context.BaseName,
                         unique,
                         $"7z 首卷自述整包 {first.DeclaredTotalBytes} 字节，实际 {receivedBytes} 字节"));
+            }
+
+            /*
+             * 自述片数判不出（0）时不能拿“等大中间片/末片不大于首片”的公式硬套：
+             * 真实样本存在非等大两片。字节和已经精确对上，交给试开确认。
+             */
+            if (declaredTotal < 2 && unique.Count >= 2)
+            {
+                PreparedVolumeGroup? nonUniform =
+                    await TryResolveNonUniformAsync(context, first, unique, cancellationToken)
+                        .ConfigureAwait(false);
+
+                if (nonUniform != null)
+                {
+                    return nonUniform;
+                }
             }
 
             for (int slot = 2; slot < total; slot++)

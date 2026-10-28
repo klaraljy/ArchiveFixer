@@ -250,7 +250,13 @@ namespace ArchiveFixer.Extraction
                 ArchiveFixer.Detection.VolumeContentFormat seedFormat =
                     ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
 
-                string key = baseName + "|" + seedFormat;
+                /*
+                 * 同名不同目录不合并：组键必须带目录。
+                 * 真机 `地狱` 首跑里两个目录都有 hell-7z，旧键只带基名+族，
+                 * 第二次种子被当重复跳过；即使不跳过，CollectPieces 也会跨目录收片。
+                 */
+                string seedDirectory = Path.GetDirectoryName(Path.GetFullPath(seed)) ?? string.Empty;
+                string key = seedDirectory + "|" + baseName + "|" + seedFormat;
 
                 if (!seenBaseAndFormat.Add(key))
                 {
@@ -498,6 +504,14 @@ namespace ArchiveFixer.Extraction
                     }
                 }
 
+                // 同名不同目录不是同一组；组只收 seed 所在目录的片。
+                string candidateDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+
+                if (!string.Equals(candidateDirectory, seedDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 if (!seedHasVolumeMarker
                     && !contentGrouping
                     && !ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
@@ -572,6 +586,25 @@ namespace ArchiveFixer.Extraction
                 candidate.PieceFacts = publicFacts;
                 candidate.Cards = cards;
                 return candidate;
+            }
+
+            /*
+             * 7z 分卷的片顺序：入口/首卷在前，其余按名字卷号；名字判不出再按内容卷号。
+             * ⛔ 非均匀分卷下不能按大小排序：首卷可以比第二卷更大，也可以更小。
+             */
+            IReadOnlyList<string> OrderVolumePieces(IReadOnlyList<PieceFacts> pieces, string? entryPath)
+            {
+                return pieces
+                    .OrderBy(item => !string.IsNullOrWhiteSpace(entryPath)
+                                     && string.Equals(item.Path, entryPath, StringComparison.OrdinalIgnoreCase)
+                        ? 0
+                        : 1)
+                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path)) ?? int.MaxValue)
+                    .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .Select(item => item.Path)
+                    .ToList();
             }
 
             /*
@@ -671,11 +704,7 @@ namespace ArchiveFixer.Extraction
                 {
                     BaseName = baseName,
                     Format = format,
-                    Pieces = items
-                        .OrderBy(item => item.Size)
-                        .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-                        .Select(item => item.Path)
-                        .ToList(),
+                    Pieces = OrderVolumePieces(items, items.FirstOrDefault(item => item.IsFirstPiece)?.Path),
                     EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
                     SuggestedVerdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
                     MissingNumbers = Array.Empty<int>(),
@@ -830,17 +859,29 @@ namespace ArchiveFixer.Extraction
             long declaredTotalBytes,
             long receivedBytes)
         {
-            var ordered = items
-                .OrderBy(item => item.VolumeNumber ?? int.MaxValue)
-                .ThenBy(item => item.Size)
-                .ToList();
+            List<PieceFacts> ordered = format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
+                ? items
+                    .OrderBy(item => item.IsFirstPiece ? 0 : 1)
+                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        Path.GetFileName(item.Path)) ?? int.MaxValue)
+                    .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+                : items
+                    .OrderBy(item => item.VolumeNumber ?? int.MaxValue)
+                    .ThenBy(item => item.Size)
+                    .ToList();
 
             /*
              * 完整性的 N 取「名字/内容卷号的最大值」与「入口包自述片数」里的较大者：
              * ⛔ 只要有自述片数，就不许把"只找到 1 片、名字恰好是 1"当成 1..1 完整
              * （真机 V03：只看到 `组.7z.001`、自述 4 片，老判据会判 Complete ⇒ 第二大步白跑一轮）。
              */
-            int expected = Math.Max(numbers[^1], declaredPieceCount);
+            int expected = format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
+                           && declaredTotalBytes > 0
+                           && declaredTotalBytes == receivedBytes
+                ? Math.Max(numbers[^1], 1)
+                : Math.Max(numbers[^1], declaredPieceCount);
 
             bool contiguous = numbers[0] == 1
                 && numbers.Count == expected

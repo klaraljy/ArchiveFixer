@@ -7,6 +7,7 @@
 > v0.2.1 把分卷识别与解压收成一套共用骨架：第一大步账本、边界 resolver、PreparedVolumeGroup、
 > 临时标准名硬链接、原始路径映射和 SizeAnomaly 状态；再按 7z → RAR → ZIP 三族串行。
 > 新增标准名快通道、RAR 内容卡规范名、7z 末卷闸门、父任务回写，以及“有失败但已有内容物 ⇒ 部分完成”的汇总口径。
+> v0.2.0 的「特定解压独立管线 + 空间不足」继续保留；需要 0.2.0 基线可用 tag `v0.2.0`。
 
 Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联网 · **绿色目录版**解压即用、**不写注册表**（**安装包**会写 `HKCU` 两条键：卸载信息 + `Software\ArchiveFixer`）
 
@@ -22,6 +23,8 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 | ZIP | 跨盘 `.z01/.zip` 与通用 `.zip.001` 分族；名字槽 + 高概率顺序 + 试开 |
 | 标准名快通道 | 同目录标准名组直接按入口试解，不再先做内容完整性判断；后缀夹中文只清后缀段 |
 | 汇总 | 有失败但整批已有内容物 ⇒ 部分完成；只有整批一个内容物都没有才失败；校验判否仍红 |
+| 特定解压 | v0.2.0 的独立最多 3 层管线保留：每个源包单独处理，压平中间目录，按最后一层内容命名 |
+| 空间不足 | v0.2.0 的源包体积降序、动态并发、成功后删源包与最后一层过程物保留 |
 
 细节逐条见 [CHANGELOG](CHANGELOG.md) 的 v0.2.1 段。
 
@@ -31,10 +34,9 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
    `ArchiveFixer-0.2.1-setup.exe`（**安装包**，双击一路下一步）、
-   `ArchiveFixer-0.2.1-standalone.zip`（**独立版**，什么都不用装，解压即用）
-   或 `ArchiveFixer-0.2.1-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
+   `ArchiveFixer-0.2.1-standalone.zip`（**独立版**，什么都不用装，解压即用）；
    自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
-   `ArchiveFixer-0.2.1-框架依赖.zip` / `ArchiveFixer-0.2.1-独立.zip` / `ArchiveFixer-0.2.1-setup.exe`
+   `ArchiveFixer-0.2.1-独立.zip` / `ArchiveFixer-0.2.1-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
 
    **安装包怎么用**（`ArchiveFixer-0.2.1-setup.exe`）：

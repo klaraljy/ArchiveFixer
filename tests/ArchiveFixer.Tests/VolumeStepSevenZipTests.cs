@@ -15,6 +15,26 @@ namespace ArchiveFixer.Tests
     public sealed class VolumeStepSevenZipTests
     {
         [Fact]
+        public void 首卷没有片数字段_两片字节和相等_仍判完整()
+        {
+            string layer = NewLayer();
+
+            var unit = NewUnit(
+                "组",
+                layer,
+                Path.Combine(layer, "组.7z.001"),
+                Fact(Path.Combine(layer, "组.7z.001"), 100, first: true, declaredCount: 0, declaredTotal: 250),
+                Fact(Path.Combine(layer, "组.7z.002"), 150));
+
+            FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "组.7z.001", "组.7z.002" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+        }
+
+        [Fact]
         public void 首卷自述3片_字节和相等_判完整_规范名7z001到003()
         {
             string layer = NewLayer();

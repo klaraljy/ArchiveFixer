@@ -66,3 +66,24 @@ pwsh -File samples/generate-samples.ps1 -VolumeSizeMb 2
 ```
 
 当前批次先按上表的紧凑列记录；等 M4 引入递归与哈希校验后，再补齐"预期文件数量 / 输出哈希 / 预期递归行为"三列。
+
+## 地狱（非均匀 + 加密头，随机生成）
+
+`samples/generate-hell.ps1` 每次运行重新随机载荷大小、卷数与前几卷切点：
+
+| 目录 | 内容 | 加密 |
+|---|---|---|
+| `01_7z_非均匀_明文` | 7z 非均匀分卷 | 无 |
+| `02_7z_非均匀_头加密` | 7z 非均匀分卷 | `-mhe=on` 头加密 |
+| `03_rar_非均匀_明文` | RAR 非均匀分卷 | 无 |
+| `04_rar_非均匀_头加密` | RAR 非均匀分卷 | `-hp` 头加密 |
+| `05_zip_非均匀_条目加密` | ZIP 非均匀分卷 | `-p` 条目加密（ZIP 无同意义头加密） |
+
+用法：
+
+```powershell
+pwsh -File samples/generate-hell.ps1
+pwsh -File samples/generate-hell.ps1 -Seed 12345 -MinPayloadMb 8 -MaxPayloadMb 24
+```
+
+样本本体在 `samples/generated/地狱/`，不入库。每次运行把真实卷大小写进 `MANIFEST.txt`。
