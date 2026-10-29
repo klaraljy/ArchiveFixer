@@ -464,7 +464,7 @@ namespace ArchiveFixer.Engines.WinRar
                     ? "UnRAR 命令行参数错误"
                     : "UnRAR 命令行参数错误：" + detail,
                 EngineErrorTypes.Cancelled => "操作已取消",
-                EngineErrorTypes.TimedOut => "UnRAR 执行超时，可能正在等待输入密码或文件过大/异常",
+                EngineErrorTypes.TimedOut => "UnRAR 执行超时（连续 30 分钟无输出或超过 6 小时总上限），已强制结束进程",
                 _ => string.IsNullOrWhiteSpace(detail)
                     ? "未知错误，请查看日志"
                     : detail

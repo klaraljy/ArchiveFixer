@@ -48,8 +48,11 @@ namespace ArchiveFixer.Engines.WinRar
     /// </summary>
     public sealed class WinRarProcessRunner
     {
-        /// <summary>与 7-Zip / UnRAR 两侧同一个口径：30 分钟。超大包可能很慢，超时会被明确报出来。</summary>
-        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(30);
+        /// <summary>
+        /// WinRAR GUI 版不写 stdout/stderr（实测全程 0 字节），无法用“无输出”判断卡死；
+        /// 这里只保留 6 小时绝对上限，避免超大包在 30 分钟处被误杀。
+        /// </summary>
+        private static readonly TimeSpan MaxTotalTimeout = TimeSpan.FromHours(6);
 
         /// <summary>等两路输出读完的上限（GUI 版正常情况下一个字节都没有，这里只是不许无界等待）。</summary>
         private static readonly TimeSpan OutputDrainTimeout = TimeSpan.FromSeconds(3);
@@ -224,7 +227,7 @@ namespace ArchiveFixer.Engines.WinRar
             Task<string>? outputTask = null;
             Task<string>? errorTask = null;
 
-            using var timeoutCts = new CancellationTokenSource(DefaultTimeout);
+            using var timeoutCts = new CancellationTokenSource(MaxTotalTimeout);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 timeoutCts.Token);

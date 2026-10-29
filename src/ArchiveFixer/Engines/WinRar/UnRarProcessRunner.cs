@@ -44,8 +44,16 @@ namespace ArchiveFixer.Engines.WinRar
     /// </summary>
     public sealed class UnRarProcessRunner
     {
-        /// <summary>与 7-Zip 侧同一个口径：30 分钟。RAR 的固实大包可能很慢，给足时间；超时会被明确报出来。</summary>
-        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(30);
+        /// <summary>
+        /// 30 分钟**无输出**超时：UnRAR 只要还在吐进度，就续期。
+        /// </summary>
+        private static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// 绝对上限：即使一直有进度，也不允许一个进程跑超过 6 小时。
+        /// 没有它的话，“卡在某个极慢的 I/O 上但偶尔有输出”可以无限拖住任务。
+        /// </summary>
+        private static readonly TimeSpan MaxTotalTimeout = TimeSpan.FromHours(6);
 
         /// <summary>等两路输出泵收完的上限（进程已经退出，正常情况下是毫秒级）。</summary>
         private static readonly TimeSpan PumpDrainTimeout = TimeSpan.FromSeconds(3);
@@ -421,19 +429,26 @@ namespace ArchiveFixer.Engines.WinRar
 
             ArchiveProgressReporter reporter = new(progressContext?.Progress);
 
-            EngineOutputActivityMonitor? monitor = progressContext?.Stalled != null
-                ? new EngineOutputActivityMonitor(progressContext.StallThreshold, progressContext.Stalled)
-                : null;
+            /*
+             * 即使调用方没给 Stalled 回调，也要建 monitor：
+             * 它在这里的另一个职责是给“无输出超时”提供最后活动时间。
+             */
+            EngineOutputActivityMonitor monitor = new(
+                progressContext?.StallThreshold ?? EngineOutputActivityMonitor.DefaultStallThreshold,
+                progressContext?.Stalled);
 
             var outputCollector = new EngineOutputCollector(outputBuilder, outputLock, progressParser, reporter, monitor);
             var errorCollector = new EngineOutputCollector(errorBuilder, errorLock, progressParser, reporter, monitor);
 
-            using var timeoutCts = new CancellationTokenSource(DefaultTimeout);
+            using var timeoutCts = new CancellationTokenSource();
+            using var absoluteTimeoutCts = new CancellationTokenSource(MaxTotalTimeout);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
-                timeoutCts.Token);
+                timeoutCts.Token,
+                absoluteTimeoutCts.Token);
 
             using var watchdogCts = new CancellationTokenSource();
+            Task timeoutWatch = Task.CompletedTask;
 
             Task outputPump = Task.CompletedTask;
             Task errorPump = Task.CompletedTask;
@@ -498,10 +513,12 @@ namespace ArchiveFixer.Engines.WinRar
                     linkedCts.Token);
 
                 watchdog = EngineOutputActivityMonitor.WatchAsync(
-                    monitor!,
+                    monitor,
                     EngineOutputActivityMonitor.ResolvePollInterval(
                         progressContext?.StallThreshold ?? EngineOutputActivityMonitor.DefaultStallThreshold),
                     watchdogCts.Token);
+
+                timeoutWatch = WatchIdleTimeoutAsync(monitor, DefaultIdleTimeout, timeoutCts);
 
                 // 立刻关掉标准输入：UnRAR 一旦想"问密码"就拿到 EOF 立刻失败，
                 // 而不是把整个任务挂在那里等一个永远不会来的输入（我们一律用 -p/-p- 避免它问）。
@@ -519,8 +536,9 @@ namespace ArchiveFixer.Engines.WinRar
                 }
                 catch (OperationCanceledException)
                 {
-                    bool isTimeout = timeoutCts.IsCancellationRequested &&
-                                     !cancellationToken.IsCancellationRequested;
+                    bool isTimeout = (timeoutCts.IsCancellationRequested
+                                         || absoluteTimeoutCts.IsCancellationRequested)
+                                     && !cancellationToken.IsCancellationRequested;
 
                     await KillProcessTreeSafeAsync(process).ConfigureAwait(false);
 
@@ -536,7 +554,7 @@ namespace ArchiveFixer.Engines.WinRar
                         StandardError = errorOnCancel,
                         Status = isTimeout ? StatusText.UnknownError : StatusText.Cancelled,
                         Message = isTimeout
-                            ? "UnRAR 执行超时，已强制结束进程"
+                            ? "UnRAR 执行超时（30 分钟无输出或超过 6 小时总上限），已强制结束进程"
                             : "操作已取消，已强制结束 UnRAR 进程",
                         DetectedErrorType = isTimeout ? EngineErrorTypes.TimedOut : EngineErrorTypes.Cancelled,
                         UsedPasswordMasked = MaskPassword(usedPassword),
@@ -614,6 +632,7 @@ namespace ArchiveFixer.Engines.WinRar
                 try
                 {
                     watchdogCts.Cancel();
+                    timeoutCts.Cancel();
                 }
                 catch
                 {
@@ -622,7 +641,15 @@ namespace ArchiveFixer.Engines.WinRar
                 await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
 
                 reporter.Complete();
-                monitor?.Complete();
+                monitor.Complete();
+
+                try
+                {
+                    await timeoutWatch.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
 
                 try
                 {
@@ -658,6 +685,38 @@ namespace ArchiveFixer.Engines.WinRar
                     {
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 30 分钟的**无输出**超时：只在连续 <paramref name="idleTimeout"/> 没有任何引擎输出时取消进程。
+        /// 只要 UnRAR 还在吐进度，计时就被 <see cref="EngineOutputActivityMonitor.MarkActivity"/> 刷新。
+        /// </summary>
+        private static async Task WatchIdleTimeoutAsync(
+            EngineOutputActivityMonitor monitor,
+            TimeSpan idleTimeout,
+            CancellationTokenSource timeoutCts)
+        {
+            try
+            {
+                while (!timeoutCts.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), timeoutCts.Token).ConfigureAwait(false);
+
+                    if (monitor.IdleFor >= idleTimeout)
+                    {
+                        timeoutCts.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 正常收口 / 超时。
+            }
+            catch
+            {
+                // 看门狗自身出问题不允许影响解压结论。
             }
         }
 
