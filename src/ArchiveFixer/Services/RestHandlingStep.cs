@@ -783,8 +783,22 @@ namespace ArchiveFixer.Services
             IReadOnlyList<ArchiveTask>? chainTasks,
             CancellationToken cancellationToken)
         {
-            _ = chainTasks;
             _ = cancellationToken;
+
+            /*
+             * RestHandling 只服务失败 / 部分完成路径。
+             * 单一物（单包或整组）最终成功时，过程物由成功清理出口处理；
+             * 这里不再按 Keep/Delete 碰其余物。
+             */
+            bool chainSucceeded = task.Outcome == TaskOutcome.Succeeded
+                                  && (chainTasks == null
+                                      || chainTasks.All(item => item.Outcome is TaskOutcome.Succeeded
+                                          or TaskOutcome.Skipped));
+
+            if (chainSucceeded)
+            {
+                return;
+            }
 
             string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
 

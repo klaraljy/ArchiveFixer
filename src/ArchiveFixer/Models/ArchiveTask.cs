@@ -1693,8 +1693,9 @@ namespace ArchiveFixer.Models
         public string RestDirectoryPath { get; set; } = string.Empty;
 
         /// <summary>
-        /// 空间不足模式：这条链**最后一层过程物**在其余物里的保留路径（留不下时为空）。
-        /// 只给其余物删除那一档当"不要删这一份"的例外；⛔ 不参与界面显示、不写设置。
+        /// 这条链**最后一层过程物**在其余物里的保留路径（留不下时为空）。
+        /// 失败时按「删除操作」留 / 删；同一单一物最终成功时由成功清理出口删掉。
+        /// ⛔ 不参与界面显示、不写设置。
         /// </summary>
         public string LastProcessArtifactPath { get; set; } = string.Empty;
 

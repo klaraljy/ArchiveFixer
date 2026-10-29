@@ -928,6 +928,8 @@ namespace ArchiveFixer.ViewModels
 
                     OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
 
+                    CleanupSuccessfulProcessArtifacts(Tasks, message => AppendLog("INFO", message));
+
                     _vm.ReportPendingContinuation(outcome.PendingContinuationCount);
 
                     /*
@@ -3823,6 +3825,95 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 以后加状态只改 <see cref="TaskOutcomeClassifier"/> 一处。
              */
             return task != null && TaskOutcomeClassifier.IsFailureStatus(task.Status);
+        }
+
+        /// <summary>
+        /// 整条单一物（单包或整组）最终成功时，清掉曾经为失败保留的最后一层过程物。
+        /// 失败 / 部分完成 / 待处理 / 取消的组一律不动；源包路径一律不碰。
+        /// </summary>
+        internal static int CleanupSuccessfulProcessArtifacts(IEnumerable<ArchiveTask>? tasks, Action<string>? log = null)
+        {
+            if (tasks == null)
+            {
+                return 0;
+            }
+
+            int deleted = 0;
+
+            foreach (IGrouping<string, ArchiveTask> group in tasks
+                         .Where(task => task != null && !string.IsNullOrWhiteSpace(task.ChainRootIdentity))
+                         .GroupBy(task => task.ChainRootIdentity, StringComparer.OrdinalIgnoreCase))
+            {
+                if (group.Any(task => task.Outcome is TaskOutcome.Failed
+                            or TaskOutcome.PartiallyCompleted
+                            or TaskOutcome.Pending
+                            or TaskOutcome.Cancelled))
+                {
+                    continue;
+                }
+
+                var sourcePaths = new HashSet<string>(
+                    group.SelectMany(task => new[] { task.CurrentPath, task.OriginalPath, task.RootSourcePath })
+                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                        .Select(path => Path.GetFullPath(path)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (ArchiveTask task in group)
+                {
+                    string artifact = task.LastProcessArtifactPath;
+
+                    if (string.IsNullOrWhiteSpace(artifact)
+                        || string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                        || !File.Exists(artifact))
+                    {
+                        RemoveEmptyRestDirectory(task.RestDirectoryPath);
+                        continue;
+                    }
+
+                    string fullArtifact = Path.GetFullPath(artifact);
+
+                    if (sourcePaths.Contains(fullArtifact)
+                        || !ArchivePathGuard.IsInsideRoot(task.RestDirectoryPath, fullArtifact, out _))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        File.Delete(fullArtifact);
+                        task.LastProcessArtifactPath = string.Empty;
+                        deleted++;
+                        log?.Invoke(
+                            $"{task.LogName}：单一物最终成功，已清掉此前保留的最后一层过程物（{Path.GetFileName(artifact)}）。");
+
+                        RemoveEmptyRestDirectory(task.RestDirectoryPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        log?.Invoke(
+                            $"{task.LogName}：最后一层过程物清理失败（{Path.GetFileName(artifact)}）：{ex.Message}");
+                    }
+                }
+            }
+
+            return deleted;
+        }
+
+        private static void RemoveEmptyRestDirectory(string? restDirectory)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(restDirectory)
+                    && Directory.Exists(restDirectory)
+                    && !Directory.EnumerateFileSystemEntries(restDirectory).Any())
+                {
+                    Directory.Delete(restDirectory, recursive: false);
+                }
+            }
+            catch
+            {
+                // 只影响空壳清理由，不能影响任务结论。
+            }
         }
 
         /// <summary>

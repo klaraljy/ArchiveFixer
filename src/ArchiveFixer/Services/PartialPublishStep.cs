@@ -344,6 +344,8 @@ namespace ArchiveFixer.Services
 
             // 其余物记到这一单上（其余物那一档收尾时才有对象可处理）。
             task.RestDirectoryPath = restDirectory;
+            // 记下这一份过程物本身：后续整条单一物成功时，按“成功只处理源包”的规则清掉它。
+            task.LastProcessArtifactPath = target;
 
             _host.AppendLog(
                 "INFO",
