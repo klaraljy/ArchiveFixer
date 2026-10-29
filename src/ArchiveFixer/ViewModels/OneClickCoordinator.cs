@@ -1337,11 +1337,22 @@ namespace ArchiveFixer.ViewModels
                                     continue;
                                 }
 
+                                string? targetWorkRoot = ResolvePreparedGroupTargetWorkRoot(prepared);
                                 PreparedVolumeGroup? linked = VolumeGroupEntryDirectory.TryMaterialize(
                                     prepared,
-                                    null,
+                                    VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(prepared, targetWorkRoot),
                                     (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
                                     out string linkError);
+
+                                if (linked == null && targetWorkRoot != null)
+                                {
+                                    // 目标盘与源片不同卷时，硬链接只能在源卷上建；回落旧行为。
+                                    linked = VolumeGroupEntryDirectory.TryMaterialize(
+                                        prepared,
+                                        null,
+                                        (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
+                                        out linkError);
+                                }
 
                                 if (linked == null)
                                 {
@@ -3825,6 +3836,63 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 以后加状态只改 <see cref="TaskOutcomeClassifier"/> 一处。
              */
             return task != null && TaskOutcomeClassifier.IsFailureStatus(task.Status);
+        }
+
+        /// <summary>
+        /// 这一组对应的任务目标工作区根；用于把标准名入口放到“解压发生的地方”，
+        /// 而不是源盘根目录。找不到任务/输出目录时返回 null，由调用方回落。
+        /// </summary>
+        private string? ResolvePreparedGroupTargetWorkRoot(PreparedVolumeGroup group)
+        {
+            if (group == null)
+            {
+                return null;
+            }
+
+            string entry = group.OriginalEntryPath;
+
+            if (string.IsNullOrWhiteSpace(entry) && group.Pieces.Count > 0)
+            {
+                entry = group.Pieces[0].OriginalPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                return null;
+            }
+
+            ArchiveTask? task = Tasks.FirstOrDefault(candidate =>
+            {
+                if (candidate == null)
+                {
+                    return false;
+                }
+
+                return PathsEqual(candidate.CurrentPath, entry)
+                       || PathsEqual(candidate.OriginalPath, entry)
+                       || candidate.VolumePaths.Any(path => PathsEqual(path, entry));
+            });
+
+            return string.IsNullOrWhiteSpace(task?.OutputPath)
+                ? null
+                : Path.Combine(task!.OutputPath, ".ArchiveFixer.work");
+        }
+
+        private static bool PathsEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>

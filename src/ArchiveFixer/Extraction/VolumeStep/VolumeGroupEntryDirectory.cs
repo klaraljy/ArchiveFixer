@@ -9,11 +9,12 @@ namespace ArchiveFixer.Extraction
     /// <summary>
     /// **临时组入口目录**（共用骨架）：把一组的标准名做成硬链接，供 GroupAnalysis/引擎读取。
     ///
-    /// <para>用户 2026-10-27 拍板 A：临时目录放在**源卷**上（硬链接不能跨卷），
-    /// 只放标准名硬链接，跑完立即清理；⛔ 不复制、不移动、不改名用户源文件。</para>
+    /// <para>优先放在**这一单自己的目标工作区**（<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry</c>），
+    /// 这样“在哪里解压，临时入口就在哪里”；只有目标盘与源片不同卷、硬链接做不了时，
+    /// 才回落到源卷根（硬链接不能跨卷）。⛔ 不复制、不移动、不改名用户源文件。</para>
     ///
-    /// <para>形状：<c>&lt;源卷&gt;\.ArchiveFixer.work\group-entry\&lt;基名&gt;-&lt;guid&gt;\</c>。
-    /// 生产环境不传 <c>entryRoot</c> 时走这条；测试可传同卷临时根。</para>
+    /// <para>形状：<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry\&lt;基名&gt;-&lt;guid&gt;\</c>；
+    /// 回落时才是源卷根。目录必须带 Hidden 属性。</para>
     /// </summary>
     public static class VolumeGroupEntryDirectory
     {
@@ -82,6 +83,9 @@ namespace ArchiveFixer.Extraction
             try
             {
                 Directory.CreateDirectory(directory);
+                MarkHidden(directory);
+                MarkHidden(Path.GetDirectoryName(directory));
+                MarkHidden(Path.GetDirectoryName(Path.GetDirectoryName(directory)));
             }
             catch (Exception ex)
             {
@@ -146,6 +150,36 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>清理一个临时组入口目录；只删 <c>.ArchiveFixer.work\group-entry</c> 下的目录。</summary>
+        /// <summary>
+        /// 优先把标准名入口建在**任务自己的目标工作区**（&lt;目标目录&gt;\.ArchiveFixer.work\group-entry）；
+        /// 只有目标盘与源片不同卷、硬链接做不了时才返回 null，让调用方回落源卷根。
+        /// </summary>
+        public static string? TryResolveTargetEntryRoot(
+            PreparedVolumeGroup? group,
+            string? targetWorkRoot)
+        {
+            if (group == null
+                || string.IsNullOrWhiteSpace(targetWorkRoot)
+                || group.Pieces.Count == 0
+                || string.IsNullOrWhiteSpace(group.Pieces[0].OriginalPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                string root = Path.Combine(targetWorkRoot, GroupEntryFolderName);
+
+                return HardLinkHelper.CanHardLink(group.Pieces[0].OriginalPath, root)
+                    ? root
+                    : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         public static bool TryDelete(string? directory, string? entryRoot = null)
         {
             if (string.IsNullOrWhiteSpace(directory))
@@ -185,6 +219,35 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>删掉组目录后，把这次自己建出来的空 <c>group-entry</c> / <c>.ArchiveFixer.work</c> 也收掉。</summary>
+        /// <summary>
+        /// 临时入口目录在源卷根上：必须带隐藏属性，普通资源管理器不显示。
+        /// 只改属性，不动内容；失败不影响硬链接可用性。
+        /// </summary>
+        private static void MarkHidden(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    FileAttributes attributes = File.GetAttributes(path);
+
+                    if ((attributes & FileAttributes.Hidden) == 0)
+                    {
+                        File.SetAttributes(path, attributes | FileAttributes.Hidden);
+                    }
+                }
+            }
+            catch
+            {
+                // 设隐藏失败不阻断临时入口；至少内容不会被误删。
+            }
+        }
+
         private static void RemoveEmptyParents(string directory)
         {
             try
