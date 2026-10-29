@@ -115,7 +115,7 @@ namespace ArchiveFixer.ViewModels
             Math.Min(Math.Max(1, taskCount), MaxParallelExtractCountCeiling);
 
         /// <summary>
-        /// 「空间不足」模式下**本批开几个**（用户 2026-09-27 拍板：忽略设置里的并发档与「全速」）。
+        /// 「空间不足」模式下**本批开几个**（S 覆盖普通档：并发档与「全速」都不参与）。
         ///
         /// <para>判据全部在 <see cref="ExtractionScheduler.ResolveSpaceTightParallelCount"/> 里
         /// （"很多个体积相近的小包"→5，其余→3；再与"按空间算得出的建议并行数"取小）。
@@ -132,29 +132,9 @@ namespace ArchiveFixer.ViewModels
 
             count = Math.Clamp(count, 1, Math.Max(1, plan.Ordered.Count));
 
-            /*
-             * ⚠ 用户档只用来**往下压**（用户 2026-09-27 第二次追加："反正空间是弄好了，时间就是速度和卡顿
-             * 你想怎么解决"，而这一批在 USB 外置盘上 3 个并发把磁头抢满了、界面也卡）。
-             *
-             * 口径：模式自己的上限（5 / 3）与「全速」照旧不生效，但**用户的并发档允许更低** ——
-             * 慢盘上 1~2 个并发不但不卡，总时间常常还更短（磁头不用来回抢）。
-             * ⛔ 只取小、绝不取大：拿用户档把并发**抬高**到模式上限之上是不允许的（那就把这个模式的意义拆掉了）。
-             */
-            int userCap = Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
-
-            if (userCap < count)
-            {
-                AppendLog(
-                    "WARN",
-                    $"「空间不足」模式：模式自己算出最多跑 {count} 个，但②页的「最大并发解压数」是 {userCap} —— "
-                    + $"按更保守的 {userCap} 个跑（慢盘上并发少反而更快、也更不卡）。");
-
-                count = userCap;
-            }
-
             AppendLog(
                 "WARN",
-                $"「空间不足」模式：本批同时最多跑 {count} 个（忽略「全速」，不写设置）。{basis}。");
+                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通档的并发档与「全速」均不生效）。{basis}。");
 
             return count;
         }

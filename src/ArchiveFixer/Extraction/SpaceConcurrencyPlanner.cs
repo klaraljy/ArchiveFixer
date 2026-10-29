@@ -15,7 +15,7 @@ namespace ArchiveFixer.Extraction
         /// <param name="availableBytes">可用于本次启动的空间（真实剩余 − 保留余量）。</param>
         /// <param name="reservedBytes">已经在跑的任务预计新增的总字节数。</param>
         /// <param name="pendingSizes">按队列顺序排列的待跑任务预计新增字节数（从大到小）。</param>
-        /// <param name="maxParallel">用户设置的最大并发数（空间不足下作为上限，不允许超过）。</param>
+        /// <param name="maxParallel">硬上限（空间不足模式的最终数字还受形状上限 3/5 约束）。</param>
         public static int CountLaunchable(
             long availableBytes,
             long reservedBytes,

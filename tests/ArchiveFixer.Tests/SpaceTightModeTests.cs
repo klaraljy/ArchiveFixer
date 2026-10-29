@@ -784,12 +784,10 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「空间不足」模式的并发：模式自己的上限（5/3）与「全速」照旧不生效，
-        /// 但**用户把并发档调得更低时要照办**（用户 2026-09-27："时间就是速度和卡顿你想怎么解决" ——
-        /// 慢盘上少开几个反而更快、也不那么卡）。⛔ 只许往下压，绝不许拿用户档把并发抬高。
+        /// 「空间不足」模式是 S：普通档的并发档与「全速」都不参与，不能把 S 算出的并发压回 1。
         /// </summary>
         [Fact]
-        public async Task 空间不足模式_用户并发档更低时按更低的跑()
+        public async Task 空间不足模式_用户并发档更低时仍由S接管()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -827,16 +825,16 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.True(
-                LogContains(harness, x => x.Message.Contains("按更保守的 1 个跑", StringComparison.Ordinal)),
-                "用户并发档 = 1 时必须压到 1。实际日志：" + DescribeLogs(harness));
+                LogContains(harness, x => x.Message.Contains("接管并发", StringComparison.Ordinal)),
+                "S 必须明确写出自己接管了并发。实际日志：" + DescribeLogs(harness));
 
             Assert.True(
-                LogContains(harness, x => x.Message.Contains("本批同时最多跑 1 个", StringComparison.Ordinal)),
-                "并发结论那一行必须是 1。实际日志：" + DescribeLogs(harness));
+                LogContains(harness, x => x.Message.Contains("本批同时最多跑 5 个", StringComparison.Ordinal)),
+                "6 个相近小包应由 S 算到 5 个，不能被用户并发档 1 压回 1。实际日志：" + DescribeLogs(harness));
 
             Assert.DoesNotContain(
                 harness.Log.Logs,
-                x => x.Message.Contains("同时最多跑 3 个", StringComparison.Ordinal));
+                x => x.Message.Contains("按更保守的 1 个跑", StringComparison.Ordinal));
         }
 
         // ================================================================ 装配

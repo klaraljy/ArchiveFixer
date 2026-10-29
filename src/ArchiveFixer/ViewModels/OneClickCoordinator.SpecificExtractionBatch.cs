@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.ViewModels
 {
@@ -56,8 +57,10 @@ namespace ArchiveFixer.ViewModels
                  * 空间不足：按整组源包体积从大到小，按**当前可用空间**一浪一浪放；
                  * 每浪跑完重新探盘，后面的小包自然能提高并发。
                  */
+                string spaceBasis = string.Empty;
+
                 int waveSize = spaceTight
-                    ? ResolveSpecificParallel(pending, runOptions)
+                    ? ResolveSpecificParallel(pending, runOptions, out spaceBasis)
                     : 1;
 
                 waveSize = Math.Max(1, Math.Min(waveSize, pending.Count));
@@ -69,7 +72,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "INFO",
-                        $"特定解压空间不足动态并发：本浪 {waveSize} 个（待处理 {pending.Count} 个，上限 {Math.Clamp(Settings.MaxParallelExtractCount, 1, 8)}）");
+                        $"特定解压由空间不足接管并发：本浪 {waveSize} 个（待处理 {pending.Count} 个，特定解压档的并发设置不生效）。{spaceBasis}。");
                 }
 
                 bool[] results = await Task
@@ -343,12 +346,12 @@ namespace ArchiveFixer.ViewModels
 
         private int ResolveSpecificParallel(
             IReadOnlyList<SpecificBatchUnit> pending,
-            OneClickRunOptions runOptions)
+            OneClickRunOptions runOptions,
+            out string basis)
         {
-            int cap = Math.Clamp(Settings.MaxParallelExtractCount, 1, 8);
-
             if (pending == null || pending.Count == 0)
             {
+                basis = "没有待跑任务：按 1 个跑";
                 return 1;
             }
 
@@ -359,9 +362,12 @@ namespace ArchiveFixer.ViewModels
                 .Min();
 
             List<long> sizes = pending.Select(unit => unit.SourceBytes).ToList();
-            int launchable = SpaceConcurrencyPlanner.CountLaunchable(freeBytes, 0, sizes, cap);
 
-            return Math.Max(1, Math.Min(cap, launchable));
+            return ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+                sizes,
+                freeBytes,
+                reservedBytes: 0,
+                out basis);
         }
 
         private static string ResolveSpecificOutputRoot(ArchiveTask task, OneClickRunOptions runOptions)

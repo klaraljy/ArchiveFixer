@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Storage
@@ -491,18 +492,80 @@ namespace ArchiveFixer.Storage
             return count;
         }
 
+        /// <summary>
+        /// 空间不足模式的统一并发结论：只按待跑需求、可用空间和运行中预留算，
+        /// <b>不再读取用户的并发档</b>（S 覆盖普通档 / 特定解压档）。
+        ///
+        /// <para>规则与 <see cref="ResolveSpaceTightParallelCount"/> 同一套形状判据：
+        /// ≥ 5 个体积相近的小包（每个 ≤ 预算 ÷ 4，最大/最小 ≤ 1.5）→ 5；其余 → 3。
+        /// 再与 <see cref="SpaceConcurrencyPlanner.CountLaunchable"/> 算出的可启动数取小，
+        /// 最低 1（0 会让等并发位的循环永远等不到空位）。</para>
+        /// </summary>
+        public static int ResolveSpaceTightParallelCountForDemand(
+            IReadOnlyList<long>? pendingDemandBytes,
+            long availableBytes,
+            long reservedBytes,
+            out string basis)
+        {
+            IReadOnlyList<long> demands = pendingDemandBytes ?? Array.Empty<long>();
+
+            if (availableBytes < 0)
+            {
+                basis = "没能取到目标盘可用空间：按 1 个跑";
+                return 1;
+            }
+
+            if (demands.Count == 0)
+            {
+                basis = "没有待跑任务：按 1 个跑";
+                return 1;
+            }
+
+            int similarSmall = CountSimilarSmallDemands(demands, availableBytes);
+
+            int cap = demands.Count >= SpaceTightManySmallTaskCount
+                      && similarSmall >= SpaceTightManySmallTaskCount
+                ? SpaceTightParallelForManySmall
+                : SpaceTightParallelForMixedOrLarge;
+
+            string reason = cap == SpaceTightParallelForManySmall
+                ? $"本批有 {similarSmall} 个体积相近的小包（每个需求不超过预算的 1/{SpaceTightSmallTaskBudgetDivisor}）"
+                : "本批是多个偏大 / 体积差得远的包";
+
+            int launchable = SpaceConcurrencyPlanner.CountLaunchable(
+                availableBytes,
+                reservedBytes,
+                demands,
+                ParallelCeiling);
+
+            int count = Math.Max(1, Math.Min(cap, launchable));
+
+            basis = launchable <= 0
+                ? reason + $"：空间只够 0 个，先按 1 个交给空间门逐个拦"
+                : launchable < cap
+                    ? reason + $"：上限 {cap} 个，但空间只够 {launchable} 个，按空间压到 {count} 个"
+                    : reason + $"：按上限 {cap} 个跑";
+
+            return count;
+        }
+
         /// <summary>数一遍"体积相近的小包"有几个（只数，不改顺序）。</summary>
         private static int CountSimilarSmallTasks(IReadOnlyList<ScheduledExtractionItem> items, long budgetBytes)
+        {
+            return CountSimilarSmallDemands(
+                items.Select(item => item.RequiredBytes).ToList(),
+                budgetBytes);
+        }
+
+        private static int CountSimilarSmallDemands(IReadOnlyList<long> demands, long budgetBytes)
         {
             long smallLimit = budgetBytes / SpaceTightSmallTaskBudgetDivisor;
 
             long smallest = long.MaxValue;
             long largest = 0;
 
-            foreach (ScheduledExtractionItem item in items)
+            foreach (long required in demands)
             {
-                long required = item.RequiredBytes;
-
                 if (required > smallLimit)
                 {
                     continue;
@@ -528,9 +591,9 @@ namespace ArchiveFixer.Storage
 
             int count = 0;
 
-            foreach (ScheduledExtractionItem item in items)
+            foreach (long required in demands)
             {
-                if (item.RequiredBytes <= smallLimit)
+                if (required <= smallLimit)
                 {
                     count++;
                 }

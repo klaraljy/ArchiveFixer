@@ -1133,6 +1133,45 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, budget, 0, out _));
         }
 
+        /// <summary>
+        /// S 覆盖 A：空间不足模式只按空间与任务形状算，不再拿用户并发档往下压。
+        /// </summary>
+        [Fact]
+        public void 空间不足模式_S接管并发_不读取用户并发档()
+        {
+            long gib = 1024L * 1024 * 1024;
+
+            // 3 个 2 GiB，13 GiB 空闲：形状是偏大包，上限 3；空间也够 5 个。
+            int mixed = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+                new[] { 2 * gib, 2 * gib, 2 * gib },
+                availableBytes: 13 * gib,
+                reservedBytes: 0,
+                out string mixedBasis);
+
+            Assert.Equal(ExtractionScheduler.SpaceTightParallelForMixedOrLarge, mixed);
+            Assert.Contains("3 个", mixedBasis, StringComparison.Ordinal);
+
+            // 6 个 100 MiB，10 GiB 空闲：相近小包，上限 5。
+            int manySmall = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+                Enumerable.Repeat(100L * 1024 * 1024, 6).ToList(),
+                availableBytes: 10 * gib,
+                reservedBytes: 0,
+                out string smallBasis);
+
+            Assert.Equal(ExtractionScheduler.SpaceTightParallelForManySmall, manySmall);
+            Assert.Contains("小包", smallBasis, StringComparison.Ordinal);
+
+            // 空间只够 1 个：压到 1，并说明是空间限制。
+            int tight = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+                new[] { 2 * gib, 2 * gib, 2 * gib },
+                availableBytes: 3 * gib,
+                reservedBytes: 0,
+                out string tightBasis);
+
+            Assert.Equal(1, tight);
+            Assert.Contains("空间只够", tightBasis, StringComparison.Ordinal);
+        }
+
         /// <summary>造一个带净占用的调度项（只用于并发档那几条，不碰真实文件）。</summary>
         private ScheduledExtractionItem CreateLazyItem(string name, long sourceBytes)
         {
