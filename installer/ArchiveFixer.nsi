@@ -134,6 +134,8 @@ Var UnDataRadioDelete
 !define MUI_PAGE_CUSTOMFUNCTION_PRE UpgradePagePre
 Page custom UpgradePage UpgradePageLeave
 !insertmacro MUI_PAGE_DIRECTORY
+; 组件选择页：让用户决定要不要桌面快捷方式（2026-10-29）。
+!insertmacro MUI_PAGE_COMPONENTS
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT "HKCU"
 !define MUI_STARTMENUPAGE_REGISTRY_KEY "${APP_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "StartMenuFolder"
@@ -162,7 +164,7 @@ Page custom UpgradePage UpgradePageLeave
         Pop $UnDataDialog
         StrCmp $UnDataDialog "error" un_data_show_done
 
-        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个目录里放的是你长期要留着的东西，不是程序：$\r$\n$INSTDIR\data\$\r$\n· password-list.dat —— 密码本（按本机加密）$\r$\n· appsettings.json —— 你调过的设置与习惯$\r$\n· logs\ —— 历史日志"
+        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个目录里放的是你长期要留着的东西，不是程序：$\r$\n$INSTDIR\data\$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯$\r$\n· logs\ —— 历史日志"
         Pop $UnDataLabel
 
         ${NSD_CreateRadioButton} 0 56u 100% 24u "保留密码本与设置（推荐）：只删程序，上面那个 data\ 原样留着；以后重装能接着用"
@@ -326,7 +328,7 @@ Section "开始菜单快捷方式" SecStartMenu
     SecStartMenu_done:
 SectionEnd
 
-Section "桌面快捷方式" SecDesktop
+Section "桌面快捷方式（可选）" SecDesktop
     StrCmp $ForceShortcuts "1" SecDesktop_make
     IfSilent SecDesktop_done
 

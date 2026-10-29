@@ -41,6 +41,19 @@ if (-not $Version) {
 if (-not $SourceDir) { $SourceDir = Join-Path $repoRoot "dist\ArchiveFixer-$Version-独立" }
 if (-not $Output) { $Output = Join-Path $repoRoot "dist\ArchiveFixer-$Version-setup.exe" }
 
+# makensis 3.10 在 Windows 上会把中文 /DSRCDIR 读成乱码（实测 File ... no files found）；
+# 源目录含非 ASCII 时临时建一个 ASCII 目录联接再传给编译器。
+$SourceDir = [IO.Path]::GetFullPath($SourceDir)
+$Output = [IO.Path]::GetFullPath($Output)
+$makensisSourceDir = $SourceDir
+$sourceJunction = $null
+
+if ($SourceDir -match '[^\x00-\x7F]') {
+    $sourceJunction = Join-Path ([IO.Path]::GetTempPath()) ("af-installer-src-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Junction -Path $sourceJunction -Target $SourceDir | Out-Null
+    $makensisSourceDir = $sourceJunction
+}
+
 # ---------------------------------------------------------------- makensis
 if (-not $Makensis) {
     $candidates = @(
@@ -84,7 +97,7 @@ if (Test-Path -LiteralPath $Output) {
 Write-Step '2/4 编译安装包（LZMA 固实压缩，70 MB 上下，慢一点正常）'
 $args = @(
     '/V2',
-    "/DSRCDIR=$SourceDir",
+    "/DSRCDIR=$makensisSourceDir",
     "/DAPPVERSION=$Version",
     "/DOUTFILE=$Output",
     "/DICONFILE=$iconPath",
@@ -93,8 +106,17 @@ $args = @(
 )
 if (-not $Quiet) { Write-Detail ("makensis " + ($args -join ' ')) }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-& $Makensis @args
-$exit = $LASTEXITCODE
+
+try {
+    & $Makensis @args
+    $exit = $LASTEXITCODE
+}
+finally {
+    if ($sourceJunction -and (Test-Path -LiteralPath $sourceJunction)) {
+        Remove-Item -LiteralPath $sourceJunction -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $sw.Stop()
 if ($exit -ne 0) { Fail "makensis 失败（exit=$exit），上面是它自己的报错。" }
 Write-Detail "编译完成，用时 $([math]::Round($sw.Elapsed.TotalSeconds,1)) 秒"
