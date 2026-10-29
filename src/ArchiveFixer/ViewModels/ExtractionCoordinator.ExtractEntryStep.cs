@@ -221,6 +221,7 @@ namespace ArchiveFixer.ViewModels
             IsBusy = true;
             IsStopping = false;
             _isExtracting = true;
+            RememberUserSourcePaths(selectedTasks);
 
             // 本批的密码失败登记从零开始：上一批的残留不能让这一批多弹一次提示。
             ClearPasswordFailures();

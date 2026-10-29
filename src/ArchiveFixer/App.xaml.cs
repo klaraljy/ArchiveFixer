@@ -67,6 +67,9 @@ namespace ArchiveFixer
         {
             base.OnStartup(e);
 
+            // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
             AppBaseDirectory = AppContext.BaseDirectory;
 
             StartupPaths = (e?.Args ?? Array.Empty<string>())

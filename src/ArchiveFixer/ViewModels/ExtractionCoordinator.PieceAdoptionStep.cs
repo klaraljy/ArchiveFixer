@@ -25,9 +25,63 @@ namespace ArchiveFixer.ViewModels
     /// <summary>收片采纳与路径红线（接片判据/产出方链/是否可搬/任务表同步；第 9 块，同一 partial 类）。</summary>
     internal sealed partial class ExtractionCoordinator
     {
+        /// <summary>
+        /// 用户源文件路径集合：任务原始路径、当前路径、组的每一卷、链根路径。
+        /// 别名清理**只许删这个集合之外的名字**。
+        /// </summary>
+        internal static HashSet<string> BuildUserSourcePathSet(IEnumerable<ArchiveTask>? tasks)
+        {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                Add(task.OriginalPath);
+                Add(task.CurrentPath);
+                Add(task.RootSourcePath);
+
+                foreach (string volume in task.VolumePaths)
+                {
+                    Add(volume);
+                }
+            }
+
+            return paths;
+
+            void Add(string? path)
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return;
+                }
+
+                try
+                {
+                    paths.Add(Path.GetFullPath(path));
+                }
+                catch
+                {
+                    // 路径坏掉时不给集合添乱；清理侧还有“判不出就不删”兜底。
+                }
+            }
+        }
+
+        internal void RememberUserSourcePaths(IEnumerable<ArchiveTask>? tasks)
+        {
+            // 只增不减：续解轮次、后续补跑都可能再次经过别名清理，
+            // 不能因为新一轮只带来部分任务就把前一轮的用户源路径忘掉。
+            _userSourcePaths.UnionWith(BuildUserSourcePathSet(tasks));
+        }
+
         internal int PurgeRedundantPieceAliases()
         {
             int removed = 0;
+            var userSourcePaths = new HashSet<string>(_userSourcePaths, StringComparer.OrdinalIgnoreCase);
+            userSourcePaths.UnionWith(BuildUserSourcePathSet(SnapshotTaskTable(Tasks)));
 
             foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
             {
@@ -86,6 +140,27 @@ namespace ArchiveFixer.ViewModels
                                         StringComparison.OrdinalIgnoreCase)));
 
                             if (completeGroupPiece && isTaskEntry)
+                            {
+                                continue;
+                            }
+
+                            /*
+                             * 用户源路径是红线：即使它在临时组入口里还有硬链接，
+                             * 也绝不许删掉用户这个名字。2026-10-29 `444` 就是
+                             * `nali.pdf.001/.002` 在这里被当成“多余片名”删掉的。
+                             */
+                            string fullFile;
+
+                            try
+                            {
+                                fullFile = Path.GetFullPath(file);
+                            }
+                            catch
+                            {
+                                continue;
+                            }
+
+                            if (userSourcePaths.Contains(fullFile))
                             {
                                 continue;
                             }

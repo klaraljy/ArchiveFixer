@@ -6,6 +6,7 @@ using ArchiveFixer.Views;
 using ArchiveFixer.Views.Tabs;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -31,6 +32,8 @@ namespace ArchiveFixer
     public partial class MainWindow : Window
     {
         private readonly DialogService _dialogService = new();
+        private TrayIconService? _trayIcon;
+        private bool _allowClose;
 
         /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
         private const string UsageDocRelativePath = @"docs\使用说明.md";
@@ -146,6 +149,51 @@ namespace ArchiveFixer
             }
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+
+            _trayIcon = new TrayIconService(this);
+            _trayIcon.ExitRequested += ExitApplication;
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            if (!_allowClose)
+            {
+                /*
+                 * 右上角 X = 收进托盘，不退出、不取消正在跑的任务。
+                 * 真正退出走托盘菜单 / 文件菜单的「退出」。
+                 */
+                e.Cancel = true;
+                _trayIcon?.HideToTray();
+                return;
+            }
+
+            _trayIcon?.Dispose();
+            _trayIcon = null;
+            base.OnClosing(e);
+        }
+
+        private void ExitApplication()
+        {
+            if (DataContext is MainViewModel viewModel && viewModel.IsBusy)
+            {
+                bool confirmed = _dialogService.ShowConfirm(
+                    "当前还在处理任务。现在退出会停止程序，但不会自动保留正在处理的工作区。确定退出吗？");
+
+                if (!confirmed)
+                {
+                    return;
+                }
+            }
+
+            _allowClose = true;
+            _trayIcon?.Dispose();
+            _trayIcon = null;
+            System.Windows.Application.Current.Shutdown();
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             if (DataContext is MainViewModel viewModel)
@@ -202,7 +250,7 @@ namespace ArchiveFixer
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            Close();
+            ExitApplication();
         }
 
         private void LogWindowMenuItem_Click(object sender, RoutedEventArgs e)

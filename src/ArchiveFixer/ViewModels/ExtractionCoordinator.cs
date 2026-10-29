@@ -123,6 +123,12 @@ namespace ArchiveFixer.ViewModels
 
         private readonly object _runningTaskCtsLock = new();
 
+        /// <summary>
+        /// 这一批用户导入的源文件路径（含分卷各卷）。供别名清理判“这是用户的东西，绝不许删”。
+        /// 批首建立；任务表在清理时可能已被移动 / 改写，不能只靠当时的 CurrentPath 再猜。
+        /// </summary>
+        private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
+
         private void TrackRunningTask(CancellationTokenSource cts)
         {
             lock (_runningTaskCtsLock)
