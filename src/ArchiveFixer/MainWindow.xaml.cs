@@ -157,6 +157,26 @@ namespace ArchiveFixer
             _trayIcon.ExitRequested += ExitApplication;
         }
 
+        /// <summary>第二次启动 / 托盘左键 / 托盘菜单「打开」都走这里。</summary>
+        public void RestoreFromTray()
+        {
+            if (_trayIcon != null)
+            {
+                _trayIcon.Restore();
+                return;
+            }
+
+            ShowInTaskbar = true;
+            Show();
+
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+
+            Activate();
+        }
+
         protected override void OnClosing(CancelEventArgs e)
         {
             if (!_allowClose)

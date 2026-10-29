@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using ArchiveFixer.Services;
@@ -8,6 +9,13 @@ namespace ArchiveFixer
 {
     public partial class App : Application
     {
+        private const string SingleInstanceMutexName = @"Local\ArchiveFixer.SingleInstance.v1";
+        private const string ShowWindowEventName = @"Local\ArchiveFixer.ShowWindow.v1";
+
+        private Mutex? _singleInstanceMutex;
+        private EventWaitHandle? _showWindowEvent;
+        private RegisteredWaitHandle? _showWindowWait;
+
         public static string AppBaseDirectory { get; private set; } = AppContext.BaseDirectory;
 
         /// <summary>
@@ -70,6 +78,15 @@ namespace ArchiveFixer
 
             // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+            if (!TryAcquireSingleInstance())
+            {
+                // 第二次启动：把已经在跑的那一个窗口叫到前面，然后本进程安静退出，
+                // 绝不再建第二个托盘图标 / 第二个窗口。
+                StartupUri = null;
+                Shutdown();
+                return;
+            }
 
             AppBaseDirectory = AppContext.BaseDirectory;
 
@@ -164,8 +181,107 @@ namespace ArchiveFixer
             }
         }
 
+        /// <summary>
+        /// 只允许一个实例；第二次启动只发一个“把已有窗口叫出来”的信号。
+        /// 这样右下角永远最多一个托盘图标，也不会出现两个窗口各跑一份任务。
+        /// </summary>
+        private bool TryAcquireSingleInstance()
+        {
+            try
+            {
+                _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+
+                if (!createdNew)
+                {
+                    try
+                    {
+                        using EventWaitHandle existing = EventWaitHandle.OpenExisting(ShowWindowEventName);
+                        existing.Set();
+                    }
+                    catch
+                    {
+                    }
+
+                    _singleInstanceMutex.Dispose();
+                    _singleInstanceMutex = null;
+                    return false;
+                }
+
+                _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+                _showWindowWait = ThreadPool.RegisterWaitForSingleObject(
+                    _showWindowEvent,
+                    (_, timedOut) =>
+                    {
+                        if (!timedOut)
+                        {
+                            BringExistingWindowToFront();
+                        }
+                    },
+                    state: null,
+                    Timeout.Infinite,
+                    executeOnlyOnce: false);
+
+                return true;
+            }
+            catch
+            {
+                // 命名内核对象被系统策略禁用时，宁可只开一个实例也不要崩；
+                // 这里返回 true 会让程序照常启动（只是失去单实例保护）。
+                return true;
+            }
+        }
+
+        private static void BringExistingWindowToFront()
+        {
+            System.Windows.Application? application = Current;
+            if (application == null)
+            {
+                return;
+            }
+
+            application.Dispatcher.BeginInvoke(() =>
+            {
+                Window? window = application.MainWindow;
+
+                if (window is MainWindow mainWindow)
+                {
+                    mainWindow.RestoreFromTray();
+                }
+                else if (window != null)
+                {
+                    window.Show();
+                    window.Activate();
+                }
+            });
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
+            try
+            {
+                _showWindowWait?.Unregister(null);
+                _showWindowWait = null;
+                _showWindowEvent?.Dispose();
+                _showWindowEvent = null;
+
+                if (_singleInstanceMutex != null)
+                {
+                    try
+                    {
+                        _singleInstanceMutex.ReleaseMutex();
+                    }
+                    catch
+                    {
+                    }
+
+                    _singleInstanceMutex.Dispose();
+                    _singleInstanceMutex = null;
+                }
+            }
+            catch
+            {
+            }
+
             base.OnExit(e);
         }
 
