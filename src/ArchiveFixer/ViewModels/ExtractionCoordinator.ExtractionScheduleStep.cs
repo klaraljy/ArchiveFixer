@@ -295,33 +295,42 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<ScheduledExtractionItem> pending,
             int runningCount)
         {
-            int userCap = Math.Clamp(Settings.MaxParallelExtractCount, 1, 8);
-
             if (pending == null || pending.Count == 0)
             {
-                return Math.Max(1, Math.Min(userCap, Math.Max(1, runningCount)));
+                return Math.Max(1, runningCount);
             }
 
-            long? available = ProbeAvailableSpace(_spaceProbePath);
+            long remaining = _spaceLedger != null && _spaceLedger.AvailableBytes >= 0
+                ? _spaceLedger.RemainingBytes
+                : ProbeAvailableSpace(_spaceProbePath) is long available
+                    ? Math.Max(0, available - ReserveSpaceBytes)
+                    : -1;
 
-            if (!available.HasValue)
+            if (remaining < 0)
             {
-                return Math.Max(1, Math.Min(userCap, runningCount + 1));
+                return Math.Max(1, runningCount + 1);
             }
 
-            long budget = Math.Max(0, available.Value - ReserveSpaceBytes);
-            List<long> sizes = pending
-                .Select(item => item.Estimate.SourceBytes)
+            List<long> demands = pending
+                .Select(item => item.RequiredBytes)
                 .ToList();
 
-            int launchable = SpaceConcurrencyPlanner.CountLaunchable(
-                budget,
+            int launchable = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+                demands,
+                remaining,
                 reservedBytes: 0,
-                sizes,
-                maxParallel: userCap);
+                out _);
 
-            int desired = Math.Min(userCap, runningCount + launchable);
-            return Math.Max(1, Math.Max(runningCount, desired));
+            // 这个数是“总并发位”，不是“还能再开几个”；正在跑的任务已经占着位。
+            int desired = runningCount + launchable;
+
+            // 当前队列仍是“大包”时，总并发也不许超过 3；队列变小后这个限制自然消失。
+            if (demands.Max() >= remaining / 4)
+            {
+                desired = Math.Min(desired, ExtractionScheduler.SpaceTightLargeTaskParallelCeiling);
+            }
+
+            return Math.Max(1, Math.Min(ExtractionScheduler.ParallelCeiling, desired));
         }
 
         /// <summary>

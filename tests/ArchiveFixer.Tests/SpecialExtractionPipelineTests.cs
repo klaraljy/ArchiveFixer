@@ -205,7 +205,7 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(collection, "b", "01.jpg")));
             Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains("本浪 2 个", StringComparison.Ordinal));
+                text => text.Contains("当前目标 2 个", StringComparison.Ordinal));
         }
 
         // ================================================================ ③ 多分支：不塌 + WARN

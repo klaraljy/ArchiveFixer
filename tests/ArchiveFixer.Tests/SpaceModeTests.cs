@@ -1072,15 +1072,14 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 并发档（用户 2026-09-27 拍板）：**很多个体积相近的小包 → 5**，
-        /// 多个偏大 / 体积差得远的包 → **3**；取不到可用空间时按最保守的 3。
+        /// 空间不足模式的并发不再按“大包 3 / 小包 5”固定档：
+        /// 按当前预算能装下几个就开几个，最高 8。
         /// </summary>
         [Fact]
-        public void 空间不足模式_并发档_相近小包给5个_其余给3个_取不到空间也给3个()
+        public void 空间不足模式_按空间装下几个就开几个()
         {
             long budget = 10 * Gib;
 
-            // ① 六个体积相近的小包（每个峰值 200M ≤ 预算/4 = 2.5G）→ 5
             var manySmall = new List<ScheduledExtractionItem>();
 
             for (int index = 0; index < 6; index++)
@@ -1091,10 +1090,9 @@ namespace ArchiveFixer.Tests
             int count = ExtractionScheduler.ResolveSpaceTightParallelCount(
                 manySmall, budget, recommendedBySpace: 8, out string basis);
 
-            Assert.Equal(ExtractionScheduler.SpaceTightParallelForManySmall, count);
-            Assert.Contains("小包", basis, StringComparison.Ordinal);
+            Assert.Equal(6, count);
+            Assert.Contains("6 个", basis, StringComparison.Ordinal);
 
-            // ② 同样六个包，但体积差得远（100M 与 4G）→ 3（不是"很多个一样的包"）
             var mixed = new List<ScheduledExtractionItem>
             {
                 CreateLazyItem("m-100m.7z", 100L * 1024 * 1024),
@@ -1105,16 +1103,10 @@ namespace ArchiveFixer.Tests
                 CreateLazyItem("m-2g.7z", 2 * Gib)
             };
 
-            Assert.Equal(
-                ExtractionScheduler.SpaceTightParallelForMixedOrLarge,
-                ExtractionScheduler.ResolveSpaceTightParallelCount(mixed, budget, 8, out _));
+            // 这批里最大需求 4 GiB > 10 GiB / 4 ⇒ 大任务保护上限 3；不是又回到固定 3。
+            Assert.Equal(3, ExtractionScheduler.ResolveSpaceTightParallelCount(mixed, budget, 8, out _));
+            Assert.Equal(3, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall.Take(3).ToList(), budget, 8, out _));
 
-            // ③ 个数不够（只有 3 个）→ 3
-            Assert.Equal(
-                ExtractionScheduler.SpaceTightParallelForMixedOrLarge,
-                ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall.Take(3).ToList(), budget, 8, out _));
-
-            // ④ 取不到可用空间 → 空间建议就是 1（不知道够不够时不并行），模式照它办
             Assert.Equal(
                 1,
                 ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, -1, 1, out string unknownBasis));
@@ -1122,46 +1114,69 @@ namespace ArchiveFixer.Tests
             Assert.Contains("没能取到", unknownBasis, StringComparison.Ordinal);
             Assert.Contains("1 个", unknownBasis, StringComparison.Ordinal);
 
-            /*
-             * ⑤ 空间建议更小的时候**取小**、而且说法跟着那个数走（"上限 5、实际 2"必须说出来，
-             * 否则用户拿日志对并发数就会得出"日志是假的"）；它给 0（连最小的都放不下）时**取 1 而不是 0** ——
-             * 0 会让"等并发位"那个循环永远等不到空位（`runningTasks.Count >= maxParallel` 恒真）。
-             */
-            Assert.Equal(2, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, budget, 2, out string clampedBasis));
-            Assert.Contains("压到 2 个", clampedBasis, StringComparison.Ordinal);
+            // 空间只够两个 2 GiB：按空间给 2，不再被固定档卡到 3 或 5。
+            var tight = new List<ScheduledExtractionItem>
+            {
+                CreateLazyItem("t1.7z", 2 * Gib),
+                CreateLazyItem("t2.7z", 2 * Gib),
+                CreateLazyItem("t3.7z", 2 * Gib)
+            };
 
-            Assert.Equal(1, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, budget, 0, out _));
+            Assert.Equal(2, ExtractionScheduler.ResolveSpaceTightParallelCount(tight, 5 * Gib, 8, out string tightBasis));
+            Assert.Contains("2 个", tightBasis, StringComparison.Ordinal);
+
+            // 全是几百 MB 的小包、5 GiB 空闲：不要被固定 3 卡住，8 个硬顶内尽量装满。
+            var hundreds = new List<ScheduledExtractionItem>();
+
+            for (int index = 0; index < 10; index++)
+            {
+                hundreds.Add(CreateLazyItem($"hundreds-{index}.7z", 300L * 1024 * 1024));
+            }
+
+            Assert.Equal(8, ExtractionScheduler.ResolveSpaceTightParallelCount(hundreds, 5 * Gib, 8, out string hundredsBasis));
+            Assert.DoesNotContain("大任务保护", hundredsBasis, StringComparison.Ordinal);
+
+            // 大任务仍受保护：5 个 3 GiB、10 GiB 空闲最多 3 个。
+            var large = new List<ScheduledExtractionItem>();
+
+            for (int index = 0; index < 5; index++)
+            {
+                large.Add(CreateLazyItem($"large-{index}.7z", 3 * Gib));
+            }
+
+            Assert.Equal(3, ExtractionScheduler.ResolveSpaceTightParallelCount(large, 10 * Gib, 8, out string largeBasis));
+            Assert.Contains("大任务保护", largeBasis, StringComparison.Ordinal);
         }
 
         /// <summary>
-        /// S 覆盖 A：空间不足模式只按空间与任务形状算，不再拿用户并发档往下压。
+        /// S 覆盖 A：并发只由当前可用空间和待跑需求决定，不读取用户并发档，也不按固定档限死。
         /// </summary>
         [Fact]
-        public void 空间不足模式_S接管并发_不读取用户并发档()
+        public void 空间不足模式_S接管并发_按空间装下几个就开几个()
         {
             long gib = 1024L * 1024 * 1024;
 
-            // 3 个 2 GiB，13 GiB 空闲：形状是偏大包，上限 3；空间也够 5 个。
+            // 3 个 2 GiB，13 GiB 空闲：三个都放得下。
             int mixed = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
                 new[] { 2 * gib, 2 * gib, 2 * gib },
                 availableBytes: 13 * gib,
                 reservedBytes: 0,
                 out string mixedBasis);
 
-            Assert.Equal(ExtractionScheduler.SpaceTightParallelForMixedOrLarge, mixed);
+            Assert.Equal(3, mixed);
             Assert.Contains("3 个", mixedBasis, StringComparison.Ordinal);
 
-            // 6 个 100 MiB，10 GiB 空闲：相近小包，上限 5。
+            // 6 个 100 MiB，10 GiB 空闲：不为“小包”再写死 5，能开 6 就开 6。
             int manySmall = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
                 Enumerable.Repeat(100L * 1024 * 1024, 6).ToList(),
                 availableBytes: 10 * gib,
                 reservedBytes: 0,
                 out string smallBasis);
 
-            Assert.Equal(ExtractionScheduler.SpaceTightParallelForManySmall, manySmall);
-            Assert.Contains("小包", smallBasis, StringComparison.Ordinal);
+            Assert.Equal(6, manySmall);
+            Assert.Contains("6 个", smallBasis, StringComparison.Ordinal);
 
-            // 空间只够 1 个：压到 1，并说明是空间限制。
+            // 三个 2 GiB 只有 3 GiB 空闲：放得下第一个，第二个就超了 → 1。
             int tight = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
                 new[] { 2 * gib, 2 * gib, 2 * gib },
                 availableBytes: 3 * gib,
@@ -1169,7 +1184,7 @@ namespace ArchiveFixer.Tests
                 out string tightBasis);
 
             Assert.Equal(1, tight);
-            Assert.Contains("空间只够", tightBasis, StringComparison.Ordinal);
+            Assert.Contains("1 个", tightBasis, StringComparison.Ordinal);
         }
 
         /// <summary>造一个带净占用的调度项（只用于并发档那几条，不碰真实文件）。</summary>

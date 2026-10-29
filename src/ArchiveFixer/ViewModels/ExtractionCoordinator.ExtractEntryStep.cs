@@ -982,8 +982,8 @@ namespace ArchiveFixer.ViewModels
             {
                 /*
                  * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"；
-                 * 2026-09-27 追加：并发档改成"只许往下压"，见 ResolveSpaceTightParallelForBatch）。
-                 * 说清原因再关掉它：否则日志里"已开全速"与"同时最多跑 3 个"会自相矛盾。
+                 * S 覆盖普通档，见 ResolveSpaceTightParallelForBatch）。
+                 * 说清原因再关掉它：否则日志里"已开全速"与 S 算出的并发数会自相矛盾。
                  */
                 AppendLog(
                     "WARN",

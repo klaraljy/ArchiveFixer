@@ -117,10 +117,10 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 「空间不足」模式下**本批开几个**（S 覆盖普通档：并发档与「全速」都不参与）。
         ///
-        /// <para>判据全部在 <see cref="ExtractionScheduler.ResolveSpaceTightParallelCount"/> 里
-        /// （"很多个体积相近的小包"→5，其余→3；再与"按空间算得出的建议并行数"取小）。
-        /// 这里只做两件事：把那个数夹进"不超过任务数"，以及把**为什么是这个数**写进日志 ——
-        /// 空间不足模式下用户最需要知道的正是"你凭什么只开 3 个"。</para>
+        /// <para>判据全部在 <see cref="ExtractionScheduler.ResolveSpaceTightParallelCount"/> 里：
+        /// 按当前可用空间和待跑需求累加，能装几个就开几个；只有单个需求 ≥ 预算 1/4 的大任务
+        /// 才收在最多 3 个，小任务可达硬顶 8。这里只做两件事：把那个数夹进"不超过任务数"，
+        /// 以及把**为什么是这个数**写进日志。</para>
         /// </summary>
         private int ResolveSpaceTightParallelForBatch(ExtractionSchedulePlan plan)
         {

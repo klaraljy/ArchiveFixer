@@ -45,55 +45,90 @@ namespace ArchiveFixer.ViewModels
             int skippedFollowers = 0;
 
             var pending = new List<SpecificBatchUnit>(orderedUnits);
+            var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
 
-            while (pending.Count > 0)
+            int lastTarget = -1;
+            string lastBasis = string.Empty;
+
+            /*
+             * 常驻调度池：完成一个就立刻补一个，不等整浪结束。
+             * 每次补位都重新探空间、按当前 pending 重新算目标并发；pending 从大包变成小包时，
+             * 目标会从 3 自动升到 5 / 6 / 8。
+             */
+            while (pending.Count > 0 || running.Count > 0)
             {
                 if (_vm.IsStopping)
+                {
+                    // 不再启动新任务；已经在跑的收完再结束，不能留下没统计的尾巴。
+                    foreach ((SpecificBatchUnit unit, Task<bool> work) in running)
+                    {
+                        bool stoppedSuccess = await work.ConfigureAwait(true);
+                        skippedFollowers += unit.Followers.Count;
+
+                        if (stoppedSuccess)
+                        {
+                            succeeded++;
+                        }
+                        else
+                        {
+                            failed++;
+                        }
+                    }
+
+                    running.Clear();
+                    break;
+                }
+
+                string spaceBasis = string.Empty;
+                int target = spaceTight
+                    ? ResolveSpecificParallel(pending, running, runOptions, out spaceBasis)
+                    : 1;
+
+                target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
+
+                if (spaceTight && (target != lastTarget || !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
+                {
+                    lastTarget = target;
+                    lastBasis = spaceBasis;
+                    AppendLog(
+                        "INFO",
+                        $"特定解压由空间不足接管并发：当前目标 {target} 个（正在跑 {running.Count} 个，待处理 {pending.Count} 个）。{spaceBasis}。");
+                }
+
+                while (running.Count < target && pending.Count > 0)
+                {
+                    SpecificBatchUnit unit = pending[0];
+                    pending.RemoveAt(0);
+                    Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
+                    running.Add((unit, work));
+                }
+
+                if (running.Count == 0)
                 {
                     break;
                 }
 
-                /*
-                 * 空间不足：按整组源包体积从大到小，按**当前可用空间**一浪一浪放；
-                 * 每浪跑完重新探盘，后面的小包自然能提高并发。
-                 */
-                string spaceBasis = string.Empty;
+                Task<bool> finished = await Task.WhenAny(running.Select(item => item.Work)).ConfigureAwait(true);
+                int index = running.FindIndex(item => ReferenceEquals(item.Work, finished));
 
-                int waveSize = spaceTight
-                    ? ResolveSpecificParallel(pending, runOptions, out spaceBasis)
-                    : 1;
-
-                waveSize = Math.Max(1, Math.Min(waveSize, pending.Count));
-
-                List<SpecificBatchUnit> wave = pending.Take(waveSize).ToList();
-                pending.RemoveRange(0, waveSize);
-
-                if (spaceTight)
+                if (index < 0)
                 {
-                    AppendLog(
-                        "INFO",
-                        $"特定解压由空间不足接管并发：本浪 {waveSize} 个（待处理 {pending.Count} 个，特定解压档的并发设置不生效）。{spaceBasis}。");
+                    continue;
                 }
 
-                bool[] results = await Task
-                    .WhenAll(wave.Select(unit => ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner)))
-                    .ConfigureAwait(true);
+                (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
+                running.RemoveAt(index);
 
-                foreach (SpecificBatchUnit unit in wave)
+                bool success = await completedWork.ConfigureAwait(true);
+                skippedFollowers += completedUnit.Followers.Count;
+
+                if (success)
                 {
-                    skippedFollowers += unit.Followers.Count;
+                    succeeded++;
                 }
-
-                foreach (bool success in results)
+                else
                 {
-                    if (success)
-                    {
-                        succeeded++;
-                    }
-                    else
-                    {
-                        failed++;
-                    }
+                    failed++;
                 }
             }
 
@@ -346,13 +381,14 @@ namespace ArchiveFixer.ViewModels
 
         private int ResolveSpecificParallel(
             IReadOnlyList<SpecificBatchUnit> pending,
+            IReadOnlyList<(SpecificBatchUnit Unit, Task<bool> Work)> running,
             OneClickRunOptions runOptions,
             out string basis)
         {
             if (pending == null || pending.Count == 0)
             {
-                basis = "没有待跑任务：按 1 个跑";
-                return 1;
+                basis = "没有待跑任务";
+                return Math.Max(1, running?.Count ?? 0);
             }
 
             long freeBytes = pending
@@ -361,13 +397,30 @@ namespace ArchiveFixer.ViewModels
                 .DefaultIfEmpty(0)
                 .Min();
 
+            // 正在跑的任务已经用掉的空间不能再许给下一批；探到的 free 是当前真实值，再扣一次预留。
+            long runningBytes = running?.Sum(item => item.Unit.SourceBytes) ?? 0;
+            long budget = Math.Max(0, freeBytes - runningBytes);
             List<long> sizes = pending.Select(unit => unit.SourceBytes).ToList();
 
-            return ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
+            int launchable = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
                 sizes,
-                freeBytes,
+                budget,
                 reservedBytes: 0,
-                out basis);
+                out string spaceBasis);
+
+            int target = (running?.Count ?? 0) + launchable;
+
+            // 当前队列仍是“大包”时，总并发也不许超过 3；队列变小后这个限制自然消失。
+            long largest = sizes.Max();
+            if (largest >= budget / 4)
+            {
+                target = Math.Min(target, ExtractionScheduler.SpaceTightLargeTaskParallelCeiling);
+            }
+
+            target = Math.Max(running?.Count ?? 0, Math.Min(ExtractionScheduler.ParallelCeiling, target));
+
+            basis = spaceBasis + $"；正在跑 {running?.Count ?? 0} 个，预算 {TaskSpaceEstimate.FormatSize(budget)}";
+            return Math.Max(1, target);
         }
 
         private static string ResolveSpecificOutputRoot(ArchiveTask task, OneClickRunOptions runOptions)

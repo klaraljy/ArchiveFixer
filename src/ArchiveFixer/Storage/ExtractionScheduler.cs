@@ -212,6 +212,11 @@ namespace ArchiveFixer.Storage
         /// <summary>并发档的硬顶（与设置项 <c>MaxParallelExtractCount</c> 的 1–8 一致）。</summary>
         public const int ParallelCeiling = 8;
 
+        /// <summary>大任务（单个需求 ≥ 预算 1/4）的并发保护上限；小任务不受这个 3 的限制。</summary>
+        public const int SpaceTightLargeTaskParallelCeiling = 3;
+
+        private const int SpaceTightLargeTaskBudgetDivisor = 4;
+
         /// <summary>
         /// 界面上允许用户选的并发档（用户 2026-09-22 原话："可以让用户选择解压时并行解压的文件数量"）。
         /// 8 是硬顶：再往上不是"帮用户省事"，而是把磁盘和内存一起打满。
@@ -403,104 +408,48 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
-        /// 「空间不足」模式的并发档上限（用户 2026-09-27 拍板：**多个体积不同 / 偏大的包最多 3 个，
-        /// 很多个体积相近的小包最多 5 个**）。
+        /// 空间不足模式的并发结论：不再按“大包 3 / 小包 5”固定档，而是按**当前空间能装下几个**
+        /// 动态算；待跑任务已按需求从大到小排好。
         ///
-        /// <para>为什么空间紧张时反而要按"体积是不是相近"分两档：空间不足时最怕的是
-        /// "几个大包同时冲到峰值"（盘立刻满，全批一起失败）；而一堆体积相近的小包
-        /// 峰值加起来也远小于预算，多开两个只是把整批时间摊短，风险不变。
-        /// 这个判据只影响**并发数**，不影响放行 —— 真正的门仍然是每个任务启动前的空间门。</para>
+        /// <para>算法：从队首开始，逐个累加 <see cref="ScheduledExtractionItem.RequiredBytes"/>，
+        /// 只要不超过预算就继续，硬顶 <see cref="ParallelCeiling"/>（8）。因此大包自然只开 1–3 个，
+        /// 小包会一直加到 8 个；不在算法里再写死“大 / 小”档。</para>
+        ///
+        /// <para>取不到可用空间时仍按 1 个（不知道够不够时不并行）；0 会死等，所以最低取 1，
+        /// 真的一个都放不下时由空间门逐个拦下并点名报告。</para>
         /// </summary>
-        public const int SpaceTightParallelForMixedOrLarge = 3;
-
-        /// <summary>「很多个体积相近的小包」那一档（见 <see cref="SpaceTightParallelForMixedOrLarge"/>）。</summary>
-        public const int SpaceTightParallelForManySmall = 5;
-
-        /// <summary>算"体积相近的小包"时，"小"的判据：需求 ≤ 预算 ÷ 这个数。</summary>
-        private const int SpaceTightSmallTaskBudgetDivisor = 4;
-
-        /// <summary>"体积相近"的判据：最大需求 ÷ 最小需求 ≤ 它。</summary>
-        private const double SpaceTightSimilarSizeRatio = 1.5d;
-
-        /// <summary>至少这么多个"相近的小包"才算"很多个小包"。</summary>
-        private const int SpaceTightManySmallTaskCount = 5;
-
-        /// <summary>
-        /// **空间不足模式的并发档**（用户设置里的并发档与「全速」在这一档下都不生效，见调用方）。
-        ///
-        /// <para>规则（两条，判据全在这一个方法里，⛔ 不许在别处再写一套）：</para>
-        /// <list type="number">
-        /// <item><description><b>很多个体积相近的小包</b>（≥ 5 个，且每个需求 ≤ 预算 ÷ 4，
-        /// 且最大 / 最小需求 ≤ 1.5 倍）→ <see cref="SpaceTightParallelForManySmall"/>（5）；</description></item>
-        /// <item><description>其余（多个偏大 / 体积差得远的包）→ <see cref="SpaceTightParallelForMixedOrLarge"/>（3）。</description></item>
-        /// </list>
-        ///
-        /// <para>出来的数还要与"计划时按空间算得出的建议并行数"取小 —— 空间不足模式下
-        /// 唯一不能放宽的就是空间。取不到可用空间时用最保守的 3（不猜"够"）。</para>
-        /// </summary>
-        /// <param name="ordered">已排好序的计划（按净占用或需求，两者都可）。</param>
-        /// <param name="budgetBytes">可用于并行的预算（可用 − 余量；&lt; 0 = 取不到）。</param>
-        /// <param name="recommendedBySpace">计划给出的建议并行数（0 = 连最小的都放不下）。</param>
-        /// <param name="basis">这一档是怎么来的（进日志，用户要能复核）。</param>
         public static int ResolveSpaceTightParallelCount(
             IReadOnlyList<ScheduledExtractionItem>? ordered,
             long budgetBytes,
             int recommendedBySpace,
             out string basis)
         {
-            int cap;
-            string reason;
-
             IReadOnlyList<ScheduledExtractionItem> items = ordered ?? Array.Empty<ScheduledExtractionItem>();
 
             if (budgetBytes < 0)
             {
-                cap = SpaceTightParallelForMixedOrLarge;
-                reason = "没能取到目标盘可用空间";
+                basis = "没能取到目标盘可用空间：按 1 个跑";
+                return 1;
             }
-            else if (items.Count >= SpaceTightManySmallTaskCount
-                     && CountSimilarSmallTasks(items, budgetBytes) >= SpaceTightManySmallTaskCount)
+
+            if (items.Count == 0)
             {
-                cap = SpaceTightParallelForManySmall;
-                reason = $"本批有 {items.Count} 个体积相近的小包（每个需求不超过预算的 1/{SpaceTightSmallTaskBudgetDivisor}）";
-            }
-            else
-            {
-                cap = SpaceTightParallelForMixedOrLarge;
-                reason = "本批是多个偏大 / 体积差得远的包";
+                basis = "没有待跑任务：按 1 个跑";
+                return 1;
             }
 
-            /*
-             * 与空间建议取小 —— 但**绝不取 0**：0 会让"等并发位"那个循环永远等不到空位
-             * （启动条件写成 `runningTasks.Count >= maxParallel`，0 时恒为真）。
-             * 真的一个都放不下时由空间门逐个拦下并点名报告，而不是在这里变成死等。
-             *
-             * ⚠ 取不到可用空间时空间建议就是 1（"不知道够不够的时候，唯一不会把盘写满的建议就是不并行"，
-             * 见 RecommendParallelCount）—— 空间不足模式照它办，绝不因为"模式开了"就放开并行。
-             */
-            int spaceLimit = recommendedBySpace > 0 ? recommendedBySpace : 1;
-            int count = Math.Max(1, Math.Min(cap, spaceLimit));
-
-            /*
-             * 说法必须与**最终那个数**一致（§9.5 值 + 通知的老坑）：上限是 5、实际跑 2 的时候说
-             * "按 5 个跑"比不说更糟 —— 用户会拿日志去对并发数，然后得出"日志是假的"。
-             */
-            basis = count >= cap
-                ? reason + $"：按上限 {cap} 个跑"
-                : reason + $"：上限 {cap} 个，但按空间建议压到 {count} 个";
-
-            return count;
+            IReadOnlyList<long> demands = items.Select(item => item.RequiredBytes).ToList();
+            _ = recommendedBySpace; // 物理空间已在这里重新按需求累加，不再用计划里的旧建议压数。
+            return ResolveSpaceTightParallelCountForDemand(
+                demands,
+                budgetBytes,
+                reservedBytes: 0,
+                out basis);
         }
 
         /// <summary>
-        /// 空间不足模式的统一并发结论：只按待跑需求、可用空间和运行中预留算，
-        /// <b>不再读取用户的并发档</b>（S 覆盖普通档 / 特定解压档）。
-        ///
-        /// <para>规则与 <see cref="ResolveSpaceTightParallelCount"/> 同一套形状判据：
-        /// ≥ 5 个体积相近的小包（每个 ≤ 预算 ÷ 4，最大/最小 ≤ 1.5）→ 5；其余 → 3。
-        /// 再与 <see cref="SpaceConcurrencyPlanner.CountLaunchable"/> 算出的可启动数取小，
-        /// 最低 1（0 会让等并发位的循环永远等不到空位）。</para>
-        /// </summary>
+        /// 与 <see cref="ResolveSpaceTightParallelCount"/> 同一套空间判定，入参是纯需求字节
+        /// （特定解压的 unit 用源包体积作下界）。</summary>
         public static int ResolveSpaceTightParallelCountForDemand(
             IReadOnlyList<long>? pendingDemandBytes,
             long availableBytes,
@@ -521,83 +470,28 @@ namespace ArchiveFixer.Storage
                 return 1;
             }
 
-            int similarSmall = CountSimilarSmallDemands(demands, availableBytes);
-
-            int cap = demands.Count >= SpaceTightManySmallTaskCount
-                      && similarSmall >= SpaceTightManySmallTaskCount
-                ? SpaceTightParallelForManySmall
-                : SpaceTightParallelForMixedOrLarge;
-
-            string reason = cap == SpaceTightParallelForManySmall
-                ? $"本批有 {similarSmall} 个体积相近的小包（每个需求不超过预算的 1/{SpaceTightSmallTaskBudgetDivisor}）"
-                : "本批是多个偏大 / 体积差得远的包";
-
             int launchable = SpaceConcurrencyPlanner.CountLaunchable(
                 availableBytes,
                 reservedBytes,
                 demands,
                 ParallelCeiling);
 
-            int count = Math.Max(1, Math.Min(cap, launchable));
+            /*
+             * 大任务保护：单个任务就吃掉 1/8 以上预算时，最多并发 3 个，避免几个大包同时冲峰值；
+             * 全是几百 MB 的小包时不再限 3，能装下多少就开多少（硬顶仍是 8）。
+             */
+            long largestDemand = demands.Max();
+            int sizeCap = largestDemand >= availableBytes / SpaceTightLargeTaskBudgetDivisor
+                ? SpaceTightLargeTaskParallelCeiling
+                : ParallelCeiling;
+
+            int count = Math.Max(1, Math.Min(sizeCap, launchable));
 
             basis = launchable <= 0
-                ? reason + $"：空间只够 0 个，先按 1 个交给空间门逐个拦"
-                : launchable < cap
-                    ? reason + $"：上限 {cap} 个，但空间只够 {launchable} 个，按空间压到 {count} 个"
-                    : reason + $"：按上限 {cap} 个跑";
-
-            return count;
-        }
-
-        /// <summary>数一遍"体积相近的小包"有几个（只数，不改顺序）。</summary>
-        private static int CountSimilarSmallTasks(IReadOnlyList<ScheduledExtractionItem> items, long budgetBytes)
-        {
-            return CountSimilarSmallDemands(
-                items.Select(item => item.RequiredBytes).ToList(),
-                budgetBytes);
-        }
-
-        private static int CountSimilarSmallDemands(IReadOnlyList<long> demands, long budgetBytes)
-        {
-            long smallLimit = budgetBytes / SpaceTightSmallTaskBudgetDivisor;
-
-            long smallest = long.MaxValue;
-            long largest = 0;
-
-            foreach (long required in demands)
-            {
-                if (required > smallLimit)
-                {
-                    continue;
-                }
-
-                smallest = Math.Min(smallest, required);
-                largest = Math.Max(largest, required);
-            }
-
-            if (smallest == long.MaxValue || smallest <= 0)
-            {
-                // 一个"小包"都没有（或大小量不出来）→ 不算"很多个小包"。
-                return 0;
-            }
-
-            double ratio = (double)largest / smallest;
-
-            if (ratio > SpaceTightSimilarSizeRatio)
-            {
-                // 体积差得远（不是"很多个一样的包"）→ 不放开到 5。
-                return 0;
-            }
-
-            int count = 0;
-
-            foreach (long required in demands)
-            {
-                if (required <= smallLimit)
-                {
-                    count++;
-                }
-            }
+                ? "空间连最小的任务都放不下：先按 1 个交给空间门逐个拦"
+                : sizeCap < ParallelCeiling
+                    ? $"按可用空间能放 {launchable} 个；最大任务占用超过预算的 1/4，按大任务保护上限 {sizeCap} 个跑"
+                    : $"按当前可用空间能同时放下 {count} 个（按队列需求累加，硬顶 {ParallelCeiling} 个）";
 
             return count;
         }
