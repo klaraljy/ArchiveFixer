@@ -129,13 +129,40 @@ namespace ArchiveFixer.Services
         public string AppBaseDirectory => AppContext.BaseDirectory;
 
         /// <summary>
-        /// 用户数据目录（%AppData%\ArchiveFixer）。
+        /// 用户数据目录（固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>）。
         /// </summary>
         public string DataRootDirectory { get; set; } = DefaultDataRootDirectory;
 
-        /// <summary>默认数据根目录：程序目录下的 data。缓存绝不默认写 C 盘。</summary>
+        /// <summary>固定数据目录名（安装/卸载/升级都必须认同一个名字）。</summary>
+        public const string DataFolderName = "ArchiveFixer";
+
+        /// <summary>
+        /// 默认数据根目录：<c>%LOCALAPPDATA%\ArchiveFixer</c>。
+        ///
+        /// <para>⛔ 这是用户设置 / 密码本 / 元数据的唯一固定位置：
+        /// 它不再跟程序安装目录走，覆盖升级、换安装位置、卸载都不会把它带走。
+        /// 以后任何版本都不许改这个路径；旧位置只能由 <see cref="DataRootMigrator"/> 一次性迁入。</para>
+        /// </summary>
         public static string DefaultDataRootDirectory =>
-            Path.Combine(AppContext.BaseDirectory, "data");
+            Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
+
+        private static string ResolveLocalAppDataRoot()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            if (!string.IsNullOrWhiteSpace(localAppData))
+            {
+                return localAppData;
+            }
+
+            // 极端环境（用户配置目录被禁用）才走这里：仍然落在用户目录下，
+            // ⛔ 不回落程序目录（那会把用户数据重新绑回安装位置）。
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            return string.IsNullOrWhiteSpace(profile)
+                ? Path.Combine(AppContext.BaseDirectory, "user-data")
+                : Path.Combine(profile, "AppData", "Local");
+        }
 
         /// <summary>
         /// 日志目录。

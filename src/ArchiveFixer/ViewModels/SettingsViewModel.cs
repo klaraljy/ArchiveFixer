@@ -499,7 +499,7 @@ namespace ArchiveFixer.ViewModels
          *
          * 删掉的是三样东西（一个都不留）：① 属性与设置页那一格；② "不许落 C 盘"那道校验
          * （没有这个键了，也就无所谓校验）；③ 选择目录的命令。
-         * 数据根固定是程序目录下的 data，工作区固定由这一单的目标目录派生 —— 两者都不再由用户指定。
+         * 数据根固定是 %LOCALAPPDATA%\ArchiveFixer，工作区固定由这一单的目标目录派生 —— 两者都不再由用户指定。
          *
          * 旧 appsettings.json 里残留的 `CacheRootDirectory` 键由 System.Text.Json 默认行为**安静忽略**：
          * 不抛、不警告、不迁移到别处（用例 `SettingsCacheRootRemovalTests` 钉着）。

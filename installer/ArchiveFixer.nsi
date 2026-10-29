@@ -1,23 +1,24 @@
 ﻿; ArchiveFixer 安装包（NSIS 3.x）
 ;
 ; 设计要点（改之前先读这几条，都是踩过的坑）：
-;   1. ⛔ 默认安装目录：**第一个非系统固定盘上的 <盘>:\ArchiveFixer**（用户 2026-10-04 明确要求
-;      "这类重要的记忆不要放 C 盘"）。只有本机确实没有第二个固定盘时才退到
-;      %LOCALAPPDATA%\Programs\ArchiveFixer，并且欢迎页会**明说**"本机没有其它盘、数据会落在 C 盘"。
-;      ⛔ 不许写死某个盘符（D: 不是人人都有）；⛔ 也绝不用 C:\Program Files\ ——
-;      程序把日志 / 设置 / 密码列表写在 <程序目录>\data\ 下（PathService.DefaultDataRootDirectory
-;      跟着 AppContext.BaseDirectory 走），Program Files 下非管理员写不进去。
+;   1. ⛔ 默认安装目录：**第一个非系统固定盘上的 <盘>:\ArchiveFixer**。只有本机确实没有
+;      第二个固定盘时才退到 %LOCALAPPDATA%\Programs\ArchiveFixer，并且欢迎页会明说。
+;      ⛔ 不许写死某个盘符（D: 不是人人都有）；⛔ 也绝不用 C:\Program Files\。
+;      ⚠ 程序文件与用户数据分开：设置 / 密码 / 日志固定放在
+;      %LOCALAPPDATA%\ArchiveFixer（PathService.DefaultDataRootDirectory），
+;      不再放在 <程序目录>\data\；升级、换安装目录、卸载都不会把它带走。
 ;   2. RequestExecutionLevel user：免 UAC，朋友双击就能装完（每用户安装，注册表只写 HKCU）。
 ;   3. 静默安装 /S 时不建快捷方式（自动化验收用；正常双击安装照建）；静默档也**不问**
-;      升级 / 卸载那两个问题，一律按最保守的那一档（覆盖安装 + 保留 data\）。
+;      升级 / 卸载那两个问题，一律按最保守的那一档（覆盖安装 + 保留用户数据）。
 ;   4. 升级：装之前看一眼"是不是已经装过"（注册表卸载项 / 安装目录里那个 exe），
-;      装过就**问一次**：① 升级覆盖（保留 data\，默认）② 先卸载旧版再装 ③ 取消。
-;      ⛔ 绝不静默删用户数据；⛔ 卸载旧版那一路走 `Uninstall.exe /S`（静默卸载 = 保留 data\）。
+;      装过就**问一次**：① 升级覆盖（保留用户数据，默认）② 先卸载旧版再装 ③ 取消。
+;      升级页同时显示旧版本与新安装包版本；⛔ 绝不静默删用户数据；
+;      ⛔ 卸载旧版那一路走 `Uninstall.exe /S`（静默卸载 = 保留用户数据）。
 ;   5. 卸载：有 Uninstall.exe + 控制面板「应用和功能」一项 + 开始菜单一项；
-;      卸载时**问一次**（自带一页，默认 = 保留）：保留密码本与设置（data\）还是全部删除，
-;      并在界面上写清"保留了什么、在哪个目录"，最后再说一遍路径。
-;   6. 只删自己装的东西：根目录按后缀删程序文件、子目录整个删，唯独跳过 data\；
-;      最后 RMDir "$INSTDIR"（非递归）——目录里还有别的东西就留着，不硬删。
+;      卸载时**问一次**（自带一页，默认 = 保留）：保留设置与密码（%LOCALAPPDATA%\ArchiveFixer）
+;      还是全部删除，并在界面上写清"保留了什么、在哪个目录"，最后再说一遍路径。
+;   6. 只删自己装的东西：根目录按后缀删程序文件、已知程序子目录整个删；
+;      用户数据目录跳过；最后 RMDir "$INSTDIR"（非递归）——目录里还有别的东西就留着，不硬删。
 ;
 ; 编译：scripts\installer.ps1（或直接 makensis /DSRCDIR=... /DAPPVERSION=... 本文件）
 ;
@@ -56,6 +57,9 @@ SetCompressorDictSize 64
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArchiveFixer"
 !define APP_KEY "Software\ArchiveFixer"
 !define FALLBACK_DIR "$LOCALAPPDATA\Programs\${APP_NAME}"
+; ⛔ 固定用户数据目录：与 PathService.DefaultDataRootDirectory 必须逐字一致。
+;    升级、换安装目录、卸载都读这一个位置；不要把它改回 $INSTDIR\data。
+!define USER_DATA_DIR "$LOCALAPPDATA\ArchiveFixer"
 
 Name "${APP_NAME} ${APPVERSION}"
 OutFile "${OUTFILE}"
@@ -114,7 +118,7 @@ Var UnDataRadioDelete
 !define MUI_UNICON "${ICONFILE}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "${APP_NAME} ${APPVERSION} 安装向导"
-!define MUI_WELCOMEPAGE_TEXT "这一版把「批量识别 + 解压 + 整理」这套工具装到你指定的目录。$\r$\n$\r$\n· 程序自带 .NET 运行时，目标机器什么都不用装；$\r$\n· 日志、设置、密码列表都写在安装目录下的 data\ 里，那是你要长期留着的东西 —— 所以默认装到本机第一个非 C 盘的固定盘；$\r$\n· 卸载时会问你一次「保留 data\ 还是全部删除」，默认保留。$\r$\n$\r$\n点「下一步」继续。"
+!define MUI_WELCOMEPAGE_TEXT "这一版把「批量识别 + 解压 + 整理」这套工具装到你指定的目录。$\r$\n$\r$\n· 程序自带 .NET 运行时，目标机器什么都不用装；$\r$\n· 程序文件与用户数据分开：设置、密码列表、日志固定写在 $\r$\n  ${USER_DATA_DIR}（C 盘用户目录），升级或换安装目录都不会丢；$\r$\n· 卸载时会问你一次「保留用户数据还是全部删除」，默认保留。$\r$\n$\r$\n点「下一步」继续。"
 
 ; ⚠ 页面回调（WelcomePagePre / WelcomePageCustom / UpgradePage*）的函数体一律写在文件末尾：
 ;   `$mui.WelcomePage.*` 这些变量由 MUI_PAGE_WELCOME 展开时才 Var 出来，
@@ -164,12 +168,12 @@ Page custom UpgradePage UpgradePageLeave
         Pop $UnDataDialog
         StrCmp $UnDataDialog "error" un_data_show_done
 
-        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个目录里放的是你长期要留着的东西，不是程序：$\r$\n$INSTDIR\data\$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯$\r$\n· logs\ —— 历史日志"
+        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个固定目录里放的是你长期要留着的东西，不是程序：$\r$\n${USER_DATA_DIR}$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯$\r$\n· logs\ —— 历史日志"
         Pop $UnDataLabel
 
-        ${NSD_CreateRadioButton} 0 56u 100% 24u "保留密码本与设置（推荐）：只删程序，上面那个 data\ 原样留着；以后重装能接着用"
+        ${NSD_CreateRadioButton} 0 56u 100% 24u "保留设置与密码（推荐）：只删程序，${USER_DATA_DIR} 原样留着；以后重装能接着用"
         Pop $UnDataRadioKeep
-        ${NSD_CreateRadioButton} 0 84u 100% 24u "全部删除：连 data\ 一起删（密码本、设置、日志全没，不可恢复）"
+        ${NSD_CreateRadioButton} 0 84u 100% 24u "全部删除：连 ${USER_DATA_DIR} 一起删（密码本、设置、日志全没，不可恢复）"
         Pop $UnDataRadioDelete
 
         SendMessage $UnDataRadioKeep ${BM_SETCHECK} ${BST_CHECKED} 0
@@ -284,16 +288,26 @@ Section "主程序（必需）" SecMain
         MessageBox MB_ICONEXCLAMATION "旧版本的卸载程序没能跑起来（可能正被占用）。$\r$\n可以继续装；装完记得自己去控制面板把旧版本那一项卸掉。"
     upgrade_install:
 
+    ; 覆盖升级：先清掉上一版自己的工具 / 文档 / 运行时目录，避免旧 DLL 残留。
+    ; 用户数据不在 $INSTDIR 下，这里不碰它；只在这确实是一个已有安装时才清。
+    IfFileExists "$INSTDIR\${APP_EXE}" 0 upgrade_copy
+        RMDir /r "$INSTDIR\tools"
+        RMDir /r "$INSTDIR\docs"
+        RMDir /r "$INSTDIR\runtimes"
+        RMDir /r "$INSTDIR\win-x64"
+    upgrade_copy:
+
     SetOutPath "$INSTDIR"
     SetOverwrite on
 
-    ; 发布目录里的东西整份拷进来（data\ 不在发布目录里，绝不会被覆盖）
+    ; 发布目录里的东西整份拷进来（用户数据不在发布目录里，绝不会被覆盖）
     File /r "${SRCDIR}\*.*"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     WriteRegStr HKCU "${APP_KEY}" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "${APP_KEY}" "Version" "${APPVERSION}"
+    WriteRegStr HKCU "${APP_KEY}" "DataDir" "${USER_DATA_DIR}"
 
     ; 控制面板「应用和功能」里的那一项（每用户）
     WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME} ${APPVERSION}"
@@ -352,15 +366,17 @@ Section "Uninstall"
     StrCmp $UnDataChoice "delete" uninst_delete_data uninst_keep_data
 
     uninst_delete_data:
-        DetailPrint "按你的选择：连 data\ 一起删除"
+        DetailPrint "按你的选择：删除固定用户数据目录 ${USER_DATA_DIR}"
+        RMDir /r "${USER_DATA_DIR}"
+        ; 旧版本可能还留在安装目录的 data\，用户选“全部删除”时一并清掉。
         RMDir /r "$INSTDIR\data"
         Goto uninst_files
 
     uninst_keep_data:
-        DetailPrint "按你的选择：保留 data\（密码本与设置）"
+        DetailPrint "按你的选择：保留固定用户数据目录 ${USER_DATA_DIR}（设置与密码）"
 
     uninst_files:
-    ; 2) 程序文件：根目录按后缀删（data\ 是子目录，不受影响）
+    ; 2) 程序文件：根目录按后缀删（用户数据在 %LOCALAPPDATA%，不在这个目录）
     Delete "$INSTDIR\*.exe"
     Delete "$INSTDIR\*.dll"
     Delete "$INSTDIR\*.json"
@@ -369,20 +385,12 @@ Section "Uninstall"
     Delete "$INSTDIR\LICENSE"
     Delete "$INSTDIR\LICENSE.txt"
 
-    ; 3) 子目录整个删，唯独跳过 data 目录（⚠ 这行注释末尾不许留反斜杠）
-    FindFirst $R0 $R1 "$INSTDIR\*.*"
-    uninst_loop:
-        StrCmp $R1 "" uninst_loop_done
-        StrCmp $R1 "." uninst_next
-        StrCmp $R1 ".." uninst_next
-        StrCmp $R1 "data" uninst_next
-        IfFileExists "$INSTDIR\$R1\*.*" 0 uninst_next
-        RMDir /r "$INSTDIR\$R1"
-    uninst_next:
-        FindNext $R0 $R1
-        Goto uninst_loop
-    uninst_loop_done:
-        FindClose $R0
+    ; 3) 只删安装包自己知道的程序子目录；⛔ 不再“删所有子目录除 data”，
+    ;    避免用户把程序装进一个还有别的东西的自定义目录时被整份清掉。
+    RMDir /r "$INSTDIR\tools"
+    RMDir /r "$INSTDIR\docs"
+    RMDir /r "$INSTDIR\runtimes"
+    RMDir /r "$INSTDIR\win-x64"
 
     ; 4) 快捷方式与注册表
     ;    桌面那个 .lnk 只有"装的时候确实是我们建的"（$R2 == 1）才删 —— 否则会误删用户自己的快捷方式
@@ -402,8 +410,8 @@ Section "Uninstall"
     ; 5) 目录本身：非递归，里面还有别的东西就留着
     RMDir "$INSTDIR"
     IfSilent uninst_no_data_note
-    IfFileExists "$INSTDIR\data\*.*" 0 uninst_no_data_note
-    MessageBox MB_OK|MB_ICONINFORMATION "设置、日志和密码列表保留在：$\r$\n$INSTDIR\data$\r$\n$\r$\n以后重装能接着用；不需要的话可以自己删掉这个目录。"
+    IfFileExists "${USER_DATA_DIR}\*.*" 0 uninst_no_data_note
+    MessageBox MB_OK|MB_ICONINFORMATION "设置、日志和密码列表保留在：$\r$\n${USER_DATA_DIR}$\r$\n$\r$\n以后重装、换安装目录或升级都能接着用；不需要的话可以自己删掉这个目录。"
     uninst_no_data_note:
 SectionEnd
 
@@ -432,7 +440,7 @@ FunctionEnd
 Function WelcomePageCustom
     StrCmp $DefaultOnSystemDrive "1" 0 welcome_custom_done
     SendMessage $mui.WelcomePage.Title ${WM_SETTEXT} 0 "STR:${APP_NAME} ${APPVERSION} 安装向导（本机没有其它盘）"
-    SendMessage $mui.WelcomePage.Text ${WM_SETTEXT} 0 "STR:本机没有第二个固定盘，只能装到 C 盘。$\r$\n$\r$\n· 程序目录：$INSTDIR$\r$\n· 你的密码本、设置、日志会写在：$INSTDIR\data\ —— 它们将落在 C 盘上。$\r$\n$\r$\n如果你有别的盘（移动硬盘 / 第二块盘），点「下一步」后可以在目录页自己改到那个盘上。$\r$\n$\r$\n点「下一步」继续。"
+    SendMessage $mui.WelcomePage.Text ${WM_SETTEXT} 0 "STR:本机没有第二个固定盘，只能装到 C 盘。$\r$\n$\r$\n· 程序目录：$INSTDIR$\r$\n· 你的密码本、设置、日志固定写在：${USER_DATA_DIR}$\r$\n$\r$\n如果你有别的盘（移动硬盘 / 第二块盘），点「下一步」后可以在目录页自己改到那个盘上；$\r$\n用户数据仍然在 ${USER_DATA_DIR}，不会跟着程序搬家。$\r$\n$\r$\n点「下一步」继续。"
     welcome_custom_done:
 FunctionEnd
 
@@ -452,14 +460,14 @@ Function UpgradePage
     Pop $UpgradeDialog
     StrCmp $UpgradeDialog "error" upgrade_page_done
 
-    ${NSD_CreateLabel} 0 0 100% 40u "检测到本机已经装过：$\r$\n$InstalledDir（版本：$InstalledVersion）$\r$\n$\r$\n默认就是第一项：旧的程序文件被换掉，data\ 里的密码本与设置原样保留。"
+    ${NSD_CreateLabel} 0 0 100% 54u "检测到本机已经装过旧版本：$\r$\n$InstalledDir（旧版本：$InstalledVersion）$\r$\n$\r$\n当前安装包版本：${APPVERSION}$\r$\n默认就是第一项：旧程序文件被新版本换掉，设置与密码固定在 ${USER_DATA_DIR}，原样保留。"
     Pop $UpgradeLabel
 
-    ${NSD_CreateRadioButton} 0 50u 100% 14u "升级覆盖（推荐）：直接装新版本，保留密码本与设置（data\）"
+    ${NSD_CreateRadioButton} 0 62u 100% 14u "升级覆盖（推荐）：卸载旧版本 $InstalledVersion，安装新版本 ${APPVERSION}，保留设置与密码"
     Pop $UpgradeRadioOverwrite
-    ${NSD_CreateRadioButton} 0 70u 100% 14u "先卸载旧版本，再装新版本（同样保留 data\）"
+    ${NSD_CreateRadioButton} 0 82u 100% 14u "先卸载旧版本 $InstalledVersion，再安装 ${APPVERSION}（同样保留设置与密码）"
     Pop $UpgradeRadioUninstall
-    ${NSD_CreateRadioButton} 0 90u 100% 14u "取消安装"
+    ${NSD_CreateRadioButton} 0 102u 100% 14u "取消安装"
     Pop $UpgradeRadioCancel
 
     SendMessage $UpgradeRadioOverwrite ${BM_SETCHECK} ${BST_CHECKED} 0

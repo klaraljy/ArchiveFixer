@@ -400,7 +400,7 @@ namespace ArchiveFixer.ViewModels
             EngineRuntimeSettings.Apply(_settings);
 
             /*
-             * 数据根**固定**是程序目录下的 data（用户 2026-09-30：删掉「缓存根目录」设置项）。
+             * 数据根**固定**是 %LOCALAPPDATA%\ArchiveFixer（用户 2026-10-29：与安装目录解耦）。
              *
              * ⛔ 这里刻意**不写** `_pathService.DataRootDirectory = ...`：
              * 它本来就是 <see cref="PathService.DefaultDataRootDirectory"/>，而测试装配时会把
@@ -443,7 +443,7 @@ namespace ArchiveFixer.ViewModels
          * 2026-09-30 **随「缓存根目录」设置项一起删除**。
          *
          * 它存在的唯一理由是：数据根由设置项决定，于是设置文件可能有两处（程序目录那一份、
-         * 缓存根那一份），换了位置就得再读一次。现在数据根固定是程序目录下的 data
+         * 缓存根那一份），换了位置就得再读一次。现在数据根固定是 %LOCALAPPDATA%\ArchiveFixer
          * （唯一出口 = <see cref="PathService.DefaultDataRootDirectory"/>），设置文件只有一处，
          * "启动读旧的、保存写新的"这个缺陷从结构上就不存在了 —— 留着它只会是一条永远返回 false 的死路。
          */
@@ -2013,7 +2013,7 @@ namespace ArchiveFixer.ViewModels
             _taskSummaryService.EngineIdentityProvider = task => ResolveEngineIdentity(task);
 
             /*
-             * 读设置只有一步（用户 2026-09-30：数据根固定 = 程序目录下的 data，设置文件只有一处）。
+             * 读设置只有一步（数据根固定 = %LOCALAPPDATA%\ArchiveFixer，设置文件只有一处）。
              *
              * 老实现要读三步：① 先读程序目录那一份 → ② 按「缓存根目录」这个设置项把数据根定下来 →
              * ③ 数据根换了地方就再读一次。那个设置项已经删除，②③ 随之消失；

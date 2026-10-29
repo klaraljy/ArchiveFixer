@@ -29,6 +29,16 @@ namespace ArchiveFixer.Tests
             Assert.Contains("桌面快捷方式（可选）", text, StringComparison.Ordinal);
             Assert.Contains("passwords.txt", text, StringComparison.Ordinal);
             Assert.DoesNotContain("password-list.dat —— 密码本", text, StringComparison.Ordinal);
+
+            // 固定用户数据目录必须与 PathService.DefaultDataRootDirectory 一致；
+            // 升级页要同时写旧版本和新安装包版本，卸载页要指向固定目录。
+            Assert.Contains("!define USER_DATA_DIR \"$LOCALAPPDATA\\ArchiveFixer\"", text, StringComparison.Ordinal);
+            Assert.Contains("当前安装包版本", text, StringComparison.Ordinal);
+            Assert.Contains("旧版本", text, StringComparison.Ordinal);
+            Assert.Contains("WriteRegStr HKCU \"${APP_KEY}\" \"DataDir\"", text, StringComparison.Ordinal);
+            Assert.Contains("RMDir /r \"${USER_DATA_DIR}\"", text, StringComparison.Ordinal);
+            Assert.Contains("RMDir /r \"$INSTDIR\\tools\"", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("FindFirst $R0 $R1 \"$INSTDIR\\*.*\"", text, StringComparison.Ordinal);
         }
 
         private static string FindInstallerScript()

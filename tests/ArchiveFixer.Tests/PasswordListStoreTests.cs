@@ -687,7 +687,7 @@ namespace ArchiveFixer.Tests
         // ------------------------------------------------------------------ ⑯ 落点
 
         [Fact]
-        public void 记忆_文件落在DataRootDirectory下而不是C盘或用户目录()
+        public void 记忆_文件落在DataRootDirectory下且默认根固定在本机用户目录()
         {
             using var dir = new TempDir();
 
@@ -699,18 +699,13 @@ namespace ArchiveFixer.Tests
             Assert.True(store.Save(new PasswordListSnapshot()).Success);
             Assert.True(File.Exists(Path.Combine(dir.Path, "password-list.dat")));
 
-            // 默认数据根目录 = **程序目录下的 data**（绿色软件跟着安装位置走，绝不写 C 盘用户目录）
+            // 默认数据根目录固定 = %LOCALAPPDATA%\ArchiveFixer，不再跟程序安装目录走。
             string defaultRoot = PathService.DefaultDataRootDirectory;
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
-            Assert.StartsWith(AppContext.BaseDirectory, defaultRoot, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                defaultRoot,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                defaultRoot,
-                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.Combine(localAppData, PathService.DataFolderName), defaultRoot);
+            Assert.StartsWith(localAppData, defaultRoot, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(AppContext.BaseDirectory, defaultRoot, StringComparison.OrdinalIgnoreCase);
         }
 
         // ------------------------------------------------------------------ ⑰ 启动接线（MainViewModel）

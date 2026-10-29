@@ -44,14 +44,15 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
    - **装到哪**：默认装到**本机第一个非系统固定盘**的 `\ArchiveFixer`（例如 `D:\ArchiveFixer`）；
      本机没有第二个固定盘时才退到 `%LOCALAPPDATA%\Programs\ArchiveFixer`，向导会**明说**这一点。
      免 UAC、每用户安装，安装时随时可以自己改目录。
-     ⛔ 别放进 `C:\Program Files\` —— 程序要在自己目录下写 `data\`（日志 / 设置 / 密码本）。
+   - **用户数据放哪**：固定放 `%LOCALAPPDATA%\ArchiveFixer`（设置、密码本、日志），
+     ⛔ 不再跟安装目录走；程序文件装在哪个盘都一样。
    - **升级**：直接双击新版本的 `.exe` 就行。检测到已经装过会**问你一次**：
-     ① 升级覆盖（默认，**保留 `data\`** 里的密码本与设置）② 先卸载旧版本再装 ③ 取消。
-     已装过的机器默认接着装到**原来的目录**（升级不搬家）。
+     ① 升级覆盖（默认，保留固定用户数据里的密码本与设置）② 先卸载旧版本再装 ③ 取消。
+     安装页会显示旧版本号和当前安装包版本；已装过的机器默认接着装到**原来的目录**（升级不搬家）。
    - **卸载**：控制面板「应用和功能」里的 `ArchiveFixer`、开始菜单里的「卸载 ArchiveFixer」、
-     或安装目录下的 `Uninstall.exe`。卸载时会问你一次「**保留密码本与设置（`data\`）**」还是「全部删除」，
-     **默认保留**，并在界面上写清保留了什么、在哪个目录。
-   - 绿色目录版（两个 zip）解压即用、什么都不写；想换地方直接把整个目录搬走。
+     或安装目录下的 `Uninstall.exe`。卸载时会问你一次「**保留设置与密码**」还是「全部删除」，
+     **默认保留 `%LOCALAPPDATA%\ArchiveFixer`**，并在界面上写清保留了什么、在哪个目录。
+   - 绿色目录版（两个 zip）解压即用；设置 / 密码仍固定写 `%LOCALAPPDATA%\ArchiveFixer`，想换程序位置直接搬目录即可。
 2. **双击启动** → ①「任务」页点「**添加文件夹**」（也可以直接把文件夹拖进窗口）。
 3. 勾上要处理的包 → 点「**一键处理**」→ 确认框里看一眼落点 → 确定。
 4. 干完看①页结果区；失败的在 `ArchiveFixer-失败清单.txt`，要发给我排查看「**导出日志（本次）**」。
@@ -140,14 +141,15 @@ dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式
 - 环境：目标框架 **`net8.0-windows`**（用 .NET 8 或更高版本的 SDK 都能构建）、Windows 10/11。
 - 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
   **WinRAR 本体不随包分发**（共享软件），只检测与调用你自己装的那一份（见[引擎与外部工具](docs/引擎与外部工具.md)）。
-- 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用，**⛔ 不要动绿色目录里的 `data\`**（那是用户数据）。
+- 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用；用户数据固定走 `%LOCALAPPDATA%\ArchiveFixer`，
+  **⛔ 不要动旧绿色目录里的 `data\`**（升级会只读复制一次，旧数据保留）。
 - 当前测试规模与已知的偶发假红见 [`AGENTS.md` §11](AGENTS.md)。
 - **出发行包**：`pwsh -File scripts/package.ps1`（框架依赖版）/ `pwsh -File scripts/package.ps1 -SelfContained`（独立版），
   产物在 `dist\ArchiveFixer-<版本>-<档>.zip`，脚本自带自检（四样关键文件齐 + 包里绝不含 `data\` / 日志 / 样本）。
   安装包：`pwsh -File scripts/installer.ps1`（NSIS，拿独立版那一份当内容 → `dist\ArchiveFixer-<版本>-setup.exe`；
   每用户安装、免 UAC；**默认装到第一个非系统固定盘上的 `\ArchiveFixer`**，本机没有第二个盘才退
-  `%LOCALAPPDATA%\Programs\ArchiveFixer`；装新版本时问一次"覆盖 / 先卸旧版 / 取消"，卸载时问一次
-  "保留 `data\`（默认）/ 全部删除"）。
+  `%LOCALAPPDATA%\Programs\ArchiveFixer`；用户数据固定 `%LOCALAPPDATA%\ArchiveFixer`；装新版本时显示旧版本/新版本
+  并问一次"覆盖 / 先卸旧版 / 取消"，卸载时问一次"保留用户数据（默认）/ 全部删除"）。
   发行包用的是**发行档**（`-p:ArchiveFixerEdition=Release`）：①页那颗测试期专用的「不删原包」在发行包里不出现。
 
 ## 目录结构

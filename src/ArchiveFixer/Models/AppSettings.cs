@@ -717,7 +717,7 @@ namespace ArchiveFixer.Models
          * 用户原话："这个彻底取消，用户没有定工作区的权力，就是在解压的地方设立隐形的工作区，
          * 这就完全不存在跨盘的操作"。
          *
-         * 于是：① 工作区、数据根都不再由用户指定 —— 数据根固定是程序目录下的 data，
+         * 于是：① 工作区、数据根都不再由用户指定 —— 数据根固定是 %LOCALAPPDATA%\ArchiveFixer，
          * 工作区固定由**这一单的目标目录**派生（<目标目录>\.ArchiveFixer.work）；
          * ② 旧 appsettings.json 里残留的 `CacheRootDirectory` 键被**安静忽略**
          * （System.Text.Json 默认不认未知成员也不抛），⛔ 不迁移、不报错、不警告 ——

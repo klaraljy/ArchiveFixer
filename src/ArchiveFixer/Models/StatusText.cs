@@ -1974,7 +1974,7 @@ namespace ArchiveFixer.Models
         //    记忆摘要、读不出来的提示、以及日志文案都从这里引，别在 XAML / ViewModel 里另写一份。
         //
         // 用户选定的是 Windows 自带的 DPAPI **机器范围**（CryptProtectData + CRYPTPROTECT_LOCAL_MACHINE）：
-        // 跟 Windows 账号无关（同机换谁登录都能用、不弹框），文件放 <程序目录>\data\。
+        // 跟 Windows 账号无关（同机换谁登录都能用、不弹框），文件放 %LOCALAPPDATA%\ArchiveFixer\。
         // **代价必须如实写在界面上**：同机任何本机用户都可能解开；换机器 / 重装系统解不开。
 
         /// <summary>

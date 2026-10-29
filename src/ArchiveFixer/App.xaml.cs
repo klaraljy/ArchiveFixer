@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using ArchiveFixer.Services;
 
 namespace ArchiveFixer
 {
@@ -10,12 +11,12 @@ namespace ArchiveFixer
         public static string AppBaseDirectory { get; private set; } = AppContext.BaseDirectory;
 
         /// <summary>
-        /// 用户数据目录（<c>&lt;程序目录&gt;\data</c>）。
-        /// 配置、日志、临时文件、工作区都放在这里 —— 绿色软件跟着安装位置走，
-        /// 缓存绝不写进 C 盘的 %AppData%（用户明确要求）。
+        /// 用户数据目录：固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>。
+        ///
+        /// <para>⛔ 不再跟程序安装目录走：升级、换安装位置、卸载都从同一个地方读设置与密码。
+        /// 旧位置（程序目录 data、旧 %AppData%）只由 <see cref="DataRootMigrator"/> 一次性迁入。</para>
         /// </summary>
-        public static string DataRootDirectory { get; private set; } =
-            Path.Combine(AppContext.BaseDirectory, "data");
+        public static string DataRootDirectory => PathService.DefaultDataRootDirectory;
 
         public static string SettingsFilePath =>
             Path.Combine(DataRootDirectory, "appsettings.json");
@@ -178,38 +179,12 @@ namespace ArchiveFixer
         }
 
         /// <summary>
-        /// 一次性迁移：把旧版本放在程序目录的 appsettings.json 复制到用户数据目录。
-        /// 仅在用户数据目录还没有配置文件时执行。
+        /// 一次性迁移：把旧版本留在程序目录 / 旧 %AppData% / 旧安装目录里的
+        /// 设置与密码复制到固定用户数据目录。
         /// </summary>
         private static void MigrateLegacyData()
         {
-            try
-            {
-                // 两个历史位置都要看一眼：
-                //   1) 最老的一版放在程序目录；
-                //   2) 8 月那版放在 %AppData%\ArchiveFixer（C 盘，已被用户否掉）。
-                // 找到就先搬过来，别让用户重新配一遍。
-                string[] legacyPaths =
-                {
-                    Path.Combine(AppBaseDirectory, "appsettings.json"),
-                    Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "ArchiveFixer",
-                        "appsettings.json")
-                };
-
-                string legacySettingsPath = legacyPaths.FirstOrDefault(File.Exists) ?? legacyPaths[0];
-
-                if (File.Exists(legacySettingsPath) && !File.Exists(SettingsFilePath))
-                {
-                    SafeCreateDirectory(DataRootDirectory);
-                    File.Copy(legacySettingsPath, SettingsFilePath, overwrite: false);
-                }
-            }
-            catch
-            {
-                // 迁移失败不影响程序启动，后续会使用默认设置。
-            }
+            DataRootMigrator.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
         }
 
         private static void SafeCreateDirectory(string path)

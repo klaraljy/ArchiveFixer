@@ -203,7 +203,7 @@ namespace ArchiveFixer.Services
         /// 必须与 <see cref="PathService.DataRootDirectory"/> 保持一致：
         /// 之前在导入那边写死 <c>AppContext.BaseDirectory\data</c>、读取那边却另算一个目录，
         /// 用户一旦换过位置就会"导入了、下次启动又说没配过"。
-        /// （现在数据根固定 = 程序目录下的 data，两边本来就同一个值；这条口径照旧不许各算一份。）
+        /// （现在数据根固定 = %LOCALAPPDATA%\ArchiveFixer，两边本来就同一个值；这条口径照旧不许各算一份。）
         /// </summary>
         public string DataRootDirectory
         {
