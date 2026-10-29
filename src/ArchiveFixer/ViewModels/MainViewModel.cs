@@ -2649,7 +2649,7 @@ namespace ArchiveFixer.ViewModels
             _passwordService.SetRememberedBookPaths(settingsBooks);
         }
 
-        /// <summary>导入密码本，并把路径记进设置，下次启动自动加载。</summary>
+        /// <summary>导入密码本：合并进内置 passwords.txt，不再复制外部文件、不再记外部路径。</summary>
         private void ImportPasswordBook()
         {
             try
@@ -2666,11 +2666,8 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                string installedPath = PasswordService.CopyImportedBookToInstallDirectory(path);
-                int count = _passwordService.ImportPasswordList(installedPath).Count;
-
-                Settings.PasswordBookPath = installedPath;
-                WriteSettingsToDisk("导入的密码本");
+                int count = _passwordService.ImportPasswordList(path).Count;
+                ClearLegacyPasswordBookPath();
 
                 /*
                  * ④页那份「已记住的密码本」清单要跟着重读（同步审计逮到）：它是 SettingsViewModel
@@ -2685,8 +2682,11 @@ namespace ArchiveFixer.ViewModels
                     ? $"{Environment.NewLine}{Environment.NewLine}提示：{string.Join(Environment.NewLine, _passwordService.LastImportWarnings)}"
                     : string.Empty;
 
-                AppendLog("INFO", $"已导入密码本：{System.IO.Path.GetFileName(path)}（{count} 条），下次启动会自动加载。");
-                _dialogService.ShowInfo($"已导入 {count} 条密码，并记住了这个文件，下次启动会自动加载。{warnings}");
+                AppendLog(
+                    "INFO",
+                    $"已导入密码本：{System.IO.Path.GetFileName(path)}（{count} 条），已合并进内置 passwords.txt；外部文件以后不再链接。");
+                _dialogService.ShowInfo(
+                    $"已导入 {count} 条密码，并合并进程序内置 passwords.txt；外部文件以后改了也不会再链接。{warnings}");
             }
             catch (Exception ex)
             {
@@ -2702,6 +2702,41 @@ namespace ArchiveFixer.ViewModels
                     + "可以检查：① 文件是不是纯文本（UTF-8 或 ANSI 编码）；"
                     + "② 文件有没有被别的程序占用；③ 换一个位置的文件再试。"
                     + "也可以直接在「密码列表管理」里手工添加密码。");
+            }
+        }
+
+        /// <summary>
+        /// 清掉旧外部密码本路标；⛔ 不删用户文件、也不猜哪个程序目录副本能删。
+        /// </summary>
+        private void ClearLegacyPasswordBookPath()
+        {
+            try
+            {
+                if (Settings != null)
+                {
+                    bool changed = !string.IsNullOrWhiteSpace(Settings.PasswordBookPath)
+                                   || (Settings.PasswordBookPaths?.Count ?? 0) > 0;
+
+                    Settings.PasswordBookPath = string.Empty;
+                    Settings.PasswordBookPaths = new List<string>();
+
+                    if (changed)
+                    {
+                        WriteSettingsToDisk("清理旧密码本路径");
+                    }
+                }
+
+                string sidecar = Path.Combine(_passwordService.DataRootDirectory, "password-book.path");
+
+                if (File.Exists(sidecar))
+                {
+                    File.Delete(sidecar);
+                    AppendLog("INFO", "已清掉旧的外部密码本路径（password-book.path）；用户原始文件未动。");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "清理旧密码本路径失败（不影响本次导入）：" + ex.Message);
             }
         }
 

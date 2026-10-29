@@ -63,6 +63,32 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 启用状态与备注_跟密码值一起重启恢复()
+        {
+            var service = new PasswordService
+            {
+                DataRootDirectory = _root,
+                UseTextStore = true
+            };
+
+            Assert.True(service.AddPassword("disabled-secret"));
+            service.Passwords[0].IsEnabled = false;
+            service.Passwords[0].Remark = "测试备注";
+
+            var restarted = new PasswordService
+            {
+                DataRootDirectory = _root,
+                UseTextStore = true
+            };
+
+            Assert.Equal(PasswordListLoadStatus.Loaded, restarted.LoadRememberedList());
+            var item = Assert.Single(restarted.Passwords);
+            Assert.Equal("disabled-secret", item.Value);
+            Assert.False(item.IsEnabled);
+            Assert.Equal("测试备注", item.Remark);
+        }
+
+        [Fact]
         public void 旧DPAPI记忆_首次读取后迁移到passwords_txt()
         {
             var oldStore = new PasswordListStore { DataRootDirectory = _root };

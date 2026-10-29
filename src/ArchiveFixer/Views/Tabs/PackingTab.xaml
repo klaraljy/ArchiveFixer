@@ -178,6 +178,10 @@
                                 Click="PickPassword_Click" />
                     </Grid>
 
+                    <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailPackingPasswordHeader}"
+                                         Detail="{x:Static models:StatusText.BoxDetailPackingPasswordDetail}"
+                                         Margin="0,6,0,0" />
+
                     <!--
                         ==================== 外层容器（不再让用户选）====================
                         第 46 条：外层**默认 rar**；本机没装 WinRAR 时**自动改用 7z**

@@ -120,6 +120,9 @@ namespace ArchiveFixer.Services
         /// <summary>程序自带的明文密码清单（用户 2026-10-25：不再链接外部密码本）。</summary>
         public PasswordTextStore TextStore { get; } = new();
 
+        /// <summary>passwords.txt 的启用 / 备注元数据（密码值仍以 passwords.txt 为准）。</summary>
+        public PasswordMetadataStore MetadataStore { get; } = new();
+
         /// <summary>
         /// 是否把内置 <c>passwords.txt</c> 当主存储（生产入口默认 true；单元测试默认 false，保持旧 DPAPI 夹具语义）。
         /// </summary>
@@ -182,6 +185,7 @@ namespace ArchiveFixer.Services
         public PasswordService()
         {
             ListStore.DataRootDirectory = _dataRootDirectory;
+            MetadataStore.DataRootDirectory = _dataRootDirectory;
 
             /*
              * 变更即落盘（用户 2026-09-24 要求：内容 / 顺序 / 启用状态 / 手工条目跨重启保留）。
@@ -211,6 +215,7 @@ namespace ArchiveFixer.Services
                 // 记忆文件与侧车文件共用同一个根：两处分开设过一次就会互相看不见。
                 ListStore.DataRootDirectory = _dataRootDirectory;
                 TextStore.DataRootDirectory = _dataRootDirectory;
+                MetadataStore.DataRootDirectory = _dataRootDirectory;
             }
         }
 
@@ -244,6 +249,16 @@ namespace ArchiveFixer.Services
                 {
                     if (TextStore.TryLoad(out List<string> textValues, out _))
                     {
+                        bool hasMetadata = MetadataStore.TryLoad(
+                            out Dictionary<string, PasswordMetadataEntry> metadata,
+                            out string metadataFailure);
+
+                        if (!hasMetadata && metadataFailure.Length > 0)
+                        {
+                            LastListWarning = "密码启用状态 / 备注读取失败，已按启用、无备注恢复：" + metadataFailure;
+                            RememberedListWarning?.Invoke(LastListWarning);
+                        }
+
                         _persistSuspensions++;
 
                         try
@@ -252,12 +267,14 @@ namespace ArchiveFixer.Services
 
                             foreach (string value in textValues)
                             {
+                                metadata.TryGetValue(value, out PasswordMetadataEntry? entry);
+
                                 Passwords.Add(new PasswordItem
                                 {
                                     Value = value,
                                     Source = "BuiltInText",
-                                    IsEnabled = true,
-                                    Remark = string.Empty
+                                    IsEnabled = entry?.IsEnabled ?? true,
+                                    Remark = entry?.Remark ?? string.Empty
                                 });
                             }
                         }
@@ -777,6 +794,19 @@ namespace ArchiveFixer.Services
                     && !TextStore.TrySave(Passwords.Select(item => item.Value), out textFailure))
                 {
                     textFailure = "内置密码清单写入失败：" + textFailure;
+                }
+
+                if (UseTextStore && textFailure.Length == 0
+                    && !MetadataStore.TrySave(
+                        Passwords.Select(item => new PasswordMetadataEntry
+                        {
+                            Value = item.Value ?? string.Empty,
+                            IsEnabled = item.IsEnabled,
+                            Remark = item.Remark ?? string.Empty
+                        }),
+                        out string metadataFailure))
+                {
+                    textFailure = "密码启用状态 / 备注写入失败：" + metadataFailure;
                 }
 
                 // DPAPI 记忆继续保留，供迁移 / 统计等旧逻辑使用；它不是用户要写回的那一份。

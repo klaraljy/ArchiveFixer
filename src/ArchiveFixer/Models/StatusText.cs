@@ -1993,8 +1993,8 @@ namespace ArchiveFixer.Models
         /// 不同次文件一律严格按我列表顺序**」⇒ 表里就是严格顺序，"按成功次数排"这一档**已被删掉**。</para>
         /// </summary>
         public const string PasswordListPrivacyHint =
-            "列表按本机加密保存（机器范围 DPAPI，跟 Windows 账号无关；关掉「记住密码列表」则只在本次运行内有效）；"
-            + "日志不记明文。导入时保留密码中的空格。"
+            "密码值和顺序存在程序自带 data\\passwords.txt（明文）；启用状态和备注存在 passwords.meta.json。"
+            + "关掉「记住密码列表」则只在本次运行内有效；日志不记明文。导入时保留密码中的空格。"
             + "⚠ 实际尝试顺序：先试一次空密码，再试密码本里命中名称的，最后严格按这张表自上而下的顺序逐条试；"
             + "同一批里前面刚解开的密码会先试一次（只在本次运行内，下一批回到这张表的顺序）。";
 
@@ -3545,6 +3545,14 @@ namespace ArchiveFixer.Models
         /// <summary>⑤ 打包：确认窗里问什么、记不记得住（原先是常驻的那段）。</summary>
         public const string BoxDetailPackingConfirmDetail =
             "点「打包…」还会弹一个小窗：确认原包操作 + 其余物操作（都会记住，下次照上次的来；落点在上面选）。";
+
+        /// <summary>⑤ 打包密码那一框的展示框标题。</summary>
+        public const string BoxDetailPackingPasswordHeader = "详细说明：本次打包密码会不会进密码本";
+
+        /// <summary>⑤ 打包：密码只用于本次打包，避免用户误以为会同步到 passwords.txt。</summary>
+        public const string BoxDetailPackingPasswordDetail =
+            "本次输入的打包密码只用于这次打包，不写进 passwords.txt，也不自动加到④「密码」页的列表里。"
+            + "需要下次继续使用，请在打包前到④「密码」页添加；「从密码列表选…」只是把列表里的一条复制到这个框。";
 
         /// <summary>⑤ 打包步骤那一框的展示框标题。</summary>
         public const string BoxDetailPackingStepsHeader = "详细说明：打包的四步分别做了什么";
