@@ -30,6 +30,18 @@ namespace ArchiveFixer.Models
         public const string ProgressSkipped = "跳过";
         public const string ProgressCancelled = "已取消";
 
+        /// <summary>进度详情里的剩余时间后缀；{0} = 已格式化的 mm:ss / h:mm:ss。</summary>
+        public const string ProgressRemainingSuffixFormat = " · 剩余 {0}";
+
+        /// <summary>托盘悬停提示的进度格式；{0} = 百分比，{1} = 可空的剩余时间后缀。</summary>
+        public const string TrayProgressFormat = "ArchiveFixer {0}%{1}";
+
+        /// <summary>托盘悬停提示：只有“在处理”但没有可用百分比。</summary>
+        public const string TrayBusyText = "ArchiveFixer 处理中";
+
+        /// <summary>托盘悬停提示：空闲。</summary>
+        public const string TrayIdleText = "ArchiveFixer";
+
         // 操作
         public const string OpWaiting = "等待";
         public const string OpScan = "扫描";

@@ -52,6 +52,22 @@ namespace ArchiveFixer.Services
         /// <summary>用户在托盘菜单点了“退出”。</summary>
         public event Action? ExitRequested;
 
+        /// <summary>更新悬停提示（Windows 托盘没有标准进度条属性，只能显示短文字）。</summary>
+        public void SetStatusText(string? text)
+        {
+            try
+            {
+                string value = string.IsNullOrWhiteSpace(text) ? "ArchiveFixer" : text!;
+
+                // NotifyIcon.Text 有长度限制；保留最早的关键信息，避免 Windows 截断。
+                _notifyIcon.Text = value.Length > 63 ? value[..63] : value;
+            }
+            catch
+            {
+                // 托盘文字失败不影响任务。
+            }
+        }
+
         public void HideToTray()
         {
             if (_hidden)

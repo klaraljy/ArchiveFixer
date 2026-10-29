@@ -135,6 +135,8 @@ namespace ArchiveFixer.Models
         private int _progressPercent = NoProgress;
         private string _progressEntry = string.Empty;
         private string _responsivenessHint = string.Empty;
+        private DateTime? _progressEtaStartUtc;
+        private string _estimatedRemainingText = string.Empty;
 
         /// <summary>"还没有进度"的哨兵值。<b>不要</b>用 0 —— 0% 是"确实刚开始解"。</summary>
         public const int NoProgress = -1;
@@ -966,6 +968,12 @@ namespace ArchiveFixer.Models
         public bool HasResponsivenessHint => !string.IsNullOrWhiteSpace(_responsivenessHint);
 
         /// <summary>
+        /// 按当前这一轮解压的已用时间与百分比估算的剩余时间（空串 = 还算不出）。
+        /// 只是显示用；候选密码重试 / 递归下一层时百分比回退会重置估算起点。
+        /// </summary>
+        public string EstimatedRemainingText => _estimatedRemainingText;
+
+        /// <summary>
         /// 现在是不是**真的在跑并且有进度可看**。
         ///
         /// <para>
@@ -1144,15 +1152,23 @@ namespace ArchiveFixer.Models
                 }
 
                 string percent = $"{_progressPercent}%";
+                string eta = string.IsNullOrWhiteSpace(_estimatedRemainingText)
+                    ? string.Empty
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.ProgressRemainingSuffixFormat,
+                        _estimatedRemainingText);
 
                 if (string.IsNullOrWhiteSpace(_progressEntry))
                 {
-                    return HasResponsivenessHint ? $"{percent} · {_responsivenessHint}" : percent;
+                    return HasResponsivenessHint
+                        ? $"{percent}{eta} · {_responsivenessHint}"
+                        : $"{percent}{eta}";
                 }
 
                 return HasResponsivenessHint
-                    ? $"{percent} · {_progressEntry} · {_responsivenessHint}"
-                    : $"{percent} · {_progressEntry}";
+                    ? $"{percent}{eta} · {_progressEntry} · {_responsivenessHint}"
+                    : $"{percent}{eta} · {_progressEntry}";
             }
         }
 
@@ -1168,7 +1184,16 @@ namespace ArchiveFixer.Models
         {
             if (percent >= 0)
             {
-                ProgressPercent = percent > 100 ? 100 : percent;
+                int clamped = percent > 100 ? 100 : percent;
+
+                // 新的一轮（换密码候选 / 进入下一层）通常从 0 重新开始：
+                // ETA 必须跟着重来，不能拿“上一轮 90% 的用时”去估这一轮。
+                if (_progressPercent < 0 || clamped < _progressPercent || clamped == 0)
+                {
+                    _progressEtaStartUtc = clamped > 0 ? DateTime.UtcNow : null;
+                }
+
+                ProgressPercent = clamped;
             }
 
             if (!string.IsNullOrWhiteSpace(entry))
@@ -1211,15 +1236,54 @@ namespace ArchiveFixer.Models
             {
                 ResponsivenessHint = string.Empty;
             }
+
+            UpdateEstimatedRemaining();
+        }
+
+        private void UpdateEstimatedRemaining()
+        {
+            string previous = _estimatedRemainingText;
+
+            if (!HasLiveProgress || _progressPercent <= 0 || _progressPercent >= 100 || _progressEtaStartUtc == null)
+            {
+                _estimatedRemainingText = string.Empty;
+            }
+            else
+            {
+                TimeSpan elapsed = DateTime.UtcNow - _progressEtaStartUtc.Value;
+
+                // 刚开始的一两秒样本太少，估出来只会是 00:00 / 荒唐值；先不显示。
+                if (elapsed < TimeSpan.FromSeconds(2))
+                {
+                    _estimatedRemainingText = string.Empty;
+                }
+                else
+                {
+                    double remainingSeconds = elapsed.TotalSeconds * (100.0 - _progressPercent) / _progressPercent;
+                    _estimatedRemainingText = remainingSeconds is > 0 and < 86400
+                        ? TimeSpan.FromSeconds(remainingSeconds).ToString(remainingSeconds >= 3600 ? @"h\:mm\:ss" : @"mm\:ss")
+                        : string.Empty;
+                }
+            }
+
+            if (!string.Equals(previous, _estimatedRemainingText, StringComparison.Ordinal))
+            {
+                OnPropertyChanged(nameof(EstimatedRemainingText));
+                OnPropertyChanged(nameof(ProgressDetail));
+            }
         }
 
         /// <summary>清掉实时进度（任务收尾 / 重跑之前调用）。</summary>
         public void ClearProgress()
         {
+            _progressEtaStartUtc = null;
+            _estimatedRemainingText = string.Empty;
             ProgressPercent = NoProgress;
             ProgressEntry = string.Empty;
             ResponsivenessHint = string.Empty;
             _liveLayer = 0;
+            OnPropertyChanged(nameof(EstimatedRemainingText));
+            OnPropertyChanged(nameof(ProgressDetail));
         }
 
         /// <summary>续解链当前在第几层（0 = 不在递归层里 / 不知道）。见 <see cref="ApplyProgress"/>。</summary>

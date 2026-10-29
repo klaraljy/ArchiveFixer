@@ -81,10 +81,10 @@ namespace ArchiveFixer
 
             if (!TryAcquireSingleInstance())
             {
-                // 第二次启动：把已经在跑的那一个窗口叫到前面，然后本进程安静退出，
-                // 绝不再建第二个托盘图标 / 第二个窗口。
-                StartupUri = null;
-                Shutdown();
+                // 第二次启动：事件已经在 TryAcquireSingleInstance 里发过了。
+                // 这里立刻结束进程，不再让 WPF 启动窗口 / 托盘 —— “最终只剩一个”不够，
+                // 启动过程中也不许短暂冒出第二个图标。
+                Environment.Exit(0);
                 return;
             }
 

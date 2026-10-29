@@ -6,12 +6,14 @@ using ArchiveFixer.Views;
 using ArchiveFixer.Views.Tabs;
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Shell;
 
 namespace ArchiveFixer
 {
@@ -34,6 +36,7 @@ namespace ArchiveFixer
         private readonly DialogService _dialogService = new();
         private TrayIconService? _trayIcon;
         private bool _allowClose;
+        private MainViewModel? _watchedViewModel;
 
         /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
         private const string UsageDocRelativePath = @"docs\使用说明.md";
@@ -41,6 +44,11 @@ namespace ArchiveFixer
         public MainWindow()
         {
             InitializeComponent();
+
+            TaskbarItemInfo = new TaskbarItemInfo
+            {
+                ProgressState = TaskbarItemProgressState.None
+            };
 
             Loaded += MainWindow_Loaded;
 
@@ -70,8 +78,147 @@ namespace ArchiveFixer
                 viewModel.TabRequested -= ViewModel_TabRequested;
                 viewModel.TabRequested += ViewModel_TabRequested;
 
+                SubscribeTaskProgress(viewModel);
                 ImportStartupPaths(viewModel);
             }
+        }
+
+        private void SubscribeTaskProgress(MainViewModel viewModel)
+        {
+            if (ReferenceEquals(_watchedViewModel, viewModel))
+            {
+                return;
+            }
+
+            UnsubscribeTaskProgress();
+
+            _watchedViewModel = viewModel;
+            viewModel.PropertyChanged += ViewModel_PropertyChanged;
+            viewModel.Tasks.CollectionChanged += Tasks_CollectionChanged;
+
+            foreach (ArchiveTask task in viewModel.Tasks)
+            {
+                task.PropertyChanged += Task_PropertyChanged;
+            }
+
+            RefreshShellProgress();
+        }
+
+        private void UnsubscribeTaskProgress()
+        {
+            if (_watchedViewModel == null)
+            {
+                return;
+            }
+
+            _watchedViewModel.PropertyChanged -= ViewModel_PropertyChanged;
+            _watchedViewModel.Tasks.CollectionChanged -= Tasks_CollectionChanged;
+
+            foreach (ArchiveTask task in _watchedViewModel.Tasks)
+            {
+                task.PropertyChanged -= Task_PropertyChanged;
+            }
+
+            _watchedViewModel = null;
+        }
+
+        private void Tasks_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.OldItems != null)
+            {
+                foreach (ArchiveTask task in e.OldItems.OfType<ArchiveTask>())
+                {
+                    task.PropertyChanged -= Task_PropertyChanged;
+                }
+            }
+
+            if (e.NewItems != null)
+            {
+                foreach (ArchiveTask task in e.NewItems.OfType<ArchiveTask>())
+                {
+                    task.PropertyChanged += Task_PropertyChanged;
+                }
+            }
+
+            RefreshShellProgress();
+        }
+
+        private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(ArchiveTask.ProgressPercent)
+                or nameof(ArchiveTask.ProgressEntry)
+                or nameof(ArchiveTask.EstimatedRemainingText)
+                or nameof(ArchiveTask.ProgressText)
+                or nameof(ArchiveTask.HasLiveProgress)
+                or nameof(ArchiveTask.EndTime)
+                or nameof(ArchiveTask.Status)
+                or nameof(ArchiveTask.HasResponsivenessHint))
+            {
+                RefreshShellProgress();
+            }
+        }
+
+        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(MainViewModel.IsBusy))
+            {
+                RefreshShellProgress();
+            }
+        }
+
+        /// <summary>
+        /// 把当前活跃任务的进度同步到任务栏和托盘；没有精确百分比时显示“处理中”的
+        /// 不确定状态，而不是伪造 0%。
+        /// </summary>
+        private void RefreshShellProgress()
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(RefreshShellProgress));
+                return;
+            }
+
+            if (TaskbarItemInfo == null || _watchedViewModel == null)
+            {
+                return;
+            }
+
+            ArchiveTask? active = _watchedViewModel.Tasks
+                .Where(task => task.HasLiveProgress)
+                .OrderByDescending(task => task.ProgressPercent)
+                .FirstOrDefault();
+
+            if (active != null)
+            {
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Normal;
+                TaskbarItemInfo.ProgressValue = Math.Clamp(active.ProgressPercent / 100.0, 0.0, 1.0);
+
+                string eta = string.IsNullOrWhiteSpace(active.EstimatedRemainingText)
+                    ? string.Empty
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.ProgressRemainingSuffixFormat,
+                        active.EstimatedRemainingText);
+
+                _trayIcon?.SetStatusText(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.TrayProgressFormat,
+                    active.ProgressPercent,
+                    eta));
+                return;
+            }
+
+            if (_watchedViewModel.IsBusy)
+            {
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Indeterminate;
+                TaskbarItemInfo.ProgressValue = 0;
+                _trayIcon?.SetStatusText(StatusText.TrayBusyText);
+                return;
+            }
+
+            TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
+            TaskbarItemInfo.ProgressValue = 0;
+            _trayIcon?.SetStatusText(StatusText.TrayIdleText);
         }
 
         /// <summary>
@@ -216,6 +363,16 @@ namespace ArchiveFixer
 
         protected override void OnClosed(EventArgs e)
         {
+            UnsubscribeTaskProgress();
+
+            if (TaskbarItemInfo != null)
+            {
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
+                TaskbarItemInfo.ProgressValue = 0;
+            }
+
+            _trayIcon?.SetStatusText(StatusText.TrayIdleText);
+
             if (DataContext is MainViewModel viewModel)
             {
                 viewModel.TabRequested -= ViewModel_TabRequested;
