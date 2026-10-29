@@ -78,7 +78,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 文件夹导入_嵌套包输出到选中的合集根()
+        public void 文件夹导入_嵌套包输出到压缩包自己的父目录()
         {
             string root = CreateRoot();
             string nested = Path.Combine(root, "333");
@@ -91,7 +91,31 @@ namespace ArchiveFixer.Tests
                 SourceSelectionKind.Folder,
                 root);
 
-            Assert.Equal(root, outputRoot);
+            Assert.Equal(nested, outputRoot);
+            Directory.Delete(root, true);
+        }
+
+        [Fact]
+        public void 文件夹导入_多个子文件夹各自输出到自己的父目录()
+        {
+            string root = CreateRoot();
+            string first = Path.Combine(root, "合集A");
+            string second = Path.Combine(root, "合集B");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+
+            string firstSource = Path.Combine(first, "01.7z");
+            string secondSource = Path.Combine(second, "01.7z");
+            File.WriteAllText(firstSource, "x");
+            File.WriteAllText(secondSource, "x");
+
+            Assert.Equal(
+                first,
+                SpecificOutputNaming.ResolveOutputRoot(firstSource, SourceSelectionKind.Folder, root));
+            Assert.Equal(
+                second,
+                SpecificOutputNaming.ResolveOutputRoot(secondSource, SourceSelectionKind.Folder, root));
+
             Directory.Delete(root, true);
         }
 

@@ -66,16 +66,27 @@ namespace ArchiveFixer.Extraction
             || (value >= '\uF900' && value <= '\uFAFF');
 
         /// <summary>
-        /// 特定解压的输出根：用户选的是文件夹时，输出直接落在**选中的那个合集根**下，
-        /// 不跟着源包所在的深层子目录走（用户 2026-10-25 口径：
-        /// <c>合集\333\3333.rar</c> → <c>合集\3333\内容物</c>，不是 <c>合集\333\3333\内容物</c>）。
-        /// 选的是单个文件时仍落在文件自己那一层。
+        /// 特定解压的输出根：**跟着压缩包自己的父目录走**，不跟着导入时选中的合集根走。
+        ///
+        /// <para>用户 2026-10-29 口径：导入一个含多个子文件夹的合集时，
+        /// <c>333\子文件夹\11.7z</c> 必须落到 <c>333\子文件夹\内容物</c>，
+        /// 不能再堆到 <c>333\内容物</c>（那会把不同子文件夹的同名包撞在一起）。</para>
+        ///
+        /// <para>单文件选择同样落在文件自己那一层；只有路径异常、取不到父目录时，
+        /// 才回落到选中的根。自定义输出根由调用方在更外层覆盖，不经过这里。</para>
         /// </summary>
         public static string ResolveOutputRoot(
             string sourceArchive,
             SourceSelectionKind selectionKind,
             string? selectionRoot)
         {
+            string parent = Path.GetDirectoryName(sourceArchive) ?? string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                return parent;
+            }
+
             if (selectionKind == SourceSelectionKind.Folder
                 && !string.IsNullOrWhiteSpace(selectionRoot)
                 && Directory.Exists(selectionRoot))
@@ -83,7 +94,7 @@ namespace ArchiveFixer.Extraction
                 return selectionRoot;
             }
 
-            return Path.GetDirectoryName(sourceArchive) ?? string.Empty;
+            return string.Empty;
         }
 
         public static string Resolve(string lastArchivePath, string contentRoot)

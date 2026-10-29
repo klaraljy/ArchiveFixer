@@ -15,7 +15,7 @@ namespace ArchiveFixer.ViewModels
     {
         /// <summary>
         /// 特定解压的一键入口：每个源包独立跑 3 层以内的简单管线，不进入轮次/第二大步。
-        /// 输出根按用户选中的合集根算；源包与其余物按当前档处理，空间不足模式覆盖为
+        /// 输出根跟着每个压缩包自己的父目录走；源包与其余物按当前档处理，空间不足模式覆盖为
         /// 「用户已接受风险：成功/失败都删源包」。
         /// </summary>
         private async Task<OneClickOutcome> RunSpecificBatchAsync(

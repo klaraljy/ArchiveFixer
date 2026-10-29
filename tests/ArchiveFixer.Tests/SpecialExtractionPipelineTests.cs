@@ -72,11 +72,11 @@ namespace ArchiveFixer.Tests
         // ================================================================ ② 规则开：用户要的那一句
 
         /// <summary>
-        /// 特定解压的输出规则是**按合集根算**，不是按源包自己所在的深层子目录算：
-        /// <c>合集\333\3333.7z</c>（包内只有 <c>33333\</c>）→ <c>合集\33333\</c>。
+        /// 特定解压的输出根跟着压缩包自己的父目录走：
+        /// <c>合集\333\3333.7z</c>（包内只有 <c>33333\</c>）→ <c>合集\333\33333\</c>。
         /// </summary>
         [SevenZipFact]
-        public async Task 特定解压_嵌套包_输出到合集根_不跟源包子目录()
+        public async Task 特定解压_嵌套包_输出到压缩包父目录()
         {
             string collection = Path.Combine(_root, "合集");
             Directory.CreateDirectory(Path.Combine(collection, "333"));
@@ -101,14 +101,14 @@ namespace ArchiveFixer.Tests
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
 
             Assert.True(
-                File.Exists(Path.Combine(collection, "33333", "01.jpg")),
-                "输出必须在合集根下；实际目录树：" + string.Join(" | ", Tree(collection)));
+                File.Exists(Path.Combine(collection, "333", "33333", "01.jpg")),
+                "输出必须留在源包自己的父目录里；实际目录树：" + string.Join(" | ", Tree(collection)));
+            Assert.False(
+                Directory.Exists(Path.Combine(collection, "33333")),
+                "输出不能再堆到导入的合集根");
             Assert.False(
                 Directory.Exists(Path.Combine(collection, "333", "3333")),
-                "不能把源包所在的深层子目录套进输出路径");
-            Assert.False(
-                Directory.Exists(Path.Combine(collection, "333", "33333")),
-                "输出不能再留在源包子目录里");
+                "不能多套一层源包名目录");
         }
 
 
