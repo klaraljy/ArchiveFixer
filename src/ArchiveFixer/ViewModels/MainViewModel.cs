@@ -1864,6 +1864,9 @@ namespace ArchiveFixer.ViewModels
         public ICommand RepairVolumeNameCurrentTaskCommand { get; }
         public ICommand StartExtractCurrentTaskCommand { get; }
         public ICommand ExtractIntoSourceFolderCurrentTaskCommand { get; }
+        public ICommand OpenCurrentTaskOutputDirectoryCommand { get; }
+        public ICommand CleanCurrentTaskArtifactsCommand { get; }
+        public ICommand CleanCurrentTaskEmptyFoldersCommand { get; }
 
         public ICommand OpenTaskOutputDirectoryCommand { get; }
 
@@ -2227,6 +2230,21 @@ namespace ArchiveFixer.ViewModels
                         extractIntoSourceFolder: true,
                         targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
                 },
+                CanRunCurrentTaskManual);
+            OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
+                () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
+                CanRunCurrentTaskManual);
+            CleanCurrentTaskArtifactsCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(
+                    CleanupScope.Artifacts,
+                    ArtifactDeleteScope.SelectedTask,
+                    SelectedTask == null ? null : new[] { SelectedTask }),
+                CanRunCurrentTaskManual);
+            CleanCurrentTaskEmptyFoldersCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(
+                    CleanupScope.EmptyFolders,
+                    ArtifactDeleteScope.SelectedTask,
+                    SelectedTask == null ? null : new[] { SelectedTask }),
                 CanRunCurrentTaskManual);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
@@ -4676,8 +4694,11 @@ namespace ArchiveFixer.ViewModels
             /// <summary>一个都没勾 —— 什么都不做（提示用户先勾选）。</summary>
             None = 0,
 
-            /// <summary>以**勾选**为准（界面上写的那一套，**唯一**会执行的来源）。</summary>
-            Checked = 1
+            /// <summary>以**勾选**为准（批量清理的入口）。</summary>
+            Checked = 1,
+
+            /// <summary>只作用于当前选中的一行（右侧任务检查器）。</summary>
+            Selected = 2
         }
 
         /// <summary>
@@ -4717,8 +4738,26 @@ namespace ArchiveFixer.ViewModels
         /// **替他决定要动哪些文件**：他以为"我没勾就是不动"，程序却拿高亮那一行开了工。
         /// 代价（用户点一行但没勾 → 收到提示）远小于代价的另一面（动了没打算动的文件）。</para>
         /// </summary>
-        internal static CleanupTargetSelection ResolveCleanupTargets(IEnumerable<ArchiveTask>? tasks)
+        internal static CleanupTargetSelection ResolveCleanupTargets(
+            IEnumerable<ArchiveTask>? tasks,
+            IReadOnlyList<ArchiveTask>? selectedTargets = null)
         {
+            if (selectedTargets != null)
+            {
+                List<ArchiveTask> selected = selectedTargets
+                    .Where(task => task != null && (tasks == null || tasks.Contains(task)))
+                    .Distinct()
+                    .ToList();
+
+                return selected.Count > 0
+                    ? new CleanupTargetSelection
+                    {
+                        Tasks = selected,
+                        Source = CleanupTargetSource.Selected
+                    }
+                    : new CleanupTargetSelection { Source = CleanupTargetSource.None };
+            }
+
             List<ArchiveTask> checkedTasks = tasks?
                 .Where(task => task != null && task.IsSelected)
                 .ToList()
@@ -4744,6 +4783,13 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static string DescribeCleanupTargets(string title, CleanupTargetSelection selection)
         {
+            if (selection.Source == CleanupTargetSource.Selected)
+            {
+                return selection.Tasks.Count == 1
+                    ? $"{title}：只作用于当前任务「{selection.Tasks[0].FileName}」。"
+                    : $"{title}：只作用于当前选中的 {selection.Tasks.Count} 个任务。";
+            }
+
             if (selection.Source == CleanupTargetSource.Checked)
             {
                 return selection.Tasks.Count == 1
@@ -4835,15 +4881,20 @@ namespace ArchiveFixer.ViewModels
         /// 作用域大小：只删每个目标任务自己那一份（默认），还是删整个共享目录下的全部。
         /// 后者只由「删除本目录全部其余物…」这个显式入口传进来。
         /// </param>
-        private async Task RunCleanupAsync(CleanupScope scope, ArtifactDeleteScope deleteScope)
+        private async Task RunCleanupAsync(
+            CleanupScope scope,
+            ArtifactDeleteScope deleteScope,
+            IReadOnlyList<ArchiveTask>? selectedTargets = null)
         {
             bool everything = deleteScope == ArtifactDeleteScope.EverythingInDirectory;
 
-            string title = scope == CleanupScope.EmptyFolders
-                ? "清理空文件夹"
-                : everything ? "删除本目录全部其余物" : "删除其余物";
+            string title = selectedTargets != null
+                ? (scope == CleanupScope.EmptyFolders ? "清理当前任务空文件夹" : "删除当前任务产物")
+                : scope == CleanupScope.EmptyFolders
+                    ? "清理空文件夹"
+                    : everything ? "删除本目录全部其余物" : "删除其余物";
 
-            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks);
+            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks, selectedTargets);
 
             AppendLog(selection.HasTarget ? "INFO" : "WARN", DescribeCleanupTargets(title, selection));
 
@@ -6677,6 +6728,9 @@ namespace ArchiveFixer.ViewModels
                  RepairVolumeNameCurrentTaskCommand,
                  StartExtractCurrentTaskCommand,
                  ExtractIntoSourceFolderCurrentTaskCommand,
+                 OpenCurrentTaskOutputDirectoryCommand,
+                 CleanCurrentTaskArtifactsCommand,
+                 CleanCurrentTaskEmptyFoldersCommand,
                  CopyTaskInfoCommand,
                  CopyTaskPathCommand,
                  CopyTaskErrorCommand,

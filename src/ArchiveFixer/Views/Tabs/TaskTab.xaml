@@ -731,6 +731,33 @@
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
 
+                    <TextBlock Text="同组文件"
+                               Style="{StaticResource LabelTextStyle}"
+                               Margin="0,10,0,2" />
+                    <ItemsControl ItemsSource="{Binding SelectedTask.VolumePaths}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}"
+                                           Style="{StaticResource HintTextStyle}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="缺失卷"
+                               Style="{StaticResource LabelTextStyle}"
+                               Margin="0,6,0,2" />
+                    <ItemsControl ItemsSource="{Binding SelectedTask.MissingVolumeNames}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}"
+                                           Foreground="{StaticResource WarningTextBrush}"
+                                           TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <Button Content="重新扫描当前任务"
                             HorizontalAlignment="Left"
                             Margin="0,8,0,0"
@@ -783,6 +810,23 @@
                                 MinWidth="132" Margin="6,0,0,0"
                                 Command="{Binding ExtractIntoSourceFolderCurrentTaskCommand}"
                                 ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}" />
+                    </WrapPanel>
+
+                    <TextBlock Text="清理（只对当前任务，先预览确认）"
+                               Style="{StaticResource LabelTextStyle}"
+                               Margin="0,10,0,4" />
+                    <WrapPanel>
+                        <Button Content="打开输出目录" MinWidth="104"
+                                Command="{Binding OpenCurrentTaskOutputDirectoryCommand}"
+                                ToolTip="打开当前任务的成品目录。" />
+                        <Button Content="清理产物…" MinWidth="92" Margin="6,0,0,0"
+                                Style="{StaticResource DangerOutlineButtonStyle}"
+                                Command="{Binding CleanCurrentTaskArtifactsCommand}"
+                                ToolTip="预览并清理当前任务自己的其余物/过程物。" />
+                        <Button Content="清理空文件夹…" MinWidth="104" Margin="6,0,0,0"
+                                Style="{StaticResource DangerOutlineButtonStyle}"
+                                Command="{Binding CleanCurrentTaskEmptyFoldersCommand}"
+                                ToolTip="预览并清理当前任务输出根下没有任何文件的子目录。" />
                     </WrapPanel>
 
                     <TextBlock Text="只作用于当前选中行，不读取复选框。"
