@@ -1,0 +1,171 @@
+<Window x:Class="ArchiveFixer.Views.ManualOperationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:ArchiveFixer.Models"
+        Style="{StaticResource AppWindowStyle}"
+        Title="手动操作"
+        Width="620"
+        Height="720"
+        MinWidth="520"
+        MinHeight="520"
+        WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style x:Key="ManualSectionStyle" TargetType="TextBlock" BasedOn="{StaticResource CardTitleTextStyle}">
+            <Setter Property="Margin" Value="0,14,0,6" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="手动操作"
+                       FontSize="20"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SelectedTask.LogName, TargetNullValue=未选中任务}"
+                       Style="{StaticResource CardTitleTextStyle}"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding SelectedTask.CurrentPath}"
+                       Margin="0,8,0,2" />
+            <TextBlock Text="{Binding SelectedTask.StatusDisplayText}"
+                       Style="{StaticResource HintTextStyle}" />
+            <TextBlock Text="{Binding SelectedTask.ProgressDetail}"
+                       Style="{StaticResource HintTextStyle}"
+                       Margin="0,2,0,0" />
+            <TextBlock Text="只作用于当前选中的这一行，不读取复选框。"
+                       Style="{StaticResource HintTextStyle}"
+                       Margin="0,6,0,0" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
+            <StackPanel>
+                <Border Style="{StaticResource CardStyle}" Padding="12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="格式" Style="{StaticResource StatLabelTextStyle}" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedTask.DetectedFormatDisplay}" Style="{StaticResource ValueTextStyle}" Margin="12,0,0,0" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="大小" Style="{StaticResource StatLabelTextStyle}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedTask.SourceSizeText}" Style="{StaticResource ValueTextStyle}" Margin="12,6,0,0" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="分卷" Style="{StaticResource StatLabelTextStyle}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedTask.VolumeInfoText}" Style="{StaticResource ValueTextStyle}" Margin="12,6,0,0" TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="输出" Style="{StaticResource StatLabelTextStyle}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedTask.OutputPath}" Style="{StaticResource ValueTextStyle}" Margin="12,6,0,0" TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="{Binding SelectedTask.ErrorMessage}"
+                           Foreground="{StaticResource DangerTextBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,8,0,0" />
+                <TextBlock Text="{Binding SelectedTask.VolumeRenameSuggestion}"
+                           Foreground="{StaticResource WarningTextBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0" />
+
+                <TextBlock Text="同组文件" Style="{StaticResource LabelTextStyle}" Margin="0,10,0,2" />
+                <ItemsControl ItemsSource="{Binding SelectedTask.VolumePaths}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}"
+                                       Style="{StaticResource HintTextStyle}"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="缺失卷" Style="{StaticResource LabelTextStyle}" Margin="0,6,0,2" />
+                <ItemsControl ItemsSource="{Binding SelectedTask.MissingVolumeNames}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}"
+                                       Foreground="{StaticResource WarningTextBrush}"
+                                       TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="查看（只读，不写盘）" Style="{StaticResource ManualSectionStyle}" />
+                <WrapPanel>
+                    <Button Content="看内容" MinWidth="90"
+                            Command="{Binding InspectCurrentTaskCommand}" />
+                    <Button Content="试密码" MinWidth="90" Margin="8,0,0,0"
+                            Command="{Binding TryPasswordsForCurrentTaskCommand}" />
+                    <Button Content="打开源目录" MinWidth="104" Margin="8,0,0,0"
+                            Command="{Binding OpenCurrentSourceDirectoryCommand}" />
+                    <Button Content="复制同组路径" MinWidth="110" Margin="8,0,0,0"
+                            Command="{Binding CopyCurrentVolumeGroupPathsCommand}" />
+                    <Button Content="重新扫描" MinWidth="90" Margin="8,0,0,0"
+                            Command="{Binding RescanTaskCommand}"
+                            CommandParameter="{Binding SelectedTask}" />
+                </WrapPanel>
+
+                <TextBlock Text="修正名字（会改源文件名，先预览）" Style="{StaticResource ManualSectionStyle}" />
+                <WrapPanel>
+                    <Button Content="修复分卷名并重新识别" MinWidth="176"
+                            FontWeight="SemiBold"
+                            ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}"
+                            Command="{Binding RepairVolumeNameCurrentTaskCommand}" />
+                    <Button Content="智能修正当前后缀" MinWidth="140" Margin="8,0,0,0"
+                            Command="{Binding SmartRenameCurrentTaskCommand}" />
+                    <Button Content="自定义改名…" MinWidth="112" Margin="8,0,0,0"
+                            Command="{Binding ChangeNameCurrentTaskCommand}" />
+                </WrapPanel>
+
+                <TextBlock Text="解压（会写产物）" Style="{StaticResource ManualSectionStyle}" />
+                <WrapPanel>
+                    <Button Content="只解压这一层" MinWidth="120"
+                            FontWeight="SemiBold"
+                            Command="{Binding StartExtractCurrentTaskCommand}" />
+                    <Button Content="{x:Static models:StatusText.ExtractIntoSourceFolderText}"
+                            MinWidth="146" Margin="8,0,0,0"
+                            ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}"
+                            Command="{Binding ExtractIntoSourceFolderCurrentTaskCommand}" />
+                </WrapPanel>
+                <Button Content="把输出目录加入列表（下一层）"
+                        HorizontalAlignment="Left"
+                        Margin="0,8,0,0"
+                        Command="{Binding AddCurrentOutputFolderToTasksCommand}"
+                        ToolTip="逐层解压用：把当前输出目录追加到任务列表，再从里面挑下一层包；不会自动递归。" />
+
+                <TextBlock Text="清理（只对当前任务，先预览确认）" Style="{StaticResource ManualSectionStyle}" />
+                <WrapPanel>
+                    <Button Content="打开输出目录" MinWidth="104"
+                            Command="{Binding OpenCurrentTaskOutputDirectoryCommand}" />
+                    <Button Content="移到回收站…" MinWidth="104" Margin="8,0,0,0"
+                            Command="{Binding RecycleCurrentTaskArtifactsCommand}" />
+                    <Button Content="彻底删除产物…" MinWidth="112" Margin="8,0,0,0"
+                            Style="{StaticResource DangerOutlineButtonStyle}"
+                            Command="{Binding CleanCurrentTaskArtifactsCommand}" />
+                    <Button Content="清理空文件夹…" MinWidth="104" Margin="8,0,0,0"
+                            Style="{StaticResource DangerOutlineButtonStyle}"
+                            Command="{Binding CleanCurrentTaskEmptyFoldersCommand}" />
+                </WrapPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="2"
+                Content="关闭"
+                HorizontalAlignment="Right"
+                MinWidth="92"
+                IsCancel="True"
+                Click="CloseButton_Click" />
+    </Grid>
+</Window>

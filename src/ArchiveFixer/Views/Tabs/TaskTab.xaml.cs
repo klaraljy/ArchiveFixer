@@ -166,6 +166,30 @@ namespace ArchiveFixer.Views.Tabs
         /// 以前这里改完就完事，于是用户批量勾了 20 个、右键修一个，回来发现勾选全没了（2026-09-26 审计）。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 「手动操作」弹窗：只对当前选中行打开；没有选中就不弹空白窗口。
+        /// </summary>
+        private void OpenManualOperationButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is not MainViewModel viewModel)
+            {
+                return;
+            }
+
+            if (viewModel.SelectedTask is not ArchiveTask task)
+            {
+                _dialogService.ShowInfo("先在左侧列表选中一行，再打开手动操作。");
+                return;
+            }
+
+            var window = new ManualOperationWindow(viewModel, task)
+            {
+                Owner = Window.GetWindow(this)
+            };
+
+            window.ShowDialog();
+        }
+
         private async void SmartRenameCurrentTaskMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is not MainViewModel viewModel)
