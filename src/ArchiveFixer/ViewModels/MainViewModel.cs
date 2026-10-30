@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
@@ -1710,6 +1711,9 @@ namespace ArchiveFixer.ViewModels
                 if (SetProperty(ref _selectedTask, value))
                 {
                     OnPropertyChanged(nameof(HasSelectedTask));
+                    OnPropertyChanged(nameof(CanOpenManualOperation));
+                    OnPropertyChanged(nameof(ManualGuideText));
+                    SubscribeManualDistributionTask(value);
                     RefreshManualDistribution();
                     RaiseAllCommandCanExecuteChanged();
                 }
@@ -1717,6 +1721,68 @@ namespace ArchiveFixer.ViewModels
         }
 
         public bool HasSelectedTask => _selectedTask != null;
+
+        /// <summary>当前行有任务，或只勾选了一个任务时，手动操作入口可用。</summary>
+        public bool CanOpenManualOperation =>
+            SelectedTask != null || Tasks.Count(task => task != null && task.IsSelected) == 1;
+
+        private ArchiveTask? _manualDistributionTask;
+
+        private void SubscribeManualDistributionTask(ArchiveTask? task)
+        {
+            if (_manualDistributionTask != null)
+            {
+                _manualDistributionTask.PropertyChanged -= ManualDistributionTask_PropertyChanged;
+            }
+
+            _manualDistributionTask = task;
+
+            if (task != null)
+            {
+                task.PropertyChanged += ManualDistributionTask_PropertyChanged;
+            }
+        }
+
+        private void ManualDistributionTask_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(ArchiveTask.OutputPath)
+                or nameof(ArchiveTask.CurrentPath)
+                or nameof(ArchiveTask.Status)
+                or nameof(ArchiveTask.StatusDisplayText)
+                or nameof(ArchiveTask.Outcome))
+            {
+                RefreshManualDistribution();
+            }
+        }
+
+        /// <summary>
+        /// 手动弹窗顶部提示：单包告诉用户按步骤走；分卷组说明入口包与落点。
+        /// </summary>
+        public string ManualGuideText
+        {
+            get
+            {
+                ArchiveTask? task = SelectedTask;
+
+                if (task == null)
+                {
+                    return "先在主界面选中一个任务。";
+                }
+
+                if (task.VolumePaths.Count > 1 || task.IsVolumeGroup || task.IsVolumeGroupFollower)
+                {
+                    string entry = task.VolumePaths.Count > 0
+                        ? task.VolumePaths[0]
+                        : task.CurrentPath;
+
+                    return "分卷组：入口包是 "
+                        + Path.GetFileName(entry)
+                        + "。先看内容 / 试密码，再只解压这一层；解压会落到入口包所在目录。";
+                }
+
+                return "单一压缩包：建议按 1 看内容 → 2 试密码 → 3 只解压这一层 → 4 打开输出目录 的顺序操作。";
+            }
+        }
 
         // 手动操作弹窗里的“目录分布”：只读参考，不参与操作目标判定。
         public string ManualDistributionTitle { get; private set; } = "文件分布";
@@ -1728,6 +1794,14 @@ namespace ArchiveFixer.ViewModels
         public IReadOnlyList<ManualDistributionEntry> ManualDistributionEntries { get; private set; }
             = Array.Empty<ManualDistributionEntry>();
 
+        /// <summary>手动弹窗打开时按基名推测的同组文件（只读候选，不直接移动/删除）。</summary>
+        public IReadOnlyList<ManualDistributionEntry> ManualVolumeCandidates { get; private set; }
+            = Array.Empty<ManualDistributionEntry>();
+
+        public string ManualVolumeSearchText { get; private set; } = "尚未查找同组文件。";
+
+        public ICommand FindVolumeSiblingsCommand { get; }
+
         /// <summary>
         /// 手动操作弹窗打开/切换当前任务时，刷新目录分布。
         /// 没指定输出位置 = 看源包所在目录；指定了输出位置 = 看那个目录，但这里只展示，不操作。
@@ -1738,6 +1812,8 @@ namespace ArchiveFixer.ViewModels
             ManualDistributionPath = string.Empty;
             ManualDistributionEmptyText = string.Empty;
             ManualDistributionEntries = Array.Empty<ManualDistributionEntry>();
+            ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
+            ManualVolumeSearchText = "尚未查找同组文件。";
 
             ArchiveTask? task = SelectedTask;
 
@@ -1751,11 +1827,17 @@ namespace ArchiveFixer.ViewModels
             bool useOutput = !Settings.ExtractToOriginalDirectory
                 && !string.IsNullOrWhiteSpace(Settings.CustomOutputDirectory);
 
+            string sourceEntry = task.VolumePaths.Count > 0
+                ? task.VolumePaths[0]
+                : task.CurrentPath;
+
             string? root = useOutput
                 ? Settings.CustomOutputDirectory
-                : Path.GetDirectoryName(task.CurrentPath);
+                : Path.GetDirectoryName(sourceEntry);
 
-            ManualDistributionTitle = useOutput ? "输出位置文件分布" : "原位置文件分布";
+            ManualDistributionTitle = useOutput
+                ? "输出位置文件分布"
+                : "原位置文件分布（入口包所在目录）";
             ManualDistributionPath = root ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
@@ -1799,6 +1881,132 @@ namespace ArchiveFixer.ViewModels
             NotifyManualDistributionChanged();
         }
 
+        private async Task FindVolumeSiblingsAsync()
+        {
+            ArchiveTask? task = SelectedTask;
+
+            if (task == null)
+            {
+                return;
+            }
+
+            ManualVolumeSearchText = "正在按基名查找同组文件…";
+            ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
+            NotifyManualVolumeChanged();
+
+            string entryPath = task.VolumePaths.Count > 0
+                ? task.VolumePaths[0]
+                : task.CurrentPath;
+            string? entryDirectory = Path.GetDirectoryName(entryPath);
+
+            var roots = new List<string>();
+
+            void AddRoot(string? root)
+            {
+                if (!string.IsNullOrWhiteSpace(root)
+                    && Directory.Exists(root)
+                    && !roots.Contains(root, StringComparer.OrdinalIgnoreCase))
+                {
+                    roots.Add(root);
+                }
+            }
+
+            // 先扫入口包所在目录的上一级（可以覆盖同一下载目录下的多个子文件夹），
+            // 再扫用户指定输出目录；都只读，不移动任何文件。
+            AddRoot(entryDirectory);
+            AddRoot(Path.GetDirectoryName(entryDirectory));
+            AddRoot(string.IsNullOrWhiteSpace(Settings.CustomOutputDirectory)
+                ? null
+                : Settings.CustomOutputDirectory);
+
+            try
+            {
+                List<string> found = await Task.Run(() =>
+                {
+                    var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (string root in roots)
+                    {
+                        try
+                        {
+                            foreach (string file in Directory.EnumerateFiles(
+                                         root,
+                                         "*",
+                                         SearchOption.AllDirectories))
+                            {
+                                if (paths.Count >= 20000)
+                                {
+                                    break;
+                                }
+
+                                if (VolumeGroupDetector.BelongsToSameGroup(
+                                        Path.GetFileName(file),
+                                        Path.GetFileName(task.CurrentPath)))
+                                {
+                                    paths.Add(file);
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // 单个目录无权限/被占用：跳过它，其他根继续。
+                        }
+
+                        if (paths.Count >= 20000)
+                        {
+                            break;
+                        }
+                    }
+
+                    paths.Add(task.CurrentPath);
+                    return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+                }).ConfigureAwait(true);
+
+                var entries = new List<ManualDistributionEntry>(found.Count);
+
+                foreach (string path in found)
+                {
+                    try
+                    {
+                        var file = new FileInfo(path);
+                        entries.Add(new ManualDistributionEntry
+                        {
+                            Name = file.Name,
+                            Kind = path.Equals(task.CurrentPath, StringComparison.OrdinalIgnoreCase)
+                                ? "当前"
+                                : "同组",
+                            SizeText = FormatFileSize(file),
+                            ModifiedText = file.Exists
+                                ? file.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+                                : "-",
+                            FullPath = path
+                        });
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                ManualVolumeCandidates = entries;
+                ManualVolumeSearchText = entries.Count <= 1
+                    ? "没有按基名找到其他同组文件。"
+                    : $"按基名找到 {entries.Count} 个同组文件（含当前）；只是提示，不会自动搬移。";
+            }
+            catch (Exception ex)
+            {
+                ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
+                ManualVolumeSearchText = "查找同组失败：" + ex.Message;
+            }
+
+            NotifyManualVolumeChanged();
+        }
+
+        private void NotifyManualVolumeChanged()
+        {
+            OnPropertyChanged(nameof(ManualVolumeCandidates));
+            OnPropertyChanged(nameof(ManualVolumeSearchText));
+        }
+
         private static string FormatFileSize(FileSystemInfo info)
         {
             try
@@ -1834,6 +2042,7 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(ManualDistributionPath));
             OnPropertyChanged(nameof(ManualDistributionEmptyText));
             OnPropertyChanged(nameof(ManualDistributionEntries));
+            OnPropertyChanged(nameof(ManualGuideText));
         }
 
         public ICommand AddFilesCommand { get; }
@@ -2353,6 +2562,9 @@ namespace ArchiveFixer.ViewModels
                         targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
                 },
                 CanRunCurrentTaskManual);
+            FindVolumeSiblingsCommand = new AsyncRelayCommand(
+                FindVolumeSiblingsAsync,
+                () => CanRunCurrentTaskManual());
             OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
                 () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
                 CanRunCurrentTaskManual);
@@ -3611,6 +3823,7 @@ namespace ArchiveFixer.ViewModels
         {
             Summary = _taskSummaryService.BuildSummary(Tasks);
             OnPropertyChanged(nameof(SelectedTasksSummary));
+            OnPropertyChanged(nameof(CanOpenManualOperation));
             RaiseAllCommandCanExecuteChanged();
         }
 

@@ -17,6 +17,15 @@ namespace ArchiveFixer.Views
             WindowMinimizePolicy.Apply(this);
             DataContext = viewModel;
             Title = $"手动操作 - {task.LogName}";
+
+            // 打开即按基名做一次只读查找；扫描在后台线程，不阻塞窗口显示。
+            Loaded += (_, _) =>
+            {
+                if (viewModel.FindVolumeSiblingsCommand.CanExecute(null))
+                {
+                    viewModel.FindVolumeSiblingsCommand.Execute(null);
+                }
+            };
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)

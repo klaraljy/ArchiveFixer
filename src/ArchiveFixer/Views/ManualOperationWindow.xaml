@@ -52,9 +52,12 @@
             <TextBlock Text="{Binding SelectedTask.ProgressDetail}"
                        Style="{StaticResource HintTextStyle}"
                        Margin="0,2,0,0" />
-            <TextBlock Text="操作对象固定为当前选中的这一行；下面目录只用于查看分布，不在这里勾选或操作。"
+            <TextBlock Text="{Binding ManualGuideText}"
                        Style="{StaticResource HintTextStyle}"
                        Margin="0,4,0,0" />
+            <TextBlock Text="操作对象固定为当前选中的这一行；下面目录只用于查看分布，不在这里勾选或操作。"
+                       Style="{StaticResource HintTextStyle}"
+                       Margin="0,2,0,0" />
         </StackPanel>
 
         <!-- 所有手动操作集中在第一行 -->
@@ -68,6 +71,7 @@
                 <Button Content="源目录" Style="{StaticResource ManualActionButton}" ToolTip="在资源管理器中打开当前源包所在目录。" Command="{Binding OpenCurrentSourceDirectoryCommand}" />
                 <Button Content="复制路径" Style="{StaticResource ManualActionButton}" ToolTip="复制当前同组文件路径，便于定位缺片。" Command="{Binding CopyCurrentVolumeGroupPathsCommand}" />
                 <Button Content="重扫" Style="{StaticResource ManualActionButton}" ToolTip="重新识别当前任务的格式、加密状态与分卷信息。" Command="{Binding RescanTaskCommand}" CommandParameter="{Binding SelectedTask}" />
+                <Button Content="找同组" Style="{StaticResource ManualActionButton}" ToolTip="按基名在入口包目录及输出目录查找其他分卷；只提示，不移动。" Command="{Binding FindVolumeSiblingsCommand}" />
 
                 <Button Content="修分卷名" Style="{StaticResource ManualActionButton}" ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}" Command="{Binding RepairVolumeNameCurrentTaskCommand}" />
                 <Button Content="智能修正" Style="{StaticResource ManualActionButton}" ToolTip="按识别结果修正当前任务后缀，先弹出预览。" Command="{Binding SmartRenameCurrentTaskCommand}" />
@@ -100,12 +104,34 @@
                            Foreground="{StaticResource WarningTextBrush}"
                            TextWrapping="Wrap"
                            Margin="0,2,0,0" />
+
+                <Expander Header="{Binding ManualVolumeSearchText}"
+                          Margin="0,8,0,0"
+                          IsExpanded="True"
+                          MaxHeight="110">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding ManualVolumeCandidates}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding FullPath}"
+                                               Style="{StaticResource HintTextStyle}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding FullPath}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Expander>
             </StackPanel>
-            <Button Grid.Column="1"
-                    Content="打开输出目录"
-                    MinWidth="104"
-                    VerticalAlignment="Center"
-                    Command="{Binding OpenCurrentTaskOutputDirectoryCommand}" />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <Button Content="查找同组"
+                        MinWidth="104"
+                        Command="{Binding FindVolumeSiblingsCommand}" />
+                <Button Content="打开输出目录"
+                        MinWidth="104"
+                        Margin="0,6,0,0"
+                        Command="{Binding OpenCurrentTaskOutputDirectoryCommand}" />
+            </StackPanel>
         </Grid>
 
         <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="0" Margin="0,8,0,8">

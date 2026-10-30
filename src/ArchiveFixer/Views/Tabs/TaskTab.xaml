@@ -180,9 +180,22 @@
                     <Button Content="手动操作"
                             MinWidth="84"
                             Margin="0,0,8,0"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            ToolTip="对当前选中的一行打开手动操作弹窗；不占主界面，不影响一键处理。"
-                            Click="OpenManualOperationButton_Click" />
+                            IsEnabled="{Binding CanOpenManualOperation}"
+                            ToolTip="对当前选中的一行打开手动操作弹窗；未选中或勾选多个时不可用。"
+                            Click="OpenManualOperationButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CanOpenManualOperation}" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource PrimarySoftBrush}" />
+                                        <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
 
                     <Button Content="一键处理"
                             MinWidth="128"
