@@ -1864,6 +1864,7 @@ namespace ArchiveFixer.ViewModels
         public ICommand RepairVolumeNameCurrentTaskCommand { get; }
         public ICommand StartExtractCurrentTaskCommand { get; }
         public ICommand ExtractIntoSourceFolderCurrentTaskCommand { get; }
+        public ICommand ToggleManualPanelCommand { get; }
         public ICommand OpenCurrentTaskOutputDirectoryCommand { get; }
         public ICommand CopyCurrentVolumeGroupPathsCommand { get; }
         public ICommand AddCurrentOutputFolderToTasksCommand { get; }
@@ -2234,6 +2235,8 @@ namespace ArchiveFixer.ViewModels
                         targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
                 },
                 CanRunCurrentTaskManual);
+            ToggleManualPanelCommand = new RelayCommand(
+                () => IsManualPanelVisible = !IsManualPanelVisible);
             OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
                 () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
                 CanRunCurrentTaskManual);
@@ -2955,6 +2958,17 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>要不要显示「继续解」那一行 / 那个按钮。</summary>
         public bool HasPendingContinuation => _pendingContinuationCount > 0;
+
+        private bool _isManualPanelVisible;
+
+        /// <summary>
+        /// 右侧当前任务检查器是否展开。默认隐藏：一键处理是主线，手动操作只是按需工具。
+        /// </summary>
+        public bool IsManualPanelVisible
+        {
+            get => _isManualPanelVisible;
+            set => SetProperty(ref _isManualPanelVisible, value);
+        }
 
         /// <summary>「继续解」那一行的文案（按钮与提示共用一份措辞：<c>StatusText.ContinueOneClick*</c>）。</summary>
         public string PendingContinuationText => !HasPendingContinuation

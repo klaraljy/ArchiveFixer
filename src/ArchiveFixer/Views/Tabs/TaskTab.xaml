@@ -21,7 +21,7 @@
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" MinWidth="620" />
-            <ColumnDefinition Width="360" MinWidth="300" />
+            <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
         <Grid.RowDefinitions>
@@ -181,6 +181,13 @@
                               IsChecked="{Binding SpaceTightKeepSource, Mode=TwoWay}"
                               Visibility="{Binding IsSpaceTightKeepSourceAvailable, Converter={StaticResource BoolToVisibilityConverter}}"
                               ToolTip="{x:Static models:StatusText.SpaceTightKeepSourceToolTip}" />
+
+                    <Button Content="手动操作"
+                            MinWidth="84"
+                            Margin="0,0,8,0"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            ToolTip="显示/隐藏右侧当前任务检查器。默认隐藏；只处理当前选中的一行，不影响一键处理。"
+                            Command="{Binding ToggleManualPanelCommand}" />
 
                     <Button Content="一键处理"
                             MinWidth="128"
@@ -671,13 +678,24 @@
         <Border Grid.Row="3"
                 Grid.Column="1"
                 Grid.RowSpan="4"
+                Width="360"
                 Style="{StaticResource CardStyle}"
                 Padding="12"
-                Margin="8,0,0,8">
+                Margin="8,0,0,8"
+                Visibility="{Binding IsManualPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <TextBlock Text="当前任务"
-                               Style="{StaticResource LabelTextStyle}" />
+                    <Grid>
+                        <TextBlock Text="当前任务"
+                                   Style="{StaticResource LabelTextStyle}"
+                                   VerticalAlignment="Center" />
+                        <Button Content="收起"
+                                HorizontalAlignment="Right"
+                                Padding="8,2"
+                                Style="{StaticResource LinkButtonStyle}"
+                                ToolTip="隐藏当前任务检查器"
+                                Command="{Binding ToggleManualPanelCommand}" />
+                    </Grid>
 
                     <TextBlock Text="{Binding SelectedTask.LogName, TargetNullValue=未选中任务}"
                                Style="{StaticResource CardTitleTextStyle}"
