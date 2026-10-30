@@ -77,7 +77,7 @@
 
         <!-- 行状态（DataGrid 悬停 / 选中 / 禁用） -->
         <SolidColorBrush x:Key="RowHoverBrush" Color="#F1F5FD" />
-        <SolidColorBrush x:Key="RowSelectedBrush" Color="#DCE9FB" />
+        <SolidColorBrush x:Key="RowSelectedBrush" Color="#EFF6FF" />
         <SolidColorBrush x:Key="DisabledBackgroundBrush" Color="#F1F2F4" />
         <SolidColorBrush x:Key="DisabledTextBrush" Color="#A3A9B5" />
         <SolidColorBrush x:Key="OverlayHoverBrush" Color="#12000000" />
@@ -569,7 +569,7 @@
             <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Padding" Value="8,7" />
+            <Setter Property="Padding" Value="8,8" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
@@ -591,7 +591,7 @@
         <Style x:Key="AppDataGridRowStyle" TargetType="DataGridRow">
             <Setter Property="Background" Value="{StaticResource PanelBrush}" />
             <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
-            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="MinHeight" Value="34" />
             <Setter Property="SnapsToDevicePixels" Value="True" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
@@ -667,8 +667,8 @@
         <Style TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Padding" Value="14,7" />
-            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Margin" Value="0,0,6,0" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TabItem">
@@ -687,7 +687,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="HeaderBorder" Property="Background" Value="{StaticResource PanelBrush}" />
+                                <Setter TargetName="HeaderBorder" Property="Background" Value="Transparent" />
                                 <Setter TargetName="HeaderBorder" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
                                 <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
