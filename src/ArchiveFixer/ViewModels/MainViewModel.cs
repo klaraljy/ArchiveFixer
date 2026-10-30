@@ -1865,6 +1865,8 @@ namespace ArchiveFixer.ViewModels
         public ICommand StartExtractCurrentTaskCommand { get; }
         public ICommand ExtractIntoSourceFolderCurrentTaskCommand { get; }
         public ICommand OpenCurrentTaskOutputDirectoryCommand { get; }
+        public ICommand CopyCurrentVolumeGroupPathsCommand { get; }
+        public ICommand AddCurrentOutputFolderToTasksCommand { get; }
         public ICommand CleanCurrentTaskArtifactsCommand { get; }
         public ICommand RecycleCurrentTaskArtifactsCommand { get; }
         public ICommand CleanCurrentTaskEmptyFoldersCommand { get; }
@@ -2234,6 +2236,12 @@ namespace ArchiveFixer.ViewModels
                 CanRunCurrentTaskManual);
             OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
                 () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
+                CanRunCurrentTaskManual);
+            CopyCurrentVolumeGroupPathsCommand = new RelayCommand(
+                CopyCurrentVolumeGroupPaths,
+                CanRunCurrentTaskManual);
+            AddCurrentOutputFolderToTasksCommand = new AsyncRelayCommand(
+                AddCurrentOutputFolderToTasksAsync,
                 CanRunCurrentTaskManual);
             CleanCurrentTaskArtifactsCommand = new AsyncRelayCommand(
                 () => RunCleanupAsync(
@@ -6494,6 +6502,44 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 它只**打开目录**，不动任何文件（不选中、不改名、不删除）。</para>
         /// </summary>
+        private void CopyCurrentVolumeGroupPaths()
+        {
+            if (SelectedTask == null)
+            {
+                return;
+            }
+
+            IEnumerable<string> paths = SelectedTask.VolumePaths.Count > 0
+                ? SelectedTask.VolumePaths
+                : new[] { SelectedTask.CurrentPath };
+
+            string text = string.Join(Environment.NewLine, paths);
+
+            if (CopySanitizedToClipboard(text))
+            {
+                AppendLog("INFO", $"已复制当前任务同组路径（{paths.Count()} 条）。");
+            }
+        }
+
+        private async Task AddCurrentOutputFolderToTasksAsync()
+        {
+            if (SelectedTask == null)
+            {
+                return;
+            }
+
+            string output = SelectedTask.OutputPath;
+
+            if (string.IsNullOrWhiteSpace(output) || !Directory.Exists(output))
+            {
+                _dialogService.ShowInfo("当前任务还没有可用的输出目录；先解压这一层，再添加下一层。");
+                return;
+            }
+
+            await _scanCoordinator.AddPathsAsync(new[] { output }, ImportMode.Append).ConfigureAwait(true);
+            AppendLog("INFO", $"已把当前任务输出目录追加到任务列表，供手动逐层继续：{output}");
+        }
+
         private void OpenCheckedSourceDirectory()
         {
             ArchiveTask? task = Tasks.FirstOrDefault(item => item.IsSelected) ?? SelectedTask;
@@ -6752,6 +6798,8 @@ namespace ArchiveFixer.ViewModels
                  StartExtractCurrentTaskCommand,
                  ExtractIntoSourceFolderCurrentTaskCommand,
                  OpenCurrentTaskOutputDirectoryCommand,
+                 CopyCurrentVolumeGroupPathsCommand,
+                 AddCurrentOutputFolderToTasksCommand,
                  CleanCurrentTaskArtifactsCommand,
                  RecycleCurrentTaskArtifactsCommand,
                  CleanCurrentTaskEmptyFoldersCommand,

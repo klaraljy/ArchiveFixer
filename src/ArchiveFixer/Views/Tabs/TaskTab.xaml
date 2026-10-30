@@ -782,6 +782,9 @@
                         <Button Content="源目录" MinWidth="80" Margin="6,0,0,0"
                                 Command="{Binding OpenCurrentSourceDirectoryCommand}"
                                 ToolTip="在资源管理器中打开当前源包所在目录。" />
+                        <Button Content="复制同组路径" MinWidth="104" Margin="6,0,0,0"
+                                Command="{Binding CopyCurrentVolumeGroupPathsCommand}"
+                                ToolTip="把当前任务的同组文件路径复制到剪贴板，便于定位缺片。" />
                     </WrapPanel>
 
                     <TextBlock Text="修正名字（先预览）"
@@ -811,6 +814,11 @@
                                 Command="{Binding ExtractIntoSourceFolderCurrentTaskCommand}"
                                 ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}" />
                     </WrapPanel>
+                    <Button Content="把输出目录加入列表（下一层）"
+                            HorizontalAlignment="Left"
+                            Margin="0,6,0,0"
+                            Command="{Binding AddCurrentOutputFolderToTasksCommand}"
+                            ToolTip="逐层解压用：把当前输出目录追加到任务列表，再从里面挑下一层包；不会自动递归。" />
 
                     <TextBlock Text="清理（只对当前任务，先预览确认）"
                                Style="{StaticResource LabelTextStyle}"
