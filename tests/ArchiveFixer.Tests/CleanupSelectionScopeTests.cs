@@ -426,6 +426,25 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 当前任务清理_只看显式传入的当前行_不看勾选()
+        {
+            var checkedTask = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = true };
+            var currentTask = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
+
+            MainViewModel.CleanupTargetSelection selection =
+                MainViewModel.ResolveCleanupTargets(
+                    new[] { checkedTask, currentTask },
+                    new[] { currentTask });
+
+            Assert.Equal(MainViewModel.CleanupTargetSource.Selected, selection.Source);
+            Assert.Equal(new[] { currentTask }, selection.Tasks);
+
+            string description = MainViewModel.DescribeCleanupTargets("清理当前任务产物", selection);
+            Assert.Contains("只作用于当前任务", description, StringComparison.Ordinal);
+            Assert.DoesNotContain("勾选为准", description, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void 空列表与列表中一个都没勾_判定一致()
         {
             var inList = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = false };

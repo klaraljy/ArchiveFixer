@@ -1866,6 +1866,7 @@ namespace ArchiveFixer.ViewModels
         public ICommand ExtractIntoSourceFolderCurrentTaskCommand { get; }
         public ICommand OpenCurrentTaskOutputDirectoryCommand { get; }
         public ICommand CleanCurrentTaskArtifactsCommand { get; }
+        public ICommand RecycleCurrentTaskArtifactsCommand { get; }
         public ICommand CleanCurrentTaskEmptyFoldersCommand { get; }
 
         public ICommand OpenTaskOutputDirectoryCommand { get; }
@@ -2239,6 +2240,13 @@ namespace ArchiveFixer.ViewModels
                     CleanupScope.Artifacts,
                     ArtifactDeleteScope.SelectedTask,
                     SelectedTask == null ? null : new[] { SelectedTask }),
+                CanRunCurrentTaskManual);
+            RecycleCurrentTaskArtifactsCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(
+                    CleanupScope.Artifacts,
+                    ArtifactDeleteScope.SelectedTask,
+                    SelectedTask == null ? null : new[] { SelectedTask },
+                    DeleteMode.RecycleBin),
                 CanRunCurrentTaskManual);
             CleanCurrentTaskEmptyFoldersCommand = new AsyncRelayCommand(
                 () => RunCleanupAsync(
@@ -4884,12 +4892,17 @@ namespace ArchiveFixer.ViewModels
         private async Task RunCleanupAsync(
             CleanupScope scope,
             ArtifactDeleteScope deleteScope,
-            IReadOnlyList<ArchiveTask>? selectedTargets = null)
+            IReadOnlyList<ArchiveTask>? selectedTargets = null,
+            DeleteMode? requestedMode = null)
         {
             bool everything = deleteScope == ArtifactDeleteScope.EverythingInDirectory;
 
             string title = selectedTargets != null
-                ? (scope == CleanupScope.EmptyFolders ? "清理当前任务空文件夹" : "删除当前任务产物")
+                ? scope == CleanupScope.EmptyFolders
+                    ? "清理当前任务空文件夹"
+                    : requestedMode == DeleteMode.RecycleBin
+                        ? "把当前任务产物移到回收站"
+                        : "彻底删除当前任务产物"
                 : scope == CleanupScope.EmptyFolders
                     ? "清理空文件夹"
                     : everything ? "删除本目录全部其余物" : "删除其余物";
@@ -4939,11 +4952,21 @@ namespace ArchiveFixer.ViewModels
                  * （彻底删除 —— 回收站那一档整条下线），所以这里不再有"默认档 / 另一档"之说，
                  * 档位构造仍然只有 DeriveCleanupDecision 一处实现。
                  */
-                CleanupDecision decision = DeriveCleanupDecision(
-                    merged,
-                    title,
-                    scopeNote,
-                    actionable);
+                CleanupDecision decision = requestedMode is { } forcedMode
+                    ? new CleanupDecision
+                    {
+                        DefaultMode = forcedMode,
+                        OptionMode = forcedMode,
+                        ConfirmText = BuildCleanupConfirmText(title, actionable, merged, forcedMode, scopeNote),
+                        ConfirmButtonText = forcedMode == DeleteMode.Permanent ? "彻底删除" : "移入回收站",
+                        OptionText = string.Empty,
+                        OptionCheckedByDefault = false
+                    }
+                    : DeriveCleanupDecision(
+                        merged,
+                        title,
+                        scopeNote,
+                        actionable);
 
                 bool confirmed = _dialogService.ShowDestructiveConfirmWithOption(
                     decision.ConfirmText,
@@ -6730,6 +6753,7 @@ namespace ArchiveFixer.ViewModels
                  ExtractIntoSourceFolderCurrentTaskCommand,
                  OpenCurrentTaskOutputDirectoryCommand,
                  CleanCurrentTaskArtifactsCommand,
+                 RecycleCurrentTaskArtifactsCommand,
                  CleanCurrentTaskEmptyFoldersCommand,
                  CopyTaskInfoCommand,
                  CopyTaskPathCommand,
