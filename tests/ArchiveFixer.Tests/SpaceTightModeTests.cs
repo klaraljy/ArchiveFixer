@@ -410,11 +410,11 @@ namespace ArchiveFixer.Tests
 
             int switchIndex = taskTab.IndexOf("SpaceTightMode", StringComparison.Ordinal);
             int oneClickIndex = taskTab.IndexOf("OneClickProcessCommand", StringComparison.Ordinal);
-            int manualIndex = taskTab.IndexOf("手动操作（单独改后缀 / 单独解压）", StringComparison.Ordinal);
-            int extractIndex = taskTab.IndexOf("StartExtractCommand", StringComparison.Ordinal);
+            int manualIndex = taskTab.IndexOf("手动操作（当前任务）", StringComparison.Ordinal);
+            int extractIndex = taskTab.IndexOf("StartExtractCurrentTaskCommand", StringComparison.Ordinal);
 
             Assert.True(switchIndex > 0 && oneClickIndex > switchIndex, "「空间不足」必须排在「一键处理」左边");
-            Assert.True(manualIndex > 0 && extractIndex > manualIndex, "「只解压」必须已经挪进「手动操作」折叠区");
+            Assert.True(manualIndex > 0 && extractIndex > manualIndex, "「只解压这一层」必须已经挪进「手动操作」折叠区");
 
             // 「空间不足」是运行期开关：界面这一页不许出现任何"写设置"的绑定（SettingsEditor / Settings.）。
             int switchLineEnd = taskTab.IndexOf("/>", switchIndex, StringComparison.Ordinal);

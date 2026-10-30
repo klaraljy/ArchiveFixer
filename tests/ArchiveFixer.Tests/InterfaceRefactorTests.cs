@@ -149,7 +149,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("AddFilesCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("AddFolderCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("OneClickProcessCommand", taskTab, StringComparison.Ordinal);
-            Assert.Contains("StartExtractCommand", taskTab, StringComparison.Ordinal);
+            Assert.Contains("StartExtractCurrentTaskCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("StopCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("CancelCurrentCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("Summary.", taskTab, StringComparison.Ordinal);

@@ -92,9 +92,9 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        internal async Task SmartRenameAsync()
+        internal async Task SmartRenameAsync(IReadOnlyList<ArchiveTask>? targets = null)
         {
-            await RenameByOptionsAsync(BuildFixByDetectedFormatOptions());
+            await RenameByOptionsAsync(BuildFixByDetectedFormatOptions(), targets);
         }
 
         /// <summary>
@@ -201,7 +201,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>三条路仍然走**同一套**预览与执行（<see cref="RenameByOptionsAsync"/>）：
         /// 先给你看改名预览 → 确认 → 才动盘；⛔ 绝不覆盖、绝不先删后移。</para>
         /// </summary>
-        internal async Task ChangeNameAsync()
+        internal async Task ChangeNameAsync(IReadOnlyList<ArchiveTask>? targets = null)
         {
             (string Mode, string Extension, string FindText, string ReplaceText)? choice = ShowRenameDialog();
 
@@ -243,16 +243,18 @@ namespace ArchiveFixer.ViewModels
                 UnknownFormatAction = Settings.UnknownFormatAction
             };
 
-            await RenameByOptionsAsync(options);
+            await RenameByOptionsAsync(options, targets);
         }
 
         // 「删除多个后缀」已退役（2026-09-26 审计）：要先想清"N 是几"，而真实数据里几乎没有
         // "连续多个后缀"的形状 —— 它与「替换后缀」重叠，路径上还多一次输入框。
         // 退役方式 = 按钮 + 命令 + 这里的方法 + RenameOptions 的工厂 + 服务分支一起删（⛔ 不留半截）。
 
-        private async Task RenameByOptionsAsync(RenameOptions options)
+        private async Task RenameByOptionsAsync(
+            RenameOptions options,
+            IReadOnlyList<ArchiveTask>? targets = null)
         {
-            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(options);
+            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(options, targets);
 
             if (previewItems == null)
             {
@@ -372,9 +374,13 @@ namespace ArchiveFixer.ViewModels
         /// </para>
         /// </summary>
         /// <returns>预览项；被参数/勾选挡下时为 null（此时已经提示过，调用方直接返回）。</returns>
-        internal async Task<List<RenamePreviewItem>?> BuildPreviewAsync(RenameOptions options)
+        internal async Task<List<RenamePreviewItem>?> BuildPreviewAsync(
+            RenameOptions options,
+            IReadOnlyList<ArchiveTask>? targets = null)
         {
-            var selectedTasks = Tasks.Where(x => x.IsSelected).ToList();
+            var selectedTasks = targets != null
+                ? targets.Where(Tasks.Contains).Distinct().ToList()
+                : Tasks.Where(x => x.IsSelected).ToList();
 
             if (selectedTasks.Count == 0)
             {

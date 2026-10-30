@@ -203,96 +203,99 @@
             </Grid>
         </Border>
 
-        <!-- ============ 手动操作（单独改后缀 / 单独解压，默认收起） ============ -->
+        <!-- ============ 手动操作（只针对当前任务） ============ -->
         <Expander Grid.Row="2"
-                  Header="手动操作（单独改后缀 / 单独解压）"
+                  Header="手动操作（当前任务）"
                   Margin="0,0,0,8"
                   Padding="12,10"
                   Background="{StaticResource PanelBrush}"
                   BorderBrush="{StaticResource PanelBorderBrush}"
                   BorderThickness="1">
-            <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <!--
-                    「修复分卷名并重试」（用户 2026-09-25 第 41 条；2026-09-26 审计改口径）：
-                    只对"名字被改坏的分卷第一卷"有效，判据全在文件系统事实里（VolumeNameRepair.Plan 七条），
-                    所以**扫描完就亮**（以前要等一次失败的解压才亮，用户从没见过它亮）。
-                    它是这个程序里唯一会动源文件名的入口，而且必须用户点了才动 ——
-                    文案里把"只改名字、内容不动"写进 ToolTip，确认框里再写一遍。
-                    ToolTipService.ShowOnDisabled：灰着的时候也要能读到"它到底干什么、为什么现在不能用"。
-                -->
-                <Button Content="修复分卷名并重试"
-                        MinWidth="136"
-                        FontWeight="SemiBold"
-                        ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}"
-                        ToolTipService.ShowOnDisabled="True"
-                        Command="{Binding RenameBySuggestionAndRetryCommand}" />
+            <StackPanel>
+                <TextBlock Text="{Binding SelectedTask.LogName, TargetNullValue=未选中任务}"
+                           Style="{StaticResource CardTitleTextStyle}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding SelectedTask.CurrentPath}" />
 
-                <!--
-                    ⚠ 「智能修正」不是"完全不碰分卷"（2026-09-26 审计）：它遇到分卷名会先问一次
-                    VolumeNameRepair.Plan —— 名字被改坏的第一卷会被修回标准名，其余的照样跳过。
-                    文案必须这么说，否则用户以为"点了也白点"（真机上他正是这么问的）。
-                -->
-                <Button Content="智能修正选中后缀"
-                        MinWidth="136"
-                        Margin="8,0,0,0"
-                        ToolTip="对勾选的任务按识别结果修正后缀（会先弹出改名预览让你确认）；名字被改坏的分卷第一卷也能在这一步修回标准名。"
-                        Command="{Binding SmartRenameCommand}" />
+                <TextBlock Text="{Binding SelectedTask.StatusDisplayText, TargetNullValue=先在列表里选中一行}"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,3,0,0" />
 
-                <Button Content="改名…"
-                        MinWidth="96"
-                        Margin="8,0,0,0"
-                        ToolTip="自己指定怎么改：替换文件名里的文字（删掉被塞进去的字）/ 替换最后一个后缀 / 添加后缀 / 删除最后一个后缀（同样先出改名预览）。"
-                        Command="{Binding ChangeNameCommand}" />
+                <TextBlock Text="只作用于当前选中行，不读取复选框；批量处理请用上方一键处理。"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,2,0,8" />
 
-                <!--
-                    「只解压」（用户 2026-09-27：从主操作栏**移到这里**）：
-                    语义一个字没变 —— 跳过改后缀，直接对勾选的任务按密码本解压。
-                    它属于"手动档"：一次只解当前这一层、不续解、要弹的框照旧弹（一键处理才是不弹窗那条路）。
-                -->
-                <Button Content="只解压"
-                        MinWidth="88"
-                        FontWeight="SemiBold"
-                        ToolTip="跳过改后缀这一步，直接对勾选的任务按密码本解压（只解当前这一层，不续解内层包）"
-                        Command="{Binding StartExtractCommand}" />
+                <TextBlock Text="查看（只读，不写盘）"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,2,0,4" />
+                <WrapPanel Orientation="Horizontal">
+                    <Button Content="看内容"
+                            MinWidth="84"
+                            ToolTip="只列出当前任务里有什么（条目数、总大小、前几条），不解压、不写盘。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding InspectCurrentTaskCommand}" />
 
-                <!--
-                    「解压到当前文件夹」（用户 2026-09-27 拍板加的手动档）：
-                    语义就是 WinRAR 右键那一句 —— 内容物**不建包名那一层**，直接落在包自己所在的目录里。
-                    它是**唯一**会摊平的入口（一键处理 / 继续解永远套一层包名文件夹），
-                    所以文案里必须把"少一层"和"撞名按覆盖策略处理"都说出来（用户拍板接受这个代价）。
-                    位置：与上面那几个"会写盘"的动作排在一起，后面才是那几颗只看不动的按钮。
-                -->
-                <Button Content="{x:Static models:StatusText.ExtractIntoSourceFolderText}"
-                        MinWidth="136"
-                        Margin="8,0,0,0"
-                        FontWeight="SemiBold"
-                        ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}"
-                        ToolTipService.ShowOnDisabled="True"
-                        Command="{Binding ExtractIntoSourceFolderCommand}" />
+                    <Button Content="试密码"
+                            MinWidth="84"
+                            Margin="8,0,0,0"
+                            ToolTip="拿密码列表逐个候选问引擎「这个能不能开」，只显示候选序号，不显示密码。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding TryPasswordsForCurrentTaskCommand}" />
 
-                <!--
-                    两颗"只看不动盘"的按钮（用户 2026-09-26 批准加的高频功能）：
-                    看内容 = 列出包里有什么（不解压）；试密码 = 逐个候选问一遍"这个能不能开"。
-                    ⛔ 它们一个字节都不写盘、也不动源文件。
-                -->
-                <Button Content="看内容"
-                        MinWidth="84"
-                        Margin="8,0,0,0"
-                        ToolTip="只列出勾选任务里有什么（条目数、总大小、前几条），不解压、不写盘。"
-                        Command="{Binding InspectArchiveCommand}" />
+                    <Button Content="打开源目录"
+                            MinWidth="104"
+                            Margin="8,0,0,0"
+                            ToolTip="在资源管理器里打开当前源包所在目录，只打开、不动文件。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding OpenCurrentSourceDirectoryCommand}" />
+                </WrapPanel>
 
-                <Button Content="试密码"
-                        MinWidth="84"
-                        Margin="8,0,0,0"
-                        ToolTip="拿密码本与密码列表逐个候选去问引擎「这个能不能开」，报出能开的那个（只显示它排第几，不显示密码本身）。"
-                        Command="{Binding TryPasswordsCommand}" />
+                <TextBlock Text="修正名字（会改源文件名，先预览）"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,10,0,4" />
+                <WrapPanel Orientation="Horizontal">
+                    <Button Content="修复分卷名并重新识别"
+                            MinWidth="176"
+                            FontWeight="SemiBold"
+                            ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding RepairVolumeNameCurrentTaskCommand}" />
 
-                <Button Content="打开源目录"
-                        MinWidth="104"
-                        Margin="8,0,0,0"
-                        ToolTip="在资源管理器里打开第一个勾选任务所在的文件夹（只打开，不动文件）。"
-                        Command="{Binding OpenCheckedSourceDirectoryCommand}" />
-            </WrapPanel>
+                    <Button Content="智能修正当前后缀"
+                            MinWidth="140"
+                            Margin="8,0,0,0"
+                            ToolTip="按当前任务的识别结果修正后缀；会先弹出改名预览，名字被改坏的分卷第一卷也能修回标准名。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding SmartRenameCurrentTaskCommand}" />
+
+                    <Button Content="自定义改名…"
+                            MinWidth="112"
+                            Margin="8,0,0,0"
+                            ToolTip="自己指定怎么改：替换文件名里的文字、替换最后一个后缀、添加或删除后缀；先出预览。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding ChangeNameCurrentTaskCommand}" />
+                </WrapPanel>
+
+                <TextBlock Text="解压（会写产物）"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,10,0,4" />
+                <WrapPanel Orientation="Horizontal">
+                    <Button Content="只解压这一层"
+                            MinWidth="112"
+                            FontWeight="SemiBold"
+                            ToolTip="只解当前任务的这一层，不自动续解内层包；按密码本和当前设置执行。"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding StartExtractCurrentTaskCommand}" />
+
+                    <Button Content="{x:Static models:StatusText.ExtractIntoSourceFolderText}"
+                            MinWidth="136"
+                            Margin="8,0,0,0"
+                            FontWeight="SemiBold"
+                            ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding ExtractIntoSourceFolderCurrentTaskCommand}" />
+                </WrapPanel>
+            </StackPanel>
         </Expander>
 
         <!-- ============ 任务列表 ============ -->

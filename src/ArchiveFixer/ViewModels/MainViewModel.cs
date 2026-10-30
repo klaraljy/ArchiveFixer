@@ -1705,8 +1705,17 @@ namespace ArchiveFixer.ViewModels
         public ArchiveTask? SelectedTask
         {
             get => _selectedTask;
-            set => SetProperty(ref _selectedTask, value);
+            set
+            {
+                if (SetProperty(ref _selectedTask, value))
+                {
+                    OnPropertyChanged(nameof(HasSelectedTask));
+                    RaiseAllCommandCanExecuteChanged();
+                }
+            }
         }
+
+        public bool HasSelectedTask => _selectedTask != null;
 
         public ICommand AddFilesCommand { get; }
         public ICommand AddFolderCommand { get; }
@@ -1845,6 +1854,17 @@ namespace ArchiveFixer.ViewModels
         /// 「试密码」：拿候选逐个问引擎"这个能不能开"，报出能开的那个（只显示候选说明，不显示密码）。
         /// </summary>
         public ICommand TryPasswordsCommand { get; }
+
+        // 手动检查器：这些命令只作用于 SelectedTask，**不读勾选**。
+        public ICommand InspectCurrentTaskCommand { get; }
+        public ICommand TryPasswordsForCurrentTaskCommand { get; }
+        public ICommand OpenCurrentSourceDirectoryCommand { get; }
+        public ICommand SmartRenameCurrentTaskCommand { get; }
+        public ICommand ChangeNameCurrentTaskCommand { get; }
+        public ICommand RepairVolumeNameCurrentTaskCommand { get; }
+        public ICommand StartExtractCurrentTaskCommand { get; }
+        public ICommand ExtractIntoSourceFolderCurrentTaskCommand { get; }
+
         public ICommand OpenTaskOutputDirectoryCommand { get; }
 
         /// <summary>打开当前任务的其余物目录（旧名"过程物"）；没有就提示一句。</summary>
@@ -2100,8 +2120,12 @@ namespace ArchiveFixer.ViewModels
             ClearCommand = new RelayCommand(ClearTasks, CanRunNormalCommand);
             RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRemoveSelectedTasks);
 
-            SmartRenameCommand = new AsyncRelayCommand(_renameCoordinator.SmartRenameAsync, CanRunNormalCommand);
-            ChangeNameCommand = new AsyncRelayCommand(_renameCoordinator.ChangeNameAsync, CanRunNormalCommand);
+            SmartRenameCommand = new AsyncRelayCommand(
+                () => _renameCoordinator.SmartRenameAsync(),
+                CanRunNormalCommand);
+            ChangeNameCommand = new AsyncRelayCommand(
+                () => _renameCoordinator.ChangeNameAsync(),
+                CanRunNormalCommand);
 
             /*
              * 四个"开始干活"的入口都打一个操作标记（用户 2026-09-25 第 38 条）：
@@ -2166,6 +2190,44 @@ namespace ArchiveFixer.ViewModels
             OpenCheckedSourceDirectoryCommand = new RelayCommand(OpenCheckedSourceDirectory, CanRunNormalCommand);
             InspectArchiveCommand = new AsyncRelayCommand(InspectCheckedArchivesAsync, CanRunNormalCommand);
             TryPasswordsCommand = new AsyncRelayCommand(TryPasswordsForCheckedArchivesAsync, CanRunNormalCommand);
+
+            InspectCurrentTaskCommand = new AsyncRelayCommand(
+                () => RunInspectAsync(tryPasswords: false, singleTask: SelectedTask),
+                CanRunCurrentTaskManual);
+            TryPasswordsForCurrentTaskCommand = new AsyncRelayCommand(
+                () => RunInspectAsync(tryPasswords: true, singleTask: SelectedTask),
+                CanRunCurrentTaskManual);
+            OpenCurrentSourceDirectoryCommand = new RelayCommand(
+                () => { if (SelectedTask != null) OpenTaskDirectory(SelectedTask); },
+                CanRunCurrentTaskManual);
+            SmartRenameCurrentTaskCommand = new AsyncRelayCommand(
+                () => _renameCoordinator.SmartRenameAsync(SelectedTask == null ? null : new[] { SelectedTask }),
+                CanRunCurrentTaskManual);
+            ChangeNameCurrentTaskCommand = new AsyncRelayCommand(
+                () => _renameCoordinator.ChangeNameAsync(SelectedTask == null ? null : new[] { SelectedTask }),
+                CanRunCurrentTaskManual);
+            RepairVolumeNameCurrentTaskCommand = new AsyncRelayCommand(
+                () => RenameBySuggestionAndRetryAsync(SelectedTask == null ? null : new[] { SelectedTask }),
+                () => CanRunCurrentTaskManual() && SelectedTask != null
+                    && BuildVolumeRepairCandidates(new[] { SelectedTask }).Count > 0);
+            StartExtractCurrentTaskCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    if (SelectedTask == null) return;
+                    _logService.MarkOperationStart("只解压当前任务");
+                    await _extractionCoordinator.StartExtractAsync(targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
+                },
+                CanRunCurrentTaskManual);
+            ExtractIntoSourceFolderCurrentTaskCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    if (SelectedTask == null) return;
+                    _logService.MarkOperationStart(StatusText.ExtractIntoSourceFolderText);
+                    await _extractionCoordinator.StartExtractAsync(
+                        extractIntoSourceFolder: true,
+                        targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
+                },
+                CanRunCurrentTaskManual);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
             CopyOutputLocationCommand = new RelayCommand(CopyOutputLocation, CanRunNormalCommand);
@@ -2238,7 +2300,7 @@ namespace ArchiveFixer.ViewModels
             RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks, CanRemoveSelectedTasks);
 
             RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
-                RenameBySuggestionAndRetryAsync,
+                () => RenameBySuggestionAndRetryAsync(),
                 CanRenameBySuggestionAndRetry);
             RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync, IsRowInList);
             CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo, IsRowInList);
@@ -3018,6 +3080,11 @@ namespace ArchiveFixer.ViewModels
         private bool CanStartExtract()
         {
             return !IsBusy && Tasks.Any(x => x.IsSelected);
+        }
+
+        private bool CanRunCurrentTaskManual()
+        {
+            return !IsBusy && SelectedTask != null && Tasks.Contains(SelectedTask);
         }
 
         /// <summary>三个批量勾选命令的可用性：闲着 + 列表里确实有东西可勾。</summary>
@@ -5716,11 +5783,15 @@ namespace ArchiveFixer.ViewModels
          */
 
         /// <summary>「按建议改名并重试」当前能改的那几个任务（勾选 + 这一档的毛病 + 计划成立）。</summary>
-        private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates()
+        private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
+            IReadOnlyList<ArchiveTask>? targets = null)
         {
             var candidates = new List<(ArchiveTask, VolumeNameRepairPlan)>();
+            IEnumerable<ArchiveTask> source = targets != null
+                ? targets.Where(Tasks.Contains)
+                : Tasks.Where(item => item != null && item.IsSelected);
 
-            foreach (ArchiveTask task in Tasks.Where(item => item != null && item.IsSelected))
+            foreach (ArchiveTask task in source)
             {
                 /*
                  * 判据是**机器事实**：任务上记着改名建议（= 上一轮判决认定"名字被改坏的第一卷"），
@@ -5762,9 +5833,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 按建议改名（只改名字）并立刻重试解压。
         /// </summary>
-        internal async Task RenameBySuggestionAndRetryAsync()
+        internal async Task RenameBySuggestionAndRetryAsync(IReadOnlyList<ArchiveTask>? targets = null)
         {
-            List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> candidates = BuildVolumeRepairCandidates();
+            List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> candidates = BuildVolumeRepairCandidates(targets);
 
             if (candidates.Count == 0)
             {
@@ -6202,13 +6273,18 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 两个按钮共用的本体（⛔ 一份实现：不然"看内容"说不能开、"试密码"说能开，用户只会更糊涂）。
         /// </summary>
-        private async Task RunInspectAsync(bool tryPasswords)
+        private async Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
         {
-            List<ArchiveTask> targets = Tasks.Where(item => item.IsSelected).ToList();
+            List<ArchiveTask> targets = singleTask != null && Tasks.Contains(singleTask)
+                ? new List<ArchiveTask> { singleTask }
+                : Tasks.Where(item => item.IsSelected).ToList();
 
             if (targets.Count == 0)
             {
-                _dialogService.ShowInfo("请先勾选要看的任务（最左侧一列）。");
+                _dialogService.ShowInfo(
+                    singleTask != null
+                        ? "当前没有选中的任务。"
+                        : "请先勾选要看的任务（最左侧一列）。");
                 return;
             }
 
@@ -6593,6 +6669,14 @@ namespace ArchiveFixer.ViewModels
                  RemoveTaskCommand,
                  RescanTaskCommand,
                  RenameBySuggestionAndRetryCommand,
+                 InspectCurrentTaskCommand,
+                 TryPasswordsForCurrentTaskCommand,
+                 OpenCurrentSourceDirectoryCommand,
+                 SmartRenameCurrentTaskCommand,
+                 ChangeNameCurrentTaskCommand,
+                 RepairVolumeNameCurrentTaskCommand,
+                 StartExtractCurrentTaskCommand,
+                 ExtractIntoSourceFolderCurrentTaskCommand,
                  CopyTaskInfoCommand,
                  CopyTaskPathCommand,
                  CopyTaskErrorCommand,

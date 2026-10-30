@@ -20,7 +20,7 @@
         <!-- ============ 颜色 / 画刷 ============ -->
 
         <!-- 底与面板 -->
-        <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F3F4F6" />
+        <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F6F7F9" />
         <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="PanelAltBrush" Color="#FAFBFC" />
         <SolidColorBrush x:Key="PanelSunkenBrush" Color="#F6F7F9" />
@@ -85,7 +85,7 @@
 
         <!-- ============ 字号 / 间距 / 圆角 ============ -->
 
-        <FontFamily x:Key="AppFontFamily">Microsoft YaHei UI, Segoe UI, Arial</FontFamily>
+        <FontFamily x:Key="AppFontFamily">Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Arial</FontFamily>
         <FontFamily x:Key="MonoFontFamily">Consolas, Microsoft YaHei UI</FontFamily>
 
         <!--
@@ -99,9 +99,9 @@
         <Thickness x:Key="BannerPadding">10,8</Thickness>
         <Thickness x:Key="InlineGap">0,0,8,0</Thickness>
 
-        <CornerRadius x:Key="CardCornerRadius">6</CornerRadius>
-        <CornerRadius x:Key="CardCornerRadiusTop">6,6,0,0</CornerRadius>
-        <CornerRadius x:Key="CardCornerRadiusBottom">0,0,6,6</CornerRadius>
+        <CornerRadius x:Key="CardCornerRadius">8</CornerRadius>
+        <CornerRadius x:Key="CardCornerRadiusTop">8,8,0,0</CornerRadius>
+        <CornerRadius x:Key="CardCornerRadiusBottom">0,0,8,8</CornerRadius>
         <CornerRadius x:Key="BadgeCornerRadius">11</CornerRadius>
 
         <!-- ============ Converter ============ -->
@@ -284,13 +284,13 @@
                                     Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="4"
+                                    CornerRadius="6"
                                     SnapsToDevicePixels="True" />
 
                             <!-- 悬停/按下的统一覆盖层：与底色无关 -->
                             <Border x:Name="Overlay"
                                     Background="{StaticResource OverlayHoverBrush}"
-                                    CornerRadius="4"
+                                    CornerRadius="6"
                                     Opacity="0"
                                     SnapsToDevicePixels="True" />
 

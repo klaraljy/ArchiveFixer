@@ -58,8 +58,14 @@ namespace ArchiveFixer.ViewModels
         /// 同名文件/文件夹按当前冲突档处理 —— 摊平会更容易撞名，这个代价用户 2026-09-27 明确接受。
         /// </para>
         /// </param>
-        public Task StartExtractAsync(bool extractIntoSourceFolder = false) =>
-            StartExtractCoreAsync(oneClickRun: false, runOptions: null, extractIntoSourceFolder: extractIntoSourceFolder);
+        public Task StartExtractAsync(
+            bool extractIntoSourceFolder = false,
+            IReadOnlyList<ArchiveTask>? targetTasks = null) =>
+            StartExtractCoreAsync(
+                oneClickRun: false,
+                runOptions: null,
+                extractIntoSourceFolder: extractIntoSourceFolder,
+                targetTasks: targetTasks);
 
         /// <summary>
         /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，
@@ -90,7 +96,8 @@ namespace ArchiveFixer.ViewModels
             bool oneClickRun,
             OneClickRunOptions? runOptions = null,
             bool extractIntoSourceFolder = false,
-            bool continueDeferredVolumeDeficits = false)
+            bool continueDeferredVolumeDeficits = false,
+            IReadOnlyList<ArchiveTask>? targetTasks = null)
         {
             if (_isExtracting)
             {
@@ -98,7 +105,9 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            var selectedTasks = Tasks.Where(x => x.IsSelected).ToList();
+            var selectedTasks = targetTasks != null
+                ? targetTasks.Where(Tasks.Contains).Distinct().ToList()
+                : Tasks.Where(x => x.IsSelected).ToList();
 
             if (selectedTasks.Count == 0)
             {
