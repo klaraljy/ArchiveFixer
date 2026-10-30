@@ -13,7 +13,6 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Shell;
 
 namespace ArchiveFixer
 {
@@ -44,11 +43,6 @@ namespace ArchiveFixer
         public MainWindow()
         {
             InitializeComponent();
-
-            TaskbarItemInfo = new TaskbarItemInfo
-            {
-                ProgressState = TaskbarItemProgressState.None
-            };
 
             Loaded += MainWindow_Loaded;
 
@@ -167,8 +161,9 @@ namespace ArchiveFixer
         }
 
         /// <summary>
-        /// 把当前活跃任务的进度同步到任务栏和托盘；没有精确百分比时显示“处理中”的
-        /// 不确定状态，而不是伪造 0%。
+        /// 只同步托盘悬停文字。任务栏缩略图/进度覆盖已移除：
+        /// Windows 11 的 TaskbarItemInfo 缩略图在部分 WPF 窗口上会出现下半截白块，
+        /// 用户要求先去掉，以确认是否由它引起。
         /// </summary>
         private void RefreshShellProgress()
         {
@@ -178,7 +173,7 @@ namespace ArchiveFixer
                 return;
             }
 
-            if (TaskbarItemInfo == null || _watchedViewModel == null)
+            if (_watchedViewModel == null)
             {
                 return;
             }
@@ -190,9 +185,6 @@ namespace ArchiveFixer
 
             if (active != null)
             {
-                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Normal;
-                TaskbarItemInfo.ProgressValue = Math.Clamp(active.ProgressPercent / 100.0, 0.0, 1.0);
-
                 string eta = string.IsNullOrWhiteSpace(active.EstimatedRemainingText)
                     ? string.Empty
                     : string.Format(
@@ -208,17 +200,8 @@ namespace ArchiveFixer
                 return;
             }
 
-            if (_watchedViewModel.IsBusy)
-            {
-                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Indeterminate;
-                TaskbarItemInfo.ProgressValue = 0;
-                _trayIcon?.SetStatusText(StatusText.TrayBusyText);
-                return;
-            }
-
-            TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
-            TaskbarItemInfo.ProgressValue = 0;
-            _trayIcon?.SetStatusText(StatusText.TrayIdleText);
+            _trayIcon?.SetStatusText(
+                _watchedViewModel.IsBusy ? StatusText.TrayBusyText : StatusText.TrayIdleText);
         }
 
         /// <summary>
@@ -364,12 +347,6 @@ namespace ArchiveFixer
         protected override void OnClosed(EventArgs e)
         {
             UnsubscribeTaskProgress();
-
-            if (TaskbarItemInfo != null)
-            {
-                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
-                TaskbarItemInfo.ProgressValue = 0;
-            }
 
             _trayIcon?.SetStatusText(StatusText.TrayIdleText);
 
