@@ -1711,6 +1711,11 @@ namespace ArchiveFixer.ViewModels
                 {
                     OnPropertyChanged(nameof(HasSelectedTask));
                     RaiseAllCommandCanExecuteChanged();
+
+                    if (value == null)
+                    {
+                        IsManualPanelVisible = false;
+                    }
                 }
             }
         }
@@ -2236,7 +2241,16 @@ namespace ArchiveFixer.ViewModels
                 },
                 CanRunCurrentTaskManual);
             ToggleManualPanelCommand = new RelayCommand(
-                () => IsManualPanelVisible = !IsManualPanelVisible);
+                () =>
+                {
+                    if (!IsManualPanelVisible && SelectedTask == null)
+                    {
+                        _dialogService.ShowInfo("先在左侧列表选中一行，再打开当前任务的手动操作。");
+                        return;
+                    }
+
+                    IsManualPanelVisible = !IsManualPanelVisible;
+                });
             OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
                 () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
                 CanRunCurrentTaskManual);
