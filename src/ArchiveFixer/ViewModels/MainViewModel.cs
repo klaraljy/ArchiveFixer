@@ -1710,12 +1710,131 @@ namespace ArchiveFixer.ViewModels
                 if (SetProperty(ref _selectedTask, value))
                 {
                     OnPropertyChanged(nameof(HasSelectedTask));
+                    RefreshManualDistribution();
                     RaiseAllCommandCanExecuteChanged();
                 }
             }
         }
 
         public bool HasSelectedTask => _selectedTask != null;
+
+        // 手动操作弹窗里的“目录分布”：只读参考，不参与操作目标判定。
+        public string ManualDistributionTitle { get; private set; } = "文件分布";
+
+        public string ManualDistributionPath { get; private set; } = string.Empty;
+
+        public string ManualDistributionEmptyText { get; private set; } = string.Empty;
+
+        public IReadOnlyList<ManualDistributionEntry> ManualDistributionEntries { get; private set; }
+            = Array.Empty<ManualDistributionEntry>();
+
+        /// <summary>
+        /// 手动操作弹窗打开/切换当前任务时，刷新目录分布。
+        /// 没指定输出位置 = 看源包所在目录；指定了输出位置 = 看那个目录，但这里只展示，不操作。
+        /// </summary>
+        private void RefreshManualDistribution()
+        {
+            ManualDistributionTitle = "文件分布";
+            ManualDistributionPath = string.Empty;
+            ManualDistributionEmptyText = string.Empty;
+            ManualDistributionEntries = Array.Empty<ManualDistributionEntry>();
+
+            ArchiveTask? task = SelectedTask;
+
+            if (task == null)
+            {
+                ManualDistributionEmptyText = "先在主界面选中一个任务。";
+                NotifyManualDistributionChanged();
+                return;
+            }
+
+            bool useOutput = !Settings.ExtractToOriginalDirectory
+                && !string.IsNullOrWhiteSpace(Settings.CustomOutputDirectory);
+
+            string? root = useOutput
+                ? Settings.CustomOutputDirectory
+                : Path.GetDirectoryName(task.CurrentPath);
+
+            ManualDistributionTitle = useOutput ? "输出位置文件分布" : "原位置文件分布";
+            ManualDistributionPath = root ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                ManualDistributionEmptyText = useOutput
+                    ? "指定的输出目录尚不存在；不会为了展示而创建它。"
+                    : "找不到当前源包所在目录。";
+                NotifyManualDistributionChanged();
+                return;
+            }
+
+            try
+            {
+                var entries = new List<ManualDistributionEntry>();
+
+                foreach (FileSystemInfo info in new DirectoryInfo(root)
+                             .EnumerateFileSystemInfos()
+                             .OrderBy(item => item is DirectoryInfo ? 0 : 1)
+                             .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+                             .Take(500))
+                {
+                    bool directory = info is DirectoryInfo;
+                    entries.Add(new ManualDistributionEntry
+                    {
+                        Name = info.Name,
+                        Kind = directory ? "文件夹" : "文件",
+                        SizeText = directory ? "-" : FormatFileSize(info),
+                        ModifiedText = info.LastWriteTime.ToString("yyyy-MM-dd HH:mm"),
+                        FullPath = info.FullName
+                    });
+                }
+
+                ManualDistributionEntries = entries;
+                ManualDistributionEmptyText = entries.Count == 0 ? "这个目录是空的。" : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                ManualDistributionEmptyText = "读取目录失败：" + ex.Message;
+            }
+
+            NotifyManualDistributionChanged();
+        }
+
+        private static string FormatFileSize(FileSystemInfo info)
+        {
+            try
+            {
+                if (info is not FileInfo file)
+                {
+                    return "-";
+                }
+
+                string[] units = { "B", "KiB", "MiB", "GiB", "TiB" };
+                double value = file.Length;
+                int unit = 0;
+
+                while (value >= 1024 && unit < units.Length - 1)
+                {
+                    value /= 1024;
+                    unit++;
+                }
+
+                return unit == 0
+                    ? $"{value:0} {units[unit]}"
+                    : $"{value:0.#} {units[unit]}";
+            }
+            catch
+            {
+                return "-";
+            }
+        }
+
+        private void NotifyManualDistributionChanged()
+        {
+            OnPropertyChanged(nameof(ManualDistributionTitle));
+            OnPropertyChanged(nameof(ManualDistributionPath));
+            OnPropertyChanged(nameof(ManualDistributionEmptyText));
+            OnPropertyChanged(nameof(ManualDistributionEntries));
+        }
 
         public ICommand AddFilesCommand { get; }
         public ICommand AddFolderCommand { get; }
