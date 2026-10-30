@@ -2043,6 +2043,8 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(ManualDistributionEmptyText));
             OnPropertyChanged(nameof(ManualDistributionEntries));
             OnPropertyChanged(nameof(ManualGuideText));
+            OnPropertyChanged(nameof(ManualVolumeCandidates));
+            OnPropertyChanged(nameof(ManualVolumeSearchText));
         }
 
         public ICommand AddFilesCommand { get; }
@@ -2547,19 +2549,21 @@ namespace ArchiveFixer.ViewModels
             StartExtractCurrentTaskCommand = new AsyncRelayCommand(
                 async () =>
                 {
-                    if (SelectedTask == null) return;
+                    ArchiveTask? target = ResolveManualExtractionTarget();
+                    if (target == null) return;
                     _logService.MarkOperationStart("只解压当前任务");
-                    await _extractionCoordinator.StartExtractAsync(targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
+                    await _extractionCoordinator.StartExtractAsync(targetTasks: new[] { target }).ConfigureAwait(true);
                 },
                 CanRunCurrentTaskManual);
             ExtractIntoSourceFolderCurrentTaskCommand = new AsyncRelayCommand(
                 async () =>
                 {
-                    if (SelectedTask == null) return;
+                    ArchiveTask? target = ResolveManualExtractionTarget();
+                    if (target == null) return;
                     _logService.MarkOperationStart(StatusText.ExtractIntoSourceFolderText);
                     await _extractionCoordinator.StartExtractAsync(
                         extractIntoSourceFolder: true,
-                        targetTasks: new[] { SelectedTask }).ConfigureAwait(true);
+                        targetTasks: new[] { target }).ConfigureAwait(true);
                 },
                 CanRunCurrentTaskManual);
             FindVolumeSiblingsCommand = new AsyncRelayCommand(
@@ -3452,6 +3456,47 @@ namespace ArchiveFixer.ViewModels
         private bool CanRunCurrentTaskManual()
         {
             return !IsBusy && SelectedTask != null && Tasks.Contains(SelectedTask);
+        }
+
+        /// <summary>
+        /// 手动解压永远从入口包启动：选中第 2 卷时，找列表里对应的入口包；
+        /// 找不到就停下来提示，不拿后续卷去启动一条注定失败的解压。
+        /// </summary>
+        private ArchiveTask? ResolveManualExtractionTarget()
+        {
+            ArchiveTask? selected = SelectedTask;
+
+            if (selected == null)
+            {
+                return null;
+            }
+
+            if (selected.VolumePaths.Count == 0)
+            {
+                return selected;
+            }
+
+            string entryPath = selected.VolumePaths[0];
+
+            if (string.Equals(selected.CurrentPath, entryPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return selected;
+            }
+
+            ArchiveTask? entryTask = Tasks.FirstOrDefault(task =>
+                string.Equals(task.CurrentPath, entryPath, StringComparison.OrdinalIgnoreCase)
+                || task.VolumePaths.Any(path =>
+                    string.Equals(path, entryPath, StringComparison.OrdinalIgnoreCase)));
+
+            if (entryTask == null)
+            {
+                _dialogService.ShowInfo(
+                    "当前选中的是分卷组的后续卷，但任务列表里没有入口包。"
+                    + Environment.NewLine
+                    + "请先把入口包加入列表，再手动解压；程序不会拿后续卷直接启动。");
+            }
+
+            return entryTask;
         }
 
         /// <summary>三个批量勾选命令的可用性：闲着 + 列表里确实有东西可勾。</summary>

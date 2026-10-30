@@ -12,15 +12,15 @@
     <Window.Resources>
         <Style x:Key="ManualActionButton" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
             <Setter Property="MinHeight" Value="30" />
-            <Setter Property="MinWidth" Value="64" />
-            <Setter Property="Padding" Value="9,4" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="MinWidth" Value="58" />
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="Margin" Value="0,0,4,0" />
         </Style>
         <Style x:Key="ManualDangerActionButton" TargetType="Button" BasedOn="{StaticResource DangerOutlineButtonStyle}">
             <Setter Property="MinHeight" Value="30" />
-            <Setter Property="MinWidth" Value="72" />
-            <Setter Property="Padding" Value="9,4" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="MinWidth" Value="68" />
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="Margin" Value="0,0,4,0" />
         </Style>
     </Window.Resources>
 
