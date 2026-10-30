@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Win32;
 
 namespace ArchiveFixer.Services
@@ -43,13 +46,12 @@ namespace ArchiveFixer.Services
                 return copied;
             }
 
-            foreach (string sourceDirectory in EnumerateSourceDirectories(programDirectory))
-            {
-                if (IsSameDirectory(sourceDirectory, destinationRoot))
-                {
-                    continue;
-                }
+            var sourceDirectories = EnumerateSourceDirectories(programDirectory)
+                .Where(directory => !IsSameDirectory(directory, destinationRoot))
+                .ToList();
 
+            foreach (string sourceDirectory in sourceDirectories)
+            {
                 foreach (string fileName in MigratableFileNames)
                 {
                     string source = Path.Combine(sourceDirectory, fileName);
@@ -73,7 +75,189 @@ namespace ArchiveFixer.Services
                 }
             }
 
+            MergePasswordsIfSourceIsRicher(sourceDirectories, destinationRoot, copied, log);
             return copied;
+        }
+
+        /// <summary>
+        /// 旧密码本可能比新固定的多很多条（2026-10-30 真机：旧 data 13 条、
+        /// 新根只剩 1 条，导致原来能解的包全部变成“文件名已加密”）。
+        /// 这里按“值”做一次保守合并：目标已有的值绝不丢，旧数据多出来的值补进去。
+        /// </summary>
+        private static void MergePasswordsIfSourceIsRicher(
+            IReadOnlyList<string> sourceDirectories,
+            string destinationRoot,
+            List<string> copied,
+            Action<string>? log)
+        {
+            string destinationPasswords = Path.Combine(destinationRoot, "passwords.txt");
+
+            if (!File.Exists(destinationPasswords))
+            {
+                return;
+            }
+
+            List<string> destinationLines = ReadPasswordLines(destinationPasswords);
+            string? bestSourceDirectory = null;
+            List<string> bestSourceLines = destinationLines;
+
+            foreach (string sourceDirectory in sourceDirectories)
+            {
+                string sourcePasswords = Path.Combine(sourceDirectory, "passwords.txt");
+
+                if (!File.Exists(sourcePasswords))
+                {
+                    continue;
+                }
+
+                List<string> sourceLines = ReadPasswordLines(sourcePasswords);
+
+                if (sourceLines.Count > bestSourceLines.Count)
+                {
+                    bestSourceDirectory = sourceDirectory;
+                    bestSourceLines = sourceLines;
+                }
+            }
+
+            if (bestSourceDirectory == null)
+            {
+                return;
+            }
+
+            bool destinationIsSubset = destinationLines.All(bestSourceLines.Contains);
+
+            if (destinationIsSubset)
+            {
+                // 目标里的值全在旧数据里：直接用旧文件恢复完整顺序。
+                BackupFile(destinationPasswords);
+                File.Copy(Path.Combine(bestSourceDirectory, "passwords.txt"), destinationPasswords, overwrite: true);
+
+                string sourceMeta = Path.Combine(bestSourceDirectory, "passwords.meta.json");
+                string destinationMeta = Path.Combine(destinationRoot, "passwords.meta.json");
+
+                if (File.Exists(sourceMeta))
+                {
+                    BackupFile(destinationMeta);
+                    File.Copy(sourceMeta, destinationMeta, overwrite: true);
+                }
+
+                string sourceEncrypted = Path.Combine(bestSourceDirectory, "password-list.dat");
+                string destinationEncrypted = Path.Combine(destinationRoot, "password-list.dat");
+
+                if (File.Exists(sourceEncrypted))
+                {
+                    BackupFile(destinationEncrypted);
+                    File.Copy(sourceEncrypted, destinationEncrypted, overwrite: true);
+                }
+
+                copied.Add(destinationPasswords);
+                log?.Invoke("旧密码本已补全（目标里的密码都在旧数据中，按旧顺序恢复）。");
+                return;
+            }
+
+            // 目标有旧数据里没有的新密码：保留目标顺序，再补旧数据里缺的值。
+            List<string> mergedLines = new(destinationLines);
+
+            foreach (string line in bestSourceLines)
+            {
+                if (!mergedLines.Contains(line, StringComparer.Ordinal))
+                {
+                    mergedLines.Add(line);
+                }
+            }
+
+            if (mergedLines.Count == destinationLines.Count)
+            {
+                return;
+            }
+
+            BackupFile(destinationPasswords);
+            File.WriteAllLines(destinationPasswords, mergedLines);
+            MergeMetadata(
+                Path.Combine(bestSourceDirectory, "passwords.meta.json"),
+                Path.Combine(destinationRoot, "passwords.meta.json"));
+            copied.Add(destinationPasswords);
+            log?.Invoke("旧密码本已补全（保留新密码，补齐旧数据里缺的值）。");
+        }
+
+        private static List<string> ReadPasswordLines(string path)
+        {
+            try
+            {
+                return File.ReadAllLines(path)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .ToList();
+            }
+            catch
+            {
+                return new List<string>();
+            }
+        }
+
+        private static void MergeMetadata(string sourcePath, string destinationPath)
+        {
+            try
+            {
+                if (!File.Exists(sourcePath) || !File.Exists(destinationPath))
+                {
+                    return;
+                }
+
+                JsonArray? source = JsonNode.Parse(File.ReadAllText(sourcePath)) as JsonArray;
+                JsonArray? destination = JsonNode.Parse(File.ReadAllText(destinationPath)) as JsonArray;
+
+                if (source == null || destination == null)
+                {
+                    return;
+                }
+
+                var existing = new HashSet<string>(
+                    destination
+                        .Select(node => node?["Value"]?.GetValue<string>())
+                        .Where(value => !string.IsNullOrWhiteSpace(value))
+                        .Select(value => value!),
+                    StringComparer.Ordinal);
+
+                foreach (JsonNode? node in source)
+                {
+                    string? value = node?["Value"]?.GetValue<string>();
+
+                    if (!string.IsNullOrWhiteSpace(value) && existing.Add(value!))
+                    {
+                        destination.Add(node!.DeepClone());
+                    }
+                }
+
+                BackupFile(destinationPath);
+                File.WriteAllText(
+                    destinationPath,
+                    destination.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch
+            {
+                // 密码本文件本身已经合并；元数据失败不应阻止启动。
+            }
+        }
+
+        private static void BackupFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    return;
+                }
+
+                string backup = path + ".bak-before-merge";
+
+                if (!File.Exists(backup))
+                {
+                    File.Copy(path, backup, overwrite: false);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static IEnumerable<string> EnumerateSourceDirectories(string programDirectory)
