@@ -46,16 +46,12 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Content="添加文件"
                             MinWidth="92"
-                            MinHeight="32"
-                            Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding AddFilesCommand}"
                             ToolTip="{x:Static models:StatusText.AddReplacesListHint}" />
 
                     <Button Content="添加文件夹"
                             MinWidth="100"
-                            MinHeight="32"
                             Margin="8,0,0,0"
-                            Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding AddFolderCommand}"
                             ToolTip="{x:Static models:StatusText.AddReplacesListHint}" />
                 </StackPanel>
@@ -108,9 +104,7 @@
                     <Button Grid.Column="2"
                             Content="{x:Static models:StatusText.OutputLocationChooseButtonText}"
                             MinWidth="72"
-                            MinHeight="32"
                             Margin="8,0,0,0"
-                            Style="{StaticResource ToolbarButtonStyle}"
                             ToolTip="挑一个统一的输出位置"
                             Command="{Binding SelectOutputDirectoryCommand}" />
 
@@ -296,12 +290,12 @@
                 </Border>
 
                 <Border DockPanel.Dock="Top"
-                        Background="{StaticResource PanelSunkenBrush}"
-                        BorderBrush="{StaticResource DividerBrush}"
+                        Background="{StaticResource InfoSoftBrush}"
+                        BorderBrush="{StaticResource InfoBorderBrush}"
                         BorderThickness="0,0,0,1"
                         CornerRadius="{StaticResource CardCornerRadiusTop}"
                         Padding="12,7">
-                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}"
+                    <TextBlock Foreground="{StaticResource InfoTextBrush}"
                                FontSize="11.5"
                                TextWrapping="Wrap"
                                Text="{x:Static models:StatusText.SelectionScopeHint}" />
