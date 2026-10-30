@@ -4,6 +4,7 @@ using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -176,9 +177,27 @@ namespace ArchiveFixer.Views.Tabs
                 return;
             }
 
-            if (viewModel.SelectedTask is not ArchiveTask task)
+            ArchiveTask? task = viewModel.SelectedTask;
+
+            if (task == null)
             {
-                _dialogService.ShowInfo("先在左侧列表选中一行，再打开手动操作。");
+                // 复选框不等于“当前行”。只勾了一个任务时，把它当成这次手动操作的目标；
+                // 多个都勾着又没有当前行时，不替用户猜。
+                var checkedTasks = viewModel.Tasks.Where(item => item.IsSelected).ToList();
+
+                if (checkedTasks.Count == 1)
+                {
+                    task = checkedTasks[0];
+                    viewModel.SelectedTask = task;
+                }
+            }
+
+            if (task == null)
+            {
+                _dialogService.ShowInfo(
+                    "请先在左侧列表点中一行，再打开手动操作。"
+                    + Environment.NewLine
+                    + "如果勾了多个任务，请先点中要操作的那一行。");
                 return;
             }
 
