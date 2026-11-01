@@ -93,8 +93,7 @@ namespace ArchiveFixer.Tests
                 totalMemoryBytes: SixteenGb);
 
             controller.Observe(100, 1, 0, false);
-            controller.Observe(120, 1, 0, false);
-            controller.Observe(120, 1, 0, false); // 稳定 3 个窗口 ⇒ 试探性加档
+            controller.Observe(120, 1, 0, false); // 稳定 2 个窗口 ⇒ 试探性加档
             Assert.Equal(2, controller.CurrentLimit);
 
             controller.Observe(120, 2, 0, false); // 冷却窗口
@@ -112,6 +111,54 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 加档后总吞吐反而下降_回退并压顶()
+        {
+            var controller = new AutoConcurrencyController(
+                StorageDeviceKind.Hdd,
+                sameVolume: false,
+                logicalCores: 8,
+                totalMemoryBytes: SixteenGb);
+
+            controller.Observe(100, 1, 0, false);
+            controller.Observe(120, 1, 0, false); // 探到 2
+            Assert.Equal(2, controller.CurrentLimit);
+
+            controller.Observe(80, 2, 0, false); // 冷却窗口
+            int after = controller.Observe(80, 2, 0, false); // 总吞吐明显下降
+
+            Assert.Equal(1, after);
+
+            for (int i = 0; i < 3; i++)
+            {
+                controller.Observe(1000, 2, 0, false);
+            }
+
+            Assert.Equal(1, controller.CurrentLimit);
+        }
+
+        [Fact]
+        public void 设备快且加档真有增益_能一路爬到硬顶()
+        {
+            var controller = new AutoConcurrencyController(
+                StorageDeviceKind.Ssd,
+                sameVolume: false,
+                logicalCores: 16,
+                totalMemoryBytes: SixteenGb);
+
+            Assert.Equal(4, controller.CurrentLimit);
+
+            double throughput = 100;
+
+            for (int i = 0; i < 20; i++)
+            {
+                controller.Observe(throughput, activeTasks: controller.CurrentLimit, uiStalls: 0, diskSpaceLow: false);
+                throughput *= 1.08;
+            }
+
+            Assert.Equal(controller.HardLimit, controller.CurrentLimit);
+        }
+
+        [Fact]
         public void UI线程有停顿_立即降一档()
         {
             var controller = new AutoConcurrencyController(
@@ -123,9 +170,10 @@ namespace ArchiveFixer.Tests
             controller.Observe(200, 4, 0, false);
             controller.Observe(200, 4, 0, false);
 
-            int after = controller.Observe(200, 4, uiStalls: 1, diskSpaceLow: false);
+            int before = controller.CurrentLimit;
+            int after = controller.Observe(200, before, uiStalls: 1, diskSpaceLow: false);
 
-            Assert.True(after < 4);
+            Assert.True(after < before);
         }
 
         [Fact]

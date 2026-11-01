@@ -177,10 +177,10 @@ namespace ArchiveFixer.Extraction
 
             /*
              * 起点刻意低（HDD/未知 = 1）：慢盘上并发往往让**单任务**成倍变慢，先串行拿到基准，
-             * 再每稳定 3 个窗口试探性加一档；下一窗口没换来 3% 吞吐就回退并压住拐点。
-             * 这不是"拍脑袋 2 个"，而是用实测决定要不要并行。
+             * 再每稳定 2 个窗口试探性加一档；下一窗口没换来 3% 吞吐就回退并压住拐点。
+             * 这不是"拍脑袋 2 个"，而是用实测决定要不要并行；设备快、加档真有增益时会一路爬到硬顶。
              */
-            bool probe = _stableObservations >= 3;
+            bool probe = _stableObservations >= 2;
 
             if (clearGain || probe)
             {
