@@ -103,7 +103,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(afterStartup, File.GetLastWriteTimeUtc(harness.SettingsFilePath));
 
             // 改一项 → 立刻存；之后十跳 → 又安静下来。
-            harness.Vm.Settings.MaxParallelExtractCount = 6;
+            harness.Vm.Settings.ConcurrencyOverride = 6;
             Assert.True(harness.Vm.AutoSaveSettingsIfChanged());
 
             DateTime afterChange = File.GetLastWriteTimeUtc(harness.SettingsFilePath);
@@ -134,14 +134,14 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness("badtoolpath");
 
-            harness.Vm.Settings.MaxParallelExtractCount = 7;
+            harness.Vm.Settings.ConcurrencyOverride = 7;
             harness.Vm.Settings.CustomRarExePath = @"C:\af-should-not-be-saved\Rar.exe";
 
             Assert.True(harness.Vm.AutoSaveSettingsIfChanged(), "同一份里还有合法改动，这一跳必须落盘");
 
             AppSettings onDisk = new SettingsService(harness.PathService).Load();
 
-            Assert.Equal(7, onDisk.MaxParallelExtractCount);
+            Assert.Equal(7, onDisk.ConcurrencyOverride);
             Assert.Equal(string.Empty, onDisk.CustomRarExePath ?? string.Empty);
 
             // 内存里那一份也被 Normalize 清空了 —— 界面读的是同一个对象，不会显示一个已经不生效的路径。

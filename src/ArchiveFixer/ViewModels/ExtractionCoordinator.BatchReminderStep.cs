@@ -72,19 +72,11 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 本批允许同时跑几个任务（并发上限）。
+        /// 本批允许同时跑几个任务（**自适应并发**）。
         ///
-        /// <para>
-        /// 「全速」开着时返回本批的任务数（= 不节流）—— 这是"自动等待/节流必须配一个立即继续的出口"
-        /// 那条采纳项的落地（<c>docs/WinRAR功能参考.md</c> §2 D 组）。它有意的取舍：
-        /// **不管磁盘、不管别的程序**，跑成什么样由用户自己负责；界面上的勾选框文案把这一点写明了。
-        /// </para>
-        /// <para>
-        /// 关着时读设置项 <see cref="AppSettings.MaxParallelExtractCount"/>（1–8，默认 4 ——
-        /// 2026-09-22 的并行实测：并发 1→4 是 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍）。
-        /// 夹一次是兜底：设置对象不一定走过 <c>AppSettings.Normalize</c>（测试里直接 new），
-        /// 0 或负数会让"等并发位"的循环条件永远成立 —— 那个任务会永远等下去。
-        /// </para>
+        /// <para>用户 2026-11-01：并发数不再让用户选，由程序按设备与吞吐自己判断。
+        /// 初始值来自 <see cref="AutoConcurrencyController"/>（SSD 4/硬顶 6，HDD 2/3，未知按 HDD），
+        /// 批内再按窗口吞吐/延迟做 AIMD 调整。</para>
         /// </summary>
         /// <summary>
         /// 排队等空位**超过这个秒数**才单独写一行（否则只进批末汇总）。
@@ -96,21 +88,64 @@ namespace ArchiveFixer.ViewModels
 
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
         {
-            fullSpeed = _vm.RunAtFullSpeed;
+            // 全速档已退役（用户 2026-11-01：全部交给算法）。
+            fullSpeed = false;
 
-            if (fullSpeed)
-            {
-                /*
-                 * 用户 2026-10-26：「全速不是所有的一起开，最高限 8 个，要不然用户的电脑会卡死」。
-                 * 8 与设置项/调度器同一个硬顶（ExtractionScheduler.ParallelCeiling），不另造数字。
-                 */
-                return ResolveFullSpeedParallel(tasks?.Count ?? 1);
-            }
+            _autoConcurrency = CreateAutoConcurrencyController(tasks);
 
-            return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
+            AppendLog(
+                "INFO",
+                $"并发：自动（设备={DescribeDevice(_autoConcurrency.Device)}，"
+                + $"初始 {_autoConcurrency.InitialLimit} 个，硬顶 {_autoConcurrency.HardLimit} 个）");
+
+            return _autoConcurrency.InitialLimit;
         }
 
-        /// <summary>「全速」的硬顶 = 8 个（用户 2026-10-26：不是所有的一起开）。</summary>
+        private AutoConcurrencyController CreateAutoConcurrencyController(IReadOnlyList<ArchiveTask>? tasks)
+        {
+            ArchiveTask? first = tasks?.FirstOrDefault(task =>
+                task != null && !string.IsNullOrWhiteSpace(task.CurrentPath));
+            string? samplePath = first?.CurrentPath;
+            StorageDeviceKind device = StorageDeviceProfile.Detect(samplePath);
+
+            bool sameVolume = false;
+
+            if (first != null && !string.IsNullOrWhiteSpace(first.CurrentPath))
+            {
+                string outputDirectory = string.IsNullOrWhiteSpace(first.OutputPath)
+                    ? Path.GetDirectoryName(first.CurrentPath) ?? string.Empty
+                    : first.OutputPath;
+
+                string sourceRoot = Path.GetPathRoot(Path.GetFullPath(first.CurrentPath)) ?? string.Empty;
+                string outputRoot = string.IsNullOrWhiteSpace(outputDirectory)
+                    ? string.Empty
+                    : Path.GetPathRoot(Path.GetFullPath(outputDirectory)) ?? string.Empty;
+
+                sameVolume = sourceRoot.Length > 0
+                    && outputRoot.Length > 0
+                    && string.Equals(sourceRoot, outputRoot, StringComparison.OrdinalIgnoreCase);
+            }
+
+            long memory = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+
+            return new AutoConcurrencyController(
+                device,
+                sameVolume,
+                Environment.ProcessorCount,
+                memory,
+                Settings.ConcurrencyOverride);
+        }
+
+        private static string DescribeDevice(StorageDeviceKind device) => device switch
+        {
+            StorageDeviceKind.Ssd => "SSD",
+            StorageDeviceKind.Hdd => "HDD",
+            _ => "未知（按 HDD 保守）"
+        };
+
+        /// <summary>
+        /// 「全速」硬顶 = 8（旧档位；UI 删除前保留给旧守门用例，接线后不再使用）。
+        /// </summary>
         internal static int ResolveFullSpeedParallel(int taskCount) =>
             Math.Min(Math.Max(1, taskCount), MaxParallelExtractCountCeiling);
 
@@ -134,7 +169,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通档的并发档与「全速」均不生效）。{basis}。");
+                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通自动档不参与）。{basis}。");
 
             return count;
         }

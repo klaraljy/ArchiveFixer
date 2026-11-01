@@ -37,11 +37,21 @@ namespace ArchiveFixer.Extraction
             StorageDeviceKind device,
             bool sameVolume,
             int logicalCores,
-            long totalMemoryBytes)
+            long totalMemoryBytes,
+            int manualCap = 0)
         {
             Device = device;
             SameVolume = sameVolume;
             LogicalCores = Math.Max(1, logicalCores);
+
+            if (manualCap > 0)
+            {
+                int fixedLimit = Math.Clamp(manualCap, MinLimit, 8);
+                _hardLimit = fixedLimit;
+                CurrentLimit = fixedLimit;
+                InitialLimit = fixedLimit;
+                return;
+            }
 
             _hardLimit = device switch
             {
@@ -304,6 +314,12 @@ namespace ArchiveFixer.Extraction
         {
             public int PropertyId;
             public int QueryType;
+
+            /*
+             * STORAGE_PROPERTY_QUERY 的 AdditionalParameters[1] —— 少这 4 字节时
+             * DeviceIoControl 返回 ERROR_BAD_LENGTH(24)，所有盘都会被误判成 Unknown。
+             */
+            public int Additional;
         }
 
         [StructLayout(LayoutKind.Sequential)]

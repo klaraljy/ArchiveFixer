@@ -595,7 +595,7 @@ namespace ArchiveFixer.Tests
             settings.TryEmptyPasswordFirst = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             configure?.Invoke(settings);
 

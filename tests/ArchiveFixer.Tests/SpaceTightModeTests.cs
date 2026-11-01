@@ -795,7 +795,7 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.MaxParallelExtractCount = 1;
+                settings.ConcurrencyOverride = 1;
                 settings.RunAtFullSpeed = true;   // 全速仍然不生效：模式自己决定，但下限来自用户档
             });
 
@@ -926,7 +926,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 启动前空间不够_先排队不记失败_等腾出空间后自动补跑()
         {
-            Harness harness = CreateHarness(settings => settings.MaxParallelExtractCount = 2);
+            Harness harness = CreateHarness(settings => settings.ConcurrencyOverride = 2);
 
             /*
              * 假盘：一开始只剩 210 MiB —— 够第一个包（200 MiB），两个一起就不够了。

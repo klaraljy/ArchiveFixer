@@ -13,6 +13,7 @@ namespace ArchiveFixer.Services
         private static string _phase = "空闲";
         private static string _task = string.Empty;
         private static string _detail = string.Empty;
+        private static int _stallCount;
 
         public static void Mark(string phase, string task = "", string detail = "")
         {
@@ -20,6 +21,12 @@ namespace ArchiveFixer.Services
             _task = task ?? string.Empty;
             _detail = detail ?? string.Empty;
         }
+
+        /// <summary>记一次 UI 停顿（供自适应并发控制器读取；本身不改变任何行为）。</summary>
+        public static void NoteUiStall() => System.Threading.Interlocked.Increment(ref _stallCount);
+
+        /// <summary>取走并清零停顿计数（只有调度线程调用）。</summary>
+        public static int TakeUiStallCount() => System.Threading.Interlocked.Exchange(ref _stallCount, 0);
 
         public static string Snapshot()
         {
@@ -78,6 +85,8 @@ namespace ArchiveFixer.Services
 
             if (gap >= StallThreshold)
             {
+                UiActivity.NoteUiStall();
+
                 try
                 {
                     _warn(

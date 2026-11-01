@@ -366,7 +366,7 @@ namespace ArchiveFixer.Tests
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             settingsService.Save(settings);
 

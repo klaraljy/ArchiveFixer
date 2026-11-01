@@ -161,7 +161,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             // 源包档位：需要验证“成功后源包不在了”的用例选「彻底删除」（就地删，不搬其余物）。
             settings.SourceHandling = moveSourceToRest

@@ -1027,7 +1027,7 @@ namespace ArchiveFixer.Tests
             settings.RemindBeforeExtract = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             // 逐用例的覆盖（例如"这一单要走递归路径"）—— 放最后，⛔ 别让默认值把它盖回去。
             configure?.Invoke(settings);

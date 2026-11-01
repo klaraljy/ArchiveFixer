@@ -227,53 +227,22 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="120" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Text="并发档："
+                        <TextBlock Text="并发："
                                    Style="{StaticResource LabelTextStyle}" />
 
                         <!--
-                            可编辑的下拉：1 / 2 / 3 / 4 / 8 是档位，也可以直接填 1~8 的任意数
-                            （设置项本身允许 1~8，这里不再把 5~7 挡在门外）。
+                            用户 2026-11-01：并发数不再给用户选，完全由程序按设备与实时吞吐决定
+                            （AutoConcurrencyController）。这里只说明是自动，不提供任何输入控件。
                         -->
-                        <ComboBox Grid.Column="1"
-                                  IsEditable="True"
-                                  ItemsSource="{Binding MaxParallelChoices}"
-                                  Text="{Binding SettingsEditor.Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                  SelectionChanged="ParallelCount_SelectionChanged"
-                                  LostFocus="ParallelCount_LostFocus"
-                                  ToolTip="同时解压几个包（1~8，默认 4）。装不下当前可用空间的任务仍然会在启动前被拦下，并如实报告各自需要多少。" />
-
-                        <TextBlock Grid.Column="2"
+                        <TextBlock Grid.Column="1"
                                    Style="{StaticResource HintTextStyle}"
-                                   Margin="8,0,0,0"
                                    VerticalAlignment="Center"
-                                   TextWrapping="Wrap">
-                            <Run Text="默认 4（实测：并发 1→4 吞吐 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍）—— " />
-                            <Run Text="{x:Static storage:ProcessorTopology.ConcurrencyAdvice}" /><Run Text="。" />
-                        </TextBlock>
+                                   TextWrapping="Wrap"
+                                   Text="自动（程序按磁盘类型与实时吞吐决定，无需设置）" />
                     </Grid>
-
-                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <CheckBox Content="全速（最高 8 个）"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
-                                  ToolTip="本批忽略并发档，最多同时 8 个（不会无限开；8 是硬顶）。另有整机级闸门：同一台机器上所有 ArchiveFixer 进程合计最多同时跑 4 个外部引擎（7z/UnRAR/WinRAR），慢盘上不会再被多实例抢死。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复按并发档排队就把勾去掉）。" />
-
-                        <Button Content="按空间算建议"
-                                Margin="16,0,0,0"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTip="按当前可用空间算出最多能并行几个（要读每个源包的大小，可能要一两秒）"
-                                Command="{Binding RefreshParallelAdviceCommand}" />
-                    </StackPanel>
-
-                    <TextBlock Text="{Binding ParallelAdviceText}"
-                               Margin="0,8,0,0"
-                               TextWrapping="Wrap"
-                               ToolTip="{Binding ParallelAdviceText}"
-                               Style="{StaticResource HintTextStyle}" />
 
                     <Border Style="{StaticResource InfoBannerStyle}" Margin="0,8,0,0">
                         <StackPanel>

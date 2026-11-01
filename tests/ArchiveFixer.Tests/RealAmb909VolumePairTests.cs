@@ -297,7 +297,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             settingsService.Save(settings);

@@ -324,7 +324,7 @@ namespace ArchiveFixer.Tests
              */
             AppSettings settings = AppSettings.CreateDefault();
             settings.CustomOutputDirectory = outputRoot;
-            settings.MaxParallelExtractCount = 5;
+            settings.ConcurrencyOverride = 5;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
 

@@ -154,10 +154,10 @@ namespace ArchiveFixer.Tests
             Assert.Equal(4, settings.MaxParallelExtractCount);
             Assert.False(settings.LowProcessPriority);
 
-            settings.MaxParallelExtractCount = 2;
+            settings.ConcurrencyOverride = 2;
             settings.Normalize();
 
-            Assert.Equal(2, settings.MaxParallelExtractCount);
+            Assert.Equal(2, settings.ConcurrencyOverride);
             Assert.False(settings.LowProcessPriority);
         }
 

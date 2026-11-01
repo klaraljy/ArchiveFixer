@@ -158,7 +158,7 @@ namespace ArchiveFixer.Tests
             {
                 EnableSpecialExtraction(settings);
                 settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-                settings.MaxParallelExtractCount = 1;
+                settings.ConcurrencyOverride = 1;
             });
 
             await harness.AddPathsAsync(collection);
@@ -191,7 +191,7 @@ namespace ArchiveFixer.Tests
             {
                 EnableSpecialExtraction(settings);
                 settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-                settings.MaxParallelExtractCount = 2;
+                settings.ConcurrencyOverride = 2;
             });
 
             harness.Vm.SpaceTightMode = true;

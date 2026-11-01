@@ -432,7 +432,7 @@ namespace ArchiveFixer.Tests
              * 并发 1 时任务是排队跑的，前一个收尾会把预留还回去 —— 于是每个包单独看都放得下、
              * 一个都不会被拦（这条也正是"空间够不够"与"能不能同时跑"两件事的分界）。
              */
-            settings.MaxParallelExtractCount = 4;
+            settings.ConcurrencyOverride = 4;
             settingsService.Save(settings);
 
             var engine = new FakeEngine();

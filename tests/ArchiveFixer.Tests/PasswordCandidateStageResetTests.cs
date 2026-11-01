@@ -269,7 +269,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
             settings.MaxPasswordAttemptsPerLayer = 10;
 
             // 源包档位固定"留在原地"：这一组测的是候选循环，不该顺带测源包搬运。

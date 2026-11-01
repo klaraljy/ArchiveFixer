@@ -309,13 +309,9 @@ namespace ArchiveFixer.Tests
 
             Assert.True(throttleLines.Count == 1, $"「并发已满」只该说一次，实际 {throttleLines.Count} 次：\n" + string.Join("\n", throttleLines));
 
-            // 指对地方：②页 + 那个开关的真名字；并说清"勾上当场生效"。
-            Assert.Contains("②页", throttleLines[0]);
-            Assert.Contains("全速（最高 8 个）", throttleLines[0]);
-            Assert.Contains("当场生效", throttleLines[0]);
-
-            // ⛔ 反面：不许再说"主界面的「全速」"（主界面没有这个选项，用户就是被这句带偏的）。
-            Assert.DoesNotContain(lines, line => line.Contains("主界面的「全速」", StringComparison.Ordinal));
+            // 并发数由程序自动决定：等待提示必须说清这一点，且不再出现旧「全速」出口。
+            Assert.Contains("自动调整", throttleLines[0]);
+            Assert.DoesNotContain(lines, line => line.Contains("全速", StringComparison.Ordinal));
 
             // 批末一条汇总（谁等过、等了几个）。
             Assert.Contains(lines, line => line.Contains("并发排队汇总", StringComparison.Ordinal));
@@ -476,7 +472,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
             settings.MaxPasswordAttemptsPerLayer = 10;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;

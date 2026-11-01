@@ -518,34 +518,30 @@ namespace ArchiveFixer.ViewModels
                              */
                             AppendLog(
                                 "INFO",
-                                $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。" +
-                                (fullSpeed
-                                    ? "（已开「全速」，本批不再节流。）"
-                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（最高 8 个）」—— 勾上当场生效，" +
-                                      "不用停止、也不用重开；或点①页「停止后续」不再启动后面的任务。" +
-                                      "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）"));
+                                $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。"
+                                + "并发数由程序根据磁盘与实时吞吐自动调整（无需设置）；"
+                                + "也可以点①页「停止后续」不再启动后面的任务。"
+                                + "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）");
                         }
 
                         /*
-                         * 中途勾上「全速」→ **立刻放开**（用户问的正是"是要暂停下来开还是直接开"：直接开）。
-                         * 这里重读一次那个开关（它是 MainViewModel 上的本次运行开关，不是落盘设置）。
-                         *
-                         * ⚠ 「空间不足」模式下这一条**不生效**（用户 2026-09-27："忽略全速和并发档"）：
-                         * 那个模式的并发数是按空间算出来的，中途放开等于把"别把盘写满"这条自己拆掉。
+                         * 「全速」档已退役（用户 2026-11-01：并发全部交给算法）。
+                         * 这里只保留"每跑完一个任务就重新看一窗口吞吐"的自适应调整。
                          */
-                        if (!_spaceTightThisBatch && !fullSpeed && _vm.RunAtFullSpeed)
+                        Task finished = await Task.WhenAny(runningTasks);
+
+                        if (!_spaceTightThisBatch && _autoConcurrency != null)
                         {
-                            fullSpeed = true;
-                            maxParallel = ResolveFullSpeedParallel(plan.Ordered.Count);
-
-                            AppendLog("INFO", $"检测到「全速」已勾上，本批立刻放开并发（同时最多 {maxParallel} 个，硬顶 {MaxParallelExtractCountCeiling}）。");
-
-                            break;
+                            SampleAutoConcurrencyWindow(runningTasks, finished, ref maxParallel);
                         }
 
-                        Task finished = await Task.WhenAny(runningTasks);
                         runningTasks.Remove(finished);
                         await finished;
+
+                        if (_autoTaskMap.Remove(finished, out ArchiveTask? autoFinished))
+                        {
+                            _autoProgress.Remove(autoFinished);
+                        }
 
                         if (_spaceTightThisBatch && !IsStopping)
                         {
@@ -644,7 +640,10 @@ namespace ArchiveFixer.ViewModels
                     runtime.ReservedBytes = gate.ProbeFailed ? 0L : item.RequiredBytes;
                     runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
                     startedTasks.Add(task);
-                    runningTasks.Add(RunScheduledTaskAsync(task, oneClickRun, runtime));
+                    Task runningTask = RunScheduledTaskAsync(task, oneClickRun, runtime);
+                    _autoProgress[task] = Math.Max(0, task.ProgressPercent);
+                    _autoTaskMap[runningTask] = task;
+                    runningTasks.Add(runningTask);
                 }
 
                 await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
@@ -695,9 +694,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"并发排队汇总：本批 {throttledTasks} 个任务等过空位（同时最多跑 {maxParallel} 个）。"
-                        + (fullSpeed
-                            ? "本批已开「全速」。"
-                            : "下次想全程不排队：②页 →「并发与空间」勾上「全速（最高 8 个）」（勾上当场生效）。"));
+                        + "并发数由程序自动调整（磁盘类型 + 实时吞吐），无需设置。");
                 }
 
                 /*
@@ -1004,6 +1001,74 @@ namespace ArchiveFixer.ViewModels
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 一个自适应窗口（建议 5 秒）：按活跃任务进度增量估算吞吐，交给控制器做 AIMD；
+        /// 变更上限时写一行日志（普通导出也保留，用户能看懂为什么快/慢）。
+        /// </summary>
+        private void SampleAutoConcurrencyWindow(
+            IReadOnlyList<Task> runningTasks,
+            Task finished,
+            ref int maxParallel)
+        {
+            if (_autoConcurrency == null)
+            {
+                return;
+            }
+
+            double bytes = 0;
+
+            foreach (KeyValuePair<Task, ArchiveTask> pair in _autoTaskMap)
+            {
+                ArchiveTask task = pair.Value;
+
+                if (task == null)
+                {
+                    continue;
+                }
+
+                int last = _autoProgress.TryGetValue(task, out int previous) ? previous : 0;
+                int current = Math.Clamp(task.ProgressPercent, 0, 100);
+
+                if (ReferenceEquals(pair.Key, finished)
+                    && task.Outcome == TaskOutcome.Succeeded)
+                {
+                    current = 100;
+                }
+
+                if (current > last)
+                {
+                    bytes += (current - last) / 100.0 * Math.Max(1L, task.SourceSizeBytes);
+                }
+
+                _autoProgress[task] = current;
+            }
+
+            double seconds = _autoWindow.Elapsed.TotalSeconds;
+
+            if (seconds < 5)
+            {
+                return;
+            }
+
+            int stalls = UiActivity.TakeUiStallCount();
+            int next = _autoConcurrency.Observe(
+                bytes / seconds,
+                runningTasks.Count,
+                stalls,
+                diskSpaceLow: false);
+
+            _autoWindow.Restart();
+
+            if (next != maxParallel)
+            {
+                AppendLog(
+                    "INFO",
+                    $"并发调整 {maxParallel} → {next}：窗口吞吐 {bytes / seconds / (1024 * 1024):F1} MB/s，"
+                    + $"活跃 {runningTasks.Count} 个，UI 停顿 {stalls} 次（设备={_autoConcurrency.Device}）");
+                maxParallel = next;
+            }
         }
 
         /// <summary>

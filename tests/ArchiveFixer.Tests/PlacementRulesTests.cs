@@ -433,7 +433,7 @@ namespace ArchiveFixer.Tests
 
             // 用例自己决定源包怎么处理；默认"一个字节都不搬"（源目录的反向断言要靠它）。
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             configure?.Invoke(settings);
             settingsService.Save(settings);

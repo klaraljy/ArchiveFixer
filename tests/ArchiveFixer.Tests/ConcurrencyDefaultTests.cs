@@ -110,11 +110,10 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置界面_并发那一项旁边写着核数建议与新的默认值()
+        public void 设置界面_并发只显示自动_没有手动控件()
         {
             /*
-             * 2026-09-24 第 11 条之后，并发档从主界面搬到了②解压方式页的「并发与空间」分组
-             * （原来是主界面一个下拉 + 设置窗口一个数字框，两处并存）。
+             * 用户 2026-11-01：并发数不再给用户选（自动算法决定），界面不留下拉/全速/建议按钮。
              */
             string path = Path.Combine(
                 XamlBindingScan.RepositoryRoot,
@@ -127,11 +126,12 @@ namespace ArchiveFixer.Tests
 
             string xaml = File.ReadAllText(path);
 
-            Assert.Contains("ProcessorTopology.ConcurrencyAdvice", xaml, StringComparison.Ordinal);
-            Assert.Contains("默认 4", xaml, StringComparison.Ordinal);
-
-            // 旧说法"默认 1（串行）更稳定"必须已经不在了 —— 默认值改了之后它就是错的。
-            Assert.DoesNotContain("默认 1（串行）更稳定", xaml, StringComparison.Ordinal);
+            Assert.Contains("自动（程序按磁盘类型与实时吞吐决定", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("MaxParallelExtractCount", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("RunAtFullSpeed", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("全速", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("并发档", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("RefreshParallelAdviceCommand", xaml, StringComparison.Ordinal);
         }
     }
 }

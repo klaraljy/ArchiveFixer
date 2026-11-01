@@ -281,6 +281,15 @@ namespace ArchiveFixer.Models
         public bool RunAtFullSpeed { get; set; }
 
         /// <summary>
+        /// **内部/测试专用**的并发覆盖（0 = 自动算法）。
+        ///
+        /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发完全由
+        /// <c>AutoConcurrencyController</c> 决定。它只留着给无头夹具/排障在需要"固定串行"
+        /// 时用（旧守门用例大量依赖"同时只跑 1 个"）。</para>
+        /// </summary>
+        public int ConcurrencyOverride { get; set; }
+
+        /// <summary>
         /// 并发数的出厂默认值（**4**，见 <see cref="MaxParallelExtractCount"/> 的实测依据）。
         ///
         /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
@@ -1169,6 +1178,16 @@ namespace ArchiveFixer.Models
             if (MaxParallelExtractCount > 8)
             {
                 MaxParallelExtractCount = 8;
+            }
+
+            if (ConcurrencyOverride < 0)
+            {
+                ConcurrencyOverride = 0;
+            }
+
+            if (ConcurrencyOverride > 8)
+            {
+                ConcurrencyOverride = 8;
             }
 
             /*

@@ -998,7 +998,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 等并发位时点了停止后续_不再启动新任务()
         {
-            Harness harness = CreateHarness(configure: settings => settings.MaxParallelExtractCount = 2);
+            Harness harness = CreateHarness(configure: settings => settings.ConcurrencyOverride = 2);
 
             ArchiveTask first = AddTask(harness, CreateSourceFile("stop-1.7z"));
             ArchiveTask second = AddTask(harness, CreateSourceFile("stop-2.7z"));

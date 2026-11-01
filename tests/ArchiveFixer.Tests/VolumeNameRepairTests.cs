@@ -1147,7 +1147,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.AutoScanAfterDrop = false;
-            settings.MaxParallelExtractCount = 1;
+            settings.ConcurrencyOverride = 1;
 
             // 源包档位固定"留在原地"：这一组测的是改名，不该顺带测源包搬运 / 删除。
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

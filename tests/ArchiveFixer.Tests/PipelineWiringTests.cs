@@ -839,15 +839,13 @@ namespace ArchiveFixer.Tests
         /// 两个任务的解压在假引擎里会互相等对方进场，所以只要实现是串行的，这条必然超时失败。
         /// </summary>
         [Fact]
-        public async Task 全速开着_并发数超过设置里的上限()
+        public async Task 旧全速开关已退役_并发不再突破上限()
         {
             Harness harness = CreateHarness(settings: s =>
             {
-                s.MaxParallelExtractCount = 1;
+                s.ConcurrencyOverride = 1;
                 s.TryEmptyPasswordFirst = true;
             });
-
-            harness.Vm.RunAtFullSpeed = true;
 
             AddTask(harness, CreateSourceFile("one.7z"));
             AddTask(harness, CreateSourceFile("two.7z"));
@@ -881,9 +879,7 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.True(
-                maxInFlight >= 2,
-                $"开了「全速」之后应当能同时跑 2 个任务，实测最大并发 {maxInFlight}（节流仍然生效？）");
+            Assert.Equal(1, maxInFlight);
         }
 
         /// <summary>
@@ -893,7 +889,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 没开全速_并发数受设置限制()
         {
-            Harness harness = CreateHarness(settings: s => s.MaxParallelExtractCount = 1);
+            Harness harness = CreateHarness(settings: s => s.ConcurrencyOverride = 1);
 
             Assert.False(harness.Vm.RunAtFullSpeed, "「全速」的出厂状态必须是关（只对本次运行有效，不是持久设置）");
 
@@ -931,7 +927,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 被节流挡住_等待状态写进日志并给出出口()
         {
-            Harness harness = CreateHarness(settings: s => s.MaxParallelExtractCount = 1);
+            Harness harness = CreateHarness(settings: s => s.ConcurrencyOverride = 1);
 
             AddTask(harness, CreateSourceFile("one.7z"));
             AddTask(harness, CreateSourceFile("two.7z"));
@@ -944,7 +940,7 @@ namespace ArchiveFixer.Tests
                 harness.Log.Logs,
                 item => item.Message.Contains("并发已满", StringComparison.Ordinal) &&
                         item.Message.Contains("等空位", StringComparison.Ordinal) &&
-                        item.Message.Contains("全速（最高 8 个）", StringComparison.Ordinal));
+                        item.Message.Contains("自动调整", StringComparison.Ordinal));
 
             /*
              * ⚠ 2026-09-26 第 45 条：**等待那一段不再逐任务刷**（真机 76 个任务刷了 74 遍），

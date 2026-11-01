@@ -449,7 +449,6 @@ namespace ArchiveFixer.Tests
                  * `RecursionModeDefaultTests`），所以它不再有"界面上的家"、也就不在这份清单里。
                  */
                 ["MaxRecursionDepth"] = "ExtractionTab",
-                ["MaxParallelExtractCount"] = "ExtractionTab",
 
                 // 2026-10-25：「解压前与完成后」整组从②页搬到「提醒」页（用户口径）
                 ["TestBeforeExtract"] = "ReminderTab",
