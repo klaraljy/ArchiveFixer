@@ -34,7 +34,7 @@ namespace ArchiveFixer.Tests
                 logicalCores: 16,
                 totalMemoryBytes: SixteenGb);
 
-            Assert.Equal(2, controller.InitialLimit);
+            Assert.Equal(1, controller.InitialLimit);
             Assert.Equal(3, controller.HardLimit);
         }
 
@@ -47,7 +47,7 @@ namespace ArchiveFixer.Tests
                 logicalCores: 32,
                 totalMemoryBytes: SixteenGb);
 
-            Assert.Equal(2, controller.InitialLimit);
+            Assert.Equal(1, controller.InitialLimit);
             Assert.Equal(2, controller.HardLimit);
         }
 
@@ -92,22 +92,23 @@ namespace ArchiveFixer.Tests
                 logicalCores: 8,
                 totalMemoryBytes: SixteenGb);
 
-            controller.Observe(100, 2, 0, false);
-            controller.Observe(120, 2, 0, false); // 加档
-            Assert.Equal(3, controller.CurrentLimit);
+            controller.Observe(100, 1, 0, false);
+            controller.Observe(120, 1, 0, false);
+            controller.Observe(120, 1, 0, false); // 稳定 3 个窗口 ⇒ 试探性加档
+            Assert.Equal(2, controller.CurrentLimit);
 
-            controller.Observe(120, 3, 0, false); // 冷却窗口
-            int after = controller.Observe(120, 3, 0, false); // 无提升 ⇒ 回退
+            controller.Observe(120, 2, 0, false); // 冷却窗口
+            int after = controller.Observe(120, 2, 0, false); // 无提升 ⇒ 回退
 
-            Assert.Equal(2, after);
+            Assert.Equal(1, after);
 
-            // 停在拐点：后续吞吐再涨也不越过 2（有效硬顶已被压下）
+            // 停在拐点：后续吞吐再涨也不越过 1（有效硬顶已被压下）
             for (int i = 0; i < 5; i++)
             {
-                controller.Observe(1000, 3, 0, false);
+                controller.Observe(1000, 2, 0, false);
             }
 
-            Assert.Equal(2, controller.CurrentLimit);
+            Assert.Equal(1, controller.CurrentLimit);
         }
 
         [Fact]

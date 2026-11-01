@@ -30,6 +30,7 @@ namespace ArchiveFixer.Extraction
         private double _baselineBytesPerSecond;
         private int _cooldownWindows;
         private int _stallWindows;
+        private int _stableObservations;
         private int _lastIncreaseFrom = -1;
         private double _throughputBeforeIncrease;
 
@@ -64,8 +65,8 @@ namespace ArchiveFixer.Extraction
             int initial = device switch
             {
                 StorageDeviceKind.Ssd => Math.Clamp(LogicalCores / 2, 2, 4),
-                StorageDeviceKind.Hdd => 2,
-                _ => 2
+                StorageDeviceKind.Hdd => 1,
+                _ => 1
             };
 
             if (sameVolume && device == StorageDeviceKind.Hdd)
@@ -167,13 +168,27 @@ namespace ArchiveFixer.Extraction
                 return CurrentLimit;
             }
 
-            if (bytesPerSecond >= _baselineBytesPerSecond * 1.05
-                && activeTasks >= CurrentLimit)
+            bool stable = activeTasks >= CurrentLimit
+                && bytesPerSecond >= _baselineBytesPerSecond * 0.95;
+            _stableObservations = stable ? _stableObservations + 1 : 0;
+
+            bool clearGain = bytesPerSecond >= _baselineBytesPerSecond * 1.05
+                && activeTasks >= CurrentLimit;
+
+            /*
+             * 起点刻意低（HDD/未知 = 1）：慢盘上并发往往让**单任务**成倍变慢，先串行拿到基准，
+             * 再每稳定 3 个窗口试探性加一档；下一窗口没换来 3% 吞吐就回退并压住拐点。
+             * 这不是"拍脑袋 2 个"，而是用实测决定要不要并行。
+             */
+            bool probe = _stableObservations >= 3;
+
+            if (clearGain || probe)
             {
                 _throughputBeforeIncrease = bytesPerSecond;
                 CurrentLimit = Math.Min(_hardLimit, CurrentLimit + 1);
                 _lastIncreaseFrom = CurrentLimit;
                 _cooldownWindows = Math.Max(_cooldownWindows, 1);
+                _stableObservations = 0;
             }
 
             return CurrentLimit;
@@ -183,6 +198,7 @@ namespace ArchiveFixer.Extraction
         {
             _ = reason;
             _lastIncreaseFrom = -1;
+            _stableObservations = 0;
 
             if (CurrentLimit > MinLimit)
             {
@@ -191,11 +207,10 @@ namespace ArchiveFixer.Extraction
 
             _cooldownWindows = Math.Max(_cooldownWindows, 2);
 
-            if (lowerHardLimit && CurrentLimit < _hardLimit)
+            if (lowerHardLimit)
             {
-                // 由调用方持有的 _hardLimit 是 readonly；真正的"学到的顶"打在 CurrentLimit 上，
-                // 后续 Observe 不会越过它（因为 CurrentLimit 已停在这里且加档要求 CurrentLimit < _hardLimit，
-                // 这里通过把 _lastIncreaseFrom 重置 + 冷却避免立刻再试）。
+                // 学到拐点：把有效硬顶压到当前值，之后不再尝试越过。
+                _hardLimit = Math.Max(MinLimit, CurrentLimit);
             }
 
             return CurrentLimit;
