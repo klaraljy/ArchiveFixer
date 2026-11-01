@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
@@ -141,6 +140,23 @@ namespace ArchiveFixer.Extraction
                         $"7z 自述 {total} 片，实际候选 {unique.Count} 片 ⇒ 数量结构异常"));
             }
 
+            /*
+             * 7z 末片允许小于首片：未定槽里若恰好只有一片小于首片，它就是末片。
+             * 先把末槽钉住，中间片才只剩真正的排列；否则首/末已知也会被当成 3 片乱试。
+             */
+            if (!slots.ContainsKey(total) && unassigned.Count > 0)
+            {
+                List<FirstStepFileLedgerEntry> smaller = unassigned
+                    .Where(entry => entry.Size < first.Size)
+                    .ToList();
+
+                if (smaller.Count == 1)
+                {
+                    slots[total] = smaller[0];
+                    unassigned.Remove(smaller[0]);
+                }
+            }
+
             List<int> missing = Enumerable.Range(1, total)
                 .Except(slots.Keys)
                 .OrderBy(number => number)
@@ -165,6 +181,7 @@ namespace ArchiveFixer.Extraction
                     await TryProbeUnassignedOrderAsync(
                             context,
                             first,
+                            slots,
                             missing,
                             unassigned,
                             total,
@@ -409,6 +426,7 @@ namespace ArchiveFixer.Extraction
         private static async Task<Dictionary<int, FirstStepFileLedgerEntry>?> TryProbeUnassignedOrderAsync(
             VolumeBoundaryContext context,
             FirstStepFileLedgerEntry first,
+            IReadOnlyDictionary<int, FirstStepFileLedgerEntry> assignedSlots,
             IReadOnlyList<int> missing,
             IReadOnlyList<FirstStepFileLedgerEntry> unassigned,
             int total,
@@ -427,18 +445,39 @@ namespace ArchiveFixer.Extraction
 
             foreach (IReadOnlyList<FirstStepFileLedgerEntry> permutation in Permute(unassigned))
             {
-                var rest = new List<VolumeCandidate>(permutation.Count);
+                var full = new Dictionary<int, FirstStepFileLedgerEntry>(assignedSlots);
 
                 for (int index = 0; index < permutation.Count; index++)
                 {
+                    full[missing[index]] = permutation[index];
+                }
+
+                if (full.Count != total)
+                {
+                    continue;
+                }
+
+                var rest = new List<VolumeCandidate>(total - 1);
+
+                for (int slot = 2; slot <= total; slot++)
+                {
+                    if (!full.TryGetValue(slot, out FirstStepFileLedgerEntry? entry))
+                    {
+                        rest.Clear();
+                        break;
+                    }
+
                     rest.Add(new VolumeCandidate
                     {
-                        Path = permutation[index].Path,
-                        Size = permutation[index].Size
+                        Path = entry.Path,
+                        Size = entry.Size
                     });
                 }
 
-                orderings.Add(rest);
+                if (rest.Count == total - 1)
+                {
+                    orderings.Add(rest);
+                }
             }
 
             if (orderings.Count == 0)
@@ -452,7 +491,9 @@ namespace ArchiveFixer.Extraction
                     orderings,
                     cancellationToken,
                     context.WorkspaceRoot,
-                    VolumeContentFormat.SevenZip)
+                    VolumeContentFormat.SevenZip,
+                    testVolumes: true,
+                    passwordCandidates: context.PasswordCandidates)
                 .ConfigureAwait(false);
 
             if (!outcome.Confirmed
@@ -463,7 +504,9 @@ namespace ArchiveFixer.Extraction
 
             var byPath = new Dictionary<string, FirstStepFileLedgerEntry>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (FirstStepFileLedgerEntry entry in unassigned.Append(first))
+            foreach (FirstStepFileLedgerEntry entry in assignedSlots.Values
+                         .Concat(unassigned)
+                         .Append(first))
             {
                 byPath[Path.GetFullPath(entry.Path)] = entry;
             }
@@ -618,16 +661,13 @@ namespace ArchiveFixer.Extraction
                 return number;
             }
 
-            Match tail = Regex.Match(name, @"(\d{1,3})$");
-
-            if (tail.Success
-                && int.TryParse(tail.Groups[1].Value, out int tailNumber)
-                && tailNumber >= 2
-                && tailNumber <= total)
-            {
-                return tailNumber;
-            }
-
+            /*
+             * ⛔ 2026-11-01 删掉「名字末尾 1~3 位数字就当卷号」那一档（真机 901000034 的根因）：
+             * 产出片 `222-L2.7z.mpcqZ4` 的伪装尾巴碰巧以 `Z4` 结尾，正则读出卷号 4，
+             * 与真正的 `.0中文04.删除` 撞在同一槽 ⇒ `SizeAnomaly（槽位 4 有两份不同文件）`，
+             * 整组一次引擎都不调。卷号只认 `VolumeGroupDetector`（标准名 / 容差档）这一把尺子；
+             * 认不出的片留作 unassigned，交给"缺槽数 = 未定片数"的字节规则与 7z 试开定序。
+             */
             return null;
         }
 
@@ -675,3 +715,4 @@ namespace ArchiveFixer.Extraction
             ?? string.Empty;
     }
 }
+

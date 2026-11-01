@@ -242,30 +242,8 @@ namespace ArchiveFixer.Extraction
 
             string key = BuildKey(prepared.BaseName, prepared.Family.Value);
 
-            if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
-            {
-                // prepared 组先由边界解析建一次（owner 为空），任务表里找到入口后只补写一次 owner。
-                if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
-                    && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
-                    && existing.State == VolumeGroupState.Complete)
-                {
-                    existing.OwnerTaskFileName = ownerTaskFileName;
-                    existing.State = VolumeGroupState.OwnerAssigned;
-                }
-
-                return existing;
-            }
-
-            var unit = new VolumeGroupUnit(
-                prepared.BaseName,
-                prepared.Family,
-                prepared.OriginalSourceLayer,
-                string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath)
-                    ? prepared.OriginalEntryPath
-                    : prepared.CanonicalEntryPath)
-            {
-                State = MapPreparedState(prepared.State),
-                Pieces = prepared.Pieces.Select(piece => new GroupPieceFact(
+            List<GroupPieceFact> pieces = prepared.Pieces
+                .Select(piece => new GroupPieceFact(
                         piece.OriginalPath,
                         piece.Size,
                         FormatForFamily(prepared.Family),
@@ -282,7 +260,64 @@ namespace ArchiveFixer.Extraction
                         true,
                         CanonicalVolumeName: piece.CanonicalName,
                         ArchiveBaseName: prepared.BaseName))
-                    .ToList(),
+                .ToList();
+
+            if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
+            {
+                /*
+                 * ⚠ 2026-11-01（真机 901000018 / 901000027）：第一轮账本只认出 2 片 ⇒ 登记成 Unknown；
+                 * 第二轮又产出两片、prepared 已经是 **Complete**，可老写法一律 `return existing`
+                 * ⇒ 永远拿回第一轮那本"判不出"的旧账，组一次都不点名、一次引擎都不调。
+                 *
+                 * 判据：**没进入不可逆阶段**（没链接 / 没解 / 没成功 / 没失败）的旧 Unit，
+                 * 只要新事实不同、或者旧结论本来就是"判不出/缺片/结构异常"，就按新 prepared 重建；
+                 * 已经 Linked/Extracting/Succeeded/Failed 的是定局，⛔ 不推翻。
+                 */
+                bool locked = existing.State is VolumeGroupState.Linked
+                    or VolumeGroupState.Extracting
+                    or VolumeGroupState.Succeeded
+                    or VolumeGroupState.Failed;
+
+                if (locked)
+                {
+                    return existing;
+                }
+
+                bool sameFacts = SamePieces(existing.Pieces, pieces);
+                bool undecided = existing.State is VolumeGroupState.Unknown
+                    or VolumeGroupState.Missing
+                    or VolumeGroupState.SizeAnomaly
+                    or VolumeGroupState.Candidate;
+
+                if (!sameFacts || undecided)
+                {
+                    _units.Remove(key);
+                }
+                else
+                {
+                    // 先建组、后建任务那一档：任务出现后只**补写一次** owner（⛔ 不换 owner、不重置状态）。
+                    if (!string.IsNullOrWhiteSpace(ownerTaskFileName)
+                        && string.IsNullOrWhiteSpace(existing.OwnerTaskFileName)
+                        && existing.State == VolumeGroupState.Complete)
+                    {
+                        existing.OwnerTaskFileName = ownerTaskFileName;
+                        existing.State = VolumeGroupState.OwnerAssigned;
+                    }
+
+                    return existing;
+                }
+            }
+
+            var unit = new VolumeGroupUnit(
+                prepared.BaseName,
+                prepared.Family,
+                prepared.OriginalSourceLayer,
+                string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath)
+                    ? prepared.OriginalEntryPath
+                    : prepared.CanonicalEntryPath)
+            {
+                State = MapPreparedState(prepared.State),
+                Pieces = pieces,
                 OrderedPieces = prepared.Pieces
                     .Select(piece => string.IsNullOrWhiteSpace(prepared.EntryLayer)
                         ? piece.OriginalPath

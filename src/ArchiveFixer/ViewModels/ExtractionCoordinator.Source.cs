@@ -422,7 +422,7 @@ namespace ArchiveFixer.ViewModels
                  * 只有链没跑完（递归未 Completed）、分卷组未完整、或还有未完成卷组时才延期。
                  * 这样一批里某个 300MB 失败，不会拖着 9G/5G/3G 那些已经成功任务的源包。
                  */
-                if (oneClickRun && !CanDeleteRootSourceImmediately(task, recursion))
+                if (oneClickRun && !CanDeleteRootSourceImmediately(task, recursion, commit))
                 {
                     task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
 
@@ -944,7 +944,10 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// ⛔ 只读事实位，不按名字或中文猜。
         /// </summary>
-        private static bool CanDeleteRootSourceImmediately(ArchiveTask task, RecursionResult? recursion)
+        private static bool CanDeleteRootSourceImmediately(
+            ArchiveTask task,
+            RecursionResult? recursion,
+            StageCommitResult? commit)
         {
             if (task == null)
             {
@@ -970,11 +973,62 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ⚠ 2026-11-01（用户口径「原包不能先动」）：这一轮吐出来的还是**分卷片**时，
+             * 后面还有第二大步要接手 ⇒ 源包必须留到链尾按源包档处理，不能凭"名字像内容物"当场删。
+             * 真机 901000019：产出片 `…\.404272删除7z` 是 7z 首片、名字后缀不成形，旧的名字判据没认出来，
+             * 用户包壳在第一层成功那一刻就被删掉（链后面要是失败，用户原件就再也救不回来）。
+             * 判据只读内容卡（与第二大步闸门同一套三条），⛔ 不按后缀猜。
+             */
+            if (commit != null && commit.ProducedFiles.Any(IsProducedVolumePiece))
+            {
+                return false;
+            }
+
+            /*
              * 一键处理的“链”可能不是递归核心里展开的：第一层只把 inner.7z.001 当内容物落出来，
              * 再交给下一轮续解。源码层看不出“后面还有没有一层”，所以这里看盘上事实：
              * 产物树里还有归档/分卷候选 ⇒ 这一单还没到最终内容物，源包必须留着。
              */
             return !OutputLooksLikeIntermediateArchive(task.OutputPath);
+        }
+
+        /// <summary>这一份产出是不是**分卷片**（内容卡三条，与第二大步闸门同一套口径）。</summary>
+        private static bool IsProducedVolumePiece(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return false;
+            }
+
+            if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
+            {
+                return true;
+            }
+
+            if (ArchiveFixer.Detection.AndroidPackageDetector.IsAndroidPackage(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                FileNatureCard card = FileNature.Inspect(path);
+
+                if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
+                    || card.BodyKind == ArchiveBodyKind.VolumePiece)
+                {
+                    return true;
+                }
+
+                return (card.Format == VolumeContentFormat.Rar
+                        && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                    || (card.Format == VolumeContentFormat.Zip && card.ZipEndRecordMeansSplit);
+            }
+            catch
+            {
+                // 读不出 ⇒ 判不出 ⇒ 按"不是分卷片"处理（与这条判据之外的老行为一致）。
+                return false;
+            }
         }
 
         private static bool OutputLooksLikeIntermediateArchive(string? outputDirectory)
@@ -1623,6 +1677,14 @@ namespace ArchiveFixer.ViewModels
              * `part1869删除2` 的跟班事实在批末才写，早一步扫它会漏）。幂等：Done 的跳过。
              */
             SettleVerifiedGroupFollowers();
+
+            /*
+             * 分卷组的**原包**留到链尾按源包档处理（用户 2026-11-01 口径）：
+             * 过程物片在收片时已删；原包片与"只出过程物"的包壳**不许先动** —— 这里以
+             * 「owner 成功 + 入口包落点里已有内容物」为事实（不是包壳自己的落点目录），
+             * 再走既有 `PurgeLayerSourcePackage` 唯一出口。留下档一个字节都不动。
+             */
+            SettleSucceededGroupSourcesAtChainEnd(runOptions);
 
             if (rootTasks == null || rootTasks.Count == 0)
             {

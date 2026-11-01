@@ -63,6 +63,89 @@ namespace ArchiveFixer.ViewModels
         internal FirstStepFileLedger FirstStepLedger => _firstStepFileLedger;
 
         /// <summary>
+        /// 把这一单产出的全部文件登记进唯一第一大步账本。
+        /// 这是“文件产物产生时”的登记点，覆盖包装/递归产出的 Unknown 与中间片。
+        /// </summary>
+        internal void RegisterProducedOutputsToLedger(ArchiveTask task)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.OutputPath))
+            {
+                return;
+            }
+
+            string output = task.OutputPath;
+
+            if (!Directory.Exists(output))
+            {
+                return;
+            }
+
+            IEnumerable<string> files;
+
+            try
+            {
+                files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories);
+            }
+            catch
+            {
+                return;
+            }
+
+            foreach (string file in files)
+            {
+                /*
+                 * ⛔ 只登记已发布的产物：.ArchiveFixer.work 下的 stage/recursive 是临时层，
+                 * 任务收尾会清理；把它登记进账本会让后续 resolver 拿到已经不存在的源路径
+                 * （Win32 错误 3：建硬链接时源文件找不到了）。
+                 */
+                if (file.Contains(
+                        Path.DirectorySeparatorChar + ".ArchiveFixer.work" + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (string.Equals(file, task.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                ArchiveFixer.Detection.FileNatureCard card;
+                try
+                {
+                    card = ArchiveFixer.Detection.FileNature.Inspect(file);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!card.HasIdentity)
+                {
+                    continue;
+                }
+
+                int? nameSlot = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    FileNameHelper.GetFileName(file));
+
+                _firstStepFileLedger.AddOrReplace(
+                    ArchiveFixer.Detection.FirstStepFileLedgerEntry.FromCard(
+                        card,
+                        FileNameHelper.GetFileName(file),
+                        ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced,
+                        gatePassed: true,
+                        nameSlot: nameSlot));
+            }
+
+        }
+
+        private static bool IsInsideWorkDirectory(string? path) =>
+            !string.IsNullOrWhiteSpace(path)
+            && path.Contains(
+                Path.DirectorySeparatorChar + ".ArchiveFixer.work" + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 第一大步闸门通过后登记账本（不判定分卷、不碰盘）。
         /// 同一路径在一轮里重复登记时保留后到的内容卡（改名/补片后事实会变）。
         /// </summary>
@@ -71,6 +154,13 @@ namespace ArchiveFixer.ViewModels
             ArchiveFixer.Detection.FileNatureCard card)
         {
             string path = task.CurrentPath ?? string.Empty;
+
+            /*
+             * ⛔ 工作区里的 task.CurrentPath / 兄弟片是临时层，收尾会消失。
+             * 登记进账本会让第二大步拿旧路径建硬链接（Win32 错误 3）。
+             * 已发布产物由 RegisterProducedOutputsToLedger 单独登记。
+             */
+            bool insideWork = IsInsideWorkDirectory(path);
             int? nameSlot = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
                 FileNameHelper.GetFileName(path));
 
@@ -87,16 +177,19 @@ namespace ArchiveFixer.ViewModels
                 zipVariant: zipVariant,
                 nameSlot: nameSlot);
 
-            FirstStepFileLedgerEntry registered = _firstStepFileLedger.AddOrReplace(entry);
+            FirstStepFileLedgerEntry registered = insideWork
+                ? entry
+                : _firstStepFileLedger.AddOrReplace(entry);
 
             /*
              * 账本不能只收"任务表里那一份"：同目录的 `.002` 可能只是上一轮解出来的兄弟片，
              * 没有独立任务；7z 中间片内容又没有魔数，不补进来就只剩 1 片可判。
              * 只扫同基名、卷标记候选，且只在当前项本身像分卷时才扫。
              */
-            if (card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
-                || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
-                || card.Format == VolumeContentFormat.SevenZip)
+            if (!insideWork
+                && (card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
+                    || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    || card.Format == VolumeContentFormat.SevenZip))
             {
                 RegisterSiblingLedgerEntries(task, card);
             }
@@ -271,21 +364,30 @@ namespace ArchiveFixer.ViewModels
             }
 
             string name = FileNameHelper.GetFileName(card.Path);
-            int lastDot = name.LastIndexOf('.');
+            string[] segments = name.Split('.');
 
-            if (lastDot >= 0
-                && lastDot + 1 < name.Length
-                && ArchiveFixer.Helpers.ExtensionHelper.TrySplitVolumeSegmentTolerant(
-                    name[(lastDot + 1)..],
-                    out string canonical,
-                    out _)
-                && canonical.Length == 3
-                && (canonical[0] == 'z' || canonical[0] == 'Z')
-                && char.IsAsciiDigit(canonical[1])
-                && char.IsAsciiDigit(canonical[2]))
+            /*
+             * `.zNN` 是跨盘族的第 1 片；⛔ 不能用 `.zip`=1 的那套名字口径。
+             *
+             * ⚠ 2026-11-01（真机 901000020，调试器逐条读出的账本事实）：第一片叫
+             * `222-L2.&-z01.删除` —— 卷标记被伪装杂质挤到了**中间那一段**。老写法只看最后一个点段
+             *（`删除`）⇒ 认不出 ⇒ 落进下面"有本地头 ⇒ Numbered"，与末片的 Spanned 强锚点撞成
+             * `SizeAnomaly（不混组）`，整组一次引擎都不调。⇒ 改成逐段认（用的还是同一把容差尺子
+             * `TrySplitVolumeSegmentTolerant`，⛔ 没有新门槛、⛔ 不按整名相似度猜）。
+             */
+            for (int index = segments.Length - 1; index >= 1; index--)
             {
-                // `.z01` 是跨盘族的第 1 片；⛔ 不能用 `.zip`=1 的那套名字口径。
-                return ZipVariant.Spanned;
+                if (ArchiveFixer.Helpers.ExtensionHelper.TrySplitVolumeSegmentTolerant(
+                        segments[index],
+                        out string canonical,
+                        out _)
+                    && canonical.Length == 3
+                    && (canonical[0] == 'z' || canonical[0] == 'Z')
+                    && char.IsAsciiDigit(canonical[1])
+                    && char.IsAsciiDigit(canonical[2]))
+                {
+                    return ZipVariant.Spanned;
+                }
             }
 
             if (card.ZipEndRecordMeansSplit || card.HasZipLocalHeader)

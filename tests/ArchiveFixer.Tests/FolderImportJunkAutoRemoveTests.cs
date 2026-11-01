@@ -15,30 +15,32 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 用户 2026-09-28「一键处理**开工前**自动把无用物从列表里移掉」的守门用例（A 条）。
+    /// 「**选文件夹导入**时自动把无用物从列表里移掉」的守门用例。
     ///
-    /// <para>用户原话：「这次导入文件没有移除无用物的弹窗提醒，但是列表里面还在，我以为按了一键处理
-    /// 你们就会清除掉，但是他没有」→「1.要」；口径是他自己划的那条线：
-    /// 「他们是无用物，只是对你们解压没有用，不是垃圾」。</para>
+    /// <para>历史：2026-09-28 的口径是"导入完就移"（含一键处理开工前再扫一遍）。**2026-11-01 用户收窄口径**：
+    /// 「导入文件，一般情况下只是导入单个文件…这单个文件也就是用户的原包，所以只对文件夹操作」——
+    /// 自动剔除只对 <see cref="Extraction.SourceSelectionKind.Folder"/> 的任务生效；
+    /// 手动选中的文件不自动剔，一键处理开工前也不再扫（解压过程中不做无用物判定）。
+    /// 手动清理仍走列表的「移除勾选任务」。</para>
     ///
-    /// <para>这一组钉三件事：</para>
+    /// <para>这一组钉四件事：</para>
     /// <list type="number">
-    /// <item><description><b>真的移掉</b>：<c>ScanCoordinator.RemoveJunkTasksFromListAsync</c> 一调，
-    /// 无用物就不在任务列表里了（这才是用户要的"按一下全搞定"）；</description></item>
-    /// <item><description><b>红线：磁盘一个字节都不动</b> —— 不删、不搬、不改名，内容与最后写入时间都对照一遍；</description></item>
-    /// <item><description><b>判据窄，不误伤真包</b>：名字像无用物、魔数却是真包（伪装包）的那一个必须留在列表里
-    /// —— 这正是 <c>SourceJunkScanner</c> 判据 3 存在的理由。</description></item>
+    /// <item><description><b>真的移掉</b>：文件夹导入扫出来的无用物会被移出任务列表；</description></item>
+    /// <item><description><b>红线和判据窄</b>：只动列表不动磁盘；名字像无用物、魔数却是真包的必须留下；</description></item>
+    /// <item><description><b>文件夹来源才剔</b>：手动选中的文件名字再像无用物也不许自动拿走；</description></item>
+    /// <item><description><b>难识别的分卷片靠同组基名保护</b>：伪装成 <c>.png</c> 的裸切块不能当无用物
+    /// （真机 902000003）。</description></item>
     /// </list>
     ///
     /// <para>夹具照 <c>ImportJunkReminderTests</c> 那一套装配（假引擎 + 无界面宿主），
-    /// 只多一个直接构造出来的 <c>ScanCoordinator</c>：一键处理里调的就是它这一个方法。</para>
+    /// 只多一个直接构造出来的 <c>ScanCoordinator</c>：导入路径里调的就是它这一个方法。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
-    public class OneClickJunkAutoRemoveTests : IDisposable
+    public class FolderImportJunkAutoRemoveTests : IDisposable
     {
         private readonly string _root;
 
-        public OneClickJunkAutoRemoveTests()
+        public FolderImportJunkAutoRemoveTests()
         {
             _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerJunkAutoRemove", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
@@ -117,6 +119,82 @@ namespace ArchiveFixer.Tests
                 line => line.Contains("无用物从列表里移掉", StringComparison.Ordinal) &&
                         line.Contains("说明.txt", StringComparison.Ordinal) &&
                         line.Contains("源文件一个字节都没动", StringComparison.Ordinal));
+        }
+
+        // ================================================================ ①b 同基名的伪装分卷片不许当无用物
+
+        /// <summary>
+        /// 真机 902000003：`打包111-L2.z04` 伪装成 `打包111-L2.png`（裸切块、内容读不出、名字无卷标记），
+        /// 与同组其它片又散在不同目录 ⇒ 旧判据一条保护都罩不到它，导入时被当"无用物"移出任务列表，
+        /// 第二大步账本永远少一片（组判 Missing，内容物出不来）。
+        ///
+        /// <para>判据用第二大步的组键：同基名里只要有一份可识别归档，这个基名的其它文件就都不当无用物。
+        /// ⛔ 只保护"同基名"，同一目录里的真无用物（说明.txt）照旧移掉。</para>
+        /// </summary>
+        [Fact]
+        public async Task 同基名的伪装分卷片_不算无用物()
+        {
+            Harness harness = CreateHarness();
+
+            string packDirectory = Path.Combine(_root, "a");
+            string pieceDirectory = Path.Combine(_root, "b");
+            Directory.CreateDirectory(packDirectory);
+            Directory.CreateDirectory(pieceDirectory);
+
+            string archivePath = Path.Combine(packDirectory, "组-L2.zip");
+            File.WriteAllBytes(archivePath, ZipHeaderBytes());
+
+            string piecePath = Path.Combine(pieceDirectory, "组-L2.png");
+            File.WriteAllBytes(piecePath, new byte[] { 0x11, 0x22, 0x33, 0x44, 0x55 });
+
+            string junkPath = Path.Combine(pieceDirectory, "说明.txt");
+            File.WriteAllBytes(junkPath, Encoding.UTF8.GetBytes("打包者附带的说明，不是压缩包"));
+
+            ArchiveTask archiveTask = AddTask(harness, archivePath);
+            archiveTask.IsArchive = true;   // 真机里是跨盘 ZIP 的末片（ZIP_SPANNED）
+            ArchiveTask pieceTask = AddTask(harness, piecePath);
+            ArchiveTask junkTask = AddTask(harness, junkPath);
+
+            // 前提：这三份的名字确实都像无用物时才有得比（.png / .txt 都在无用物名单里）。
+            Assert.True(SourceJunkScanner.LooksLikeJunkCandidate("组-L2.png"));
+            Assert.True(SourceJunkScanner.LooksLikeJunkCandidate("说明.txt"));
+
+            int removed = await harness.Scan.RemoveJunkTasksFromListAsync(harness.Vm.Tasks.ToList());
+
+            Assert.Equal(1, removed);
+            Assert.Contains(harness.Vm.Tasks, task => ReferenceEquals(task, pieceTask));
+            Assert.DoesNotContain(harness.Vm.Tasks, task => ReferenceEquals(task, junkTask));
+            Assert.True(File.Exists(piecePath), "红线：只动列表，磁盘上的片一个字节都不许动");
+        }
+
+        // ================================================================ ①c 自动剔除只对文件夹来源生效
+
+        /// <summary>
+        /// 用户 2026-11-01 口径：手动选中的单个文件就是用户的原包，名字再像无用物也**不许自动拿走**
+        /// （自动剔除只针对「选文件夹导入」扫出来的任务）。同一份文件改成文件夹来源 ⇒ 正常移掉。
+        /// </summary>
+        [Fact]
+        public async Task 手动选中的文件_不自动剔无用物()
+        {
+            Harness harness = CreateHarness();
+
+            string junk = CreateFile(harness, "说明.txt", Encoding.UTF8.GetBytes("用户手点的文件"));
+
+            ArchiveTask fileTask = AddTask(harness, junk);
+            fileTask.SourceSelectionKind = SourceSelectionKind.File;
+
+            int removedFromFile = await harness.Scan.RemoveJunkTasksFromListAsync(harness.Vm.Tasks.ToList());
+
+            Assert.Equal(0, removedFromFile);
+            Assert.Contains(harness.Vm.Tasks, task => ReferenceEquals(task, fileTask));
+
+            // 同一份任务改成文件夹来源：自动剔除照常生效（证明这条用例不是"扫描根本没跑"）。
+            fileTask.SourceSelectionKind = SourceSelectionKind.Folder;
+
+            int removedFromFolder = await harness.Scan.RemoveJunkTasksFromListAsync(harness.Vm.Tasks.ToList());
+
+            Assert.Equal(1, removedFromFolder);
+            Assert.DoesNotContain(harness.Vm.Tasks, task => ReferenceEquals(task, fileTask));
         }
 
         // ================================================================ ② 判据窄：没有无用物就一个都不动
@@ -249,7 +327,9 @@ namespace ArchiveFixer.Tests
                 IsArchive = false,
                 Status = StatusText.Recognized,
                 ExtensionStatus = StatusText.ExtensionNormal,
-                IsSelected = true
+                IsSelected = true,
+                // 自动剔除只对「选文件夹导入」扫出来的任务生效（用户 2026-11-01 口径）。
+                SourceSelectionKind = SourceSelectionKind.Folder
             };
 
             harness.Vm.Tasks.Add(task);

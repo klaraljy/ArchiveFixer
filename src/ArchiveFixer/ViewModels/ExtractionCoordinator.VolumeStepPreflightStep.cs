@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -160,6 +161,73 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="IsUserImportedSourcePath"/>）；失败 / 密码错 / 缺卷 ⇒ 调用方**不调**本方法，
         /// 片全部留在入口层等补密码（这里也留一道保险：没成功只写一行、一个字节不动）。</para>
         /// </summary>
+        /// <summary>
+        /// 任务收尾时清理这一单临时标准名入口目录；源片不动，只删
+        /// <c>.ArchiveFixer.work\group-entry</c> 下的硬链接壳。
+        /// </summary>
+        internal void CleanupVolumeStepGroupEntry(ArchiveTask task)
+        {
+            if (task == null || !_volumeStepGroupWork.TryGetValue(task, out VolumeStepGroupWork? work))
+            {
+                return;
+            }
+
+            ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+            _volumeStepGroupWork.Remove(task);
+        }
+
+        /// <summary>批末清理所有临时标准名入口目录；只删 group-entry 壳，源片不动。</summary>
+        internal void CleanupAllVolumeStepEntryDirectories()
+        {
+            foreach (VolumeStepGroupWork work in _volumeStepGroupWork.Values)
+            {
+                ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+            }
+
+            _volumeStepGroupWork.Clear();
+        }
+
+        /// <summary>
+        /// 批末兜底：从每个任务落点里删掉遗留的 .ArchiveFixer.work\group-entry 壳。
+        /// 只删这一层临时硬链接目录，不碰源片、不碰内容物。
+        /// </summary>
+        internal void CleanupGroupEntryShellsFor(IEnumerable<ArchiveTask>? tasks)
+        {
+            if (tasks == null)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null || string.IsNullOrWhiteSpace(task.OutputPath))
+                {
+                    continue;
+                }
+
+                string work = Path.Combine(task.OutputPath, ".ArchiveFixer.work");
+                string group = Path.Combine(work, "group-entry");
+
+                try
+                {
+                    if (Directory.Exists(group))
+                    {
+                        Directory.Delete(group, recursive: true);
+                    }
+
+                    if (Directory.Exists(work)
+                        && !Directory.EnumerateFileSystemEntries(work).Any())
+                    {
+                        Directory.Delete(work);
+                    }
+                }
+                catch
+                {
+                    // 清不掉不影响内容物；下一轮再由工作区清理兜底。
+                }
+            }
+        }
+
         internal void TryPurgeSolvedVolumeStepPieces(ArchiveTask task)
         {
             if (task == null || !_volumeStepGroupWork.TryGetValue(task, out VolumeStepGroupWork? work))
@@ -200,9 +268,38 @@ namespace ArchiveFixer.ViewModels
              */
             bool removedEntryDirectory = ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
 
+            /*
+             * 入口层链接不是物理片的全部名字：同一组的过程物可能散在多个包装输出目录。
+             * 组成功后按 work.Pieces 的原始路径逐个收：用户原包不动，其余过程物全删。
+             * ⛔ 不写死片数，也不只删入口层链接。
+             */
+            int removedProcessPieces = 0;
+            foreach (string piecePath in work.Pieces)
+            {
+                if (string.IsNullOrWhiteSpace(piecePath)
+                    || !File.Exists(piecePath)
+                    || IsUserImportedSourcePath(piecePath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(piecePath);
+                    removedProcessPieces++;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[第二大步·收片] {task.LogName}：过程物删不掉：{piecePath}（{ex.Message}）");
+                }
+            }
+
             AppendLog(
                 "INFO",
-                $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片（用户原件不删）"
+                $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片；"
+                + $"按组删掉过程物 {removedProcessPieces} 片（用户原件不删）"
                 + (removedEntryDirectory ? "；临时标准名目录已清理" : string.Empty)
                 + "。");
 

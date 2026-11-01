@@ -906,18 +906,10 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * 一键处理 = 按一下全搞定（用户 2026-09-28：「1.要」）：**无用物不要留在任务列表里**。
-                 * ⛔ 只动列表，绝不删 / 移动文件；放在 EnterBusy 之前，列表先清干净、用户看得见。
-                 * 出错也不影响这一批（只写一句 WARN）。
+                 * ⛔ 2026-11-01（用户口径）：一键处理开工前**不再扫无用物**。
+                 * 无用物的自动剔除只发生在「选文件夹导入」那一次（见 ScanCoordinator.RemoveJunkTasksFromListAsync）：
+                 * 导入文件一般是用户点名的单个原包，解压过程中不应再动列表；手动清理走「移除勾选任务」。
                  */
-                try
-                {
-                    await _scanCoordinator.RemoveJunkTasksFromListAsync(targets);
-                }
-                catch (Exception ex)
-                {
-                    AppendLog("WARN", "一键处理：清理列表里的无用物失败（不影响这一批）：" + ex.Message);
-                }
 
                 EnterBusy();
 
@@ -1011,14 +1003,12 @@ namespace ArchiveFixer.ViewModels
             OneClickRunOptions? runOptions = null)
         {
             /*
-             * ⛔ 这一批只处理**还在任务列表里**的目标（2026-09-28 真机："只解一层就停"的真正成因）。
+             * ⛔ 这一批只处理**还在任务列表里**的目标（2026-09-28 真机"只解一层就停"的守门）。
              *
-             * 调用方拍下"这一批要处理谁"的清单之后，列表还可能变——一键处理开工前那一步就会把
-             * 无用物从列表里移掉（ScanCoordinator.RemoveJunkTasksFromListAsync：只动列表，不动磁盘）。
-             * 被移掉的那些**既不在列表里、也不会被解压循环碰到**（解压循环走的是列表），
-             * 于是收尾守卫（下面那句 roundStartTargets.Any(t => !IsHandled(t))）会把它们读成
-             * "这一轮有任务没轮到" → 一次正常的续解被误判成用户叫停：**只解一层就收工**，
-             * 汇总还写着"已按「停止后续」中断"（用户根本没按过；真机症状就是这个）。
+             * 历史成因：一键处理开工前曾把无用物从列表里移掉，被移掉的任务既不在列表里、也不会被
+             * 解压循环碰到 ⇒ 收尾守卫把它们读成"这一轮有任务没轮到" ⇒ 误判成用户叫停。
+             * ⚠ 2026-11-01 起开工前**不再**移无用物（自动剔除只在文件夹导入那一次），但这条过滤
+             * **保留**：任何"清单拍下之后列表又变了"的路径（以后新加的）都靠它兜住。
              *
              * ⚠ 判据是**引用**（那个任务对象还在不在列表里），不按路径比 ——
              * 同一个文件被重新导入会是一个新任务，路径一样但它不属于这一批。
@@ -1106,8 +1096,8 @@ namespace ArchiveFixer.ViewModels
                      * ⚠ 2026-09-28 复检（补守门用例时当场量到的）：这份快照与 roundTargets 在同一个迭代里
                      * **内容逐项相同**（roundTargets 只在本轮末尾才被重新赋值，中途没有任何地方改它），
                      * 所以"改用快照"这一下本身不改变行为，真机上那个"只解一层就停"也不是它治好的 ——
-                     * 真正的成因是"这一批的目标清单里混进了**已经从列表里移掉**的任务"（开工前清无用物那一步），
-                     * 那个已经在 RunPipelineAsync 入口处过滤掉了（见那里的说明）。
+                     * 当时的成因是"目标清单里混进了已经从列表里移掉的任务"（开工前清无用物那一步）；
+                     * 2026-11-01 起开工前不再移无用物，那条过滤仍在 RunPipelineAsync 入口保留作通用守卫。
                      * 保留这份快照的理由：它把"守卫只看本轮开跑时的目标"这条语义**写死**在这里，
                      * 以后谁要是把 roundTargets 改成实时清单（比如直接传 Tasks），守卫不会跟着一起错。
                      */
@@ -1286,11 +1276,56 @@ namespace ArchiveFixer.ViewModels
                             }
                         }
 
+                        List<string> analysisRoots = groupRoots
+                            .Concat(_extractionCoordinator.FirstStepLedger.Entries
+                                .Select(entry => entry.SourceLayer)
+                                .Where(layer => !string.IsNullOrWhiteSpace(layer)))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        /*
+                         * 第二大步候选的唯一正式来源 = FirstStepFileLedger。
+                         * VolumeHandoffEntries 只是其中一部分，必须把账本里
+                         * 未单独建交接单的 Unknown/内层片也补成候选。
+                         */
+                        List<ArchiveFixer.Detection.VolumeHandoffEntry> ledgerHandoff =
+                            _extractionCoordinator.FirstStepLedger.Entries
+                                .Select(entry => new ArchiveFixer.Detection.VolumeHandoffEntry
+                                {
+                                    Path = entry.Path,
+                                    BaseName = entry.BaseName,
+                                    Format = entry.Format,
+                                    Size = entry.Size,
+                                    BodyKind = entry.BodyKind,
+                                    Evidence = entry.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                                            or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                                        ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven
+                                        : entry.NameSlot.HasValue
+                                            ? ArchiveFixer.Detection.VolumeHandoffEvidence.NameSlot
+                                            : ArchiveFixer.Detection.VolumeHandoffEvidence.Unknown,
+                                    VolumeNumber = entry.VolumeNumber,
+                                    NameVolumeIndex = entry.NameSlot,
+                                    FirstVolumeFlag = entry.FirstVolumeFlag,
+                                    Membership = entry.Membership,
+                                    DeclaredTotalBytes = entry.DeclaredTotalBytes,
+                                    DeclaredVolumeCount = entry.DeclaredVolumeCount,
+                                    RawVolumeField = entry.RawVolumeField,
+                                    HasZipEndRecord = entry.HasZipEndRecord,
+                                    ZipEndRecordMeansSplit = entry.ZipEndRecordMeansSplit,
+                                    HasZipLocalHeader = entry.HasZipLocalHeader,
+                                    SourceLayer = entry.SourceLayer,
+                                    Source = entry.Source
+                                })
+                                .Concat(_extractionCoordinator.VolumeHandoffEntries)
+                                .GroupBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
+                                .Select(group => group.First())
+                                .ToList();
+
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
                         List<GroupAnalysis.GroupCandidate> analyzedGroups = await Task.Run(
                             () => GroupAnalysis.Analyze(
-                                _extractionCoordinator.VolumeHandoffEntries,
-                                groupRoots,
+                                ledgerHandoff,
+                                analysisRoots,
                                 extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase)).ToList());
                         UiActivity.Mark("空闲");
 
@@ -1304,6 +1339,20 @@ namespace ArchiveFixer.ViewModels
                          * 共用骨架接线点：族 resolver 先出 prepared 组，再让 GroupAnalysis 只吃标准名。
                          * 骨架阶段一个族都没注册 ⇒ 返回空，下面的过滤与追加都不会发生，既有行为不变。
                          */
+                        foreach (ArchiveTask ledgerTask in Tasks)
+                        {
+                            if (!string.IsNullOrWhiteSpace(ledgerTask.CurrentPath)
+                                && !string.Equals(
+                                    ledgerTask.OriginalPath,
+                                    ledgerTask.CurrentPath,
+                                    StringComparison.OrdinalIgnoreCase))
+                            {
+                                _extractionCoordinator.FirstStepLedger.RetargetPath(
+                                    ledgerTask.OriginalPath,
+                                    ledgerTask.CurrentPath);
+                            }
+                        }
+
                         IReadOnlyList<PreparedVolumeGroup> preparedGroups =
                             await _extractionCoordinator.VolumeBoundaryPipeline.ResolveAllAsync(
                                     _extractionCoordinator.FirstStepLedger,
@@ -1313,6 +1362,11 @@ namespace ArchiveFixer.ViewModels
                                         BaseName = baseName,
                                         Engine = _extractionCoordinator.ArchiveEngine,
                                         WorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot,
+                                        PasswordCandidates = _extractionCoordinator.BuildVolumeProbePasswordCandidates(
+                                            _extractionCoordinator.FirstStepLedger
+                                                .SameBase(baseName)
+                                                .Select(entry => entry.Path)
+                                                .FirstOrDefault() ?? string.Empty),
                                         OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
                                             .SameBase(baseName)
                                             .Select(entry => entry.SourceLayer)
@@ -1679,7 +1733,11 @@ namespace ArchiveFixer.ViewModels
                                 entryTask,
                                 group.BaseName,
                                 entryLayer,
-                                group.Pieces);
+                                group.PreparedGroup?.Pieces
+                                    .Select(piece => piece.OriginalPath)
+                                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                                    .ToList()
+                                    ?? group.Pieces);
                         }
                         else if (entryLayer.Length > 0)
                         {
@@ -1733,7 +1791,11 @@ namespace ArchiveFixer.ViewModels
                                 entryTask,
                                 group.BaseName,
                                 entryLayer,
-                                group.Pieces);
+                                group.PreparedGroup?.Pieces
+                                    .Select(piece => piece.OriginalPath)
+                                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                                    .ToList()
+                                    ?? group.Pieces);
                         }
 
                         if (!volumeEntryTasks.Contains(entryTask))
@@ -3650,6 +3712,8 @@ namespace ArchiveFixer.ViewModels
              * 判据见 `ExtractionCoordinator.PurgeRedundantPieceAliases`：只碰"名字像分卷片 **且** 还有别的名字"
              * 的文件 ⇒ 删掉一个名字**一个字节都不丢**（真机 `6666` 实测：两个名字同 File ID）。
              */
+            _extractionCoordinator.CleanupAllVolumeStepEntryDirectories();
+            _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
             _extractionCoordinator.RestoreKeepInPlaceSourceNames();
             _extractionCoordinator.PurgeRedundantPieceAliases();
 

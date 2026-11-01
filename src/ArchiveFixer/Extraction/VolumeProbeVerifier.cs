@@ -91,7 +91,9 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<IReadOnlyList<VolumeCandidate>>? orderings,
             CancellationToken cancellationToken = default,
             string? preferredWorkRoot = null,
-            VolumeContentFormat family = VolumeContentFormat.Unknown)
+            VolumeContentFormat family = VolumeContentFormat.Unknown,
+            bool testVolumes = false,
+            IReadOnlyList<string>? passwordCandidates = null)
         {
             if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
             {
@@ -199,7 +201,14 @@ namespace ArchiveFixer.Extraction
                     var volumes = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
                     volumes.AddRange(ordering);
 
-                    TrialResult trial = await TryLinkAndListAsync(volumes, trialDirectory, cancellationToken, family).ConfigureAwait(false);
+                    TrialResult trial = await TryLinkAndListAsync(
+                            volumes,
+                            trialDirectory,
+                            cancellationToken,
+                            family,
+                            testVolumes,
+                            passwordCandidates)
+                        .ConfigureAwait(false);
 
                     if (trial.Failure == null)
                     {
@@ -855,7 +864,9 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<VolumeCandidate> volumes,
             string directory,
             CancellationToken cancellationToken,
-            VolumeContentFormat family = VolumeContentFormat.Unknown)
+            VolumeContentFormat family = VolumeContentFormat.Unknown,
+            bool testVolumes = false,
+            IReadOnlyList<string>? passwordCandidates = null)
         {
             try
             {
@@ -885,6 +896,37 @@ namespace ArchiveFixer.Extraction
                 {
                     firstLink = linkPath;
                 }
+            }
+
+            if (testVolumes)
+            {
+                IReadOnlyList<string> candidates = passwordCandidates is { Count: > 0 }
+                    ? passwordCandidates
+                    : new[] { string.Empty };
+                string lastFailure = "试开不成立";
+
+                foreach (string password in candidates)
+                {
+                    ArchiveOperationResult test = await _engine
+                        .TestAsync(ArchiveRequest.For(firstLink, password), cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (test.Success)
+                    {
+                        return new TrialResult(null, false);
+                    }
+
+                    lastFailure = string.IsNullOrWhiteSpace(test.Message)
+                        ? lastFailure
+                        : test.Message;
+
+                    if (!test.IsWrongPassword && !test.IsPartiallyCompleted)
+                    {
+                        break;
+                    }
+                }
+
+                return new TrialResult(lastFailure, false);
             }
 
             ArchiveListResult list = await _engine

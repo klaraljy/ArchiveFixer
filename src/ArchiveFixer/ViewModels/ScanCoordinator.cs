@@ -1,4 +1,5 @@
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
@@ -301,13 +302,14 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 把「无用物」（对解压没用的说明 / 网址 / 广告之类）从任务列表里移掉。
         ///
-        /// <para><b>两个调用点</b>：</para>
-        /// <list type="number">
-        /// <item><description><b>导入一完成</b>（<see cref="AddPathsAsync"/>）—— 用户 2026-09-28 拍板的
-        /// 主路径：他原话「为什么不在检测到的时候就直接移除」；</description></item>
-        /// <item><description><b>一键处理开工前</b>（<c>OneClickCoordinator.RunAsync</c>，2026-09-28「1.要」）——
-        /// 兜底那一道：列表里若还有无用物（导入那一次没扫到的），开工前顺手清干净。</description></item>
-        /// </list>
+        /// <para><b>唯一调用点 / 唯一判据范围</b>（用户 2026-11-01 口径）：只处理
+        /// <see cref="SourceSelectionKind.Folder"/> 的任务 —— 也就是「选文件夹导入」时由程序扫描出来、
+        /// 用户没有逐个点名的那些文件。理由（用户原话）：「导入文件，一般情况下只是导入单个文件…
+        /// 这单个文件也就是用户的原包，所以只对文件夹操作」。</para>
+        ///
+        /// <para>⛔ **手动选中的文件不自动剔**（那是用户点名的原包，一个都不许拿走）；
+        /// ⛔ **一键处理开工前不再扫一遍**（解压过程中不做无用物判定，导入时已经清过）。
+        /// 用户想自己清理走列表的「移除勾选任务」——手动移除这条路保留。</para>
         ///
         /// <para>⛔ 只动**列表**，绝不删 / 移动任何文件（用户原话：「他们是无用物，只是对你们解压没有用，
         /// 不是垃圾」）。扫不到、扫描出错 → 什么都不做，只写一句日志，绝不影响导入 / 这一批。</para>
@@ -316,10 +318,9 @@ namespace ArchiveFixer.ViewModels
         /// 那个框**已经退休**（用户明确说"检测到就直接移除"，而且他抱怨框在该出现的时候没出现、
         /// 不该出现的时候又冒出来）—— 同一个功能只留自动移出这一条路，⛔ 别再把它做回成弹窗。</para>
         /// </summary>
-        /// <param name="tasks">要体检的任务（导入那一次传的是本次导入的任务，一键处理传的是这一批的目标）。</param>
+        /// <param name="tasks">要体检的任务（导入那一次传的是本次导入的任务；只有文件夹来源的会参与）。</param>
         /// <param name="removedLogFormat">
         /// 移掉之后那句日志的模板（<c>{0}</c> = 个数，<c>{1}</c> = 前几个名字）。
-        /// 两个调用点的语境不同（导入 / 一键处理），所以文案由调用方按 <see cref="StatusText"/> 里的常量给；
         /// 传 null 时退回一键处理那一句。
         /// </param>
         /// <returns>移掉的任务个数。</returns>
@@ -332,15 +333,27 @@ namespace ArchiveFixer.ViewModels
                 return 0;
             }
 
+            /*
+             * ⛔ 自动剔除只对**文件夹来源**的任务生效（用户 2026-11-01 口径）：
+             * 手动挑进来的单个文件是用户的原包，名字再像无用物也不许自动拿走。
+             */
+            List<ArchiveTask> folderTasks = tasks
+                .Where(task => task != null && task.SourceSelectionKind == SourceSelectionKind.Folder)
+                .ToList();
+
+            if (folderTasks.Count == 0)
+            {
+                return 0;
+            }
+
             SourceJunkScanResult junk;
 
             try
             {
-                junk = await SourceJunkScanner.ScanAsync(tasks, _junkProber);
+                junk = await SourceJunkScanner.ScanAsync(folderTasks, _junkProber);
             }
             catch (Exception ex)
             {
-                // 文案刻意不提"一键处理"：导入那条路也走这里（两条路的语境不同，措辞保持中性）。
                 AppendLog("WARN", "无用物扫描失败（不影响这一次，什么都不动）：" + ex.Message);
                 return 0;
             }

@@ -609,5 +609,165 @@ namespace ArchiveFixer.ViewModels
             ReclaimSucceededGroupSources(unit, task);
             return true;
         }
+
+        /// <summary>
+        /// **链尾：成功组的原包按「源包档」收**（用户 2026-11-01 口径）。
+        ///
+        /// <para>过程物片在收片那一刻已经删掉；**原包不许先动** —— 用户原包片、以及"只出过程物"的
+        /// 包壳都留到这里，由源包档决定删还是留。判据只读运行期事实：</para>
+        /// <list type="number">
+        /// <item><description>组不缺片，owner 任务成功，且完整性判据允许删源；</description></item>
+        /// <item><description>**入口包落点里有内容物**（用户 2026-11-01 订正：分卷的内容物是经入口包
+        /// 解出来的，所以要检查**入口包的位置**，不是包壳自己的落点目录）；</description></item>
+        /// <item><description>源包档 = 彻底删除才动作；留下档一个字节都不动。</description></item>
+        /// </list>
+        ///
+        /// <para>包装壳（产出片被本组接手的那几单）也在这里按同一档收：它们的"内容"就是入口包树里
+        /// 那些内容物 —— ⛔ 不按包名猜，按「谁产出的这一片」这条事实认（<see cref="ArchiveTask.ProducedFiles"/>，
+        /// 认不出再按落点树），⛔ 不放宽半套分卷闸门（走既有 <see cref="PurgeLayerSourcePackage"/> 唯一出口）。</para>
+        /// </summary>
+        internal void SettleSucceededGroupSourcesAtChainEnd(OneClickRunOptions? runOptions)
+        {
+            if (_volumeGroupService.Units.Count == 0)
+            {
+                return;
+            }
+
+            SourceHandlingMode handling = _spaceTightThisBatch
+                ? SourceHandlingMode.DeleteInPlace
+                : runOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
+
+            if (handling != SourceHandlingMode.DeleteInPlace)
+            {
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+            ArchiveTask[] tasks = SnapshotTaskTable(Tasks);
+
+            foreach (VolumeGroupUnit unit in _volumeGroupService.Units.ToList())
+            {
+                if (unit == null || unit.MissingNumbers.Count > 0)
+                {
+                    continue;
+                }
+
+                ArchiveTask? owner = FindOwnerTask(unit);
+
+                if (owner == null || owner.Outcome != TaskOutcome.Succeeded)
+                {
+                    continue;
+                }
+
+                ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(owner);
+
+                if (!verdict.AllowsSourceRemoval)
+                {
+                    continue;
+                }
+
+                string entryOutput = owner.OutputPath;
+
+                if (string.IsNullOrWhiteSpace(entryOutput))
+                {
+                    entryOutput = owner.ContentDirectoryPath;
+                }
+
+                if (string.IsNullOrWhiteSpace(entryOutput)
+                    || !Directory.Exists(entryOutput)
+                    || _restHandlingStep.CountContentFiles(entryOutput) == 0)
+                {
+                    continue;
+                }
+
+                _volumeGroupService.MarkState(
+                    unit,
+                    VolumeGroupState.Succeeded,
+                    $"解压成功，入口包落点已有内容物：{entryOutput}");
+
+                // 组入口自己的源包 + 直接导入的分卷原包片（过程物片早在收片时删掉了）
+                ReclaimSucceededGroupSources(unit, owner);
+
+                // 包装壳：它的产出片被这一组接手、组又可证完整 ⇒ 原包按同一档处理（⛔ 不是过程物）。
+                foreach (GroupPieceFact piece in unit.Pieces)
+                {
+                    if (piece.Source == VolumeHandoffSource.UserImported
+                        || IsUserImportedSourcePath(piece.Path))
+                    {
+                        continue;
+                    }
+
+                    ArchiveTask? producer = FindProducingTaskForPiece(tasks, piece.Path, owner);
+
+                    if (producer == null
+                        || producer.IsContinuationTask
+                        || producer.Outcome != TaskOutcome.Succeeded)
+                    {
+                        continue;
+                    }
+
+                    PurgeLayerSourcePackage(
+                        producer,
+                        verification: null,
+                        commit: null,
+                        logEntries,
+                        LayerPurgeTrigger.SourceHandlingDelete,
+                        reclaimVerdict: verdict,
+                        groupComplete: true);
+                }
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
+        }
+
+        /// <summary>
+        /// 这一片是哪一单产出的：先认任务自己记下的 <see cref="ArchiveTask.ProducedFiles"/>，
+        /// 认不出再按"它的落点树里确实有这一片"这条盘上事实认。⛔ 不按名字猜。
+        /// </summary>
+        private static ArchiveTask? FindProducingTaskForPiece(
+            IReadOnlyList<ArchiveTask> tasks,
+            string piecePath,
+            ArchiveTask? exclude)
+        {
+            if (string.IsNullOrWhiteSpace(piecePath))
+            {
+                return null;
+            }
+
+            foreach (ArchiveTask candidate in tasks)
+            {
+                if (candidate == null || ReferenceEquals(candidate, exclude))
+                {
+                    continue;
+                }
+
+                if (candidate.ProducedFiles.Any(produced =>
+                        SafePathHelper.PathEquals(produced, piecePath)
+                        || FileIdentity.IsSamePhysicalFile(produced, piecePath)))
+                {
+                    return candidate;
+                }
+            }
+
+            foreach (ArchiveTask candidate in tasks)
+            {
+                if (candidate == null
+                    || ReferenceEquals(candidate, exclude)
+                    || string.IsNullOrWhiteSpace(candidate.OutputPath))
+                {
+                    continue;
+                }
+
+                if (ArchiveFixer.Security.ArchivePathGuard.IsInsideRoot(candidate.OutputPath, piecePath, out _))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
     }
 }

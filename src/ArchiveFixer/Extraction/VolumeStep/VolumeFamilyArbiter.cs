@@ -55,14 +55,37 @@ namespace ArchiveFixer.Extraction
                     || entry.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
                     || entry.RarVariant != RarVariant.Unknown));
 
-            bool zipSpanned = entries.Any(entry =>
+            /*
+             * 跨盘族的**内容证据**：内容卷号已证（VolumeNumber≥2）或末片 EOCD 说"分盘"——
+             * 两者都要求 Membership=VolumeMember（单凭 split 位不算：通用族的守门形状也带 split 位）。
+             * 账本项可以没有 ZipVariant（不是所有账本项都走 ResolveZipVariant），所以这里不读它。
+             */
+            bool zipSpannedByContent = entries.Any(entry =>
+                entry.Format == VolumeContentFormat.Zip
+                && entry.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                && (entry.ZipEndRecordMeansSplit
+                    || (entry.VolumeNumber is int spannedNumber && spannedNumber >= 2)));
+
+            /*
+             * 强锚点投票：Spanned = 内容证据，或该片已被定成 Spanned，或内容卷号≥2；
+             * Numbered = 该片不是 Spanned、不是"可证非成员"，且有本地头/EOCD/卷成员身份。
+             * 内容 Unknown 的中间片跟着锚点走。
+             */
+            bool zipSpanned = zipSpannedByContent || entries.Any(entry =>
                 entry.Format == VolumeContentFormat.Zip
                 && (entry.ZipVariant == ZipVariant.Spanned
                     || (entry.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                         && entry.VolumeNumber is int number
                         && number >= 2)));
 
-            bool zipNumbered = entries.Any(entry =>
+            /*
+             * 通用族的第一片同样"有本地头"（`HasZipLocalHeader`），单凭它投 Numbered 必然与跨盘末片
+             * 撞成 `SizeAnomaly（不混组）`。真机 901000018 / 901000036（调试器读出的账本事实）：
+             * 第一片被包装改名成 `bbb-L2.jpg` / `打包111-L2.png` —— `.z01` 名字没了、只剩本地头，
+             * 而末片的 EOCD 盘号明确说"这一组是跨盘的"。⇒ 有跨盘内容证据时，本地头那一档不投票；
+             * 没有该证据时行为与原来逐字相同。
+             */
+            bool zipNumbered = !zipSpannedByContent && entries.Any(entry =>
                 entry.Format == VolumeContentFormat.Zip
                 && entry.ZipVariant != ZipVariant.Spanned
                 && entry.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember

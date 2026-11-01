@@ -229,7 +229,13 @@ namespace ArchiveFixer.Extraction
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var seenBaseAndFormat = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            /*
+             * 种子按**基名**归桶（用户口径：第二大步的组键是基名，不是“目录 + 基名 + 族”）：
+             * 同一组的片可能散在兄弟目录（包装产物），所以同基名的种子要**一起收片**再判；
+             * 但两个**各自完整**的同名组不能因此被并成一个 —— 由下面的自述事实分桶，
+             * 而不是按目录猜。
+             */
+            var seedsByBaseName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (string seed in (seeds ?? Enumerable.Empty<string>())
                          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path)))
@@ -241,31 +247,55 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                /*
-                 * 同基名不一定同组：970 批 `29292929` 的真机形状是
-                 * `pack111-L1.part1.rar`（RAR4）和 `pack111-L1.z01/.zip`（ZipSpanned）同基名。
-                 * 旧口径“基名相同就是一组、不分族”把 RAR 片塞进 ZIP 组，4 片对自述 3 片 ⇒ Missing。
-                 * ⇒ 组键必须是「基名 + 内容族」；内容判不出族的片仍允许补位，但不许把已证实的异族并进来。
-                 */
-                ArchiveFixer.Detection.VolumeContentFormat seedFormat =
-                    ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
-
-                /*
-                 * 同名不同目录不合并：组键必须带目录。
-                 * 真机 `地狱` 首跑里两个目录都有 hell-7z，旧键只带基名+族，
-                 * 第二次种子被当重复跳过；即使不跳过，CollectPieces 也会跨目录收片。
-                 */
-                string seedDirectory = Path.GetDirectoryName(Path.GetFullPath(seed)) ?? string.Empty;
-                string key = seedDirectory + "|" + baseName + "|" + seedFormat;
-
-                if (!seenBaseAndFormat.Add(key))
+                if (!seedsByBaseName.TryGetValue(baseName, out List<string>? baseSeeds))
                 {
-                    continue;
+                    baseSeeds = new List<string>();
+                    seedsByBaseName[baseName] = baseSeeds;
                 }
 
-                List<string> pieces = CollectPieces(seed, baseName, seedFormat, roots);
+                if (!baseSeeds.Contains(seed, StringComparer.OrdinalIgnoreCase))
+                {
+                    baseSeeds.Add(seed);
+                }
+            }
 
-                result.Add(Evaluate(baseName, pieces, handoffByPath));
+            foreach (KeyValuePair<string, List<string>> pair in seedsByBaseName)
+            {
+                string baseName = pair.Key;
+
+                /*
+                 * 同基名的所有种子一起收片：每个种子扫自己那一层 + 调用方给的 roots，
+                 * 去重按路径（物理身份在 CollectPieces 里已经去过重）。
+                 */
+                var pieces = new List<string>();
+                var seenPieces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (string seed in pair.Value)
+                {
+                    ArchiveFixer.Detection.VolumeContentFormat seedFormat =
+                        ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
+
+                    foreach (string piece in CollectPieces(seed, baseName, seedFormat, roots))
+                    {
+                        if (seenPieces.Add(piece))
+                        {
+                            pieces.Add(piece);
+                        }
+                    }
+                }
+
+                /*
+                 * 同基名跨目录收片是对的，但**两个各自完整的同名组**不能被并成一个：
+                 * 判据用第一片的自述事实（DeclaredTotalBytes）分桶 —— 不是按目录猜。
+                 * 守门 `GroupAnalysisNonUniformTests.同名同族但在不同目录_必须分成两组`：
+                 * `a\组.7z.001` 自述 1200 字节、`b\组.7z.001` 自述 600 字节 ⇒ 这是两组。
+                 * ⛔ 只有"≥2 个互不相同的自述整包"时才分桶；任一片无法唯一归桶 ⇒ **不分**
+                 * （保持跨目录合并，交给族 resolver 判），⛔ 不猜。
+                 */
+                foreach (List<string> cluster in SplitPiecesByDeclaredGroup(pieces, handoffByPath))
+                {
+                    result.Add(Evaluate(baseName, cluster, handoffByPath));
+                }
             }
 
             EnrichGroupsWithContentMembers(result, handoffByPath);
@@ -422,8 +452,6 @@ namespace ArchiveFixer.Extraction
              * 才把它收进同一组；否则每个包必须各自成任务/各自输出。
              * 这条不按样本名开分支，防的是“同基名的普通归档被误当分卷”。
              */
-            bool seedHasVolumeMarker = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(seed));
-
             if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(seed, out ulong seedVolume, out ulong seedIndex))
             {
                 identities.Add(seedVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -504,20 +532,10 @@ namespace ArchiveFixer.Extraction
                     }
                 }
 
-                // 同名不同目录不是同一组；组只收 seed 所在目录的片。
-                string candidateDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
-
-                if (!string.Equals(candidateDirectory, seedDirectory, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (!seedHasVolumeMarker
-                    && !contentGrouping
-                    && !ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
-                {
-                    continue;
-                }
+                /*
+                 * 同基名跨目录仍然是一组：包装会把同一组分到兄弟目录。
+                 * 目录不再是组键；是否同组由基名 + 内容族 + 完整性判据回答。
+                 */
 
                 if (seedFormat != ArchiveFixer.Detection.VolumeContentFormat.Unknown)
                 {
@@ -555,6 +573,119 @@ namespace ArchiveFixer.Extraction
             }
 
             return pieces;
+        }
+
+        /// <summary>
+        /// **同名同族但在不同目录的两个组**：按第一片自述整包分桶（内容事实，不按目录猜）。
+        ///
+        /// <para>只有一个自述 / 分不干净（任一片找不到唯一归属）⇒ 返回原样一组，
+        /// 保持"同组跨目录合并"的既有行为；⛔ 判不出就不拆。</para>
+        /// </summary>
+        private static IReadOnlyList<List<string>> SplitPiecesByDeclaredGroup(
+            List<string> pieces,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+        {
+            if (handoffByPath == null || handoffByPath.Count == 0 || pieces.Count < 2)
+            {
+                return new[] { pieces };
+            }
+
+            var buckets = new List<(long DeclaredTotal, List<string> Paths)>();
+            var others = new List<string>();
+
+            foreach (string path in pieces)
+            {
+                if (handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? entry)
+                    && entry != null
+                    && entry.DeclaredTotalBytes > 0
+                    && (entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                        || entry.FirstVolumeFlag))
+                {
+                    int index = buckets.FindIndex(bucket => bucket.DeclaredTotal == entry.DeclaredTotalBytes);
+
+                    if (index < 0)
+                    {
+                        buckets.Add((entry.DeclaredTotalBytes, new List<string> { path }));
+                    }
+                    else
+                    {
+                        buckets[index].Paths.Add(path);
+                    }
+                }
+                else
+                {
+                    others.Add(path);
+                }
+            }
+
+            if (buckets.Count < 2)
+            {
+                return new[] { pieces };
+            }
+
+            foreach (string path in others)
+            {
+                string directory = SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(path) ?? string.Empty);
+                long size = FileSizeOf(path);
+
+                /*
+                 * 归属证据①：与某一桶的首片**同目录**，且这样的桶唯一。
+                 * 归属证据②：这一片的字节数恰好补齐某一桶的自述整包，且这样的桶唯一。
+                 * 两条都判不出唯一 ⇒ 整组不拆（保持原行为）。
+                 */
+                var byDirectory = buckets
+                    .Where(bucket => SafePathHelper.GetFullPathSafe(
+                            Path.GetDirectoryName(bucket.Paths[0]) ?? string.Empty) == directory)
+                    .ToList();
+
+                if (byDirectory.Count == 1)
+                {
+                    byDirectory[0].Paths.Add(path);
+                    continue;
+                }
+
+                if (byDirectory.Count > 1)
+                {
+                    return new[] { pieces };
+                }
+
+                var byExactFit = buckets
+                    .Where(bucket => bucket.DeclaredTotal - SumFileSizes(bucket.Paths) == size)
+                    .ToList();
+
+                if (byExactFit.Count != 1)
+                {
+                    return new[] { pieces };
+                }
+
+                byExactFit[0].Paths.Add(path);
+            }
+
+            return buckets.Select(bucket => bucket.Paths).ToList();
+        }
+
+        private static long FileSizeOf(string path)
+        {
+            try
+            {
+                return new FileInfo(path).Length;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static long SumFileSizes(IReadOnlyList<string> paths)
+        {
+            long sum = 0;
+
+            foreach (string path in paths)
+            {
+                sum += FileSizeOf(path);
+            }
+
+            return sum;
         }
 
         /// <summary>

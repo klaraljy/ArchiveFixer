@@ -127,6 +127,50 @@ namespace ArchiveFixer.Detection
             };
         }
 
+        /// <summary>任务改名后只换路径/基名/源层，其它底层事实原样保留。</summary>
+        public FirstStepFileLedgerEntry WithPath(string newPath)
+        {
+            string directory;
+            try
+            {
+                directory = System.IO.Path.GetDirectoryName(newPath) ?? SourceLayer;
+            }
+            catch
+            {
+                directory = SourceLayer;
+            }
+
+            return new FirstStepFileLedgerEntry
+            {
+                Path = newPath,
+                BaseName = FileNameHelper.SecondStepBaseName(newPath),
+                Size = Size,
+                Format = Format,
+                Membership = Membership,
+                BodyKind = BodyKind,
+                VolumeNumber = VolumeNumber,
+                FirstVolumeFlag = FirstVolumeFlag,
+                RawVolumeField = RawVolumeField,
+                DeclaredTotalBytes = DeclaredTotalBytes,
+                DeclaredVolumeCount = DeclaredVolumeCount,
+                HasZipEndRecord = HasZipEndRecord,
+                ZipEndRecordMeansSplit = ZipEndRecordMeansSplit,
+                HasZipLocalHeader = HasZipLocalHeader,
+                RarVariant = RarVariant,
+                ZipVariant = ZipVariant,
+                Encryption = Encryption,
+                NameSlot = NameSlot,
+                NameEvidence = NameEvidence,
+                Source = Source,
+                SourceLayer = directory,
+                HasIdentity = HasIdentity,
+                VolumeSerial = VolumeSerial,
+                FileIndex = FileIndex,
+                TaskLogName = TaskLogName,
+                IsGatePassed = IsGatePassed
+            };
+        }
+
         public string Describe()
         {
             string number = VolumeNumber.HasValue
@@ -200,6 +244,42 @@ namespace ArchiveFixer.Detection
             _indexByPath[fullPath] = _entries.Count;
             _entries.Add(entry);
             return entry;
+        }
+
+        /// <summary>
+        /// 任务改名/修后缀后，把旧路径那一条改成新路径。
+        /// 只换路径与派生字段，底层身份/卷证据原样保留；旧路径不存在时不新增。
+        /// </summary>
+        public FirstStepFileLedgerEntry? RetargetPath(string? oldPath, string? newPath)
+        {
+            if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath))
+            {
+                return null;
+            }
+
+            string oldFull;
+            string newFull;
+
+            try
+            {
+                oldFull = System.IO.Path.GetFullPath(oldPath);
+                newFull = System.IO.Path.GetFullPath(newPath);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (!_indexByPath.TryGetValue(oldFull, out int index))
+            {
+                return null;
+            }
+
+            FirstStepFileLedgerEntry retargeted = _entries[index].WithPath(newFull);
+            _entries[index] = retargeted;
+            _indexByPath.Remove(oldFull);
+            _indexByPath[newFull] = index;
+            return retargeted;
         }
 
         /// <summary>同基名（第二大步基名）的项；⛔ 不做族判定。</summary>

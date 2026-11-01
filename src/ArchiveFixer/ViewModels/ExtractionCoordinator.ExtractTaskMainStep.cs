@@ -109,6 +109,7 @@ namespace ArchiveFixer.ViewModels
                  * 它仍然是"内容卡证明的入口卷 + 第二大步点名"两个事实同时成立。
                  */
                 bool isSecondStepEntry = IsSecondStepTask(task);
+
                 string entryName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
                 /*
                  * ⚠ 暂时仍只对 `.7z.NNN` 放行这一档：通用 NameSlot 闸门会把
@@ -221,6 +222,13 @@ namespace ArchiveFixer.ViewModels
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
 
                 /*
+                 * 第一大步产出的内层文件也必须进入唯一账本：
+                 * 包装解出来的 7z 中间片/Unknown 常常没有独立任务行，
+                 * 不在这里登记，SevenZipBoundaryResolver 就永远只看到一小部分片。
+                 */
+                RegisterProducedOutputsToLedger(task);
+
+                /*
                  * 收尾（P1）：owner 任务先按 VolumeGroupUnit 收片/留片/回写结论；
                  * 不是某组 owner ⇒ 交回旧收片账（其它族/未接线路径行为不变）。
                  * 成功 ⇒ 只删本组建出来的链接名（用户原件不删）；失败/密码错/缺卷 ⇒ 一个字节不动。
@@ -260,6 +268,7 @@ namespace ArchiveFixer.ViewModels
             }
             finally
             {
+                CleanupVolumeStepGroupEntry(task);
                 UntrackRunningTask(taskCts);
 
                 try

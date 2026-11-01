@@ -1,4 +1,5 @@
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
@@ -308,7 +309,9 @@ namespace ArchiveFixer.Tests
                 IsArchive = isArchive,
                 Status = StatusText.Recognized,
                 ExtensionStatus = StatusText.ExtensionNormal,
-                IsSelected = true
+                IsSelected = true,
+                // 自动剔除只对「选文件夹导入」扫出来的任务生效（用户 2026-11-01 口径）。
+                SourceSelectionKind = SourceSelectionKind.Folder
             };
 
             harness.Vm.Tasks.Add(task);

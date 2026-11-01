@@ -6520,7 +6520,7 @@ namespace ArchiveFixer.ViewModels
         internal Func<Task>? SmartRenameRunnerOverride { get; set; }
 
         /// <summary>
-        /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。
+        /// 按源路径移除任务（文件夹导入时自动剔除无用物走这条；⛔ 只动列表，不动磁盘）。
         /// </summary>
         /// <returns>真的移掉了几个（路径对不上的不算）。</returns>
         /// <summary>

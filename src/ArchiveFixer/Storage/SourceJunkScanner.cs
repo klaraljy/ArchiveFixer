@@ -50,10 +50,9 @@ namespace ArchiveFixer.Storage
         /// **要拿去移出任务列表的那份名单**（唯一出口）：<see cref="AllItems"/> 非空就用它，
         /// 否则退回 <see cref="Items"/>（手工构造的结论 / 老调用方只填了 `Items`）。
         ///
-        /// <para>⛔ 两个消费点（导入 / 一键处理开工前，以及批末那一步）**必须都读这一个属性**：
-        /// 真机 2026-10-07 10:15 那一批就是"只改了其中一条路"—— 导入那条仍按 `Items`（上限 10 条）
-        /// 移，于是 17 个无用物先只走了 10 个、剩下 7 个要等点「一键处理」才被移掉，
-        /// 用户当场问「为什么一开始只清理 10 个」。</para>
+        /// <para>⛔ 唯一消费点（`ScanCoordinator.RemoveJunkTasksFromListAsync`，只对文件夹来源的任务）
+        /// **必须读这一个属性**：真机 2026-10-07 10:15 那一批按 `Items`（上限 10 条）移，
+        /// 17 个无用物先只走了 10 个（用户当场问「为什么一开始只清理 10 个」）。</para>
         /// </summary>
         public IReadOnlyList<SourceJunkItem> AllHits => AllItems.Count > 0 ? AllItems : Items;
 
@@ -490,6 +489,7 @@ namespace ArchiveFixer.Storage
         private static HashSet<string> CollectProtectedPaths(IReadOnlyList<ArchiveTask> tasks)
         {
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var archiveBaseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (ArchiveTask? task in tasks)
             {
@@ -505,6 +505,13 @@ namespace ArchiveFixer.Storage
                     AddProtectedPath(result, volumePath);
                 }
 
+                string baseName = FileNameHelper.SecondStepBaseName(task.CurrentPath ?? string.Empty);
+
+                if (baseName.Length > 0)
+                {
+                    archiveBaseNames.Add(baseName);
+                }
+
                 /*
                  * ⛔ **同目录里同组的兄弟卷也要保护**（用户 2026-09-28 真机）：
                  * 分卷组的后续卷**没有文件头魔数**（裸切块），所以 `IsArchive == false`、
@@ -515,6 +522,36 @@ namespace ArchiveFixer.Storage
                  * 后续卷本来就没东西可看。
                  */
                 AddSiblingVolumePaths(result, task.CurrentPath);
+            }
+
+            /*
+             * ⛔ **同基名的伪装片也要保护**（真机 902000003 的根因）：
+             * `打包111-L2.z04` 被伪装成 `打包111-L2.png`、内容是裸切块 ⇒ `IsArchive == false`、
+             * 名字里也没有卷标记、兄弟片又散在别的目录 ⇒ 上面三条保护一条都够不着它，
+             * 导入时被当"无用物"移出任务列表 ⇒ 第二大步账本永远少一片（组判 Missing、内容物出不来）。
+             *
+             * 第二大步的组键是 `SecondStepBaseName`（用户口径：目录不是组键），所以：
+             * **同基名里只要有一份可识别归档，这一批同基名的其它文件就都不当无用物**。
+             * 代价只是"少列一条提醒"；反过来漏掉一片就是整组解不开（不可逆方向的取舍）。
+             */
+            if (archiveBaseNames.Count > 0)
+            {
+                foreach (ArchiveTask? task in tasks)
+                {
+                    if (task == null
+                        || task.IsArchive
+                        || string.IsNullOrWhiteSpace(task.CurrentPath))
+                    {
+                        continue;
+                    }
+
+                    string baseName = FileNameHelper.SecondStepBaseName(task.CurrentPath);
+
+                    if (baseName.Length > 0 && archiveBaseNames.Contains(baseName))
+                    {
+                        AddProtectedPath(result, task.CurrentPath);
+                    }
+                }
             }
 
             return result;

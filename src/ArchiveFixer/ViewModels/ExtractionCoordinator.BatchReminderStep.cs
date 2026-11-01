@@ -632,51 +632,13 @@ namespace ArchiveFixer.ViewModels
             }
 
             LogReminderFindings(facts.Junk, facts.NoUsablePassword);
-            /*
-             * ⛔ **"无用物移出任务列表"也挂在这里**（真机 2026-10-07 07:49）：
-             * 判据与结论**这一处已经算好了**（上面那句提醒用的就是 `facts.Junk`）；
-             * 而 `ScanCoordinator.RemoveJunkTasksFromListAsync` 那两个调用点（导入 / 一键处理）
-             * 在真机那一批里**一次都没进到扫描**（我加的排障行没出现，列表里那 4 个 `.txt` 也没被移走）
-             * ⇒ 与其去猜它们为什么没跑，不如在"结论已经在手上"的这一刻**直接落一步**：
-             * 复用既有出口 `RemoveTasksBySourcePaths`（⛔ 只动列表、⛔ 不删/不改名/不搬磁盘上的文件），
-             * 移了谁、移了几个**逐条写日志**。⛔ 不在这里另写一套扫描判据（唯一实现仍是 SourceJunkScanner）。
-             */
-            /*
-             * ⛔ 判据用**唯一出口** `AllHits`（= 全部命中），⛔ 不是那份"最多列 10 条"的提示名单（`Items`）：
-             * 真机 CCCC 2026-10-07 实测扫到 17 条、`Items` 只有前 10 条 ⇒ 按 `Items` 移就会剩下几条
-             * 留在列表里（用户当场问「为什么一开始只清理 10 个」）。
-             */
-            IReadOnlyList<SourceJunkItem> junkHits = facts.Junk.AllHits;
 
-            if (junkHits.Count > 0)
-            {
-                int junkRemoved = _vm.RemoveTasksBySourcePaths(junkHits.Select(item => item.FullPath));
-
-                if (junkRemoved > 0)
-                {
-                    AppendLog(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.OneClickJunkRemovedLogFormat,
-                            junkRemoved,
-                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
-                }
-                else
-                {
-                    /*
-                     * 列表里一条都没对上 ⇒ **中性地说一声**（INFO）：正常情形就是"导入那一步已经把它们
-                     * 移走了"（用户看到的"两波"正是这两条路各移一部分）。⛔ 只写日志，⛔ 不动磁盘上任何文件。
-                     */
-                    AppendLog(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.JunkAlreadyOffListLogFormat,
-                            junkHits.Count,
-                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
-                }
-            }
+            /*
+             * ⛔ 2026-11-01（用户口径）：这里**不再把无用物移出任务列表**。
+             * 自动剔除只发生在「选文件夹导入」那一次（ScanCoordinator.RemoveJunkTasksFromListAsync）；
+             * 一键处理开工时不再扫、也不再动列表（用户原话：「一键处理…难道每次操作都检测一遍吗」）。
+             * 这里的 `facts.Junk` 只用于提醒/日志；手动清理走列表的「移除勾选任务」。
+             */
 
             if (_callerHandlesBatchReminderDialog)
             {
