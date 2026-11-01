@@ -240,6 +240,19 @@ namespace ArchiveFixer.Extraction
             foreach (string seed in (seeds ?? Enumerable.Empty<string>())
                          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path)))
             {
+                /*
+                 * ⛔ 2026-11-01 真机（2.exe / 2.part*.rar）：**已经自证是完整单卷的文件，不许再当分卷组种子**。
+                 * 父包 2.exe 与它解出来的 2.part1/2/3.rar 基名都是 "2"，旧逻辑只比基名+族，
+                 * 于是父包被收进子分卷组 ⇒ 组永远判不出、过程物也删不掉。
+                 * 判据只认内容事实：BodyKind=SingleComplete + Membership=ProvablyNotVolumeMember + 没有名字卷槽。
+                 */
+                if (handoffByPath != null
+                    && handoffByPath.TryGetValue(seed, out ArchiveFixer.Detection.VolumeHandoffEntry? seedHandoff)
+                    && IsProvablySingleCompleteNonMember(seedHandoff))
+                {
+                    continue;
+                }
+
                 string baseName = ResolveGroupBaseName(seed);
 
                 if (baseName.Length == 0)
@@ -275,7 +288,7 @@ namespace ArchiveFixer.Extraction
                     ArchiveFixer.Detection.VolumeContentFormat seedFormat =
                         ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
 
-                    foreach (string piece in CollectPieces(seed, baseName, seedFormat, roots))
+                    foreach (string piece in CollectPieces(seed, baseName, seedFormat, roots, handoffByPath))
                     {
                         if (seenPieces.Add(piece))
                         {
@@ -441,7 +454,8 @@ namespace ArchiveFixer.Extraction
             string seed,
             string baseName,
             ArchiveFixer.Detection.VolumeContentFormat seedFormat,
-            IReadOnlyList<string> roots)
+            IReadOnlyList<string> roots,
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
         {
             var pieces = new List<string> { seed };
             var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -533,26 +547,43 @@ namespace ArchiveFixer.Extraction
                 }
 
                 /*
+                 * ⛔ 2026-11-01 真机（2.exe / 2.part*.rar）：**父包/已自证完整的单卷文件不许混进子分卷组**。
+                 * 它们和子组基名相同（都是 "2"）、族也相同（RAR），旧逻辑只查基名+族 ⇒ 父包被收进组。
+                 * 判据只认内容事实：SingleComplete + ProvablyNotVolumeMember + 没有名字卷槽。
+                 */
+                if (IsProvablySingleCompleteNonMember(handoffByPath, path))
+                {
+                    continue;
+                }
+
+                /*
                  * 同基名跨目录仍然是一组：包装会把同一组分到兄弟目录。
                  * 目录不再是组键；是否同组由基名 + 内容族 + 完整性判据回答。
                  */
 
                 if (seedFormat != ArchiveFixer.Detection.VolumeContentFormat.Unknown)
                 {
-                    ArchiveFixer.Detection.VolumeContentFormat candidateFormat;
+                    ArchiveFixer.Detection.FileNatureCard? candidateCard = null;
 
                     try
                     {
-                        candidateFormat = ArchiveFixer.Detection.FileNature.Inspect(path).Format;
+                        candidateCard = ArchiveFixer.Detection.FileNature.Inspect(path);
                     }
                     catch
                     {
                         // 读不出内容不阻止补位；由族算法/完整性判据兜底。
-                        candidateFormat = ArchiveFixer.Detection.VolumeContentFormat.Unknown;
                     }
+
+                    ArchiveFixer.Detection.VolumeContentFormat candidateFormat =
+                        candidateCard?.Format ?? ArchiveFixer.Detection.VolumeContentFormat.Unknown;
 
                     if (candidateFormat != ArchiveFixer.Detection.VolumeContentFormat.Unknown
                         && candidateFormat != seedFormat)
+                    {
+                        continue;
+                    }
+
+                    if (IsProvablySingleCompleteNonMember(candidateCard, path))
                     {
                         continue;
                     }
@@ -573,6 +604,53 @@ namespace ArchiveFixer.Extraction
             }
 
             return pieces;
+        }
+
+        /// <summary>
+        /// 这一份是不是**自证完整单卷、且可证不是分卷成员**（父包 / 普通单卷 zip / 完整单卷 7z）。
+        ///
+        /// <para>⛔ 这类文件只能当自己的任务，绝不能当别人分卷组的一片 —— 真机 2026-11-01：
+        /// `2.exe`（完整 RAR5）与它解出来的 `2.part1/2/3.rar` 基名同为 "2"，被收进同一组，
+        /// 组永远判不出、过程物也删不掉。判据只认内容事实，不看名字像不像。</para>
+        /// </summary>
+        private static bool IsProvablySingleCompleteNonMember(
+            ArchiveFixer.Detection.VolumeHandoffEntry? entry)
+        {
+            return entry != null
+                && entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
+                && entry.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                && !entry.NameVolumeIndex.HasValue
+                && !entry.FirstVolumeFlag;
+        }
+
+        private static bool IsProvablySingleCompleteNonMember(
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath,
+            string path)
+        {
+            return handoffByPath != null
+                && handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? entry)
+                && IsProvablySingleCompleteNonMember(entry);
+        }
+
+        private static bool IsProvablySingleCompleteNonMember(
+            ArchiveFixer.Detection.FileNatureCard? card,
+            string path)
+        {
+            return card != null
+                && card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
+                && card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                && !ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    Path.GetFileName(path)).HasValue;
+        }
+
+        private static bool IsProvablySingleCompleteNonMember(PieceFacts item)
+        {
+            if (item.Handoff != null)
+            {
+                return IsProvablySingleCompleteNonMember(item.Handoff);
+            }
+
+            return IsProvablySingleCompleteNonMember(item.Card, item.Path);
         }
 
         /// <summary>
@@ -736,6 +814,28 @@ namespace ArchiveFixer.Extraction
                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
                     .Select(item => item.Path)
                     .ToList();
+            }
+
+            /*
+             * ⛔ 2026-11-01：单卷完整包（父包 / 普通单卷 zip）不是分卷组。
+             * 没有名字卷槽、内容自证 SingleComplete + 可证非成员 ⇒ 直判 Unknown，
+             * 绝不再给"名字卷标记连成 1..1"这种假 Complete。
+             */
+            if (items.Count == 1 && IsProvablySingleCompleteNonMember(items[0]))
+            {
+                return Finish(new GroupCandidate
+                {
+                    BaseName = baseName,
+                    Format = format,
+                    Pieces = new[] { items[0].Path },
+                    EntryPath = items[0].Path,
+                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                    DeclaredPieceCount = declaredPieceCount,
+                    ReceivedPieceCount = 1,
+                    DeclaredTotalBytes = declaredTotalBytes,
+                    ReceivedBytes = receivedBytes,
+                    Evidence = "内容自证是完整单卷（可证不是分卷成员）⇒ 不是分卷组"
+                });
             }
 
             /*
@@ -1036,6 +1136,30 @@ namespace ArchiveFixer.Extraction
                     .FirstOrDefault(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
                         Path.GetFileName(item.Path)) == 1)
                     ?.Path ?? string.Empty;
+            }
+
+            /*
+             * ⛔ 2026-11-01：**每一片都必须有卷号/名字槽**才可能 Complete。
+             * 真机 `2` 组：4 片里只有 `.part1/.part2` 有槽（另外两片没有槽），
+             * 旧判据 `numbers.Count == expected` 只数有槽的片 ⇒ 判成 Complete，
+             * 与建组那边的 `RarPart 判不出` 直接打架，回收也随之卡死。
+             */
+            if (numbers.Count != items.Count)
+            {
+                return new GroupCandidate
+                {
+                    BaseName = baseName,
+                    Format = format,
+                    Pieces = ordered.Select(item => item.Path).ToList(),
+                    EntryPath = entry,
+                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                    DeclaredPieceCount = declaredPieceCount,
+                    ReceivedPieceCount = items.Count,
+                    DeclaredTotalBytes = declaredTotalBytes,
+                    ReceivedBytes = receivedBytes,
+                    Evidence = $"{items.Count - numbers.Count} 片没有卷号/名字槽"
+                        + $"（有槽 {string.Join(",", numbers)}）⇒ 判不出，不能证明它们是本组的一片"
+                };
             }
 
             /*
