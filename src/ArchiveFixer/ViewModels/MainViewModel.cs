@@ -4487,11 +4487,10 @@ namespace ArchiveFixer.ViewModels
              *    「任务数：10（成功 0 / 失败 0 / 跳过 0）」，读的人当场对不上账。
              */
             /*
-             * ⛔ 2026-11-01：优先用**批末那一次的计数快照**（日志正文就是批末写的），
-             * 只有它不存在（还没跑过批）才退回当前任务表重算。
+             * ⛔ 2026-11-01：导出正文是"本次操作"（可能跨多批），不能用**最后一批**的计数
+             * （真机抬头写任务数 1、明细 13 行）。按当前任务表算，与任务明细同口径。
              */
-            BatchOutcomeTally tally = _extractionCoordinator.LastBatchTally
-                ?? BatchOutcomeTally.Count(Tasks);
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(Tasks);
 
             /*
              * 任务数要分两层说（用户 2026-09-26 第 45 条的真机现场）：他跑 38 个包，头部却写"任务数：76" ——
@@ -4652,7 +4651,11 @@ namespace ArchiveFixer.ViewModels
 
                     sections.Add(
                         $"组「{unit.BaseName}」｜族={unit.Family?.ToString() ?? "判不出"}"
-                        + $"｜状态={unit.State}｜完整={unit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete}"
+                        + $"｜状态={unit.State}｜完整={unit.State is ArchiveFixer.Extraction.VolumeGroupState.Complete
+                            or ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned
+                            or ArchiveFixer.Extraction.VolumeGroupState.Linked
+                            or ArchiveFixer.Extraction.VolumeGroupState.Extracting
+                            or ArchiveFixer.Extraction.VolumeGroupState.Succeeded}"
                         + $"｜片={unit.Pieces.Count}｜入口={entryName}"
                         + $"｜owner={unit.OwnerTaskFileName ?? "未定"}"
                         + $"｜缺片={missing}"

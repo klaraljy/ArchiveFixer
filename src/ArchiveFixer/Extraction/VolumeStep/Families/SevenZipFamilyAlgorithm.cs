@@ -63,6 +63,19 @@ namespace ArchiveFixer.Extraction
                 return Unknown("7z：首卷没自述整包字节数 ⇒ 判不出");
             }
 
+            /*
+             * ⛔ 2026-11-01 真机（2916/3100 的 `风景01.mp4`+`风景02.mp4`）：
+             * 首卷自述整包字节数 == 实收字节合计 ⇒ 这已经是**字节级完整证据**，
+             * 比按首卷大小反推的 `DeclaredVolumeCount` 可靠（真机自述 4 片、实际 2 片）。
+             * 片数就用实收片数，顺序按首片 + 其余名字/大小定；⛔ 不拿反推片数把已齐的组判死。
+             */
+            long receivedForByteProof = unit.Pieces.Sum(piece => piece.Size);
+
+            if (unit.Pieces.Count >= 2 && receivedForByteProof == first.DeclaredTotalBytes)
+            {
+                total = unit.Pieces.Count;
+            }
+
             FamilyResult? confirmed = TryCompleteFromConfirmedOrder(unit, first, total);
 
             if (confirmed != null)

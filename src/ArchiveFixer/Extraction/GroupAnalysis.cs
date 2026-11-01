@@ -127,7 +127,8 @@ namespace ArchiveFixer.Extraction
         public static List<GroupCandidate> Analyze(
             IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry>? handoffs,
             IEnumerable<string>? scanRoots,
-            IEnumerable<string>? extraSeeds = null)
+            IEnumerable<string>? extraSeeds = null,
+            IReadOnlyCollection<string>? excludedSources = null)
         {
             var handoffByPath = new Dictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>(
                 StringComparer.OrdinalIgnoreCase);
@@ -157,7 +158,7 @@ namespace ArchiveFixer.Extraction
                 }
             }
 
-            return AnalyzeCore(seeds, scanRoots, handoffByPath);
+            return AnalyzeCore(seeds, scanRoots, handoffByPath, excludedSources);
         }
 
         /// <summary>
@@ -227,9 +228,14 @@ namespace ArchiveFixer.Extraction
         private static List<GroupCandidate> AnalyzeCore(
             IEnumerable<string>? seeds,
             IEnumerable<string>? scanRoots,
-            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath,
+            IReadOnlyCollection<string>? excludedSources = null)
         {
             var result = new List<GroupCandidate>();
+            var excluded = new HashSet<string>(
+                (excludedSources ?? Array.Empty<string>())
+                    .Where(path => !string.IsNullOrWhiteSpace(path)),
+                StringComparer.OrdinalIgnoreCase);
             var roots = (scanRoots ?? Enumerable.Empty<string>())
                 .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -268,6 +274,16 @@ namespace ArchiveFixer.Extraction
                          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path)))
             {
                 if (byteFitConsumed.Contains(seed))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ 2026-11-01 真机：根任务的**源包本身**（`2.exe`，内容卡 Unknown、无卷槽）
+                 * 与它解出来的 `2.part*.rar` 基名同为 "2"，被收进子分卷组 ⇒ 组永远 Unknown。
+                 * 由交界处把"没有分卷证据的根任务源路径"传进来，这里一律不种、不收。
+                 */
+                if (excluded.Contains(seed))
                 {
                     continue;
                 }
@@ -320,7 +336,7 @@ namespace ArchiveFixer.Extraction
                     ArchiveFixer.Detection.VolumeContentFormat seedFormat =
                         ArchiveFixer.Detection.FileNature.Inspect(seed).Format;
 
-                    foreach (string piece in CollectPieces(seed, baseName, seedFormat, roots, handoffByPath))
+                    foreach (string piece in CollectPieces(seed, baseName, seedFormat, roots, handoffByPath, excluded))
                     {
                         if (seenPieces.Add(piece))
                         {
@@ -487,7 +503,8 @@ namespace ArchiveFixer.Extraction
             string baseName,
             ArchiveFixer.Detection.VolumeContentFormat seedFormat,
             IReadOnlyList<string> roots,
-            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath,
+            IReadOnlySet<string> excluded)
         {
             var pieces = new List<string> { seed };
             var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -532,7 +549,8 @@ namespace ArchiveFixer.Extraction
             foreach (string path in source)
             {
                 if (string.Equals(path, seed, StringComparison.OrdinalIgnoreCase)
-                    || !File.Exists(path))
+                    || !File.Exists(path)
+                    || excluded.Contains(path))
                 {
                     continue;
                 }

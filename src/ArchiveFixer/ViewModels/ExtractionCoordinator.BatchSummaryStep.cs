@@ -25,12 +25,6 @@ namespace ArchiveFixer.ViewModels
     /// <summary>批末一条汇总（任务数/成功/失败/跳过/用时 + 失败逐条；第 8 块，同一 partial 类）。</summary>
     internal sealed partial class ExtractionCoordinator
     {
-        /// <summary>
-        /// 最近一次批末汇总的计数快照。导出抬头读它，⛔ 不再用"导出那一刻的任务表"重算：
-        /// 真机 2026-11-01 抬头写成功 18、正文汇总写成功 21（批末以后任务表被补建/清理过）。
-        /// </summary>
-        internal BatchOutcomeTally? LastBatchTally { get; private set; }
-
         private void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
         {
             CleanupConfirmedOrderStagingDirectories();
@@ -53,7 +47,6 @@ namespace ArchiveFixer.ViewModels
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底，两处都不许破。
              */
             BatchOutcomeTally tally = BatchOutcomeTally.Count(tasks);
-            LastBatchTally = tally;
 
             DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);

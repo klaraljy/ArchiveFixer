@@ -144,6 +144,45 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 根任务源包_内容卡Unknown_也要按来源排除出子分卷组()
+        {
+            string parent = Create("2.exe", 100);
+            string part1 = Create("2.part1.rar", 500);
+            string part2 = Create("2.part2.rar", 500);
+            string part3 = Create("2.part3.rar", 50);
+
+            var handoffs = new[]
+            {
+                new VolumeHandoffEntry
+                {
+                    Path = parent,
+                    BaseName = "2",
+                    Format = VolumeContentFormat.Unknown,
+                    Size = 100,
+                    BodyKind = ArchiveBodyKind.Unknown,
+                    Membership = VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+                    ContentFail = VolumeNumberFail.None,
+                    SourceLayer = _root,
+                    Source = VolumeHandoffSource.UserImported
+                },
+                RarPart(part1, 500, 1, firstPiece: true),
+                RarPart(part2, 500, 2),
+                RarPart(part3, 50, 3)
+            };
+
+            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
+                GroupAnalysis.Analyze(handoffs, new[] { _root }, extraSeeds: null, excludedSources: new[] { parent });
+
+            GroupAnalysis.GroupCandidate? group = groups
+                .FirstOrDefault(candidate => candidate.Pieces.Contains(part1));
+
+            Assert.NotNull(group);
+            Assert.DoesNotContain(parent, group!.Pieces);
+            Assert.Equal(3, group.Pieces.Count);
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict);
+        }
+
+        [Fact]
         public void 裸rar父包_卷号器会给slot1_也不许混进子分卷组()
         {
             string parent = Create("2.rar", 100);

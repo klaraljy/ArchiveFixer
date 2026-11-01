@@ -1335,12 +1335,50 @@ namespace ArchiveFixer.ViewModels
                             .Where(seed => keepRules.FindMatch(seed) == null)
                             .ToList();
 
+                        /*
+                         * ⛔ 2026-11-01 真机（2.exe 与 2.part1/2/3.rar）：父包是**任务源包**，
+                         * 内容卡是 Unknown（内嵌归档）⇒ 任何"内容自证 SingleComplete"的过滤都抓不到它。
+                         * 判据放回**来源层**：根任务源包自身没有分卷证据（不是 Volume 片、没有名字卷槽）
+                         * ⇒ 它绝不参与自己产物所组成的分卷组。
+                         */
+                        var nonVolumeRootSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        var ledgerByPath = _extractionCoordinator.FirstStepLedger.Entries
+                            .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Path))
+                            .GroupBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+                        foreach (ArchiveTask root in Tasks)
+                        {
+                            if (root == null || root.IsContinuationTask)
+                            {
+                                continue;
+                            }
+
+                            foreach (string? rootPath in new[] { root.CurrentPath, root.OriginalPath })
+                            {
+                                if (string.IsNullOrWhiteSpace(rootPath)
+                                    || !ledgerByPath.TryGetValue(rootPath, out ArchiveFixer.Detection.FirstStepFileLedgerEntry? rootEntry))
+                                {
+                                    continue;
+                                }
+
+                                if (rootEntry.BodyKind != ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                                    && rootEntry.BodyKind != ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                                    && !rootEntry.NameSlot.HasValue
+                                    && rootEntry.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                                {
+                                    nonVolumeRootSources.Add(rootPath);
+                                }
+                            }
+                        }
+
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
                         List<GroupAnalysis.GroupCandidate> analyzedGroups = await Task.Run(
                             () => GroupAnalysis.Analyze(
                                 ledgerHandoff,
                                 analysisRoots,
-                                extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase)).ToList());
+                                extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase),
+                                nonVolumeRootSources).ToList());
                         UiActivity.Mark("空闲");
 
                         foreach (GroupAnalysis.GroupCandidate group in analyzedGroups)
@@ -1388,6 +1426,27 @@ namespace ArchiveFixer.ViewModels
                                             ?? string.Empty
                                     })
                                 .ConfigureAwait(true);
+
+                        /*
+                         * ⛔ 2026-11-01 真机：字节补齐配对已在组分析层证完整（`风景01`），
+                         * 但 prepared resolver 对同名跨目录首片只给 Unknown；它一旦参与建组，
+                         * 会把 Complete 的结论顶掉。⇒ 同一基名已有字节补齐 Complete 时，
+                         * **非 Complete 的 prepared 组不参与**这一轮的组建设。
+                         */
+                        var byteFitCompleteBases = new HashSet<string>(
+                            analyzedGroups
+                                .Where(group => group.ByteFitPaired
+                                    && group.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                .Select(group => group.BaseName),
+                            StringComparer.OrdinalIgnoreCase);
+
+                        if (byteFitCompleteBases.Count > 0)
+                        {
+                            preparedGroups = preparedGroups
+                                .Where(group => group.IsComplete
+                                    || !byteFitCompleteBases.Contains(group.BaseName))
+                                .ToList();
+                        }
 
                         if (preparedGroups.Count > 0)
                         {
@@ -1447,14 +1506,10 @@ namespace ArchiveFixer.ViewModels
                                 preparedGroups.Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
-                            var incompletePreparedBaseNames = new HashSet<string>(
-                                preparedGroups.Where(group => !group.IsComplete).Select(group => group.BaseName),
-                                StringComparer.OrdinalIgnoreCase);
-
                             handoffGroups.RemoveAll(group =>
                                 preparedBaseNames.Contains(group.BaseName)
                                 && group.PreparedGroup == null
-                                && !(group.ByteFitPaired && incompletePreparedBaseNames.Contains(group.BaseName)));
+                                && !group.ByteFitPaired);
 
                             var byteFitBaseNames = new HashSet<string>(
                                 handoffGroups

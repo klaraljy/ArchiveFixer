@@ -57,6 +57,26 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 首卷反推4片但两片字节和正好等于自述整包_按字节证据判完整()
+        {
+            string layer = NewLayer();
+
+            var unit = NewUnit(
+                "组",
+                layer,
+                Path.Combine(layer, "组.7z.001"),
+                Fact(Path.Combine(layer, "组.7z.001"), 100, first: true, declaredCount: 4, declaredTotal: 150),
+                Fact(Path.Combine(layer, "组.7z.002"), 50));
+
+            FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(
+                new[] { "组.7z.001", "组.7z.002" },
+                result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
+        }
+
+        [Fact]
         public void 首卷自述3片但只收到2片_只能判不出_不能报缺片()
         {
             string layer = NewLayer();

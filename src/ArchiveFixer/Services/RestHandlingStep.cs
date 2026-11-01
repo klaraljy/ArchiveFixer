@@ -284,7 +284,11 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 整条续解链是否**全部成功**（任何跳过/失败/部分完成都算否 —— 那意味着还有没展开的内容）。
+        /// 整条续解链是否**全部成功**。
+        ///
+        /// <para>⚠ 2026-11-01 真机：跟班卷（分卷组后续卷）按设计就是 `Skipped`，
+        /// 把 Skipped 当失败会让成功链也不清空其余物（真机 `6191.exe` 5.1 GB 留在其余物里）。
+        /// 只有失败/取消/部分完成/未处理才算否。</para>
         /// </summary>
         private static bool ChainFullySucceeded(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks)
         {
@@ -294,7 +298,8 @@ namespace ArchiveFixer.Services
             }
 
             return chainTasks == null
-                || chainTasks.All(task => task != null && task.Outcome == TaskOutcome.Succeeded);
+                || chainTasks.All(task => task != null
+                    && task.Outcome is TaskOutcome.Succeeded or TaskOutcome.Skipped);
         }
 
         /// <summary>
