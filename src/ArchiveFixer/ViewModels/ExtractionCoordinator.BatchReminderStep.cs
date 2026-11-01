@@ -95,45 +95,71 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"并发：自动（设备={DescribeDevice(_autoConcurrency.Device)}，"
-                + $"初始 {_autoConcurrency.InitialLimit} 个，硬顶 {_autoConcurrency.HardLimit} 个）");
+                $"并发：自动（设备={DescribeDevice(_autoDevice)}，"
+                + $"起点 {_autoConcurrency.InitialLimit} 个，上限 {_autoConcurrency.MaxLimit} 个，"
+                + $"基线 {(_autoConcurrency.MinLatencySecondsPerGb > 0 ? "继承 profile" : "首批学习")}）");
 
             return _autoConcurrency.InitialLimit;
         }
 
-        private AutoConcurrencyController CreateAutoConcurrencyController(IReadOnlyList<ArchiveTask>? tasks)
+        private AdaptiveConcurrencyController CreateAutoConcurrencyController(IReadOnlyList<ArchiveTask>? tasks)
         {
             ArchiveTask? first = tasks?.FirstOrDefault(task =>
                 task != null && !string.IsNullOrWhiteSpace(task.CurrentPath));
             string? samplePath = first?.CurrentPath;
-            StorageDeviceKind device = StorageDeviceProfile.Detect(samplePath);
+            _autoDevice = StorageDeviceProfile.Detect(samplePath);
+            _autoProfileRoot = string.IsNullOrWhiteSpace(samplePath)
+                ? string.Empty
+                : Path.GetPathRoot(Path.GetFullPath(samplePath)) ?? string.Empty;
 
-            bool sameVolume = false;
+            ConcurrencyProfile? profile = ConcurrencyProfileStore.Load(
+                _pathService.DataRootDirectory,
+                _autoProfileRoot,
+                _autoDevice);
 
-            if (first != null && !string.IsNullOrWhiteSpace(first.CurrentPath))
+            int prior;
+
+            if (Settings.ConcurrencyOverride > 0)
             {
-                string outputDirectory = string.IsNullOrWhiteSpace(first.OutputPath)
-                    ? Path.GetDirectoryName(first.CurrentPath) ?? string.Empty
-                    : first.OutputPath;
-
-                string sourceRoot = Path.GetPathRoot(Path.GetFullPath(first.CurrentPath)) ?? string.Empty;
-                string outputRoot = string.IsNullOrWhiteSpace(outputDirectory)
-                    ? string.Empty
-                    : Path.GetPathRoot(Path.GetFullPath(outputDirectory)) ?? string.Empty;
-
-                sameVolume = sourceRoot.Length > 0
-                    && outputRoot.Length > 0
-                    && string.Equals(sourceRoot, outputRoot, StringComparison.OrdinalIgnoreCase);
+                prior = Settings.ConcurrencyOverride;
+            }
+            else if (profile != null)
+            {
+                prior = profile.LastGoodLimit;
+            }
+            else
+            {
+                prior = _autoDevice == StorageDeviceKind.Ssd
+                    ? Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
+                    : 1;
             }
 
-            long memory = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+            return new AdaptiveConcurrencyController(
+                prior,
+                maxLimit: AdaptiveConcurrencyController.DefaultMaxLimit,
+                bufferRatio: 0.20,
+                knownMinLatencySecondsPerGb: profile?.MinLatencySecondsPerGb ?? 0,
+                fixedLimit: Settings.ConcurrencyOverride > 0);
+        }
 
-            return new AutoConcurrencyController(
-                device,
-                sameVolume,
-                Environment.ProcessorCount,
-                memory,
-                Settings.ConcurrencyOverride);
+        /// <summary>批末把“这次稳定用的并发/基线”记到本机 profile（SQL DOP feedback 式持久化）。</summary>
+        private void SaveConcurrencyProfile()
+        {
+            if (_autoConcurrency == null || _autoProfileRoot.Length == 0 || _autoConcurrency.IsFixed)
+            {
+                return;
+            }
+
+            ConcurrencyProfileStore.Save(
+                _pathService.DataRootDirectory,
+                _autoProfileRoot,
+                _autoDevice,
+                new ConcurrencyProfile
+                {
+                    LastGoodLimit = _autoConcurrency.CurrentLimit,
+                    MinLatencySecondsPerGb = _autoConcurrency.MinLatencySecondsPerGb,
+                    UpdatedAt = DateTimeOffset.Now
+                });
         }
 
         private static string DescribeDevice(StorageDeviceKind device) => device switch

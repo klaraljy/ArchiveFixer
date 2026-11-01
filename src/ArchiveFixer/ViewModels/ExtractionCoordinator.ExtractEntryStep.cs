@@ -648,6 +648,9 @@ namespace ArchiveFixer.ViewModels
 
                 await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
 
+                // P1：本批稳定值写入本机 profile（下次同卷直接从这里起步）。
+                SaveConcurrencyProfile();
+
                 /*
                  * **目标 ④ 的范围记录**（用户 2026-10-24）：手动「只解压」没有轮循环，本批**不自动接手**
                  * 分卷组（交接单照常登记、文件原地不动）。这里如实写一行，别让用户以为第二大步也跑了。
@@ -1045,6 +1048,29 @@ namespace ArchiveFixer.ViewModels
                 _autoProgress[task] = current;
             }
 
+            /*
+             * P0：完成任务的**归一化延迟**（秒/GB）。用源包大小做分母（输出字节尚未逐任务记账），
+             * 跨包大小不同也能比较；窗口取中位数，避免单个缓存命中样本带偏。
+             */
+            if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedTask)
+                && finishedTask != null
+                && finishedTask.StartTime.HasValue
+                && finishedTask.EndTime.HasValue)
+            {
+                double elapsedSeconds = (finishedTask.EndTime.Value - finishedTask.StartTime.Value).TotalSeconds;
+                double gigabytes = Math.Max(1L, finishedTask.SourceSizeBytes) / (1024.0 * 1024 * 1024);
+
+                if (elapsedSeconds > 0 && gigabytes > 0)
+                {
+                    _autoWindowLatencies.Add(elapsedSeconds / gigabytes);
+                }
+
+                if (finishedTask.Outcome != TaskOutcome.Succeeded)
+                {
+                    _autoWindowFailures++;
+                }
+            }
+
             double seconds = _autoWindow.Elapsed.TotalSeconds;
 
             if (seconds < 5)
@@ -1053,22 +1079,45 @@ namespace ArchiveFixer.ViewModels
             }
 
             int stalls = UiActivity.TakeUiStallCount();
-            int next = _autoConcurrency.Observe(
-                bytes / seconds,
+            double latency = Median(_autoWindowLatencies);
+            int next = _autoConcurrency.Observe(new ConcurrencyWindowSample(
+                latency,
+                bytes / seconds / (1024 * 1024),
                 runningTasks.Count,
                 stalls,
-                diskSpaceLow: false);
+                DiskSpaceLow: false,
+                _autoWindowFailures));
 
             _autoWindow.Restart();
+            _autoWindowLatencies.Clear();
+            _autoWindowFailures = 0;
 
             if (next != maxParallel)
             {
                 AppendLog(
                     "INFO",
-                    $"并发调整 {maxParallel} → {next}：窗口吞吐 {bytes / seconds / (1024 * 1024):F1} MB/s，"
-                    + $"活跃 {runningTasks.Count} 个，UI 停顿 {stalls} 次（设备={_autoConcurrency.Device}）");
+                    $"并发调整 {maxParallel} → {next}：归一化延迟 {latency:F2} s/GB，"
+                    + $"基线 {_autoConcurrency.MinLatencySecondsPerGb:F2} s/GB，"
+                    + $"窗口吞吐 {bytes / seconds / (1024 * 1024):F1} MB/s，活跃 {runningTasks.Count} 个，"
+                    + $"UI 停顿 {stalls} 次（设备={_autoDevice}）");
                 maxParallel = next;
             }
+        }
+
+        private static double Median(List<double> values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return 0;
+            }
+
+            var sorted = new List<double>(values);
+            sorted.Sort();
+            int middle = sorted.Count / 2;
+
+            return sorted.Count % 2 == 1
+                ? sorted[middle]
+                : (sorted[middle - 1] + sorted[middle]) / 2;
         }
 
         /// <summary>

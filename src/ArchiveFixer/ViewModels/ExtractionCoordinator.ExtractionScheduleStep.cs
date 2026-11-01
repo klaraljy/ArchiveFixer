@@ -798,13 +798,21 @@ namespace ArchiveFixer.ViewModels
         private bool _spaceTightThisBatch;
 
         /// <summary>
-        /// 本批的自适应并发控制器（设备探测 + AIMD）。⛔ 只服务调度，不写设置、不暴露给用户。
+        /// 本批的自适应并发控制器（延迟梯度 + AIMD）。⛔ 只服务调度，不写设置、不暴露给用户。
         /// </summary>
-        private AutoConcurrencyController? _autoConcurrency;
+        private AdaptiveConcurrencyController? _autoConcurrency;
 
         private readonly Dictionary<ArchiveTask, int> _autoProgress = new();
 
         private readonly Dictionary<Task, ArchiveTask> _autoTaskMap = new();
+
+        private readonly List<double> _autoWindowLatencies = new();
+
+        private int _autoWindowFailures;
+
+        private string _autoProfileRoot = string.Empty;
+
+        private StorageDeviceKind _autoDevice = StorageDeviceKind.Unknown;
 
         private readonly System.Diagnostics.Stopwatch _autoWindow =
             System.Diagnostics.Stopwatch.StartNew();
