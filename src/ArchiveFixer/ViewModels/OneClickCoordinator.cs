@@ -1422,20 +1422,25 @@ namespace ArchiveFixer.ViewModels
 
                             preparedGroups = materialized;
 
+                            /*
+                             * ⛔ 2026-11-01：旧行为"prepared 组一旦存在，同基名旧候选让位"必须保留
+                             * （真机 904 批：让位被改成"只有 Complete 才让位"后，多出来的 Unknown 候选
+                             * 干扰了正常组结算 ⇒ c4 过程物按档 6 条红）。
+                             * 唯一例外：**字节补齐配对**已经在同基名给出 Complete，而 resolver 对该基名
+                             * 只有 Unknown（2916/3100 的 `风景01`）—— 这一档保留配对组。
+                             */
                             var preparedBaseNames = new HashSet<string>(
-                                preparedGroups.Where(group => group.IsComplete).Select(group => group.BaseName),
+                                preparedGroups.Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
-                            /*
-                             * ⛔ 2026-11-01：只有**可证完整**的 prepared 组才让同基名旧候选让位。
-                             * resolver 对 2916/3100 的 `风景01` 给的是 Unknown（两个目录同基名），
-                             * 而字节补齐配对已经给出 Complete —— 旧逻辑按"基名出现在 prepared 里"就删，
-                             * 会把真正可用的配对组删掉。
-                             */
+                            var incompletePreparedBaseNames = new HashSet<string>(
+                                preparedGroups.Where(group => !group.IsComplete).Select(group => group.BaseName),
+                                StringComparer.OrdinalIgnoreCase);
+
                             handoffGroups.RemoveAll(group =>
                                 preparedBaseNames.Contains(group.BaseName)
                                 && group.PreparedGroup == null
-                                && !group.ByteFitPaired);
+                                && !(group.ByteFitPaired && incompletePreparedBaseNames.Contains(group.BaseName)));
 
                             var byteFitBaseNames = new HashSet<string>(
                                 handoffGroups
