@@ -1423,19 +1423,39 @@ namespace ArchiveFixer.ViewModels
                             preparedGroups = materialized;
 
                             var preparedBaseNames = new HashSet<string>(
-                                preparedGroups.Select(group => group.BaseName),
+                                preparedGroups.Where(group => group.IsComplete).Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
-                            // prepared 组一旦存在，同一基名的旧组分析候选让位（⛔ 不两套同时消费）。
+                            /*
+                             * ⛔ 2026-11-01：只有**可证完整**的 prepared 组才让同基名旧候选让位。
+                             * resolver 对 2916/3100 的 `风景01` 给的是 Unknown（两个目录同基名），
+                             * 而字节补齐配对已经给出 Complete —— 旧逻辑按"基名出现在 prepared 里"就删，
+                             * 会把真正可用的配对组删掉。
+                             */
                             handoffGroups.RemoveAll(group =>
                                 preparedBaseNames.Contains(group.BaseName)
-                                && group.PreparedGroup == null);
+                                && group.PreparedGroup == null
+                                && !group.ByteFitPaired);
+
+                            var byteFitBaseNames = new HashSet<string>(
+                                handoffGroups
+                                    .Where(group => group.ByteFitPaired
+                                        && group.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                    .Select(group => group.BaseName),
+                                StringComparer.OrdinalIgnoreCase);
 
                             List<GroupAnalysis.GroupCandidate> preparedCandidates =
                                 GroupAnalysis.AnalyzePrepared(preparedGroups);
 
                             foreach (GroupAnalysis.GroupCandidate group in preparedCandidates)
                             {
+                                // 字节补齐配对已经给出可证完整的组 ⇒ 同一基名的 resolver Unknown 不再叠加。
+                                if (byteFitBaseNames.Contains(group.BaseName)
+                                    && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                {
+                                    continue;
+                                }
+
                                 handoffGroups.Add(group);
                                 AppendLog("INFO", $"[第二大步·prepared] {group.Describe()}");
                             }

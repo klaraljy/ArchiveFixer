@@ -78,6 +78,12 @@ namespace ArchiveFixer.Extraction
             public IReadOnlyList<GroupPieceFact> PieceFacts { get; set; } = Array.Empty<GroupPieceFact>();
 
             /// <summary>
+            /// 这一组是**字节补齐配对**出来的（首片自述整包 = 首片 + 同目录唯一无魔数尾片）。
+            /// 下游据此优先于 resolver 对同名/同基名的 Unknown 结论。
+            /// </summary>
+            public bool ByteFitPaired { get; set; }
+
+            /// <summary>
             /// 边界 resolver 已经解析好的组（骨架阶段可能为 null）。
             /// 有它时，入口/顺序/标准名以它为准，⛔ 不再从脏名重排。
             /// </summary>
@@ -237,9 +243,35 @@ namespace ArchiveFixer.Extraction
              */
             var seedsByBaseName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
+            /*
+             * ⛔ 2026-11-01 真机（2916/3100 的 风景01.mp4 + 风景02.mp4）：
+             * 7z 首片自述整包 = 本片 + 同目录一份**无魔数**的尾片（字节精确补齐），
+             * 但两片基名不同（风景01 / 风景02），永远进不了同一个基名桶。
+             * ⇒ 在按基名分桶之前先做一次"字节补齐配对"，配出来的组直接产出候选，
+             * 这两条路径不再参与后面的基名收片（避免又被同名首片合并成 Unknown）。
+             */
+            var byteFitConsumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((string pairBaseName, List<string> pairPieces) in FormByteFitPairs(handoffByPath))
+            {
+                foreach (string piece in pairPieces)
+                {
+                    byteFitConsumed.Add(piece);
+                }
+
+                GroupCandidate pairCandidate = Evaluate(pairBaseName, pairPieces, handoffByPath);
+                pairCandidate.ByteFitPaired = true;
+                result.Add(pairCandidate);
+            }
+
             foreach (string seed in (seeds ?? Enumerable.Empty<string>())
                          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path)))
             {
+                if (byteFitConsumed.Contains(seed))
+                {
+                    continue;
+                }
+
                 /*
                  * ⛔ 2026-11-01 真机（2.exe / 2.part*.rar）：**已经自证是完整单卷的文件，不许再当分卷组种子**。
                  * 父包 2.exe 与它解出来的 2.part1/2/3.rar 基名都是 "2"，旧逻辑只比基名+族，
@@ -651,6 +683,162 @@ namespace ArchiveFixer.Extraction
             }
 
             return IsProvablySingleCompleteNonMember(item.Card, item.Path);
+        }
+
+        /// <summary>
+        /// 字节补齐配对里的尾片：账本里只能是"纯 Unknown"（没有卷号/名字槽/首卷标记/自述整包），
+        /// 否则它属于别的组，⛔ 不许抢过来配对。
+        /// </summary>
+        private static bool IsByteFitTailCandidate(ArchiveFixer.Detection.VolumeHandoffEntry entry)
+        {
+            return entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                && entry.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                && !entry.NameVolumeIndex.HasValue
+                && !entry.FirstVolumeFlag
+                && entry.DeclaredTotalBytes == 0
+                && !IsProvablySingleCompleteNonMember(entry);
+        }
+
+        /// <summary>
+        /// **字节补齐配对**（2026-11-01 真机 2916/3100 的 `风景01.mp4` + `风景02.mp4`）：
+        ///
+        /// <para>7z 首片自述"整包应该有多少字节"，而尾片既没有魔数、名字也没有卷标记，
+        /// 两片基名还不一样（`风景01` / `风景02`）⇒ 按基名收片永远配不到一起。</para>
+        ///
+        /// <para>判据（严格、不猜）：首片 `VolumeFirstPiece` + `DeclaredTotalBytes &gt; 自身`；
+        /// 同目录里**恰好一份**没有魔数、没有名字卷槽、不是完整单卷的文件，其字节数正好等于
+        /// `DeclaredTotalBytes - 首片字节` ⇒ 这两片就是一组（第一片 + 唯一的尾片）。
+        /// 同目录有多份候选 / 已有同目录同基名的账本兄弟 ⇒ 不配对（交给正常基名路径）。</para>
+        /// </summary>
+        private static IEnumerable<(string BaseName, List<string> Pieces)> FormByteFitPairs(
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
+        {
+            if (handoffByPath == null || handoffByPath.Count == 0)
+            {
+                yield break;
+            }
+
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry
+                     in handoffByPath.Values
+                         .Where(item => item != null)
+                         .OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(entry.Path)
+                    || used.Contains(entry.Path)
+                    || entry.BodyKind != ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    || entry.Size <= 0
+                    || entry.DeclaredTotalBytes <= entry.Size
+                    || entry.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember)
+                {
+                    continue;
+                }
+
+                string baseName = !string.IsNullOrWhiteSpace(entry.BaseName)
+                    ? entry.BaseName
+                    : ResolveGroupBaseName(entry.Path);
+
+                string directory = Path.GetDirectoryName(entry.Path) ?? string.Empty;
+
+                if (baseName.Length == 0 || directory.Length == 0 || !Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                // 同目录同基名已有别的账本片 ⇒ 这是正常的基名组，配对逻辑让位。
+                bool hasSameDirectorySibling = handoffByPath.Values.Any(other =>
+                    other != null
+                    && !string.Equals(other.Path, entry.Path, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(other.BaseName, baseName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(other.Path) ?? string.Empty),
+                        SafePathHelper.GetFullPathSafe(directory),
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (hasSameDirectorySibling)
+                {
+                    continue;
+                }
+
+                long remainder = entry.DeclaredTotalBytes - entry.Size;
+                var matches = new List<string>();
+
+                try
+                {
+                    foreach (string path in Directory.EnumerateFiles(directory))
+                    {
+                        if (string.Equals(path, entry.Path, StringComparison.OrdinalIgnoreCase)
+                            || used.Contains(path))
+                        {
+                            continue;
+                        }
+
+                        /*
+                         * 尾片可能已经由第一大步登记进账本（本次真机就是这样：风景02.mp4
+                         * 作为 Unknown 任务进了账本）。只接受"纯 Unknown 尾片"这一种账本事实：
+                         * 没有卷号/名字槽/首卷标记/自述整包，也不是可证完整单卷。
+                         */
+                        if (handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? tailHandoff)
+                            && !IsByteFitTailCandidate(tailHandoff))
+                        {
+                            continue;
+                        }
+
+                        long size;
+
+                        try
+                        {
+                            size = new FileInfo(path).Length;
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (size != remainder)
+                        {
+                            continue;
+                        }
+
+                        ArchiveFixer.Detection.FileNatureCard card;
+
+                        try
+                        {
+                            card = ArchiveFixer.Detection.FileNature.Inspect(path);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (card.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
+                            || card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
+                            || IsProvablySingleCompleteNonMember(card, path)
+                            || ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                                FileNameHelper.GetFileName(path)).HasValue)
+                        {
+                            continue;
+                        }
+
+                        matches.Add(path);
+                    }
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (matches.Count != 1)
+                {
+                    continue;
+                }
+
+                used.Add(entry.Path);
+                used.Add(matches[0]);
+
+                yield return (baseName, new List<string> { entry.Path, matches[0] });
+            }
         }
 
         /// <summary>

@@ -143,12 +143,101 @@ namespace ArchiveFixer.Tests
                 candidate => candidate.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete);
         }
 
+        [Fact]
+        public void 首片自述整包_按字节补齐配出同目录唯一尾片()
+        {
+            string first = Create("风景01.mp4", 1000);
+            string tail = Create("风景02.mp4", 200);
+
+            var handoffs = new[]
+            {
+                SevenZipFirst(first, 1000, 1200, "风景01"),
+                UnknownTail(tail, 200, "风景02")
+            };
+
+            GroupAnalysis.GroupCandidate candidate = Assert.Single(
+                GroupAnalysis.Analyze(handoffs, new[] { _root }));
+
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, candidate.Verdict);
+            Assert.Equal(new[] { first, tail }, candidate.Pieces.ToArray());
+            Assert.Equal(first, candidate.EntryPath);
+            Assert.Contains("自述整包对账", candidate.Evidence, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 两个目录各自字节补齐_配出两组而不是并成一组()
+        {
+            string dirA = Path.Combine(_root, "2916");
+            string dirB = Path.Combine(_root, "3100");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+
+            string a1 = CreateIn(dirA, "风景01.mp4", 1000);
+            string a2 = CreateIn(dirA, "风景02.mp4", 200);
+            string b1 = CreateIn(dirB, "风景01.mp4", 500);
+            string b2 = CreateIn(dirB, "风景02.mp4", 100);
+
+            var handoffs = new[]
+            {
+                SevenZipFirst(a1, 1000, 1200, "风景01"),
+                UnknownTail(a2, 200, "风景02"),
+                SevenZipFirst(b1, 500, 600, "风景01"),
+                UnknownTail(b2, 100, "风景02")
+            };
+
+            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
+                GroupAnalysis.Analyze(handoffs, new[] { _root });
+
+            Assert.Equal(2, groups.Count);
+            Assert.All(groups, group => Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict));
+            Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
+            Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
+        }
+
         private string Create(string name, int length)
         {
             string path = Path.Combine(_root, name);
             File.WriteAllBytes(path, new byte[length]);
             return path;
         }
+
+        private static string CreateIn(string directory, string name, int length)
+        {
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, name);
+            File.WriteAllBytes(path, new byte[length]);
+            return path;
+        }
+
+        private VolumeHandoffEntry SevenZipFirst(string path, long size, long declaredTotal, string baseName) =>
+            new()
+            {
+                Path = path,
+                BaseName = baseName,
+                Format = VolumeContentFormat.SevenZip,
+                Size = size,
+                BodyKind = ArchiveBodyKind.VolumeFirstPiece,
+                FirstVolumeFlag = true,
+                Membership = VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+                ContentFail = VolumeNumberFail.None,
+                DeclaredTotalBytes = declaredTotal,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                Source = VolumeHandoffSource.UserImported
+            };
+
+        private VolumeHandoffEntry UnknownTail(string path, long size, string baseName) =>
+            new()
+            {
+                Path = path,
+                BaseName = baseName,
+                Format = VolumeContentFormat.Unknown,
+                Size = size,
+                BodyKind = ArchiveBodyKind.Unknown,
+                Membership = VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+                ContentFail = VolumeNumberFail.None,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                Source = VolumeHandoffSource.UserImported
+            };
 
         private VolumeHandoffEntry RarPart(string path, long size, int slot, bool firstPiece = false) =>
             new()
