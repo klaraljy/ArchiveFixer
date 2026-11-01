@@ -68,7 +68,7 @@ namespace ArchiveFixer.Tests
                 "风景01",
                 VolumeNamingFamily.RarPart,
                 layerA,
-                Path.Combine(layerA, "风景01.part1.rar"),
+                Path.Combine(layerA, "风景01.mp4"),
                 ownerTaskFileName: "风景01.mp4",
                 Pieces(layerA, VolumeHandoffSource.UserImported),
                 missingNumbers: null,
@@ -81,7 +81,7 @@ namespace ArchiveFixer.Tests
                 "风景01",
                 VolumeNamingFamily.RarPart,
                 layerB,
-                Path.Combine(layerB, "风景01.part1.rar"),
+                Path.Combine(layerB, "风景01.mp4"),
                 ownerTaskFileName: "风景01b.mp4",
                 Pieces(layerB, VolumeHandoffSource.UserImported),
                 missingNumbers: null,
@@ -94,6 +94,49 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(unitB);
             Assert.NotSame(unitA, unitB);
             Assert.Equal(2, service.Units.Count);
+        }
+
+        [Fact]
+        public void 同名任务在不同目录_按全路径找组不能串组()
+        {
+            const string layerA = @"C:\in\2916";
+            const string layerB = @"C:\in\3100";
+            var service = new VolumeGroupService();
+
+            VolumeGroupUnit? unitA = service.TryCommit(
+                "风景01",
+                VolumeNamingFamily.RarPart,
+                layerA,
+                Path.Combine(layerA, "风景01.mp4"),
+                ownerTaskFileName: "风景01.mp4",
+                Pieces(layerA, VolumeHandoffSource.UserImported),
+                missingNumbers: null,
+                evidence: "组 A",
+                declaredPieceCount: null,
+                declaredTotalBytes: null,
+                outputLayer: layerA);
+
+            VolumeGroupUnit? unitB = service.TryCommit(
+                "风景01",
+                VolumeNamingFamily.RarPart,
+                layerB,
+                Path.Combine(layerB, "风景01.mp4"),
+                ownerTaskFileName: "风景01.mp4",
+                Pieces(layerB, VolumeHandoffSource.UserImported),
+                missingNumbers: null,
+                evidence: "组 B",
+                declaredPieceCount: null,
+                declaredTotalBytes: null,
+                outputLayer: layerB);
+
+            Assert.NotNull(unitA);
+            Assert.NotNull(unitB);
+
+            VolumeGroupUnit? byA = service.FindForTask(Path.Combine(layerA, "风景01.mp4"), "风景01.mp4");
+            VolumeGroupUnit? byB = service.FindForTask(Path.Combine(layerB, "风景01.mp4"), "风景01.mp4");
+
+            Assert.Same(unitA, byA);
+            Assert.Same(unitB, byB);
         }
 
         private static IReadOnlyList<GroupPieceFact> Pieces(

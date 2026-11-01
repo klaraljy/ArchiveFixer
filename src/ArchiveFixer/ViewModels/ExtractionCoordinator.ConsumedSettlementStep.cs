@@ -384,6 +384,21 @@ namespace ArchiveFixer.ViewModels
                 string consumerGroupName = FileNameHelper.GetFileName(consumer.CurrentPath ?? string.Empty);
 
                 /*
+                 * ⛔ 2026-11-01 真机：字节补齐组的尾片基名与组基名**必然不同**
+                 * （`风景01` 组里坐着 `风景02.mp4`），按"族+基名"判同组永远不成立。
+                 * 组是**显式片清单**成立的 ⇒ 先问组账：这一片的全路径是不是消费方那一组的片？
+                 */
+                VolumeGroupUnit? consumerUnit = _volumeGroupService.FindForTask(
+                    consumer.CurrentPath,
+                    consumerGroupName);
+                bool inConsumerGroup = consumerUnit != null
+                    && consumerUnit.Pieces.Any(pieceFact =>
+                        !string.IsNullOrWhiteSpace(pieceFact.Path)
+                        && SafePathHelper.PathEquals(
+                            pieceFact.Path,
+                            producedPiecePath ?? piece.CurrentPath ?? string.Empty));
+
+                /*
                  * ⛔ **名字认不出族时，用底层内容卡回答**（用户 2026-10-18 的 `&&` 口径：
                  * 第一大步的片是不是这一族的成员，看内容；名字只是辅助）。
                  * 现场（`19191919`）：`bbb-L2.zip-658` 的名字读不出 `.zip.00N` 族 ⇒ 老判据拒绝跟班收场
@@ -392,9 +407,10 @@ namespace ArchiveFixer.ViewModels
                  * ③ 基名与组基名有关（既有 `BaseNameRelatedToGroup`）。三条都成立才算同一族；
                  * 判不出 ⇒ 老口径（拒绝，不清、不删）。
                  */
-                bool sameGroup = pieceName.Length > 0
-                    && consumerGroupName.Length > 0
-                    && VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName);
+                bool sameGroup = inConsumerGroup
+                    || (pieceName.Length > 0
+                        && consumerGroupName.Length > 0
+                        && VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName));
 
                 if (!sameGroup)
                 {

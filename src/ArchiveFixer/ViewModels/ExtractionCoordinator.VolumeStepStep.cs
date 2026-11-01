@@ -427,7 +427,27 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            return SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
+            /*
+             * ⛔ 2026-11-01 真机：同名文件在不同目录（2916/3100 都叫 `风景01.mp4`）时，
+             * 只按文件名找 owner 会把两组的 owner 认成同一单 ⇒ 链接账/源包结算串组。
+             * 先按**组的入口全路径/片路径**精确匹配，匹配不到才退回文件名（兼容入口被改名）。
+             */
+            ArchiveTask[] snapshot = SnapshotTaskTable(Tasks);
+            ArchiveTask? byPath = snapshot.FirstOrDefault(candidate =>
+                candidate != null
+                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                && ((!string.IsNullOrWhiteSpace(unit.EntryPath)
+                     && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, unit.EntryPath))
+                    || unit.Pieces.Any(piece =>
+                        !string.IsNullOrWhiteSpace(piece.Path)
+                        && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path))));
+
+            if (byPath != null)
+            {
+                return byPath;
+            }
+
+            return snapshot.FirstOrDefault(candidate =>
                 candidate != null
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
                 && string.Equals(
@@ -444,8 +464,13 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            /*
+             * ⛔ 2026-11-01 真机：同名文件在不同目录（2916/3100 都叫 `风景01.mp4`）时，
+             * 按文件名找组会把两单认成同一组 ⇒ 第二组的链接账永远不结算。
+             * 先按入口/片的**全路径**找组，找不到才退回文件名（兼容入口被改名的旧形状）。
+             */
             string ownerName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
-            VolumeGroupUnit? unit = _volumeGroupService.FindByOwner(ownerName);
+            VolumeGroupUnit? unit = _volumeGroupService.FindForTask(task.CurrentPath, ownerName);
 
             /*
              * 只有**族算法接线并出了规范名计划**的组才走 Unit 收尾；

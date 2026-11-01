@@ -69,6 +69,34 @@ namespace ArchiveFixer.Extraction
                 string.Equals(unit.OwnerTaskFileName, ownerTaskFileName, StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// **按任务全路径找回它所属的组**（同名文件在不同目录时唯一可靠的入口）。
+        ///
+        /// <para>⛔ 2026-11-01 真机：2916/3100 各有一个 `风景01.mp4`；只按文件名找组，
+        /// 第二单会命中第一组的单元 ⇒ 第一组链接被删两次、第二组链接永远不清。
+        /// 先比入口/片的**全路径**，找不到才退回文件名（兼容入口改名/链接名）。</para>
+        /// </summary>
+        public VolumeGroupUnit? FindForTask(string? taskCurrentPath, string? ownerTaskFileName)
+        {
+            if (!string.IsNullOrWhiteSpace(taskCurrentPath))
+            {
+                VolumeGroupUnit? byPath = _units.Values.FirstOrDefault(unit =>
+                    unit != null
+                    && ((!string.IsNullOrWhiteSpace(unit.EntryPath)
+                         && ArchiveFixer.Helpers.SafePathHelper.PathEquals(unit.EntryPath, taskCurrentPath))
+                        || unit.Pieces.Any(piece =>
+                            !string.IsNullOrWhiteSpace(piece.Path)
+                            && ArchiveFixer.Helpers.SafePathHelper.PathEquals(piece.Path, taskCurrentPath))));
+
+                if (byPath != null)
+                {
+                    return byPath;
+                }
+            }
+
+            return FindByOwner(ownerTaskFileName);
+        }
+
         /// <summary>链接完成后回写（唯一写者；只追加本次真建出来的链接名）。</summary>
         public void MarkLinked(VolumeGroupUnit? unit, IReadOnlyList<string>? linkedNames)
         {
