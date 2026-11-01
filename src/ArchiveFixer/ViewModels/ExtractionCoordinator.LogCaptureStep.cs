@@ -55,13 +55,23 @@ namespace ArchiveFixer.ViewModels
                 string line = $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
                     + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}";
 
+                /*
+                 * ⛔ 2026-11-01：成功/跳过/未处理的行不是"错误"，不许再打成 WARN
+                 * （真机日志里成功任务也写 WARN，用户会以为出问题了）。
+                 */
+                string level = row.Outcome is TaskOutcome.Failed
+                        or TaskOutcome.Cancelled
+                        or TaskOutcome.PartiallyCompleted
+                    ? "WARN"
+                    : "INFO";
+
                 if (screenVisible)
                 {
-                    AppendLog("WARN", line);
+                    AppendLog(level, line);
                 }
                 else
                 {
-                    _vm.AppendLogFileOnly("WARN", line);
+                    _vm.AppendLogFileOnly(level, line);
                 }
             }
         }

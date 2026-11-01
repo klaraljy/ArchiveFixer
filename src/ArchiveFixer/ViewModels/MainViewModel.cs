@@ -4441,6 +4441,30 @@ namespace ArchiveFixer.ViewModels
             DateTime? first = Tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = Tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
 
+            /*
+             * ⛔ 2026-11-01 真机：抬头写 14:49–15:57，正文最后事件却是 16:07 ——
+             * 因为 `Tasks.EndTime` 只到最后一单解压结束，批末的第二大步/收尾事件没有任务时间。
+             * 导出的正文就是"本次操作"那一段日志 ⇒ 抬头直接用那段日志的首末时间（有就用它）。
+             */
+            if (Logs.Count > 0)
+            {
+                int markerIndex = -1;
+
+                for (int index = 0; index < Logs.Count; index++)
+                {
+                    if (Logs[index].Message.Contains("本次操作开始", StringComparison.Ordinal))
+                    {
+                        markerIndex = index;
+                    }
+                }
+
+                if (markerIndex >= 0)
+                {
+                    first = Logs[markerIndex].Time;
+                    last = Logs[^1].Time;
+                }
+            }
+
             if (first.HasValue && last.HasValue)
             {
                 lines.Add($"时间范围：{first:yyyy-MM-dd HH:mm:ss} → {last:yyyy-MM-dd HH:mm:ss}"
