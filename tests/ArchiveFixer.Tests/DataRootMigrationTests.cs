@@ -34,8 +34,8 @@ namespace ArchiveFixer.Tests
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 PathService.DataFolderName);
 
-            Assert.Equal(expected, PathService.DefaultDataRootDirectory);
-            Assert.DoesNotContain("ArchiveFixer\\data", PathService.DefaultDataRootDirectory, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(expected, PathService.DefaultDataRootDirectoryCore);
+            Assert.DoesNotContain("ArchiveFixer\\data", PathService.DefaultDataRootDirectoryCore, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

@@ -159,9 +159,16 @@ namespace ArchiveFixer.Services
                     return overrideRoot;
                 }
 
-                return Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
+                return DefaultDataRootDirectoryCore;
             }
         }
+
+        /// <summary>
+        /// 生产默认值（**不含**测试覆盖）：守门用例要断言"固定路径不跟程序目录走"时读这一个，
+        /// 否则测试进程为了让夹具隔离而设置的 <c>ARCHIVEFIXER_DATA_ROOT</c> 会把断言带偏。
+        /// </summary>
+        internal static string DefaultDataRootDirectoryCore =>
+            Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
 
         private static string ResolveLocalAppDataRoot()
         {

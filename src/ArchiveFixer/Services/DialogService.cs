@@ -53,6 +53,13 @@ namespace ArchiveFixer.Services
         /// <summary>无 UI 宿主时是否把降级记录写进 <c>data\logs\dialog-fallback.log</c>。</summary>
         public static bool FallbackFileLoggingEnabled { get; set; } = true;
 
+        /// <summary>
+        /// 降级日志的数据根（2026-11-01：以前写死 <c>&lt;程序目录&gt;\data\logs</c>，
+        /// 与固定数据根 <c>%LOCALAPPDATA%\ArchiveFixer</c> 分成了两处；现在跟 PathService 走）。
+        /// 静态是因为写降级日志的那个方法是静态入口；PathService 默认根会读测试覆盖变量。
+        /// </summary>
+        private static readonly PathService FallbackPathService = new();
+
         /// <summary>本进程内发生过的降级记录（最近的在前）。测试与排障用。</summary>
         public static IReadOnlyList<string> FallbackLog
         {
@@ -1293,7 +1300,7 @@ namespace ArchiveFixer.Services
 
             try
             {
-                string directory = Path.Combine(AppContext.BaseDirectory, "data", "logs");
+                string directory = Path.Combine(FallbackPathService.DataRootDirectory, "logs");
 
                 if (!Directory.Exists(directory))
                 {

@@ -2271,10 +2271,12 @@ namespace ArchiveFixer.ViewModels
                   new PathService(),
                   new TaskSummaryService(),
                   new ClipboardService(),
-                  new DialogService())
+                  new DialogService(),
+                  // 生产入口：内置 passwords.txt 是主存储（测试用带参构造，保持旧 DPAPI 夹具语义）。
+                  // ⛔ 必须走构造参数：在构造体里补设就太晚了 —— AutoLoadPasswordBook() 在
+                  // 显式构造的末尾已经读过一遍记忆（真机 2026-11-01：13 条被 1 条旧记忆顶替）。
+                  useTextStore: true)
         {
-            // 生产入口：内置 passwords.txt 是主存储；测试用带参构造，保持旧 DPAPI 夹具语义。
-            _passwordService.UseTextStore = true;
         }
 
         /// <summary>
@@ -2294,7 +2296,8 @@ namespace ArchiveFixer.ViewModels
             ClipboardService clipboardService,
             DialogService dialogService,
             MaintenanceCleanupService? cleanupService = null,
-            EngineRegistry? engineRegistry = null)
+            EngineRegistry? engineRegistry = null,
+            bool useTextStore = false)
         {
             _fileScanService = fileScanService;
             _archiveDetectService = archiveDetectService;
@@ -2314,6 +2317,14 @@ namespace ArchiveFixer.ViewModels
             _archiveEngine = new EngineRouter(engineRegistry ?? BuildEngineRegistry(archiveEngine));
 
             _passwordService = passwordService;
+
+            /*
+             * ⛔ 2026-11-01：主存储必须在**任何读取之前**定下来。
+             * 以前是在无参构造的构造体里补设 `UseTextStore = true` —— 那时显式构造体末尾的
+             * `AutoLoadPasswordBook()` 已经先读过一遍，读的是旧的 DPAPI 记忆（不是 passwords.txt），
+             * 随后又把那份旧列表写回 txt（真机：用户 13 条被 1 条测试密码顶替）。
+             */
+            _passwordService.UseTextStore = useTextStore;
             _logService = logService;
             _settingsService = settingsService;
             _pathService = pathService;

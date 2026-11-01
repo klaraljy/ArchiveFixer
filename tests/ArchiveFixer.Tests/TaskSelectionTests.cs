@@ -559,7 +559,7 @@ namespace ArchiveFixer.Tests
                 new RenameService(),
                 new Engines.SevenZip.SevenZipEngine(),
                 new PasswordService(),
-                new LogService(),
+                new LogService(pathService),
                 new SettingsService(pathService),
                 pathService,
                 new TaskSummaryService(),

@@ -700,7 +700,8 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(dir.Path, "password-list.dat")));
 
             // 默认数据根目录固定 = %LOCALAPPDATA%\ArchiveFixer，不再跟程序安装目录走。
-            string defaultRoot = PathService.DefaultDataRootDirectory;
+            // ⚠ 读"不含测试覆盖"的那一份：测试进程为了让夹具隔离会设 ARCHIVEFIXER_DATA_ROOT。
+            string defaultRoot = PathService.DefaultDataRootDirectoryCore;
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
             Assert.Equal(Path.Combine(localAppData, PathService.DataFolderName), defaultRoot);
