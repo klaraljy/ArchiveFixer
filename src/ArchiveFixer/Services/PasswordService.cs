@@ -129,6 +129,16 @@ namespace ArchiveFixer.Services
         public bool UseTextStore { get; set; }
 
         /// <summary>
+        /// 本次启动**禁止再写 passwords.txt / 元数据 / 加密记忆**。
+        ///
+        /// <para>只在一种情况下为 true：主清单不见了、同目录的 <c>.bak</c> 也恢复不了，
+        /// 但还有"主清单确实存在过"的证据（元数据/备份）。此时若继续按旧加密记忆落盘，
+        /// 就会用很旧的列表覆盖用户的密码（真机 2026-11-01：13 条 → 只剩 1 条测试密码）。
+        /// 这一档宁可不写，也不能写错；用户把 <c>passwords.txt.bak</c> 改回原名重启即可恢复。</para>
+        /// </summary>
+        public bool TextStoreWriteBlocked { get; private set; }
+
+        /// <summary>
         /// 「记住密码列表」总开关（来自 <see cref="AppSettings.RememberPasswordList"/>，默认开）。
         ///
         /// <para>false = **既不写、也不读**记忆文件（一个字节都不动，磁盘上已有的那份不会被删）；
@@ -239,11 +249,39 @@ namespace ArchiveFixer.Services
                 return PasswordListLoadStatus.Disabled;
             }
 
+            TextStoreWriteBlocked = false;
+
+            /*
+             * 2026-11-01 真机：passwords.txt 丢失时，旧写法直接回落到 DPAPI 记忆并立即写回，
+             * 等于拿很旧的记忆覆盖用户列表（真机 13 条 → 只剩 1 条测试密码）。先做两件事：
+             * ① 有产品自己的 .bak ⇒ 按 .bak 恢复（那是最后一次保存前的真实内容，不是猜）；
+             * ② 没有 .bak 但仍有"主清单存在过"的证据（元数据）⇒ 本次一个字节都不写，等用户手动恢复。
+             */
+            if (UseTextStore && !TextStore.Exists)
+            {
+                if (TextStore.TryRestoreFromBackup(out _))
+                {
+                    LastListWarning = "passwords.txt 不存在，已按同目录的 passwords.txt.bak 自动恢复。";
+                    RememberedListWarning?.Invoke(LastListWarning);
+                }
+                else if (File.Exists(TextStore.FilePath + ".bak") || MetadataStore.Exists)
+                {
+                    TextStoreWriteBlocked = true;
+                    LastListWarning =
+                        "passwords.txt 不存在，且 passwords.txt.bak 恢复失败；为避免用旧的加密记忆覆盖密码列表，"
+                        + "本次不会写回任何密码文件。请把同目录的 passwords.txt.bak 改回 passwords.txt 后重启。";
+                    RememberedListWarning?.Invoke(LastListWarning);
+                    return PasswordListLoadStatus.NoFile;
+                }
+            }
+
+            bool textStorePresent = UseTextStore && TextStore.Exists;
+
             /*
              * 2026-10-25：内置明文清单是主存储。存在就只读它（顺序 = 行顺序），
              * 不再从外部密码本自动合并；没有它才回落到旧的 DPAPI 记忆做一次性迁移。
              */
-            if (UseTextStore && TextStore.Exists)
+            if (textStorePresent)
             {
                 try
                 {
@@ -389,7 +427,8 @@ namespace ArchiveFixer.Services
             RememberedEntryCount = Passwords.Count;
 
             // 旧 DPAPI 记忆读成功后做一次性迁移：立即写内置 txt，之后以 txt 为准。
-            if (UseTextStore)
+            // ⛔ 只在"本来就没有 txt、也没有它存在过的证据"时才写；txt 读过但失败时绝不覆盖。
+            if (UseTextStore && !textStorePresent)
             {
                 PersistPasswordList();
             }
@@ -774,7 +813,7 @@ namespace ArchiveFixer.Services
         /// </summary>
         private void PersistPasswordList()
         {
-            if (_persistSuspensions > 0 || !RememberPasswordList)
+            if (_persistSuspensions > 0 || !RememberPasswordList || TextStoreWriteBlocked)
             {
                 return;
             }

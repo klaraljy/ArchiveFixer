@@ -63,6 +63,53 @@ namespace ArchiveFixer.Storage
             }
         }
 
+        /// <summary>
+        /// 主清单 <c>passwords.txt</c> 不见了、但同目录还留着上一次保存自动生成的
+        /// <c>passwords.txt.bak</c> 时，用备份把它恢复回来。
+        ///
+        /// <para>为什么必须是"产品自己的备份"而不是加密记忆：2026-11-01 真机，主清单丢失后
+        /// 程序回落到很旧的 DPAPI 记忆（只剩 1 条测试密码），把它写回 txt，用户的 13 条全没了。
+        /// 备份是最后一次保存前的真实内容，拿它恢复是事实，不是猜。</para>
+        ///
+        /// <para>⛔ 只在主文件**不存在**时用；主文件在就一个字节都不动。</para>
+        /// </summary>
+        public bool TryRestoreFromBackup(out string failureReason)
+        {
+            failureReason = string.Empty;
+
+            string path = FilePath;
+
+            if (path.Length == 0)
+            {
+                failureReason = "数据根目录为空";
+                return false;
+            }
+
+            if (File.Exists(path))
+            {
+                return false;
+            }
+
+            string backup = path + ".bak";
+
+            if (!File.Exists(backup))
+            {
+                failureReason = "没有 passwords.txt.bak";
+                return false;
+            }
+
+            try
+            {
+                File.Copy(backup, path, overwrite: false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failureReason = ex.Message;
+                return false;
+            }
+        }
+
         /// <summary>原子写入；顺序就是传进来的顺序。旧文件先留一份 .bak。</summary>
         public bool TrySave(IEnumerable<string> values, out string failureReason)
         {
