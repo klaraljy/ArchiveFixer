@@ -124,7 +124,7 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            string key = BuildKey(baseName, family.Value, sourceLayer);
+            string key = BuildKey(baseName, family.Value, sourceLayer, entryPath);
 
             if (_units.TryGetValue(key, out VolumeGroupUnit? existing))
             {
@@ -240,7 +240,7 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            string key = BuildKey(prepared.BaseName, prepared.Family.Value, prepared.OriginalSourceLayer);
+            string key = BuildKey(prepared.BaseName, prepared.Family.Value, prepared.OriginalSourceLayer, prepared.OriginalEntryPath);
 
             List<GroupPieceFact> pieces = prepared.Pieces
                 .Select(piece => new GroupPieceFact(
@@ -438,9 +438,10 @@ namespace ArchiveFixer.Extraction
         /// `风景01.mp4`）；只按“基名+族”做键会把后一组顶掉/并掉。源层是组的物理出处，
         /// 同一逻辑组只会来自同一入口层，故用它做区分不会拆散正常的跨目录组。</para>
         /// </summary>
-        private static string BuildKey(string baseName, VolumeNamingFamily family, string? sourceLayer) =>
+        private static string BuildKey(string baseName, VolumeNamingFamily family, string? sourceLayer, string? entryPath) =>
             baseName + "|" + family.ToString()
-            + "|" + (string.IsNullOrWhiteSpace(sourceLayer) ? string.Empty : sourceLayer);
+            + "|" + (string.IsNullOrWhiteSpace(sourceLayer) ? string.Empty : sourceLayer)
+            + "|" + (string.IsNullOrWhiteSpace(entryPath) ? string.Empty : entryPath);
 
         /// <summary>其余物 / 工作区 / 暂存目录不能当组的入口层（只读路径判断，不碰盘）。</summary>
         private static bool IsForbiddenLayer(string layer)

@@ -163,11 +163,13 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **根任务没成功 ⇒ 一个字节都不搬**（不变量 1：失败 / 部分完成 / 取消时源包与过程物原地不动），
-        /// 并且要**如实点名**它们还留着（那是给人看的下一步指路，⛔ 不许静默）。
+        /// **根任务没成功 ⇒ 内层过程物照样进其余物**（2026-11-01 用户新口径：
+        /// 「未解开的内层包，放入其余物里面吧，它就相当于失败的时候的最后一层过程物，
+        /// 放在其余物里面看看用户的选择删或者是不删」）。
+        /// 用户源包（root 自己）仍一个字节都不搬 —— 计划只处理续解任务。
         /// </summary>
         [Fact]
-        public void 根任务失败_什么都不搬()
+        public void 根任务失败_内层过程物照样进其余物()
         {
             string restDirectory = Path.Combine(_root, "222", "其余物");
             Directory.CreateDirectory(restDirectory);
@@ -185,20 +187,17 @@ namespace ArchiveFixer.Tests
                 ContentKeepRules.Empty,
                 out _);
 
-            Assert.Empty(moves);
+            (string From, string To) move = Assert.Single(moves);
+            Assert.Equal(inner, move.From);
+            Assert.Equal(Path.Combine(restDirectory, "222.zip"), move.To);
         }
 
         /// <summary>
-        /// 根任务成功、但链上那一单**没成功** ⇒ **什么都不搬**。
-        ///
-        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻 2026-09-28 的口径）</b>：老用例断言"照旧搬"
-        /// （外层成功了它就该跟源包一起进其余物）。用户原话：
-        /// 「链上那个从未解开过的内层包（它躺在其余物里）—— <b>不是没解开你为什么要放在其余物里面，啊</b>」。
-        /// 其余物在「彻底删除」档下是永久删除 ⇒ 搬它 = 把还没解出来的内容删了。
-        /// 现在的口径：只有**自己这一单成功 + 输出校验通过**（内容已落盘）的续解任务才算过程物。</para>
+        /// 根任务成功、但链上那一单**没成功** ⇒ **照样搬进其余物**（2026-11-01 用户新口径，
+        /// 推翻 2026-10-04「没解开就不进其余物」；由链尾「删除操作」按用户选择删/留）。
         /// </summary>
         [Fact]
-        public void 根任务成功而链上那一单没成功_什么都不搬()
+        public void 根任务成功而链上那一单没成功_照样进其余物()
         {
             string restDirectory = Path.Combine(_root, "222", "其余物");
             Directory.CreateDirectory(restDirectory);
@@ -216,7 +215,9 @@ namespace ArchiveFixer.Tests
                 ContentKeepRules.Empty,
                 out _);
 
-            Assert.Empty(moves);
+            (string From, string To) move = Assert.Single(moves);
+            Assert.Equal(inner, move.From);
+            Assert.Equal(Path.Combine(restDirectory, "222.zip"), move.To);
         }
     }
 }
