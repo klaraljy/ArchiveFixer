@@ -213,11 +213,13 @@ namespace ArchiveFixer.ViewModels
         /// 入口已定 ⇒ 同组其余片的任务先落“跟班”事实。
         /// 这样它们开跑前就不会再撞“源文件已变化”，也不会各自解一遍整组。
         /// </summary>
-        private void MarkFollowerTasksForGroup(VolumeGroupUnit unit, ArchiveTask owner)
+        private void MarkFollowerTasksForGroup(VolumeGroupUnit unit, ArchiveTask? owner)
         {
-            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
-                ? owner.FileName
-                : owner.DisplayFileName;
+            string ownerName = owner == null
+                ? unit.OwnerTaskFileName ?? unit.BaseName
+                : string.IsNullOrWhiteSpace(owner.DisplayFileName)
+                    ? owner.FileName
+                    : owner.DisplayFileName;
 
             foreach (GroupPieceFact piece in unit.Pieces)
             {
@@ -322,6 +324,14 @@ namespace ArchiveFixer.ViewModels
             {
                 return;
             }
+
+            /*
+             * ⛔ 2026-11-01 真机：组已解成功、但组内跟班片任务可能是在**建组之前**
+             * 就以「跳过」收场的（`2.part3.rar`）⇒ 它没被标跟班，链尾的
+             * `DescribeChainVerificationGap` 会把它当成"链里有一层没过" ⇒ 源包永远不删。
+             * 组成功这一层把组内其余片的任务补标成跟班（⛔ 不改它们自己的解压结论）。
+             */
+            MarkFollowerTasksForGroup(unit, FindOwnerTask(unit));
 
             var consumed = unit.Pieces
                 .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
@@ -590,6 +600,9 @@ namespace ArchiveFixer.ViewModels
                 unit,
                 VolumeGroupState.Succeeded,
                 $"解压成功，收片 {deleted} 片（用户原件不删）");
+
+            // 组成功这一层把组内其余片补标成跟班（含建组之前就以「跳过」收场的那几片）。
+            MarkFollowerTasksForGroup(unit, task);
 
             /*
              * 组成功 ⇒ 这一组每一片对应的任务按**跟班卷**收场（唯一出口
