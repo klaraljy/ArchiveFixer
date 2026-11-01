@@ -144,6 +144,47 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 裸rar父包_卷号器会给slot1_也不许混进子分卷组()
+        {
+            string parent = Create("2.rar", 100);
+            string part1 = Create("2.part1.rar", 500);
+            string part2 = Create("2.part2.rar", 500);
+            string part3 = Create("2.part3.rar", 50);
+
+            var handoffs = new[]
+            {
+                new VolumeHandoffEntry
+                {
+                    Path = parent,
+                    BaseName = "2",
+                    Format = VolumeContentFormat.Rar,
+                    Size = 100,
+                    BodyKind = ArchiveBodyKind.SingleComplete,
+                    Membership = VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember,
+                    ContentFail = VolumeNumberFail.None,
+                    // 真机现场：裸 `.rar` 被卷号器当成第 1 卷（slot=1）。
+                    NameVolumeIndex = 1,
+                    SourceLayer = _root,
+                    Source = VolumeHandoffSource.UserImported
+                },
+                RarPart(part1, 500, 1, firstPiece: true),
+                RarPart(part2, 500, 2),
+                RarPart(part3, 50, 3)
+            };
+
+            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
+                GroupAnalysis.Analyze(handoffs, new[] { _root });
+
+            GroupAnalysis.GroupCandidate? group = groups
+                .FirstOrDefault(candidate => candidate.Pieces.Contains(part1));
+
+            Assert.NotNull(group);
+            Assert.DoesNotContain(parent, group!.Pieces);
+            Assert.Equal(3, group.Pieces.Count);
+            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict);
+        }
+
+        [Fact]
         public void 首片自述整包_按字节补齐配出同目录唯一尾片()
         {
             string first = Create("风景01.mp4", 1000);

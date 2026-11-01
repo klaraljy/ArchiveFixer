@@ -2362,8 +2362,16 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
-                    FileNameHelper.GetFileName(existing.CurrentPath));
+                /*
+                 * ⛔ 2026-11-01 真机：`TryGetVolumeIndex("2.rar")` 会把裸 `.rar` 当成第 1 卷（slot=1），
+                 * 于是父包 `2.rar` 被记成"用户源片 slot 1"，把真正的 `2.part1.rar` 当成重复副本跳过
+                 * ⇒ 入口任务补建 0 个、链停住。只有**名字是分卷片**的才参与这个去重。
+                 */
+                int? index = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(
+                        FileNameHelper.GetFileName(existing.CurrentPath))
+                    ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        FileNameHelper.GetFileName(existing.CurrentPath))
+                    : null;
 
                 if (index.HasValue)
                 {
@@ -2381,8 +2389,11 @@ namespace ArchiveFixer.ViewModels
                         return false;
                     }
 
-                    int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
-                        FileNameHelper.GetFileName(candidate.Path));
+                    int? index = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(
+                            FileNameHelper.GetFileName(candidate.Path))
+                        ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                            FileNameHelper.GetFileName(candidate.Path))
+                        : null;
 
                     return !index.HasValue
                         || !userVolumeSlots.Contains(

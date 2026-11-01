@@ -651,7 +651,12 @@ namespace ArchiveFixer.Extraction
             return entry != null
                 && entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
                 && entry.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
-                && !entry.NameVolumeIndex.HasValue
+                /*
+                 * ⛔ 2026-11-01 真机：`TryGetVolumeIndex("2.rar")` 把裸 `.rar` 当成第 1 卷（slot=1），
+                 * 于是父包 `2.rar` 逃过"没有名字卷槽"这一条、被收进子分卷组。
+                 * 这里判的是"名字是不是分卷片"（.part1.rar / .7z.001 / .r00…），不是"能不能读出卷号"。
+                 */
+                && !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(entry.Path))
                 && !entry.FirstVolumeFlag;
         }
 
@@ -671,8 +676,7 @@ namespace ArchiveFixer.Extraction
             return card != null
                 && card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
                 && card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
-                && !ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
-                    Path.GetFileName(path)).HasValue;
+                && !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(path));
         }
 
         private static bool IsProvablySingleCompleteNonMember(PieceFacts item)
