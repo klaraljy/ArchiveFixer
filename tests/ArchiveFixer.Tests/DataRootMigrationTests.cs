@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using Xunit;
 
 namespace ArchiveFixer.Tests
@@ -120,6 +121,69 @@ namespace ArchiveFixer.Tests
             Assert.Equal(new[] { "new-c", "old-a", "old-b" }, lines);
             Assert.Contains("manual", File.ReadAllText(Path.Combine(newData, "passwords.meta.json")), StringComparison.Ordinal);
             Assert.Contains("old-a", File.ReadAllText(Path.Combine(newData, "passwords.meta.json")), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 已删除的密码_不会被旧数据复活()
+        {
+            string programDir = Path.Combine(_root, "program");
+            string oldData = Path.Combine(programDir, "data");
+            string newData = Path.Combine(_root, "localappdata", "ArchiveFixer");
+            Directory.CreateDirectory(oldData);
+            Directory.CreateDirectory(newData);
+
+            File.WriteAllLines(Path.Combine(oldData, "passwords.txt"), new[] { "old-a", "old-b" });
+            File.WriteAllText(
+                Path.Combine(oldData, "passwords.meta.json"),
+                "[{\"Value\":\"old-a\",\"IsEnabled\":true},{\"Value\":\"old-b\",\"IsEnabled\":true}]");
+
+            File.WriteAllLines(Path.Combine(newData, "passwords.txt"), new[] { "old-b" });
+            File.WriteAllText(
+                Path.Combine(newData, "passwords.meta.json"),
+                "[{\"Value\":\"old-b\",\"IsEnabled\":true}]");
+
+            // 目标根的记忆里有墓碑：old-a 是用户删掉的。
+            var store = new PasswordListStore { DataRootDirectory = newData };
+            var snapshot = new PasswordListSnapshot();
+            snapshot.Entries.Add(new PasswordListEntry { Value = "old-b", Source = "ManualList", Enabled = true });
+            snapshot.Tombstones.Add("old-a");
+            Assert.True(store.Save(snapshot).Success);
+
+            DataRootMigrator.MigrateIfNeeded(programDir, newData);
+
+            string[] lines = File.ReadAllLines(Path.Combine(newData, "passwords.txt"));
+            Assert.Equal(new[] { "old-b" }, lines);
+            Assert.DoesNotContain("old-a", File.ReadAllText(Path.Combine(newData, "passwords.txt")), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 目标已有清单时_不把旧的加密记忆搬过来()
+        {
+            string programDir = Path.Combine(_root, "program");
+            string oldData = Path.Combine(programDir, "data");
+            string newData = Path.Combine(_root, "localappdata", "ArchiveFixer");
+            Directory.CreateDirectory(oldData);
+            Directory.CreateDirectory(newData);
+
+            File.WriteAllLines(Path.Combine(oldData, "passwords.txt"), new[] { "old-x", "old-y" });
+            File.WriteAllText(
+                Path.Combine(oldData, "passwords.meta.json"),
+                "[{\"Value\":\"old-x\",\"IsEnabled\":true},{\"Value\":\"old-y\",\"IsEnabled\":true}]");
+            File.WriteAllText(Path.Combine(oldData, "password-list.dat"), "old-encrypted");
+
+            // 目标已有清单，且有一条旧数据里没有的值 ⇒ 不是"目标全在旧数据里"。
+            File.WriteAllLines(Path.Combine(newData, "passwords.txt"), new[] { "new-mine" });
+            File.WriteAllText(
+                Path.Combine(newData, "passwords.meta.json"),
+                "[{\"Value\":\"new-mine\",\"IsEnabled\":true}]");
+
+            DataRootMigrator.MigrateIfNeeded(programDir, newData);
+
+            Assert.False(
+                File.Exists(Path.Combine(newData, "password-list.dat")),
+                "目标已有 passwords.txt：旧 .dat 不许搬进来（它可能是很多轮之前的列表）");
+
+            Assert.Equal(new[] { "new-mine", "old-x", "old-y" }, File.ReadAllLines(Path.Combine(newData, "passwords.txt")));
         }
     }
 }

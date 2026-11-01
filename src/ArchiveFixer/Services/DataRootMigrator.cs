@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ArchiveFixer.Storage;
 using Microsoft.Win32;
 
 namespace ArchiveFixer.Services
@@ -50,6 +51,12 @@ namespace ArchiveFixer.Services
                 .Where(directory => !IsSameDirectory(directory, destinationRoot))
                 .ToList();
 
+            /*
+             * 迁移**开始前**目标根有没有明文清单：用来区分"真正的新根"（连 txt 都没有，
+             * 旧加密记忆可以一起带上）和"已有清单的根"（旧记忆一律不搬，免得把旧列表翻出来）。
+             */
+            bool destinationHadPasswords = File.Exists(Path.Combine(destinationRoot, "passwords.txt"));
+
             foreach (string sourceDirectory in sourceDirectories)
             {
                 foreach (string fileName in MigratableFileNames)
@@ -58,6 +65,17 @@ namespace ArchiveFixer.Services
                     string destination = Path.Combine(destinationRoot, fileName);
 
                     if (!File.Exists(source) || File.Exists(destination))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * ⛔ 2026-11-01：目标已经有 passwords.txt 时**不许**再把旧的加密记忆搬过来。
+                     * 明文清单是主存储；旧 .dat 可能是很多轮之前的列表（真机就是 1 条测试密码），
+                     * 搬进来只会在"哪天 txt 又丢了"时把旧列表翻出来。只有真正的新根（连 txt 都没有）
+                     * 才把旧记忆一起带上 —— 那时它是唯一的历史。
+                     */
+                    if (fileName == "password-list.dat" && destinationHadPasswords)
                     {
                         continue;
                     }
@@ -124,11 +142,20 @@ namespace ArchiveFixer.Services
                 return;
             }
 
-            bool destinationIsSubset = destinationLines.All(bestSourceLines.Contains);
+            /*
+             * ⛔ 2026-11-01：旧数据**不许复活用户已删除的密码**。
+             * 墓碑（Tombstones）在目标根的加密记忆里；有墓碑的值即使旧数据里还有，也不能补回来。
+             * 没有这一步时，只要"目标的值全在旧数据里"（典型：用户删掉几条之后），
+             * 旧数据整份替换目标 → 删掉的密码全部复活，而且旧 .dat 还会把墓碑一起覆盖掉。
+             */
+            HashSet<string> tombstones = ReadDestinationTombstones(destinationRoot);
+
+            bool destinationIsSubset = destinationLines.All(bestSourceLines.Contains)
+                && !bestSourceLines.Any(tombstones.Contains);
 
             if (destinationIsSubset)
             {
-                // 目标里的值全在旧数据里：直接用旧文件恢复完整顺序。
+                // 目标里的值全在旧数据里、且没有已删除的值：直接用旧文件恢复完整顺序。
                 BackupFile(destinationPasswords);
                 File.Copy(Path.Combine(bestSourceDirectory, "passwords.txt"), destinationPasswords, overwrite: true);
 
@@ -160,7 +187,7 @@ namespace ArchiveFixer.Services
 
             foreach (string line in bestSourceLines)
             {
-                if (!mergedLines.Contains(line, StringComparer.Ordinal))
+                if (!mergedLines.Contains(line, StringComparer.Ordinal) && !tombstones.Contains(line))
                 {
                     mergedLines.Add(line);
                 }
@@ -175,7 +202,8 @@ namespace ArchiveFixer.Services
             File.WriteAllLines(destinationPasswords, mergedLines);
             MergeMetadata(
                 Path.Combine(bestSourceDirectory, "passwords.meta.json"),
-                Path.Combine(destinationRoot, "passwords.meta.json"));
+                Path.Combine(destinationRoot, "passwords.meta.json"),
+                mergedLines);
             copied.Add(destinationPasswords);
             log?.Invoke("旧密码本已补全（保留新密码，补齐旧数据里缺的值）。");
         }
@@ -194,7 +222,36 @@ namespace ArchiveFixer.Services
             }
         }
 
-        private static void MergeMetadata(string sourcePath, string destinationPath)
+        /// <summary>
+        /// 读目标根加密记忆里的墓碑（用户删掉 / 清空过的值）。
+        ///
+        /// <para>读不出来（文件不在 / 换机器 / 格式不认）⇒ 空集合：此时只按"目标已有值"判断，
+        /// 不会因为读不到墓碑就凭空复活——那一步由 <c>destinationIsSubset</c> 的墓碑条件挡住。</para>
+        /// </summary>
+        private static HashSet<string> ReadDestinationTombstones(string destinationRoot)
+        {
+            try
+            {
+                var store = new PasswordListStore { DataRootDirectory = destinationRoot };
+                PasswordListLoadResult result = store.Load();
+
+                if (result.HasMemory)
+                {
+                    return new HashSet<string>(result.Snapshot.Tombstones, StringComparer.Ordinal);
+                }
+            }
+            catch
+            {
+                // 读不到就当没有墓碑（保守：不额外复活，也不额外覆盖）。
+            }
+
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        private static void MergeMetadata(
+            string sourcePath,
+            string destinationPath,
+            IReadOnlyCollection<string>? allowedValues = null)
         {
             try
             {
@@ -222,7 +279,21 @@ namespace ArchiveFixer.Services
                 {
                     string? value = node?["Value"]?.GetValue<string>();
 
-                    if (!string.IsNullOrWhiteSpace(value) && existing.Add(value!))
+                    if (string.IsNullOrWhiteSpace(value))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * ⛔ 只为"最终真的在目标 passwords.txt 里"的值补元数据：
+                     * 被墓碑挡住的、或根本没合并进去的值，不能留下一条孤儿备注（下次会跟着列表读出来）。
+                     */
+                    if (allowedValues != null && !allowedValues.Contains(value!))
+                    {
+                        continue;
+                    }
+
+                    if (existing.Add(value!))
                     {
                         destination.Add(node!.DeepClone());
                     }
