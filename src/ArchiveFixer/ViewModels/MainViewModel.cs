@@ -4486,7 +4486,12 @@ namespace ArchiveFixer.ViewModels
              *    （例如导入完还没跑）一个数都不占，于是头部写着
              *    「任务数：10（成功 0 / 失败 0 / 跳过 0）」，读的人当场对不上账。
              */
-            BatchOutcomeTally tally = BatchOutcomeTally.Count(Tasks);
+            /*
+             * ⛔ 2026-11-01：优先用**批末那一次的计数快照**（日志正文就是批末写的），
+             * 只有它不存在（还没跑过批）才退回当前任务表重算。
+             */
+            BatchOutcomeTally tally = _extractionCoordinator.LastBatchTally
+                ?? BatchOutcomeTally.Count(Tasks);
 
             /*
              * 任务数要分两层说（用户 2026-09-26 第 45 条的真机现场）：他跑 38 个包，头部却写"任务数：76" ——

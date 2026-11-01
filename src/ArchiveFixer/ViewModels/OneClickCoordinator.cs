@@ -1321,6 +1321,20 @@ namespace ArchiveFixer.ViewModels
                                 .Select(group => group.First())
                                 .ToList();
 
+                        /*
+                         * ⛔ 2026-11-01 用户口径：「内容物保留关键词」命中的文件**碰都不要碰**，
+                         * 自然也不许进第二大步的分卷候选（`上老王论坛当老王.zip` 曾被当 1 片分卷组）。
+                         */
+                        ArchiveFixer.Security.ContentKeepRules keepRules =
+                            ArchiveFixer.Security.ContentKeepRules.FromSettings(Settings);
+
+                        ledgerHandoff = ledgerHandoff
+                            .Where(entry => entry != null && keepRules.FindMatch(entry.Path) == null)
+                            .ToList();
+                        extraGroupSeeds = extraGroupSeeds
+                            .Where(seed => keepRules.FindMatch(seed) == null)
+                            .ToList();
+
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
                         List<GroupAnalysis.GroupCandidate> analyzedGroups = await Task.Run(
                             () => GroupAnalysis.Analyze(
