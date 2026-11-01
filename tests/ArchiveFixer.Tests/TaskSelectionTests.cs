@@ -538,6 +538,21 @@ namespace ArchiveFixer.Tests
 
         private static MainViewModel CreateViewModel()
         {
+            /*
+             * ⛔ 2026-11-01：这里以前用 `new PathService()`（默认 = 用户真实数据根），
+             * MainViewModel 构造时 PasswordService 也装配到那里 ⇒ 每跑一次全量单测就写一次
+             * 用户真实的 password-list.dat。夹具必须用自己的临时根。
+             */
+            var pathService = new PathService
+            {
+                DataRootDirectory = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    "ArchiveFixerTaskSelection",
+                    System.Guid.NewGuid().ToString("N"))
+            };
+
+            System.IO.Directory.CreateDirectory(pathService.DataRootDirectory);
+
             return new MainViewModel(
                 new FileScanService(),
                 new ArchiveDetectService(),
@@ -545,8 +560,8 @@ namespace ArchiveFixer.Tests
                 new Engines.SevenZip.SevenZipEngine(),
                 new PasswordService(),
                 new LogService(),
-                new SettingsService(),
-                new PathService(),
+                new SettingsService(pathService),
+                pathService,
                 new TaskSummaryService(),
                 new ClipboardService(),
                 new DialogService());

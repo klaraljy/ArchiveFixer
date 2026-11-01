@@ -335,6 +335,33 @@ namespace ArchiveFixer.Tests
             Action<MainWindow, MainViewModel>? inspectMain = null)
         {
             /*
+             * ⛔ 2026-11-01：new MainWindow() 的 XAML DataContext 会创建 MainViewModel()（生产入口），
+             * 默认数据根 = 用户真实目录 ⇒ 每跑一次这类 UI 探针就往用户 password-list.dat 里写一次。
+             * 探针期间用环境变量把"默认数据根"指到 workRoot 里；生产不设这个变量。
+             */
+            string? previousDataRoot = Environment.GetEnvironmentVariable("ARCHIVEFIXER_DATA_ROOT");
+            Environment.SetEnvironmentVariable(
+                "ARCHIVEFIXER_DATA_ROOT",
+                Path.Combine(workRoot, "probe-data-root"));
+
+            try
+            {
+                ShowEverythingCore(report, log, workRoot, onProbeThread, inspectMain);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("ARCHIVEFIXER_DATA_ROOT", previousDataRoot);
+            }
+        }
+
+        private static void ShowEverythingCore(
+            UiProbeReport report,
+            Action<string> log,
+            string workRoot,
+            Action? onProbeThread = null,
+            Action<MainWindow, MainViewModel>? inspectMain = null)
+        {
+            /*
              * 同一进程里再建一个 Application 会抛"只能有一个 Application 实例"。
              * 正常情况下上一条用例已经还原成 null；这里再做一次防御性还原，
              * 免得某个断言中途失败留下半死状态，把后面所有用例都带崩。

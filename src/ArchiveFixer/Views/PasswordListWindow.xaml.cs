@@ -16,7 +16,7 @@ namespace ArchiveFixer.Views
             {
                 if (_viewModel == null)
                 {
-                    _viewModel = new PasswordListViewModel(new PasswordService(), new DialogService());
+                    _viewModel = new PasswordListViewModel(new PasswordService { DataRootDirectory = PathService.DefaultDataRootDirectory }, new DialogService());
                     DataContext = _viewModel;
                     AttachViewModel(_viewModel);
                 }
@@ -61,7 +61,7 @@ namespace ArchiveFixer.Views
             }
             else
             {
-                ViewModel = new PasswordListViewModel(new PasswordService(), new DialogService());
+                ViewModel = new PasswordListViewModel(new PasswordService { DataRootDirectory = PathService.DefaultDataRootDirectory }, new DialogService());
             }
         }
 

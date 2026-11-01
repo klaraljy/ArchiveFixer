@@ -142,9 +142,26 @@ namespace ArchiveFixer.Services
         /// <para>⛔ 这是用户设置 / 密码本 / 元数据的唯一固定位置：
         /// 它不再跟程序安装目录走，覆盖升级、换安装位置、卸载都不会把它带走。
         /// 以后任何版本都不许改这个路径；旧位置只能由 <see cref="DataRootMigrator"/> 一次性迁入。</para>
+        ///
+        /// <para>⚠ 仅供**测试 / 夹具**的进程内覆盖：环境变量 <c>ARCHIVEFIXER_DATA_ROOT</c> 非空时优先用它。
+        /// 生产入口不设这个变量 ⇒ 永远还是上面的固定路径；设置它是为了让 WPF 探针这类
+        /// "必须走真实启动路径"的用例也有自己的临时数据根（真机 2026-11-01：全量单测把用户真实
+        /// <c>password-list.dat</c> 写成了 1 条测试密码）。</para>
         /// </summary>
-        public static string DefaultDataRootDirectory =>
-            Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
+        public static string DefaultDataRootDirectory
+        {
+            get
+            {
+                string overrideRoot = Environment.GetEnvironmentVariable("ARCHIVEFIXER_DATA_ROOT") ?? string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(overrideRoot))
+                {
+                    return overrideRoot;
+                }
+
+                return Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
+            }
+        }
 
         private static string ResolveLocalAppDataRoot()
         {

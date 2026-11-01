@@ -99,7 +99,16 @@ namespace ArchiveFixer.Services
         /// <summary>落盘抑制计数（批量操作期间不为每一条写一次文件）。</summary>
         private int _persistSuspensions;
 
-        private string _dataRootDirectory = PathService.DefaultDataRootDirectory;
+        /// <summary>
+        /// 数据根目录。**默认空 = 未装配 = 一律不落盘**（2026-11-01 真机教训）。
+        ///
+        /// <para>以前默认就是用户真实目录 `%LOCALAPPDATA%\ArchiveFixer`：测试/夹具里
+        /// `new PasswordService()` 一加密码就把用户真实的 `password-list.dat` 写坏
+        /// （今天全量单测跑一遍，真实记忆就被写成 1 条测试密码）。现在必须**显式装配**：
+        /// 生产入口在 <c>MainViewModel</c> 构造里用 <c>PathService.DataRootDirectory</c> 注入；
+        /// 测试传临时根；没装配就什么都不写（宁可本次不保存，也不写错用户数据）。</para>
+        /// </summary>
+        private string _dataRootDirectory = string.Empty;
 
         /// <summary>最近一次导入密码本时的提醒（编码识别、重复行等），供界面/日志说明情况。</summary>
         public IReadOnlyList<string> LastImportWarnings { get; private set; } = Array.Empty<string>();
@@ -1369,7 +1378,7 @@ namespace ArchiveFixer.Services
              * 2026-10-25：生产入口改用内置 passwords.txt 后，外部路径只作为一次性来源，
              * 不再写侧车、也不再加入"记住的密码本"清单（否则下次启动又会去链接外部文件）。
              */
-            if (!UseTextStore)
+            if (!UseTextStore && DataRootDirectory.Length > 0)
             {
                 try
                 {

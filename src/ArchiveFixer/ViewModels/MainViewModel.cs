@@ -2317,6 +2317,13 @@ namespace ArchiveFixer.ViewModels
             _logService = logService;
             _settingsService = settingsService;
             _pathService = pathService;
+
+            /*
+             * ⛔ 2026-11-01：PasswordService 默认数据根改成"未装配 = 空，不落盘"。
+             * 生产入口由这里装配（PathService 的根就是 %LOCALAPPDATA%\ArchiveFixer）；
+             * 测试传临时 PathService 就自动落到临时根，绝不会再写用户真实数据。
+             */
+            _passwordService.DataRootDirectory = pathService.DataRootDirectory;
             _taskSummaryService = taskSummaryService;
             _clipboardService = clipboardService;
             _dialogService = dialogService;
@@ -3157,9 +3164,11 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
-                string sidecar = Path.Combine(_passwordService.DataRootDirectory, "password-book.path");
+                string sidecar = _passwordService.DataRootDirectory.Length > 0
+                    ? Path.Combine(_passwordService.DataRootDirectory, "password-book.path")
+                    : string.Empty;
 
-                if (File.Exists(sidecar))
+                if (sidecar.Length > 0 && File.Exists(sidecar))
                 {
                     File.Delete(sidecar);
                     AppendLog("INFO", "已清掉旧的外部密码本路径（password-book.path）；用户原始文件未动。");

@@ -679,6 +679,12 @@ namespace ArchiveFixer.ViewModels
         {
             string dataRoot = _passwordService.DataRootDirectory;
 
+            // 未装配数据根（测试/夹具里的裸 PasswordService）⇒ 一个字节都不写。
+            if (dataRoot.Length == 0)
+            {
+                return;
+            }
+
             Directory.CreateDirectory(dataRoot);
 
             File.WriteAllText(
