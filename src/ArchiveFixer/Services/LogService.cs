@@ -327,6 +327,16 @@ namespace ArchiveFixer.Services
 
             foreach (string line in DeduplicateReportBody(body))
             {
+                /*
+                 * ⛔ 2026-11-01：普通档（includeDetails=false）不把**排障专用**内容给用户：
+                 * UI 线程停顿/性能探针/内部排障标记只在完整 `.log` 里。
+                 * 详细档（用户主动勾选）原样保留。
+                 */
+                if (!includeDetails && IsDiagnosticOnlyLine(line))
+                {
+                    continue;
+                }
+
                 builder.AppendLine(line);
                 lines++;
             }
@@ -341,6 +351,17 @@ namespace ArchiveFixer.Services
             File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
 
             return (lines, fromMarker);
+        }
+
+        /// <summary>
+        /// 普通档导出要排除的**排障专用**行（只该留在完整 `.log` 里给排查用）。
+        /// </summary>
+        private static bool IsDiagnosticOnlyLine(string line)
+        {
+            return line.Contains("[性能]", StringComparison.Ordinal)
+                || line.Contains("UI 线程停顿", StringComparison.Ordinal)
+                || line.Contains("[排障", StringComparison.Ordinal)
+                || line.Contains("[诊断", StringComparison.Ordinal);
         }
 
         /// <summary>

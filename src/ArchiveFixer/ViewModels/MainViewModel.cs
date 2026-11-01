@@ -4620,13 +4620,41 @@ namespace ArchiveFixer.ViewModels
             sections.Add(string.Empty);
             sections.Add("================ 二、分卷组 ================");
 
+            /*
+             * ⛔ 2026-11-01：优先读第二大步的**组单元**（VolumeGroupUnit）——
+             * 旧写法按任务表拼，真机上 `以宇_2/yanje_2/183` 明明是 OwnerAssigned/可证完整，
+             * 导出却写「已登记片=0｜完整=False｜状态=未登记」。任务表只是组的成员视图，不是结论。
+             */
+            IReadOnlyCollection<ArchiveFixer.Extraction.VolumeGroupUnit> volumeUnits =
+                _extractionCoordinator.VolumeGroupUnits;
+
             var volumeTasks = Tasks
                 .Where(task => task.IsVolumeGroup
                     || task.IsVolumeGroupFollower
                     || task.VolumePaths.Count > 0)
                 .ToList();
 
-            if (volumeTasks.Count == 0)
+            if (volumeUnits.Count > 0)
+            {
+                foreach (ArchiveFixer.Extraction.VolumeGroupUnit unit in volumeUnits)
+                {
+                    string entryName = string.IsNullOrWhiteSpace(unit.EntryPath)
+                        ? "判不出"
+                        : System.IO.Path.GetFileName(unit.EntryPath);
+                    string missing = unit.MissingNumbers.Count == 0
+                        ? "无"
+                        : string.Join(",", unit.MissingNumbers);
+
+                    sections.Add(
+                        $"组「{unit.BaseName}」｜族={unit.Family?.ToString() ?? "判不出"}"
+                        + $"｜状态={unit.State}｜完整={unit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete}"
+                        + $"｜片={unit.Pieces.Count}｜入口={entryName}"
+                        + $"｜owner={unit.OwnerTaskFileName ?? "未定"}"
+                        + $"｜缺片={missing}"
+                        + $"｜{CompactReportLine(unit.Verdict, 300)}");
+                }
+            }
+            else if (volumeTasks.Count == 0)
             {
                 sections.Add("本批没有识别到分卷组。");
             }

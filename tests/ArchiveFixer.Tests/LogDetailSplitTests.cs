@@ -101,5 +101,35 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains("详细探针行", File.ReadAllText(detailedExport), StringComparison.Ordinal);
         }
+
+        [Fact]
+        public void 普通档导出_不包含性能探针与行快照_详细档保留()
+        {
+            var pathService = new PathService { DataRootDirectory = Path.Combine(_root, "data") };
+            var log = new LogService(pathService);
+
+            log.Initialize(enableFileLog: true);
+            log.MarkOperationStart("裁剪测试");
+
+            log.WriteInfo("普通行");
+            log.WriteInfo("[性能] UI 线程停顿 12345 ms → 工作区清理");
+            log.WriteInfo("[行] 名=x ｜ 状态=解压成功");
+
+            string normalExport = Path.Combine(_root, "trim-normal.txt");
+            log.ExportOperationLog(normalExport, includeDetails: false);
+
+            string normalText = File.ReadAllText(normalExport);
+
+            Assert.Contains("普通行", normalText, StringComparison.Ordinal);
+            Assert.DoesNotContain("UI 线程停顿", normalText, StringComparison.Ordinal);
+            Assert.DoesNotContain("[行]", normalText, StringComparison.Ordinal);
+
+            string detailedExport = Path.Combine(_root, "trim-detailed.txt");
+            log.ExportOperationLog(detailedExport, includeDetails: true);
+
+            string detailedText = File.ReadAllText(detailedExport);
+
+            Assert.Contains("UI 线程停顿", detailedText, StringComparison.Ordinal);
+        }
     }
 }
