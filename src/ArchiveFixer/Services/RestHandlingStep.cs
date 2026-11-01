@@ -271,6 +271,30 @@ namespace ArchiveFixer.Services
              * ⛔ 只搬"确实还在盘上、且落在根任务输出范围之内"的；⛔ 判不出/搬不动 ⇒ 写一行、不动。
              */
             CollectChainInnerLayerInputsIntoRest(rootTask, restDirectory, outputRoot);
+
+            /*
+             * ⛔ 2026-11-01 用户口径：过程物「先放进其余物，成功就彻底删」。
+             * 只有**整条链全部成功**才在这里直接清空其余物（用户源包不在其中）；
+             * 有跳过/失败/未展开的 ⇒ 留在其余物里，由链尾「删除操作」按用户选择处理。
+             */
+            if (ChainFullySucceeded(rootTask, chainTasks))
+            {
+                PurgeRestItemsExceptChainRootSource(rootTask);
+            }
+        }
+
+        /// <summary>
+        /// 整条续解链是否**全部成功**（任何跳过/失败/部分完成都算否 —— 那意味着还有没展开的内容）。
+        /// </summary>
+        private static bool ChainFullySucceeded(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            if (rootTask == null || rootTask.Outcome != TaskOutcome.Succeeded)
+            {
+                return false;
+            }
+
+            return chainTasks == null
+                || chainTasks.All(task => task != null && task.Outcome == TaskOutcome.Succeeded);
         }
 
         /// <summary>
@@ -474,38 +498,20 @@ namespace ArchiveFixer.Services
             var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             /*
-             * ⛔ 谁的"过程物"要收：**只有真的被解开过的**续解任务（内容已经落盘）。
+             * ⛔ 谁的"过程物"要收（**2026-11-01 用户新口径**）：
              *
-             * <para>用户 2026-10-04 当场推翻 2026-09-28 的旧口径 —— 原话：
-             * 「链上那个从未解开过的内层包（它躺在其余物里）—— **不是没解开你为什么要放在其余物里面，啊**」。
-             * 老写法是 `if (!candidateSucceeded && !rootSucceeded) continue;`：根任务一成功，
-             * 链上**所有**续解任务（失败的 / 这一轮没跑的 / 跳过的）都被当过程物收走，
-             * 而链尾「其余物按设置处理」那一档在「彻底删除」下是**永久删除**
-             * ⇒ 还没解出来的内容连包一起没了（不可逆）。
+             * <para>「未解开的内层包，放入其余物里面吧，它就相当于失败的时候的最后一层过程物，
+             * 放在其余物里面看看用户的选择删或者是不删」。</para>
              *
-             * 新口径（与"内层包按有没有被解开过分类"同一句话）：
-             * · **解开过的**（自己这一单成功 + 输出校验通过 ⇒ 内容已落盘）= 过程物 ⇒ 收进其余物、照旧按档处理；
-             * · **从未解开过的**（停在半路留下的分支 / 命中「内容物保留关键词」的 / 到上限没展开的 /
-             *   失败与没跑成的）= **还没处理的内容** ⇒ 原样留在成品目录里，⛔ 一条都不进其余物。
-             *
-             * 判据**不新造**：就是本方法一直在用的那条既有事实（`Succeeded` + `Passed`），
-             * 以及上面「内容物保留关键词」那一档；⛔ 绝不按"名字像不像归档"去猜。
-             * ⚠ 与 `CollectChainInnerPackagesIntoRestAsync` 里那份"还留着"名单**同一套判据**（§9.5）。
+             * <para>⇒ 链上**所有**续解内层包（解开过的 / 没解开过的 / 失败的）都收进其余物；
+             * 解开过的成功链由逐层回收直接删（不会留到这里），留在盘上的通常是失败/部分完成/未展开，
+             * 由链尾「删除操作」按用户选择处理。⛔ 唯一例外仍是「内容物保留关键词」：碰都不碰。</para>
              */
             foreach (ArchiveTask? candidate in chainTasks)
             {
                 if (candidate == null ||
                     ReferenceEquals(candidate, rootTask) ||
                     !candidate.IsContinuationTask)
-                {
-                    continue;
-                }
-
-                bool candidateSucceeded =
-                    candidate.Outcome == TaskOutcome.Succeeded &&
-                    candidate.OutputVerification == OutputVerificationOutcome.Passed;
-
-                if (!candidateSucceeded)
                 {
                     continue;
                 }
@@ -2226,14 +2232,16 @@ namespace ArchiveFixer.Services
             {
                 _host.AppendLog(
                     "INFO",
-                    $"其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后其余物（{scope}）留在成品目录里，随时可手工删。");
+                    $"其余物：本批保留（③页「删除操作」= 留下）。过程物先集中到落点下的「其余物」："
+                    + $"整条链全部成功时直接彻底删除（{scope}）；失败 / 部分完成 / 有未展开内层包时"
+                    + "留在其余物里，随时可手工删。");
                 return;
             }
 
             _host.AppendLog(
                 "WARN",
                 $"其余物：本批任务成功后会彻底删除（{scope}，不进回收站、不可恢复）。"
-                + "失败 / 部分完成 / 取消的任务一个字节都不动。");
+                + "失败 / 部分完成 / 未展开的内层包也按这一档彻底删除。");
         }
 
         /// <summary>

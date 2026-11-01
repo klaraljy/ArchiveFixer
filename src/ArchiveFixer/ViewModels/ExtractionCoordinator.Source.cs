@@ -1783,13 +1783,18 @@ namespace ArchiveFixer.ViewModels
                  * ⇒ 这一整个分支在普通档下**永远不执行**，实际上只剩「空间不足」模式会走到它
                  * （那个模式每一层的源包早就当场删了 ⇒ 这里同样搬不出东西）。
                  * ⛔ 判据仍然只有 `_layerReclaimThisBatch` 一个出口（⛔ 这里不另判一次档位）。
-                 * 这一段（`CollectChainInnerPackagesIntoRestAsync` 及其记账）已是**待删的死代码**，
-                 * 与 `MoveSourcePackageIntoRest` / `ExecuteSourcePackageMove` 同一批（see 修改日志）。
+                 * ⛔ 2026-11-01：上面这套"普通档不调"的旧口径已被用户新口径取代 ——
+                 * 未解开的内层包也要收进其余物，故链尾改为**无条件调用**（见下方 2026-11-01 注释）。
                  */
-                if (!_layerReclaimThisBatch)
-                {
-                    await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
-                }
+                /*
+                 * ⛔ 2026-11-01 用户新口径：**未解开的内层包也放进其余物**，让用户按「删除操作」选择删/不删。
+                 * 以前这段只在 `!_layerReclaimThisBatch` 下跑，普通档永不执行 ⇒ 被逐层回收闸门挡下的
+                 * 内层包、没展开的片一直躺在成品目录里（真机 2.part1/2/3 就是这样）。
+                 * 现在改为**链尾无条件收一次**：搬进根任务的 `destDir\其余物\`；
+                 * 整条链全部成功 ⇒ `CollectChainInnerPackagesIntoRestAsync` 末尾直接清空其余物；
+                 * 有跳过/失败/未展开 ⇒ 留在其余物里，由 `ApplyRestHandlingAfterChainAsync` 按设置处理。
+                 */
+                await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
 
                 /*
                  * ⛔ **「成品目录里还留着的内层包」那一句诊断无条件跑**（2026-10-15 从上面那个方法里拆出来）。

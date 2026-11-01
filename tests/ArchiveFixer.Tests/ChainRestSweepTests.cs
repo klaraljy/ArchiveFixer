@@ -80,22 +80,15 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 外层成功：整组收下
 
         /// <summary>
-        /// 外层成功 + 校验通过，但内层那一单**没跑成**（= 这一组内层分卷**从未被解开过**）
-        /// ⇒ **一个字节都不搬**：文件留在原处（内容照旧），其余物里没有它们，任务路径也不许被改。
+        /// 外层成功，但内层那一单**没跑成**（= 这一组内层分卷**从未被解开过**）。
         ///
-        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻 2026-09-28 的口径）</b>：老用例断言的是
-        /// "外层成功 ⇒ 没跑成的内层分卷组也整组进其余物"。用户原话：
-        /// 「链上那个从未解开过的内层包（它躺在其余物里）—— <b>不是没解开你为什么要放在其余物里面，啊</b>」。
-        /// 其余物在「彻底删除」档下是**永久删除** ⇒ 那等于把还没解出来的内容连包一起删掉。
-        /// 现在的口径：只有**真的被解开过**（自己这一单成功 + 校验通过、内容已落盘）的内层包才算过程物。</para>
-        ///
-        /// <para>「解开过的照旧整组进其余物」由这些用例钉住，⛔ 这一条没放宽：
-        /// <c>ChainInnerPackageMovePlanTests.分卷组内层包_整组一起搬且名字互不相同</c>、
-        /// <c>InnerLayerContinuationTests.缺陷3_解开过的内层包照旧进其余物并按设置被处理</c>、
-        /// <c>ChainLayerReclaimTests</c> 用例 A/E。</para>
+        /// <para><b>⚠ 2026-11-01 用户新口径</b>：「未解开的内层包，放入其余物里面吧，它就相当于
+        /// 失败的时候的最后一层过程物，放在其余物里面看看用户的选择删或者是不删」。
+        /// 旧口径（2026-10-04「不是没解开你为什么要放在其余物里面」）已被用户推翻 ⇒
+        /// 现在未解开的内层包也**整组移入其余物**，由链尾「删除操作」按用户选择处理。</para>
         /// </summary>
         [Fact]
-        public async Task 外层成功但内层分卷组从未解开过_一个字节都不搬()
+        public async Task 外层成功但内层分卷组从未解开过_整组移入其余物()
         {
             Harness harness = CreateHarness();
             ChainFixture chain = await BuildChainFixtureAsync(harness, RootState.Succeeded);
@@ -106,25 +99,23 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
                 new[] { chain.Root }, new[] { chain.Root, chain.UnrunContinuation });
 
-            // ① 每一卷都**没**进其余物 —— 它还没被解开过，进去就等于把内容交给删除档。
+            // ① 每一卷都进了其余物，原位置不再有。
             foreach (string volume in chain.VolumePaths)
             {
                 string moved = Path.Combine(chain.RestDirectory, Path.GetFileName(volume));
 
-                Assert.False(File.Exists(moved), $"{Path.GetFileName(volume)} 没解开过，不该进其余物");
-                Assert.True(File.Exists(volume), $"{Path.GetFileName(volume)} 应当原样留在成品目录里");
+                Assert.True(File.Exists(moved), $"{Path.GetFileName(volume)} 应当移入其余物");
+                Assert.False(File.Exists(volume), $"{Path.GetFileName(volume)} 不应留在成品目录里");
             }
 
-            // ② 任务账上那条路径也不许被改（它还在原地）。
-            Assert.Equal(chain.VolumePaths[0], chain.UnrunContinuation.CurrentPath);
+            // ② 任务账上的路径跟着改到其余物（续解扫描靠它排除已搬走的包）。
+            string firstMoved = Path.Combine(
+                chain.RestDirectory,
+                Path.GetFileName(chain.VolumePaths[0]));
 
-            // ③ ⛔ 不许静默：那行"还留着"的提示要如实点名（判据与搬运那一边同一套）。
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("成品目录里还留着", StringComparison.Ordinal) &&
-                        line.Contains("inner.7z.001", StringComparison.Ordinal));
+            Assert.Equal(firstMoved, chain.UnrunContinuation.CurrentPath);
 
-            // ④ 内容物与根任务的结论一点没被这次收尾改坏。
+            // ③ 内容物与根任务的结论一点没被这次收尾改坏。
             Assert.True(File.Exists(Path.Combine(chain.Root.OutputPath, ContentFileName)));
             Assert.Equal(TaskOutcome.Succeeded, chain.Root.Outcome);
             Assert.Equal(OutputVerificationOutcome.Passed, chain.Root.OutputVerification);
@@ -133,11 +124,10 @@ namespace ArchiveFixer.Tests
         // ================================================================ ② 外层没成功：一个字节都不搬（红线）
 
         /// <summary>
-        /// <b>红线</b>：根任务不是"成功 + 校验通过"时，那组没跑成的内层包**一个字节都不搬** ——
-        /// 文件留在原处（内容照旧），其余物里没有它们，续解任务的路径也不许被改。
+        /// <b>红线</b>：根任务不是"成功 + 校验通过"时，**用户源包一个字节都不动**；
+        /// 但没跑成的内层过程物按 2026-11-01 新口径**整组移入其余物**，由用户按「删除操作」选择。
         ///
-        /// <para>两档各来一次：外层这一单**失败**、外层成功了但**校验没过**。
-        /// 后者专门用来钉"两个条件必须同时成立"（Outcome 还是 Succeeded，只有校验枚举不通过）。</para>
+        /// <para>两档各来一次：外层这一单**失败**、外层成功了但**校验没过**。</para>
         /// </summary>
         [Theory]
         [InlineData(RootState.Failed)]
@@ -150,41 +140,32 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
                 new[] { chain.Root }, new[] { chain.Root, chain.UnrunContinuation });
 
-            // ① 红线：三卷都还在成品目录里（原位置、原大小）。
+            // ① 新口径：未解开的内层过程物整组进其余物；**用户源包一个字节不动**。
             for (int i = 0; i < chain.VolumePaths.Length; i++)
             {
                 string volume = chain.VolumePaths[i];
+                string moved = Path.Combine(chain.RestDirectory, Path.GetFileName(volume));
 
-                Assert.True(File.Exists(volume), $"{Path.GetFileName(volume)} 被搬走了 —— 外层没成功时一个字节都不许动");
-                Assert.Equal(
-                    i == chain.VolumePaths.Length - 1 ? 512L : 1024L,
-                    new FileInfo(volume).Length);
+                Assert.True(File.Exists(moved), $"{Path.GetFileName(volume)} 应当移入其余物");
+                Assert.False(File.Exists(volume), $"{Path.GetFileName(volume)} 不应留在成品目录里");
+                Assert.Equal(i == chain.VolumePaths.Length - 1 ? 512L : 1024L, new FileInfo(moved).Length);
             }
 
-            // ② 其余物里一个都没有（其余物目录可能压根没建出来，两种都算对）。
-            if (Directory.Exists(chain.RestDirectory))
-            {
-                Assert.Empty(FilesNamedUnder(chain.RestDirectory, "inner.7z."));
-            }
+            Assert.True(File.Exists(chain.Root.CurrentPath), "用户源包必须原样留在原地");
 
-            // ③ 整个输出根下，那三卷只出现在成品目录里（没有第二份）。
-            string[] copies = FilesNamedUnder(harness.OutputRoot, "inner.7z.");
+            // ② 其余物里就是那三卷；整个输出根下也只有这三份（没有第二份）。
+            Assert.Equal(3, FilesNamedUnder(chain.RestDirectory, "inner.7z.").Length);
+            Assert.Equal(3, FilesNamedUnder(harness.OutputRoot, "inner.7z.").Length);
 
+            // ③ 任务对象的路径跟着改到其余物。
             Assert.Equal(
-                chain.VolumePaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray(),
-                copies);
+                Path.Combine(chain.RestDirectory, Path.GetFileName(chain.VolumePaths[0])),
+                chain.UnrunContinuation.CurrentPath);
 
-            // ④ 任务对象的路径也不许被改（改了就等于告诉续解扫描"它已经搬走了"）。
-            Assert.Equal(chain.VolumePaths[0], chain.UnrunContinuation.CurrentPath);
-
-            /*
-             * ⑤ 但"如实点名"那一条照旧：链尾必须说清成品目录里还留着几个内层包 ——
-             * 用户看不到文件、也看不到这句话，就会以为程序又忘了搬（真机原话："这个你没有删除，
-             * 也许是你没有移到其余物里面"）。
-             */
+            // ④ 搬运日志必须如实写（不再写"还留着"）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("还留着 3 个内层包", StringComparison.Ordinal));
+                line => line.Contains("内层包已移入其余物", StringComparison.Ordinal));
         }
 
         // ================================================================ 夹具
