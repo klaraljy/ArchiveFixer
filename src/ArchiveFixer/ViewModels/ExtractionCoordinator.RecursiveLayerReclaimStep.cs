@@ -267,7 +267,8 @@ namespace ArchiveFixer.ViewModels
                 reclaimVerdict: request.Verdict,
                 reclaimRootSource: false,
                 reclaimLabel: request.ChildLayerLabel,
-                reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory);
+                reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory,
+                groupComplete: request.GroupFiles.Count > 1);
 
             foreach ((string level, string message) in logEntries)
             {

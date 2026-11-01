@@ -440,7 +440,8 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static string BuildKey(string baseName, VolumeNamingFamily family, string? sourceLayer, string? entryPath) =>
             baseName + "|" + family.ToString()
-            + "|" + (string.IsNullOrWhiteSpace(sourceLayer) ? string.Empty : sourceLayer);
+            + "|" + (string.IsNullOrWhiteSpace(sourceLayer) ? string.Empty : sourceLayer)
+            + "|" + (string.IsNullOrWhiteSpace(entryPath) ? string.Empty : entryPath);
 
         /// <summary>其余物 / 工作区 / 暂存目录不能当组的入口层（只读路径判断，不碰盘）。</summary>
         private static bool IsForbiddenLayer(string layer)
