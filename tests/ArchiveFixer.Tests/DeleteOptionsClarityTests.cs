@@ -234,7 +234,7 @@ namespace ArchiveFixer.Tests
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
             task.Outcome = outcome;
 
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.False(result.Attempted);
             Assert.True(Directory.Exists(restDirectory), "失败 / 取消 / 跳过 / 部分完成 → 其余物必须原样留着");
@@ -247,7 +247,7 @@ namespace ArchiveFixer.Tests
         {
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
 
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: true, DeleteMode.Permanent);
+            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: true);
 
             Assert.False(result.Attempted);
             Assert.True(Directory.Exists(restDirectory));
@@ -259,7 +259,7 @@ namespace ArchiveFixer.Tests
         {
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
 
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.False(Directory.Exists(restDirectory));
@@ -287,7 +287,7 @@ namespace ArchiveFixer.Tests
             File.WriteAllText(Path.Combine(restDirectory, "一组素材.z01"), "内层分卷（过程物）");
             File.WriteAllText(Path.Combine(task.OutputPath!, "一组素材.z删除ip"), "末片（名字被改坏，被当内容物留在这里）");
 
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.False(result.Attempted, result.Message);
             Assert.True(Directory.Exists(restDirectory), "半套分卷绝不允许整份删除");

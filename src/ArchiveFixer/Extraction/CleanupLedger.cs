@@ -67,6 +67,7 @@ namespace ArchiveFixer.Extraction
         public IReadOnlyList<string> Targets { get; init; } = Array.Empty<string>();
         public string AllowedRoot { get; init; } = string.Empty;
         public bool DeletesEverything { get; init; }
+        public bool Cancelled { get; init; }
         public string Reason { get; init; } = string.Empty;
     }
 
@@ -148,6 +149,15 @@ namespace ArchiveFixer.Extraction
                 cancellationToken.ThrowIfCancellationRequested();
                 await execute(step, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>唯一删除执行入口：计划先成立，执行体只接收同一个计划对象。</summary>
+        public static T ExecuteDeletion<T>(DeletionPlan plan, Func<DeletionPlan, T> execute)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+            ArgumentNullException.ThrowIfNull(execute);
+
+            return execute(plan);
         }
     }
 }

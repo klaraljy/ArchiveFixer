@@ -65,7 +65,7 @@ namespace ArchiveFixer.Tests
 
             // 走「彻底删除」这一档；空壳仍应就地删掉、不调执行器。
             RestPurgeOutcome outcome = new RestItemPurger(executor)
-                .Purge(task, cancelled: false, DeleteMode.Permanent);
+                .Purge(task, cancelled: false);
 
             Assert.True(outcome.Succeeded, outcome.Message);
 
@@ -96,7 +96,7 @@ namespace ArchiveFixer.Tests
                 RemovedAsEmptyShell = true
             };
 
-            string shellLine = ExtractionCoordinator.DescribeRestPurgedLine(shell, DeleteMode.Permanent);
+            string shellLine = ExtractionCoordinator.DescribeRestPurgedLine(shell);
 
             Assert.Contains("没有进回收站", shellLine, StringComparison.Ordinal);
             Assert.DoesNotContain(StatusText.RestActionRecycleBin, shellLine, StringComparison.Ordinal);
@@ -111,7 +111,7 @@ namespace ArchiveFixer.Tests
                 FreedBytes = 2048
             };
 
-            string normalLine = ExtractionCoordinator.DescribeRestPurgedLine(normal, DeleteMode.Permanent);
+            string normalLine = ExtractionCoordinator.DescribeRestPurgedLine(normal);
 
             Assert.Contains(StatusText.RestActionDelete, normalLine, StringComparison.Ordinal);
             Assert.Contains("3 项", normalLine, StringComparison.Ordinal);
@@ -133,7 +133,7 @@ namespace ArchiveFixer.Tests
 
             var executor = new FakeDeleteExecutor();
             RestPurgeOutcome outcome = new RestItemPurger(executor)
-                .Purge(task, cancelled: false, DeleteMode.Permanent);
+                .Purge(task, cancelled: false);
 
             Assert.Equal(restDirectory, Assert.Single(executor.PermanentCalls));
             Assert.Empty(executor.RecycleCalls);
@@ -158,7 +158,7 @@ namespace ArchiveFixer.Tests
             var missingExecutor = new FakeDeleteExecutor();
 
             RestPurgeOutcome missing = new RestItemPurger(missingExecutor)
-                .Purge(missingTask, cancelled: false, DeleteMode.Permanent);
+                .Purge(missingTask, cancelled: false);
 
             Assert.False(missing.Attempted);
             Assert.False(missing.Succeeded);
@@ -175,7 +175,7 @@ namespace ArchiveFixer.Tests
 
             var shapedExecutor = new FakeDeleteExecutor();
             RestPurgeOutcome shaped = new RestItemPurger(shapedExecutor)
-                .Purge(shapedTask, cancelled: false, DeleteMode.Permanent);
+                .Purge(shapedTask, cancelled: false);
 
             Assert.False(shaped.Attempted);
             Assert.Empty(shapedExecutor.RecycleCalls);
@@ -206,7 +206,7 @@ namespace ArchiveFixer.Tests
 
             var executor = new FakeDeleteExecutor();
             RestPurgeOutcome outcome = new RestItemPurger(executor)
-                .PurgeExcept(task, new[] { sourcePackage }, DeleteMode.Permanent);
+                .PurgeExcept(task, new[] { sourcePackage });
 
             Assert.True(outcome.Succeeded, outcome.Message);
             Assert.Empty(executor.RecycleCalls);
@@ -216,6 +216,28 @@ namespace ArchiveFixer.Tests
             Assert.True(Directory.Exists(restDirectory), "只删掉里面的空目录，其余物目录本身照旧留着（老口径不变）");
             Assert.True(outcome.RemovedAsEmptyShell, "PurgeExcept 的空壳支同样要留事实位");
             Assert.Contains("没有送进回收站", outcome.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 删除计划的目标不是本任务其余物 ⇒ 拒绝执行，一个字节都不删（计划不能被别的任务借用）。
+        /// </summary>
+        [Fact]
+        public void 删除计划目标不是本任务其余物_拒绝且不删()
+        {
+            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+
+            var plan = new ArchiveFixer.Extraction.DeletionPlan
+            {
+                Targets = new[] { Path.Combine(_root, "别的任务", "其余物") },
+                AllowedRoot = task.OutputPath!,
+                Reason = "测试：错误目标"
+            };
+
+            RestPurgeOutcome outcome = new RestItemPurger(new FakeDeleteExecutor()).Purge(task, plan);
+
+            Assert.False(outcome.Attempted, outcome.Message);
+            Assert.Contains("不是本任务的其余物", outcome.Message, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(restDirectory));
         }
 
         // ================================================================ 装配

@@ -44,6 +44,9 @@ namespace ArchiveFixer.Extraction
         public string Note { get; init; } = string.Empty;
 
         public bool IncludeRestAliases { get; init; }
+
+        /// <summary>目标清单的唯一来源；给了它就不再由服务自己 BuildTargetList。</summary>
+        public DeletionPlan? Plan { get; init; }
     }
 
     /// <summary>
@@ -156,12 +159,16 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public SourceCleanupResult Cleanup(ArchiveTask? task, SourceCleanupDecision decision)
         {
-            return CleanupCore(task, decision ?? new SourceCleanupDecision
+            SourceCleanupDecision actual = decision ?? new SourceCleanupDecision
             {
                 Enabled = false,
                 Evidence = SourceCleanupEvidence.None,
                 Note = "没有删源裁决"
-            });
+            };
+
+            return actual.Plan == null
+                ? CleanupCore(task, actual)
+                : CleanupExecutor.ExecuteDeletion(actual.Plan, _ => CleanupCore(task, actual));
         }
 
         private SourceCleanupResult CleanupCore(
@@ -206,7 +213,8 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
-            List<string> targets = BuildTargetList(task, decision.IncludeRestAliases);
+            List<string> targets = decision.Plan?.Targets?.ToList()
+                                   ?? BuildTargetList(task, decision.IncludeRestAliases);
 
             if (targets.Count == 0)
             {

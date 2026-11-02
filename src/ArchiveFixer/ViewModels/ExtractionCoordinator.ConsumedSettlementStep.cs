@@ -164,11 +164,6 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void DeleteHarvestTargets(ArchiveTask consumer, List<string> targets)
         {
-            string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
-
-            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 只剩永久删（调用方已保证这一批不是 Keep 档）。
-            DeleteMode deleteMode = DeleteMode.Permanent;
-
             string reason = RestItemPurger.SettledPieceCopyPurgeReason;
 
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
@@ -192,7 +187,7 @@ namespace ArchiveFixer.ViewModels
                         {
                             AllowedRoot = directory,
                             UserConfirmed = true,
-                            Mode = deleteMode,
+                            Mode = DeleteMode.Permanent,
                             Reason = reason
                         });
 
@@ -202,11 +197,9 @@ namespace ArchiveFixer.ViewModels
 
                         AppendLog(
                             "INFO",
-                            deleteMode == DeleteMode.RecycleBin
-                                ? $"{consumer.LogName}：这一组已经解开，它这一份卷 {name} 按「删除操作」移入回收站了。"
-                                : $"{consumer.LogName}：这一组已经解开，它这一份卷 {name} 按「删除操作」彻底删除"
-                                  + $"（{result.Outcomes.FirstOrDefault()?.EntryCount ?? 0} 个条目 / "
-                                  + $"释放 {TaskSpaceEstimate.FormatSize(result.Outcomes.FirstOrDefault()?.FreedBytes ?? 0)}，不进回收站）。");
+                            $"{consumer.LogName}：这一组已经解开，它这一份卷 {name} 按「删除操作」彻底删除"
+                              + $"（{result.Outcomes.FirstOrDefault()?.EntryCount ?? 0} 个条目 / "
+                              + $"释放 {TaskSpaceEstimate.FormatSize(result.Outcomes.FirstOrDefault()?.FreedBytes ?? 0)}，不进回收站）。");
                     }
                     else
                     {

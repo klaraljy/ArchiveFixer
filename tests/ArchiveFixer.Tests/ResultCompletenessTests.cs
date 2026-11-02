@@ -207,7 +207,7 @@ namespace ArchiveFixer.Tests
             task.IsOutputVerified = true;
             task.OutputManifestCrossChecked = false;
 
-            RestPurgeOutcome outcome = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+            RestPurgeOutcome outcome = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.False(outcome.Attempted);
             Assert.False(outcome.Succeeded);
@@ -225,7 +225,7 @@ namespace ArchiveFixer.Tests
             task.IsOutputVerified = true;
             task.OutputManifestCrossChecked = true;
 
-            RestPurgeOutcome outcome = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+            RestPurgeOutcome outcome = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.True(outcome.Attempted);
             Assert.True(outcome.Succeeded);

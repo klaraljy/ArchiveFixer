@@ -480,9 +480,6 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 只剩永久删（Keep 档在调用方就返回了）。
-            DeleteMode deleteMode = DeleteMode.Permanent;
-
             string reason = RestItemPurger.SettledPieceCopyPurgeReason;
 
             ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
@@ -798,7 +795,7 @@ namespace ArchiveFixer.ViewModels
                         {
                             AllowedRoot = outputRoot,
                             UserConfirmed = true,
-                            Mode = deleteMode,
+                            Mode = DeleteMode.Permanent,
                             Reason = reason
                         });
 
@@ -808,11 +805,8 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "INFO",
-                            deleteMode == DeleteMode.RecycleBin
-                                ? $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} 按「删除操作」移入回收站了"
-                                  + "（与 `111.z01` 那一档同一个收场口径）。"
-                                : $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} 按「删除操作」彻底删除"
-                                  + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(outcome?.FreedBytes ?? 0)}，不进回收站）。");
+                            $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} 按「删除操作」彻底删除"
+                              + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(outcome?.FreedBytes ?? 0)}，不进回收站）。");
                     }
                     else
                     {

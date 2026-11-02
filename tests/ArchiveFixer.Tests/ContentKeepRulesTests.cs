@@ -345,14 +345,14 @@ namespace ArchiveFixer.Tests
                     null,
                     null,
                     ContentKeepRules.FromKeywords(new[] { "小明" }))
-                .PurgeExcept(task, new[] { sourcePath }, DeleteMode.Permanent);
+                .PurgeExcept(task, new[] { sourcePath });
 
             Assert.False(outcome.Attempted);
             Assert.True(Directory.Exists(rest));
         }
 
         private static RestPurgeOutcome Purge(ArchiveTask task, ContentKeepRules rules) =>
-            new RestItemPurger(null, null, rules).Purge(task, cancelled: false, DeleteMode.Permanent);
+            new RestItemPurger(null, null, rules).Purge(task, cancelled: false);
 
         /// <summary>造一个"该动手的其余物"：源包叫 <paramref name="sourceName"/>，其余物里另有 <paramref name="restEntries"/>。</summary>
         private (ArchiveTask Task, string SourcePath, string RestDirectory) CreateRest(

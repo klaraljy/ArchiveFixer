@@ -47,10 +47,10 @@ namespace ArchiveFixer.Storage
 
     /// <summary>
     /// 「删除操作」那一档的**唯一执行体**：按用户选的方式处理一个任务自己的 `其余物`
-    /// （<see cref="DeleteMode.RecycleBin"/> = 移入回收站，可还原；<see cref="DeleteMode.Permanent"/> = 彻底删除）。
+    /// （解压侧只剩彻底删除；回收站档已整条下线）。
     ///
     /// <para>⚠ 2026-09-25 第 32 条起它不再只服务"危险模式"（那套已整块退役）：③页的「删除操作」
-    /// 三档里后两档都走这里，<b>五道门槛一个字不改</b>。</para>
+    /// 现在只剩「不动 / 彻底删除」两档，后者走这里，<b>五道门槛一个字不改</b>。</para>
     ///
     /// <para><b>门槛（五条，缺一不可 —— 这是那条红线"失败不删任何东西"的落点）</b>：</para>
     /// <list type="number">
@@ -114,10 +114,6 @@ namespace ArchiveFixer.Storage
         public const string AutoPurgeReason =
             "删除操作=彻底删除：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 彻底删除本任务的其余物（源包 + 过程物，不进回收站）";
 
-        /// <summary>移入回收站那一档的理由。</summary>
-        public const string AutoRecycleReason =
-            "删除操作=移入回收站：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 把本任务的其余物（源包 + 过程物）移入回收站（可还原；空间要等清空回收站才释放）";
-
         /// <summary>
         /// 部分完成收尾那一档的理由（用户 2026-10-02：「我建议源包 + 已解出的内容物留着，其他的都删掉」）。
         /// </summary>
@@ -161,8 +157,7 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public RestPurgeOutcome PurgeExcept(
             ArchiveTask? task,
-            IReadOnlyList<string>? keepPaths,
-            DeleteMode mode = DeleteMode.Permanent)
+            IReadOnlyList<string>? keepPaths)
         {
             // 这一档（部分完成发布）没有"换证据来源"的需求：输出范围按本任务自己的算。
             string? allowedRootEvidence = null;
@@ -170,11 +165,6 @@ namespace ArchiveFixer.Storage
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
-            }
-
-            if (mode != DeleteMode.Permanent)
-            {
-                return Skip("解压侧其余物只支持彻底删除（回收站档已整条下线），一个字节都不删");
             }
 
             string name = string.IsNullOrWhiteSpace(task.FileName)
@@ -336,7 +326,7 @@ namespace ArchiveFixer.Storage
                     {
                         AllowedRoot = allowedRoot,
                         UserConfirmed = true,
-                        Mode = mode,
+                        Mode = DeleteMode.Permanent,
                         Reason = PartialPurgeReason
                     });
             }
@@ -538,7 +528,6 @@ namespace ArchiveFixer.Storage
         /// </summary>
         /// <param name="task">目标任务。</param>
         /// <param name="cancelled">这一刻是不是已经被取消（用户按了「取消当前」/「停止后续」）。</param>
-        /// <param name="mode">怎么处理：<see cref="DeleteMode.RecycleBin"/> 或 <see cref="DeleteMode.Permanent"/>。</param>
         /// <param name="completenessEvidence">
         /// **完整性证据的来源**。默认（null）= 本任务自己那一份（<see cref="ResultCompletenessClassifier.Classify"/>）。
         ///
@@ -561,18 +550,12 @@ namespace ArchiveFixer.Storage
         public RestPurgeOutcome Purge(
             ArchiveTask? task,
             bool cancelled,
-            DeleteMode mode = DeleteMode.Permanent,
             ResultCompletenessVerdict? completenessEvidence = null,
             string? allowedRootEvidence = null)
         {
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
-            }
-
-            if (mode != DeleteMode.Permanent)
-            {
-                return Skip("解压侧其余物只支持彻底删除（回收站档已整条下线），一个字节都不删");
             }
 
             string name = string.IsNullOrWhiteSpace(task.FileName)
@@ -708,7 +691,7 @@ namespace ArchiveFixer.Storage
 
             // logSink 传 null：删除日志由调用方（协调器）原样写进界面与文件日志，
             // 不在这里另开一个落点（两处各写一份会让日志出现两个时间戳）。
-            string reason = mode == DeleteMode.RecycleBin ? AutoRecycleReason : AutoPurgeReason;
+            string reason = AutoPurgeReason;
 
             var service = new RecycleBinService(_executor, null, _probe);
             DeleteRequest request = new DeleteRequest(directory, reason);
@@ -723,7 +706,7 @@ namespace ArchiveFixer.Storage
                     {
                         AllowedRoot = allowedRoot,
                         UserConfirmed = true,
-                        Mode = mode,
+                        Mode = DeleteMode.Permanent,
                         Reason = reason
                     });
             }
@@ -746,9 +729,7 @@ namespace ArchiveFixer.Storage
                     Attempted = true,
                     Succeeded = false,
                     Directory = directory,
-                    Message = mode == DeleteMode.RecycleBin
-                        ? $"{name}：其余物没能移入回收站（{failure}）—— 内容物不受影响，其余物仍在原处"
-                        : $"{name}：其余物没能删掉（{failure}）—— 内容物不受影响，但空间没有回来",
+                    Message = $"{name}：其余物没能删掉（{failure}）—— 内容物不受影响，但空间没有回来",
                     LogLines = logLines
                 };
             }
@@ -760,13 +741,44 @@ namespace ArchiveFixer.Storage
                 Directory = directory,
                 FreedBytes = result.FreedBytes,
                 EntryCount = outcome?.EntryCount ?? 0,
-                Message = mode == DeleteMode.RecycleBin
-                    ? $"{name}：其余物已移入回收站 {directory}"
-                      + $"（{outcome?.EntryCount ?? 0} 个条目 / {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，可还原）"
-                    : $"{name}：其余物已彻底删除 {directory}"
-                      + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）",
+                Message = $"{name}：其余物已彻底删除 {directory}"
+                    + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）",
                 LogLines = logLines
             };
+        }
+
+        /// <summary>
+        /// 唯一删除计划的执行入口：目标/允许根/取消事实都从 <see cref="DeletionPlan"/> 读，
+        /// 执行体不再自己猜目标；计划与任务其余物对不上就一个字节都不删。
+        /// </summary>
+        public RestPurgeOutcome Purge(
+            ArchiveTask? task,
+            DeletionPlan plan)
+        {
+            if (task == null || plan == null)
+            {
+                return Skip("没有任务或删除计划，未删除任何东西");
+            }
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return Skip("任务没有其余物目录，未删除任何东西");
+            }
+
+            if (plan.Targets.Count != 1 ||
+                !string.Equals(
+                    SafePathHelper.GetFullPathSafe(plan.Targets[0]),
+                    SafePathHelper.GetFullPathSafe(task.RestDirectoryPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
+            }
+
+            return Purge(
+                task,
+                plan.Cancelled,
+                completenessEvidence: null,
+                allowedRootEvidence: plan.AllowedRoot);
         }
 
         /// <summary>

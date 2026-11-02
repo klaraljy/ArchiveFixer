@@ -156,8 +156,7 @@ namespace ArchiveFixer.Tests
 
             RestPurgeOutcome result = new RestItemPurger().PurgeExcept(
                 task,
-                new[] { keptInRest },
-                DeleteMode.Permanent);
+                new[] { keptInRest });
 
             Assert.True(result.Succeeded, result.Message);
 
@@ -180,8 +179,7 @@ namespace ArchiveFixer.Tests
 
             RestPurgeOutcome result = new RestItemPurger().PurgeExcept(
                 task,
-                new[] { missingSource },
-                DeleteMode.Permanent);
+                new[] { missingSource });
 
             Assert.False(result.Attempted, result.Message);
             Assert.True(File.Exists(Path.Combine(restDirectory, "inner-222.7z.001")));
@@ -203,8 +201,7 @@ namespace ArchiveFixer.Tests
 
             RestPurgeOutcome result = new RestItemPurger().PurgeExcept(
                 task,
-                new[] { kept },
-                DeleteMode.Permanent);
+                new[] { kept });
 
             Assert.False(result.Attempted, result.Message);
             Assert.True(File.Exists(kept));

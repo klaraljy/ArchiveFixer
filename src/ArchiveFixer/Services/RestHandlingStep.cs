@@ -1485,27 +1485,6 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 搬运成功后把任务对象上的源路径改到新位置（CurrentPath 与分卷清单）。
-        ///
-        /// <c>task.FileName</c> 不变（只是换目录），所以界面上的名字照旧，路径列会显示新位置 ——
-        /// 这是诚实的：源包确实已经在其余物里了。
-        ///
-        /// <para>⚠ 判据只有一处：<see cref="TaskPathSync.ApplyMove"/>（⛔ 别再自己写一遍"只改 CurrentPath"
-        /// —— 那样账上会留下盘上已不存在的旧名字，见 §38 与内层包那一处 2026-10-02 的补齐）。</para>
-        /// </summary>
-        internal static void ApplySourceMoveResult(ArchiveTask task, SourcePackageMoveResult result)
-        {
-            var byOldPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (SourcePackageMove move in result.Moved)
-            {
-                byOldPath[move.SourcePath] = move.TargetPath;
-            }
-
-            TaskPathSync.ApplyMove(task, byOldPath);
-        }
-
-        /// <summary>
         /// **过路层那一单的其余物按档处理**（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉，
         /// 我无法理解为什么还会有其余物留着」；他两次追问的 `111\111\其余物\111.zip`（48.35 MB）就是这一格）。
         ///
@@ -1608,9 +1587,6 @@ namespace ArchiveFixer.Services
 
             bool cancelled = _host.IsStopping || _host.OperationCts?.IsCancellationRequested == true;
 
-            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
-            DeleteMode deleteMode = DeleteMode.Permanent;
-
             RestPurgeOutcome outcome;
 
             try
@@ -1622,22 +1598,8 @@ namespace ArchiveFixer.Services
                     .Purge(
                         producer,
                         cancelled,
-                        deleteMode,
-                        evidence,
-
-                        /*
-                         * 输出范围那一道门槛的锚点：这一单被收场时 `OutputPath` 已经被清空
-                         * （跟班卷没有自己的成品目录）⇒ 用**唯一落点出口**现算一份它那条链的落点目录
-                         * —— 其余物正是建在那一层底下（真机 `111\111\其余物`）。
-                         */
-                        /*
-                         * ⛔ 锚点 = **其余物目录的父目录**（其余物就建在它自己那一层底下），
-                         * ⛔ **绝不现算这一单的落点**：真机 2026-10-06 21:24 实测 —— 走到这里时
-                         * 它的源包**已经被搬进组层其余物**，现算出来是 `…\其余物\111` 这种荒唐路径，
-                         * 于是"不在本任务输出目录之内"把删除拒了 4 次，48.35 MB 一直留着。
-                         * 其余五道门槛（终态 / 完整性证据 / 目录形状 / 组内文件 / 半套分卷）照旧一条不绕过。
-                         */
-                        Path.GetDirectoryName(restDirectory) ?? string.Empty);
+                        completenessEvidence: evidence,
+                        allowedRootEvidence: Path.GetDirectoryName(restDirectory) ?? string.Empty);
             }
             catch (Exception ex)
             {
@@ -1987,9 +1949,6 @@ namespace ArchiveFixer.Services
 
             bool cancelled = _host.IsStopping || _host.OperationCts?.IsCancellationRequested == true;
 
-            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
-            DeleteMode deleteMode = DeleteMode.Permanent;
-
             RestPurgeOutcome outcome;
 
             try
@@ -2013,8 +1972,8 @@ namespace ArchiveFixer.Services
                         return _host.SpaceTightThisBatch
                             && !string.IsNullOrWhiteSpace(keepLast)
                             && File.Exists(keepLast)
-                                ? purger.PurgeExcept(task, new[] { keepLast }, deleteMode)
-                                : purger.Purge(task, cancelled, deleteMode);
+                                ? purger.PurgeExcept(task, new[] { keepLast })
+                                : purger.Purge(task, cancelled);
                     });
             }
             catch (Exception ex)
@@ -2041,7 +2000,7 @@ namespace ArchiveFixer.Services
 
             if (outcome.Succeeded)
             {
-                runtime.RestPurged = deleteMode == DeleteMode.Permanent;
+                runtime.RestPurged = true;
                 runtime.PurgedBytes = outcome.FreedBytes;
 
                 /*
@@ -2050,9 +2009,9 @@ namespace ArchiveFixer.Services
                  * 68 个包就是 400 多行、7 万多字符。理由与"不可逆"已经在批首那条 + ③页常驻红提示里
                  * 说过一次了，逐任务再念一遍只是把日志撑大；**失败时仍然全量**（下面那一支）。
                  */
-                _host.NoteBatchPurge(outcome.FreedBytes, deleteMode == DeleteMode.Permanent);
+                _host.NoteBatchPurge(outcome.FreedBytes, permanent: true);
 
-                _host.AppendLog("INFO", DescribeRestPurgedLine(outcome, deleteMode));
+                _host.AppendLog("INFO", DescribeRestPurgedLine(outcome));
 
                 return;
             }
@@ -2113,7 +2072,7 @@ namespace ArchiveFixer.Services
         /// —— 那就是一句假话。判据只读 <see cref="RestPurgeOutcome.RemovedAsEmptyShell"/>（AGENTS.md §9.5：
         /// 要删 / 要写盘的动作判据只准读事实；"0 项 0 B"证明不了"没进回收站"）。</para>
         /// </summary>
-        internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome, DeleteMode deleteMode)
+        internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome)
         {
             if (outcome.RemovedAsEmptyShell)
             {
@@ -2126,7 +2085,7 @@ namespace ArchiveFixer.Services
             return string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 StatusText.RestPurgedCompactFormat,
-                deleteMode == DeleteMode.Permanent ? StatusText.RestActionDelete : StatusText.RestActionRecycleBin,
+                StatusText.RestActionDelete,
                 LogLineText.DescribeShortTail(outcome.Directory, 2),
                 outcome.EntryCount,
                 WorkspaceCleanupService.FormatSize(outcome.FreedBytes));
@@ -2289,18 +2248,17 @@ namespace ArchiveFixer.Services
             {
                 Targets = new[] { task.RestDirectoryPath },
                 AllowedRoot = planAllowedRoot ?? string.Empty,
+                Cancelled = cancellationToken.IsCancellationRequested,
                 Reason = "成功链清空其余物"
             };
 
-            RestPurgeOutcome purge = new RestItemPurger(
-                    null,
-                    null,
-                    ContentKeepRules.FromSettings(_host.Settings))
-                .Purge(
-                    task,
-                    cancelled: cancellationToken.IsCancellationRequested,
-                    DeleteMode.Permanent,
-                    allowedRootEvidence: plan.AllowedRoot);
+            RestPurgeOutcome purge = CleanupExecutor.ExecuteDeletion(
+                plan,
+                p => new RestItemPurger(
+                        null,
+                        null,
+                        ContentKeepRules.FromSettings(_host.Settings))
+                    .Purge(task, p));
 
             _host.AppendLog(
                 purge.Succeeded ? "INFO" : "WARN",
@@ -2365,8 +2323,7 @@ namespace ArchiveFixer.Services
                     ContentKeepRules.FromSettings(_host.Settings))
                 .PurgeExcept(
                 task,
-                new[] { rootSourceFull },
-                DeleteMode.Permanent);
+                new[] { rootSourceFull });
 
             _host.AppendLog(
                 purge.Succeeded ? "INFO" : "WARN",

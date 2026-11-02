@@ -186,9 +186,6 @@ namespace ArchiveFixer.ViewModels
         internal static string ResolveRestDirectoryAfterCollect(StageCommitResult commit, CollectResult? collected) =>
             RestHandlingStep.ResolveRestDirectoryAfterCollect(commit, collected);
 
-        internal static void ApplySourceMoveResult(ArchiveTask task, SourcePackageMoveResult result) =>
-            RestHandlingStep.ApplySourceMoveResult(task, result);
-
         private void PurgePassThroughRestOfSettledProducer(ArchiveTask producer, ArchiveTask consumer, string groupBaseName) =>
             _restHandlingStep.PurgePassThroughRestOfSettledProducer(producer, consumer, groupBaseName);
 
@@ -224,8 +221,8 @@ namespace ArchiveFixer.ViewModels
         internal static string DescribeLayerReclaimBlocker(ArchiveTask task) =>
             RestHandlingStep.DescribeLayerReclaimBlocker(task);
 
-        internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome, DeleteMode deleteMode) =>
-            RestHandlingStep.DescribeRestPurgedLine(outcome, deleteMode);
+        internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome) =>
+            RestHandlingStep.DescribeRestPurgedLine(outcome);
 
         private void PrepareRestHandlingForBatch() => _restHandlingStep.PrepareRestHandlingForBatch();
 

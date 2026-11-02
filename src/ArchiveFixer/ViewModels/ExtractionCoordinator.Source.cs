@@ -458,121 +458,7 @@ namespace ArchiveFixer.ViewModels
             };
         }
 
-        /// <summary>
-        /// 把本任务的**整组源包**搬进其余物（决策 D-9/D-11/D-12；用户 2026-09-22 起两条路径一致）。
-        ///
-        /// <para>
-        /// 四个前置条件缺一不可（D-11）：① 内容物已定稿；② 输出校验通过；③ 未取消（调用方刚查过令牌）；
-        /// ④ 属于本任务分卷组。任何一个不成立就**一个字节都不动**，并且不生成 <c>其余物</c> 目录。
-        /// </para>
-        /// <para>
-        /// <b>2026-09-22 修掉的那个真实缺陷</b>：条件 ① 原来死认"本轮搬过内容物"
-        /// （<c>commit.MovedContentCount &gt; 0</c>），而用户的真实文件
-        /// （<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）**第一层只出过程物**，
-        /// 内容物是续解出来的子任务产出的 —— 子任务按设计跳过源包处理（它的"源文件"是我们自己的过程物），
-        /// 于是整条一键处理流水线跑完，源包还躺在原地、其余物里只有 4 个内层分卷。
-        /// 现在把它分成三种情况：
-        /// </para>
-        /// <list type="number">
-        /// <item><description><b>本轮有内容物、且没有任何搬运失败</b> → 当场搬（原有路径）。</description></item>
-        /// <item><description><b>本轮没有内容物、但也没有任何搬运失败</b>（典型：第一层只出过程物）：
-        /// 一键处理记成"留到链结束后补搬"（<see cref="SourcePackageMoveState.DeferredToChainEnd"/>，
-        /// 由 <see cref="OneClickCoordinator"/> 在整条续解链跑完之后调
-        /// <see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；手动「只解压」是单层路径、
-        /// 没有链可等，**当场就按"定稿 + 校验通过"处理**（用户新规则：成功就把源包放进其余物）。</description></item>
-        /// <item><description><b>定稿根本没发生、或部分搬运失败</b> → 维持原判：一个字节都不动，
-        /// 也不延期（这种情况连"这一轮的内容物已定稿"都不成立，延后也等不到）。</description></item>
-        /// </list>
-        /// <para>
-        /// 目标目录的算法（这里有个坑）：其余物目录是**定稿计划**里算出来的那个，
-        /// 但归集（Collect）会把整个产物目录搬走 —— 搬走之后计划里的路径已经不存在了。
-        /// 归集成功时其余物跟着落到 <c>归集目录\&lt;相对路径&gt;</c>（归集保留目录结构），
-        /// 所以按"计划路径相对 destDir 的那一段"平移过去即可；平移后的位置不存在就退回计划路径
-        /// （归集部分失败时其余物可能只搬走了一半，留在原地的那些才是真的）。
-        /// </para>
-        /// <para>
-        /// **只允许在后台线程上跑**（跨盘时是整包拷贝，几百 MB 到几十 GB）。
-        /// </para>
-        /// </summary>
-        /// <param name="oneClickRun">
-        /// 是不是「一键处理」发起的整理路径 —— 决定"本轮没有内容物"时是延期补搬还是当场搬
-        /// （见上面的情况 ②）。
-        /// </param>
-        private SourcePackageMoveResult MoveSourcePackageIntoRest(
-            ArchiveTask task,
-            OutputVerificationResult verification,
-            StageCommitResult commit,
-            CollectResult? collected,
-            bool oneClickRun,
-            List<(string Level, string Message)> logEntries)
-        {
-            /*
-             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
-             * <see cref="ResultCompletenessClassifier"/>）。老口径下"拿不到清单、只做了非空底线校验"
-             * 也算通过，那一档**没有任何证据**却能把源包搬走；现在它落在"判不出"⇒ 源包留在原地。
-             */
-            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(
-                verification,
-                task.ManifestExpectation);
 
-            if (!completeness.AllowsSourceRemoval)
-            {
-                logEntries.Add(("WARN", $"{task.LogName}：{completeness.Blocker} —— 源包留在原地（未移入其余物）。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = completeness.Message + "，源包留在原地" };
-            }
-
-            if (task.SourcePackageMove == SourcePackageMoveState.Done)
-            {
-                /*
-                 * 幂等（硬要求）：这个源包**已经搬进其余物**了（上次运行搬的），绝不许再搬第二次。
-                 *
-                 * 不查这一步会怎样：用户对同一个包再点一次「一键处理」时，源文件已经在
-                 * 上一轮的 <c>其余物</c> 里了，而新一轮的输出目录是自动改名后的 <c>pack(1)</c> ——
-                 * 于是"计划里的其余物"变成 <c>pack(1)\其余物</c>，源包会被从它已经安顿好的位置
-                 * **再搬一次**，用户看到的是"源包又跑回来了 / 凭空多一份"。
-                 * 判据只认这个显式标记，不认"文件还在不在"：文件不在时同样可能什么都没搬成过。
-                 */
-                logEntries.Add(("INFO", $"{task.LogName}：源包已经搬进其余物，本次不再搬（幂等）。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = "源包已经搬进其余物，不再搬第二次" };
-            }
-
-            if (!commit.Attempted || commit.FailedCount > 0)
-            {
-                // 定稿没发生 / 有搬运失败：内容物没定稿成功，源包不动，其余物也不生成（D-11 第 1 条）。
-                logEntries.Add(("WARN", $"{task.LogName}：内容物未全部定稿，源包留在原地（未移入其余物）。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = "内容物未全部定稿，源包留在原地" };
-            }
-
-            if (oneClickRun && commit.MovedContentCount == 0)
-            {
-                /*
-                 * 一键处理 + 本轮没有内容物：真实文件的常见形状（第一层只出待续解的过程物）。
-                 * 此刻"内容物已定稿"这个事实还不存在，但它**马上会由续解子任务产生** ——
-                 * 所以不能像原来那样直接放弃，而要记成"留到链结束后补搬"。
-                 *
-                 * 为什么只延期、不当场搬：这一轮产物全是过程物，内容物还没出现；
-                 * 一键处理的链可能还要跑两层，链没跑完就动源包＝在"内容物可能不全"时动用户唯一无法再生的东西。
-                 */
-                task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
-
-                logEntries.Add((
-                    "INFO",
-                    $"{task.LogName}：本轮产出的都是待续解的过程物（没有内容物定稿），" +
-                    $"源包先留在原地，等整条续解链跑完后再按设置搬进其余物。"));
-
-                return new SourcePackageMoveResult { Attempted = false, Message = "本轮没有内容物，源包搬运留到链结束后补搬" };
-            }
-
-            string artifactRoot = ResolveRestDirectoryAfterCollect(commit, collected);
-
-            if (string.IsNullOrWhiteSpace(artifactRoot))
-            {
-                logEntries.Add(("WARN", $"{task.LogName}：其余物目录算不出来，源包留在原地。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = "其余物目录算不出来" };
-            }
-
-            return ExecuteSourcePackageMove(task, artifactRoot, SourceMoveTrigger.DirectInRound, logEntries);
-        }
 
         /// <summary>这次是哪个触发点（进日志；⛔ 措辞只在这里拼一次）。</summary>
         private static string DescribeLayerPurgeTrigger(LayerPurgeTrigger trigger) => trigger switch
@@ -821,13 +707,23 @@ namespace ArchiveFixer.ViewModels
                 ? $"{triggerLabel}：内容物可证完整（{evidence}）"
                 : $"{triggerLabel}：判不出完整性（未拿清单逐条核对），保留源文件";
 
+            var sourceTargets = SourceCleanupService.BuildTargetList(task, _spaceTightThisBatch);
+            var sourcePlan = new DeletionPlan
+            {
+                Targets = sourceTargets,
+                AllowedRoot = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty,
+                DeletesEverything = true,
+                Reason = $"{triggerLabel}：删除源包"
+            };
+
             SourceCleanupResult cleanup = SourcePackageCleanup.Cleanup(
                 task,
                 new SourceCleanupDecision
                 {
                     Evidence = evidence,
                     Note = verificationNoteForSourceRemoval,
-                    IncludeRestAliases = _spaceTightThisBatch
+                    IncludeRestAliases = _spaceTightThisBatch,
+                    Plan = sourcePlan
                 });
 
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
@@ -1432,109 +1328,7 @@ namespace ArchiveFixer.ViewModels
 
         private SourceCleanupService SourcePackageCleanup => new(SourcePackageDeleteFileSystem);
 
-        /// <summary>
-        /// 源包搬运的**触发点**：两条路径共用同一个执行体，但日志必须能分清是哪一次搬的
-        /// （用户要求：链结束后的补搬与本轮直接搬要在日志里区分开）。
-        /// </summary>
-        private enum SourceMoveTrigger
-        {
-            /// <summary>本轮定稿搬完内容物之后直接搬（原有路径）。</summary>
-            DirectInRound,
 
-            /// <summary>整条续解链跑完之后对"本轮没有内容物"的源包补搬（2026-09-22 修复的落点）。</summary>
-            AfterChain
-        }
-
-        /// <summary>
-        /// 源包搬运的执行体（规划 → 执行 → 记账 → 日志 → 回写任务路径）。两条触发路径共用一份，
-        /// 免得"本轮直接搬"和"链结束后的补搬"在幂等、日志、跨盘规则上各写一套、迟早分叉。
-        ///
-        /// <para>
-        /// **幂等记账在这里**（硬要求）：搬成（或压根没有可搬的）之后就把
-        /// <see cref="ArchiveTask.SourcePackageMove"/> 落成 <see cref="SourcePackageMoveState.Done"/> ——
-        /// 同一个源包绝不允许被搬第二次，而且这个判断只认标记，不认"文件还在不在"
-        /// （搬运失败时文件当然还在原地，靠它猜会导致每次运行都再试一遍、多出一份 <c>222(1).mp4</c>）。
-        /// 失败时保持原状态，让下一次运行还有机会补上（见方法里那段说明）。
-        /// </para>
-        ///
-        /// **只允许在后台线程上跑**（跨盘时是整包拷贝）。
-        /// </summary>
-        private SourcePackageMoveResult ExecuteSourcePackageMove(
-            ArchiveTask task,
-            string artifactRoot,
-            SourceMoveTrigger trigger,
-            List<(string Level, string Message)> logEntries)
-        {
-            /*
-             * 搬运本体（SourcePackageMover，纯 Extraction 层、可脱离 WPF 单测）：
-             * 整组一起移、绝不覆盖、跨盘先复制成功再删原件、单个失败不影响其余。
-             */
-            var mover = new SourcePackageMover(SourceMoveFileSystem);
-
-            SourcePackageMovePlan plan = mover.Plan(task, artifactRoot);
-            SourcePackageMoveResult result = mover.Execute(plan);
-
-            /*
-             * 幂等记账（硬要求）：**只有确实搬成了、或压根没有可搬的**（源包已经在其余物里、
-             * 清单里的文件都已不存在）才落成 <see cref="SourcePackageMoveState.Done"/>，
-             * 之后任何路径都不许再动这个源包。
-             *
-             * 搬失败（只读 / 被占用 / 跨盘复制失败）时**保持原状态**：那说明源包还原封不动地
-             * 留在原地（D-12：整组一起移、绝不先删后移），任务已经标成「部分完成」并写明原因；
-             * 下一次运行还有机会把它补上 —— 把"尝试过"也记成"搬过了"，用户就再也修不好这一次失败。
-             */
-            if (result.FailedCount == 0)
-            {
-                task.SourcePackageMove = SourcePackageMoveState.Done;
-            }
-
-            foreach (string line in result.LogLines)
-            {
-                logEntries.Add(("INFO", $"{task.LogName}：{line}"));
-            }
-
-            // 日志口径要能区分"本轮直接搬"与"链结束后的补搬"（用户明确要求）。
-            string label = trigger == SourceMoveTrigger.AfterChain ? "链结束后的补搬" : "源包处理";
-
-            if (result.Attempted)
-            {
-                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.LogName}：{label} —— {result.Message}"));
-
-                if (result.FailedCount > 0)
-                {
-                    // 失败必须写 WARN 并说清原因（不许只留一句汇总）。
-                    logEntries.Add((
-                        "WARN",
-                        $"{task.LogName}：{label}没能完成 —— {string.Join("；", result.Failures)}" +
-                        $"（源包仍在原处，内容物不受影响）"));
-                }
-            }
-            else
-            {
-                logEntries.Add(("INFO", $"{task.LogName}：{label} —— {plan.Message}"));
-
-                foreach (ArtifactSkip skip in plan.Skipped)
-                {
-                    logEntries.Add(("WARN", $"{task.LogName}：{skip.Message}：{skip.SourcePath}"));
-                }
-            }
-
-            if (result.MovedCount > 0)
-            {
-                /*
-                 * 源文件换了地方，任务对象必须跟着改（ArchiveTask.CurrentPath 的语义就是"当前真实路径"）。
-                 * 不改的后果是具体的：一键处理的续解扫描按"解压后新出现的归档起点"找内层包，
-                 * 而它排除"源文件"用的正是任务的 CurrentPath / VolumePaths ——
-                 * 于是刚搬进其余物的源包会被当成一个**新的内层包**再解一遍，
-                 * 内容物被重复写进同一个输出目录（实测过的那种"凭空多一份"）。
-                 *
-                 * 仍然把 OriginalPath 留着（它表示"最初导入路径"，详情窗口与报告都读它）。
-                 */
-                ApplySourceMoveResult(task, result);
-            }
-
-            return result;
-        }
 
         /// <summary>
         /// **链结束后的补搬**（2026-09-22 修掉的真实缺陷的落点）。

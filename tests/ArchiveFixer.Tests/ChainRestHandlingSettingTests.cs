@@ -245,7 +245,7 @@ namespace ArchiveFixer.Tests
                 (ArchiveTask task, string sourcePath, string restDirectory) = CreateRemovableRest();
                 task.Outcome = outcome;
 
-                RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+                RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
 
                 Assert.False(result.Attempted, $"终态 {outcome} 时不许动其余物");
                 Assert.True(Directory.Exists(restDirectory), $"终态 {outcome} 时其余物必须原封不动");
@@ -258,7 +258,7 @@ namespace ArchiveFixer.Tests
             cancelledTask.OutputVerification = OutputVerificationOutcome.Passed;
             cancelledTask.OutputManifestCrossChecked = true;
 
-            RestPurgeOutcome cancelled = new RestItemPurger().Purge(cancelledTask, cancelled: true, DeleteMode.Permanent);
+            RestPurgeOutcome cancelled = new RestItemPurger().Purge(cancelledTask, cancelled: true);
 
             Assert.False(cancelled.Attempted, "已取消时不许动其余物");
             Assert.True(Directory.Exists(cancelledRest), "已取消时其余物必须原封不动");
@@ -291,7 +291,7 @@ namespace ArchiveFixer.Tests
                     null,
                     null,
                     Security.ContentKeepRules.FromKeywords(new[] { "一只顶美" }))
-                .Purge(task, cancelled: false, DeleteMode.Permanent);
+                .Purge(task, cancelled: false);
 
             Assert.False(outcome.Attempted);
             Assert.True(Directory.Exists(restDirectory), "半套分卷时其余物必须原封不动");
