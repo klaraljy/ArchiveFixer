@@ -1,8 +1,10 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
@@ -52,6 +54,53 @@ namespace ArchiveFixer.Tests
             {
                 // 临时目录清不掉不影响结论。
             }
+        }
+
+        /// <summary>
+        /// **ZIP64 的本地头偏移是 8 字节**：中央目录里写满 <c>0xFFFFFFFF</c> 时，真值在扩展区，
+        /// 读成 4 字节会把 4 GiB 以上的偏移截断，后面对不上锚点。这里用合成末片直接钉住 8 字节值。
+        /// </summary>
+        [Fact]
+        public void ZIP64本地头偏移是8字节_4GiB以上也能原值读出()
+        {
+            string path = Path.Combine(_root, "zip64-tail.zip");
+            byte[] name = Encoding.ASCII.GetBytes("a.bin");
+            const int extraBodyLength = 12;
+            const int extraLength = extraBodyLength + 4;
+            int centralLength = 46 + name.Length + extraLength;
+            byte[] central = new byte[centralLength];
+
+            BinaryPrimitives.WriteUInt32LittleEndian(central.AsSpan(0, 4), 0x02014B50);
+            BinaryPrimitives.WriteUInt16LittleEndian(central.AsSpan(28, 2), (ushort)name.Length);
+            BinaryPrimitives.WriteUInt16LittleEndian(central.AsSpan(30, 2), extraLength);
+            BinaryPrimitives.WriteUInt16LittleEndian(central.AsSpan(34, 2), 0xFFFF);
+            BinaryPrimitives.WriteUInt32LittleEndian(central.AsSpan(42, 4), 0xFFFFFFFF);
+            name.CopyTo(central.AsSpan(46));
+
+            int extraAt = 46 + name.Length;
+            BinaryPrimitives.WriteUInt16LittleEndian(central.AsSpan(extraAt, 2), 0x0001);
+            BinaryPrimitives.WriteUInt16LittleEndian(central.AsSpan(extraAt + 2, 2), extraBodyLength);
+
+            const ulong offset = 0x1_0000_0020UL;
+            BinaryPrimitives.WriteUInt64LittleEndian(central.AsSpan(extraAt + 4, 8), offset);
+            BinaryPrimitives.WriteUInt32LittleEndian(central.AsSpan(extraAt + 12, 4), 1);
+
+            byte[] eocd = new byte[22];
+            BinaryPrimitives.WriteUInt32LittleEndian(eocd.AsSpan(0, 4), 0x06054B50);
+            BinaryPrimitives.WriteUInt16LittleEndian(eocd.AsSpan(4, 2), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(eocd.AsSpan(6, 2), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(eocd.AsSpan(10, 2), 1);
+            BinaryPrimitives.WriteUInt32LittleEndian(eocd.AsSpan(12, 4), (uint)centralLength);
+            BinaryPrimitives.WriteUInt32LittleEndian(eocd.AsSpan(16, 4), 0);
+
+            File.WriteAllBytes(path, central.Concat(eocd).ToArray());
+
+            SpannedZipIndex? index = SpannedZipIndex.TryRead(path);
+
+            Assert.NotNull(index);
+            SpannedZipAnchor anchor = Assert.Single(index!.Anchors);
+            Assert.Equal((long)offset, anchor.RelativeOffset);
+            Assert.Equal(1, anchor.Disk);
         }
 
         /// <summary>

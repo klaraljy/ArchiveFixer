@@ -1003,6 +1003,7 @@ namespace ArchiveFixer.Detection
             {
                 return WithEvidence(
                     Build(
+                        anchor,
                         VolumeGroupVerdict.Undetermined,
                         "判不出：" + placeDetail + " —— 位置这一条证据都不成立，不敢下任何结论（不删、不移动、不改名）",
                         allVolumes,
@@ -1030,6 +1031,7 @@ namespace ArchiveFixer.Detection
 
                 return WithEvidence(
                     Build(
+                        anchor,
                         VolumeGroupVerdict.IncompleteMissingVolume,
                         $"不完整·缺第 {string.Join("、", middleHoles)} 卷（有证据）：卷号 1.."
                         + maxFound.ToString(CultureInfo.InvariantCulture)
@@ -1057,6 +1059,7 @@ namespace ArchiveFixer.Detection
 
                 return WithEvidence(
                     Build(
+                        anchor,
                         VolumeGroupVerdict.IncompleteSuspected,
                         "不完整·疑缺卷（弱证据）：名字上看缺 " + string.Join("、", missingNames)
                         + "；" + candidate
@@ -1077,6 +1080,7 @@ namespace ArchiveFixer.Detection
                  */
                 return WithEvidence(
                     Build(
+                        anchor,
                         VolumeGroupVerdict.IncompleteSuspected,
                         "不完整·疑缺卷（弱证据）：名字序号看不出后面还有卷，但同目录有与满卷等大、"
                         + "基名段相同的候选（" + string.Join("、", inferredNotes)
@@ -1093,6 +1097,7 @@ namespace ArchiveFixer.Detection
             {
                 return WithEvidence(
                     Build(
+                        anchor,
                         VolumeGroupVerdict.IncompleteSuspected,
                         "不完整·疑缺卷（弱证据）：名字序号连续，但体积规律与裸切对不上 —— " + sizeDetail
                         + "。⛔ 这一档只报不删、不动你的任何文件",
@@ -1106,6 +1111,7 @@ namespace ArchiveFixer.Detection
 
             return WithEvidence(
                 Build(
+                    anchor,
                     VolumeGroupVerdict.Complete,
                     "完整：卷号 1.." + maxFound.ToString(CultureInfo.InvariantCulture)
                     + " 连续无洞，每一卷的名字都是标准卷名"
@@ -1121,6 +1127,7 @@ namespace ArchiveFixer.Detection
 
         /// <summary>按结论拼最终对象（<see cref="VolumeGroupResolution.CanEnterDeletableRestItems"/> 只在这里算一次）。</summary>
         private static VolumeGroupResolution Build(
+            string anchor,
             VolumeGroupVerdict verdict,
             string reason,
             IReadOnlyList<ResolvedVolume> volumes,
@@ -1130,6 +1137,7 @@ namespace ArchiveFixer.Detection
             IReadOnlyList<string>? variantPaths = null) => new()
             {
                 Verdict = verdict,
+                AnchorPath = anchor,
                 Volumes = volumes,
                 MissingVolumeNames = missingNames,
                 PositionInferredNotes = inferredNotes,

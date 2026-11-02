@@ -108,6 +108,7 @@ namespace ArchiveFixer.Tests
             VolumeGroupResolution resolution = Resolve(first);
 
             Assert.Equal(VolumeGroupVerdict.IncompleteMissingVolume, resolution.Verdict);
+            Assert.Equal(first, resolution.AnchorPath);
             Assert.Contains("111.7z.002", resolution.MissingVolumeNames);
 
             // 判不出"它是谁"就不许把它说成"可能是谁" —— 没有候选就别编。

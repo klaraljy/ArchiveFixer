@@ -303,8 +303,8 @@ namespace ArchiveFixer.Detection
                 ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(offset + 28, 2));
                 ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(offset + 30, 2));
                 ushort commentLength = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(offset + 32, 2));
-                ushort diskStart = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(offset + 34, 2));
-                uint relativeOffset = BinaryPrimitives.ReadUInt32LittleEndian(directory.AsSpan(offset + 42, 4));
+                uint diskStart = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(offset + 34, 2));
+                ulong relativeOffset = BinaryPrimitives.ReadUInt32LittleEndian(directory.AsSpan(offset + 42, 4));
                 uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(directory.AsSpan(offset + 20, 4));
                 uint uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(directory.AsSpan(offset + 24, 4));
                 int nameAt = offset + 46;
@@ -334,9 +334,15 @@ namespace ArchiveFixer.Detection
                     }
                 }
 
-                if (diskStart > lastDisk)
+                if (diskStart > (uint)lastDisk)
                 {
                     // 中央目录说这一条起在比末片还靠后的盘上 —— 自相矛盾。
+                    return null;
+                }
+
+                if (relativeOffset > long.MaxValue)
+                {
+                    // 理论上的文件不可能大于 long.MaxValue；读到了也判不出。
                     return null;
                 }
 
@@ -344,8 +350,8 @@ namespace ArchiveFixer.Detection
 
                 anchors.Add(new SpannedZipAnchor
                 {
-                    Disk = diskStart,
-                    RelativeOffset = relativeOffset,
+                    Disk = (int)diskStart,
+                    RelativeOffset = (long)relativeOffset,
                     NameBytes = nameBytes,
                     Name = Encoding.UTF8.GetString(nameBytes)
                 });
@@ -366,8 +372,8 @@ namespace ArchiveFixer.Detection
             bool compressedSizeFull,
             bool relativeOffsetFull,
             bool diskStartFull,
-            out uint resolvedOffset,
-            out ushort resolvedDisk)
+            out ulong resolvedOffset,
+            out uint resolvedDisk)
         {
             resolvedOffset = 0;
             resolvedDisk = 0;
@@ -407,7 +413,7 @@ namespace ArchiveFixer.Detection
                             return false;
                         }
 
-                        resolvedOffset = BinaryPrimitives.ReadUInt32LittleEndian(extra.Slice(cursor, 4));
+                        resolvedOffset = BinaryPrimitives.ReadUInt64LittleEndian(extra.Slice(cursor, 8));
                         cursor += 8;
                     }
 
@@ -418,7 +424,7 @@ namespace ArchiveFixer.Detection
                             return false;
                         }
 
-                        resolvedDisk = BinaryPrimitives.ReadUInt16LittleEndian(extra.Slice(cursor, 4));
+                        resolvedDisk = BinaryPrimitives.ReadUInt32LittleEndian(extra.Slice(cursor, 4));
                     }
 
                     return true;
