@@ -36,11 +36,6 @@ namespace ArchiveFixer.Extraction
 
         public string Summary { get; init; } = string.Empty;
 
-        /// <summary>
-        /// 这一单真的按**特定解压**跑了（判定表里"要套的那一层"没有套，规格 §3.5）。
-        /// 日志与任务详情据此说清"这次为什么少了一层"（用户最恨"我以为它按默认跑的"）。
-        /// </summary>
-        public bool SpecialExtractionApplied { get; init; }
 
         /// <summary>
         /// 暂存区里**只有 0 字节产物**（用户 2026-09-24 铁证：密码不对时 7z 会写出 0 字节的桩文件）。

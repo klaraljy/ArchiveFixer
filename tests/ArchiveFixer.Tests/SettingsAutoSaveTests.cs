@@ -57,16 +57,16 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness("one");
 
-            harness.Vm.Settings.UseSpecialExtraction = true;
+            harness.Vm.Settings.UseSpecificExtraction = true;
 
             Assert.True(harness.Vm.AutoSaveSettingsIfChanged(), "改过之后这一跳必须落盘");
 
             // 跨重启：重新读一遍设置文件（另一份 SettingsService 实例，与真实启动同一条路）。
             var reloaded = new SettingsService(harness.PathService).Load();
-            Assert.True(reloaded.UseSpecialExtraction, "重启后必须还在");
+            Assert.True(reloaded.UseSpecificExtraction, "重启后必须还在");
 
             Harness second = CreateHarness("one", reuseRoot: true);
-            Assert.True(second.Vm.Settings.UseSpecialExtraction, "新建的主视图模型读到的也必须还是它");
+            Assert.True(second.Vm.Settings.UseSpecificExtraction, "新建的主视图模型读到的也必须还是它");
         }
 
         [Fact]

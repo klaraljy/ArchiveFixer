@@ -22,7 +22,6 @@ namespace ArchiveFixer.ViewModels
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false) =>
             _placementStep.PlanFinalLayoutForTask(
@@ -31,7 +30,6 @@ namespace ArchiveFixer.ViewModels
                 destinationDirectory,
                 sharedOutputRoot,
                 terminalLayout,
-                specialExtraction,
                 recursion,
                 stageFilesAreProducedContent);
 
@@ -41,7 +39,6 @@ namespace ArchiveFixer.ViewModels
             bool sharedOutputRoot,
             string? archiveBaseName,
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
-            SpecialExtractionPlan? specialExtraction = null,
             bool suppressPackageFolderLayer = false,
             string? innermostPackageBaseName = null,
             RecursionResult? engineOutput = null,
@@ -53,7 +50,6 @@ namespace ArchiveFixer.ViewModels
                 sharedOutputRoot,
                 archiveBaseName,
                 terminalLayout,
-                specialExtraction,
                 suppressPackageFolderLayer,
                 innermostPackageBaseName,
                 engineOutput,
@@ -79,7 +75,6 @@ namespace ArchiveFixer.ViewModels
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false) =>
             _placementStep.PrecheckFinalLayoutConflicts(
@@ -88,7 +83,6 @@ namespace ArchiveFixer.ViewModels
                 destinationDirectory,
                 sharedOutputRoot,
                 terminalLayout,
-                specialExtraction,
                 recursion,
                 stageFilesAreProducedContent);
 
@@ -102,7 +96,6 @@ namespace ArchiveFixer.ViewModels
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
             bool verificationPassed = true,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false) =>
             _placementStep.ExecuteFinalLayout(
@@ -115,7 +108,6 @@ namespace ArchiveFixer.ViewModels
                 conflictDecision,
                 cancellationToken,
                 verificationPassed,
-                specialExtraction,
                 recursion,
                 stageFilesAreProducedContent);
 

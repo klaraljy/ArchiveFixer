@@ -75,7 +75,6 @@ namespace ArchiveFixer.Services
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false)
         {
@@ -147,7 +146,6 @@ namespace ArchiveFixer.Services
                 sharedOutputRoot,
                 archiveBaseName,
                 terminalLayout,
-                specialExtraction,
                 suppressPackageFolderLayer: _host.ExtractIntoSourceFolderThisRun
                     || layerAlreadyInPath
                     || processArtifactName
@@ -265,7 +263,6 @@ namespace ArchiveFixer.Services
             bool sharedOutputRoot,
             string? archiveBaseName,
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
-            SpecialExtractionPlan? specialExtraction = null,
             bool suppressPackageFolderLayer = false,
             string? innermostPackageBaseName = null,
             RecursionResult? engineOutput = null,
@@ -614,7 +611,6 @@ namespace ArchiveFixer.Services
                 contentRoot: null,
                 stagingRoot: stageRoot,
                 sharedOutputRoot: sharedOutputRoot,
-                specialExtraction: specialExtraction,
                 suppressPackageFolderLayer: suppressPackageFolderLayer,
                 innermostPackageBaseName: innermostPackageBaseName);
 
@@ -643,7 +639,6 @@ namespace ArchiveFixer.Services
                 ProcessArtifactTotalSize = finalize.ProcessArtifactTotalSize,
                 ContentFileCount = finalize.ContentFileCount,
                 Summary = finalize.Summary,
-                SpecialExtractionApplied = finalize.SpecialExtractionApplied,
                 Warnings = finalize.Warnings.Concat(warnings).ToList()
             };
         }
@@ -762,7 +757,6 @@ namespace ArchiveFixer.Services
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false)
         {
@@ -785,7 +779,6 @@ namespace ArchiveFixer.Services
                     destinationDirectory,
                     sharedOutputRoot,
                     terminalLayout,
-                    specialExtraction,
                     recursion,
                     stageFilesAreProducedContent);
             }
@@ -853,7 +846,6 @@ namespace ArchiveFixer.Services
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
             bool verificationPassed = true,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null,
             bool stageFilesAreProducedContent = false)
         {
@@ -886,7 +878,6 @@ namespace ArchiveFixer.Services
                     destinationDirectory,
                     sharedOutputRoot,
                     terminalLayout,
-                    specialExtraction,
                     recursion,
                     stageFilesAreProducedContent);
             }

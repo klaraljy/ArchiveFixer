@@ -290,11 +290,10 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 装配与工具
 
-        /// <summary>打开总开关并按第一条规则跑（每个用例都写一遍太啰嗦，抽一处）。</summary>
+        /// <summary>打开特定解压独立模式（每个用例都写一遍太啰嗦，抽一处）。</summary>
         private static void EnableSpecialExtraction(AppSettings settings)
         {
-            settings.UseSpecialExtraction = true;
-            settings.SpecialExtractionRules = new List<string> { SpecialExtractionRules.SingleContentLayer };
+            settings.UseSpecificExtraction = true;
         }
 
         /// <summary>

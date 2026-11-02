@@ -272,17 +272,6 @@ namespace ArchiveFixer.ViewModels
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder;
 
             /*
-             * 特定解压（规格 §3.5，用户 2026-09-24 拍板）：与终端落法同一处、同一时机读一次。
-             *
-             * 快照只读一次的原因与上面那条一样：一次一键处理会跨很多任务、很多轮（续解最多 10 层），
-             * 用户跑到一半去改设置**不许**影响这一批（否则同一个包的前后两层会按两套规则落）。
-             * 总开关关着时快照就是 Off —— 规则清单里写什么都不参与运算，
-             * 行为与加这条功能之前逐字相同（这是用户点名要的那条保证）。
-             */
-            SpecialExtractionPlan specialExtraction =
-                SpecialExtractionPlan.FromSettings(Settings);
-
-            /*
              * 同名冲突的决定：Ask 档**必须在动最终目录之前**拿到答案（"暂停该任务"就发生在这里）。
              *
              * 位置刻意放在收尾重活之前、并且只在本任务第一次撞上冲突时问：
@@ -309,7 +298,6 @@ namespace ArchiveFixer.ViewModels
                             task.OutputPath,
                             sharedOutputRoot,
                             terminalLayout,
-                            specialExtraction,
                             recursion,
                             stageFilesAreProducedContent: true),
                         cancellationToken);
@@ -349,7 +337,6 @@ namespace ArchiveFixer.ViewModels
                     conflictAction,
                     conflictDecision,
                     cancellationToken,
-                    specialExtraction,
                     recursion),
                 cancellationToken);
 

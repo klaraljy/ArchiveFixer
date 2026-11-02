@@ -218,7 +218,7 @@
                               FontWeight="SemiBold"
                               VerticalAlignment="Center"
                               IsChecked="{Binding SettingsEditor.Settings.UseSpecificExtraction, Mode=TwoWay}"
-                              ToolTip="{Binding SettingsEditor.SpecialExtractionToolTip}" />
+                              ToolTip="独立整理模式：只改内容物落点/命名；源包和其余物按本页设置处理" />
                 </WrapPanel>
             </Grid>
         </Border>

@@ -440,7 +440,7 @@ namespace ArchiveFixer.Tests
             var expectedHome = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 // ① 任务（用户 2026-09-24：「特定解压」总开关就在一键处理旁边）
-                ["UseSpecialExtraction"] = "TaskTab",
+                ["UseSpecificExtraction"] = "TaskTab",
 
                 // ② 解压方式
                 /*
@@ -597,15 +597,6 @@ namespace ArchiveFixer.Tests
                  * 那一组控件连同设置项一起删了（落点固定，不再让用户选），位置让给这一格开关。
                  */
 
-                /*
-                 * ②页「特定解压」那一栏（用户 2026-09-24：规则清单的家在②页，总开关在①页）。
-                 *
-                 * ⚠ 它是**列表式**的设置项（和 EnginePriority 一样存一串 Id），所以它落在
-                 * SettingsViewModel 上是那一栏的条目集合、落盘是 Settings.SpecialExtractionRules ——
-                 * 界面里没有第二条写死规则的路径（加规则只动注册表）。
-                 */
-                ["SpecialExtractionRules"] = "ExtractionTab",
-                ["SpecialExtractionToolTip"] = "TaskTab",
                 /*
                  * ⑦ 引擎（2026-10-14 最终设计：「引擎：从解压方式那边搬过来的」）——
                  * 整组搬到自己的页签，绑定一个字没改。

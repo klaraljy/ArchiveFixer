@@ -548,7 +548,7 @@ namespace ArchiveFixer.ViewModels
                         ? StatusText.SpaceTightKeepSourceConfirmText
                         : StatusText.SpaceTightConfirmText
                     : string.Empty,
-                SpecialExtractionEcho = Settings.UseSpecificExtraction || Settings.UseSpecialExtraction
+                SpecialExtractionEcho = Settings.UseSpecificExtraction
                     ? "特定解压：独立整理模式（只改内容物落点，源包/其余物按本页设置）"
                     : string.Empty,
                 NoticeEcho = BuildConfirmNotice(reminders, spaceRiskEcho)

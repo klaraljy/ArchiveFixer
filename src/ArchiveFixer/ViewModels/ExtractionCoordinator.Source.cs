@@ -54,7 +54,6 @@ namespace ArchiveFixer.ViewModels
             string conflictAction,
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
-            SpecialExtractionPlan? specialExtraction = null,
             RecursionResult? recursion = null)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -212,7 +211,6 @@ namespace ArchiveFixer.ViewModels
                 conflictDecision,
                 cancellationToken,
                 verification.Verified,
-                specialExtraction,
                 recursion,
                 stageFilesAreProducedContent: true);
 
