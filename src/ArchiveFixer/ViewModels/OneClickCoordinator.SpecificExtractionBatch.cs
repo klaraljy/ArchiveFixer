@@ -290,28 +290,11 @@ namespace ArchiveFixer.ViewModels
                 task.EndTime = DateTime.Now;
                 task.ApplyProgress(100, null);
 
-                // 特定解压这一支目前没有产物清单校验；源包保留，等接入统一
-                // SourceCleanupDecision 后再按“可证完整”处置。
-
-                if ((spaceTight
-                        || string.Equals(runOptions.RestHandling, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
-                    && !string.IsNullOrWhiteSpace(result.RestDirectory))
-                {
-                    try
-                    {
-                        Directory.Delete(result.RestDirectory, recursive: true);
-                        task.RestDirectoryPath = string.Empty;
-                        AppendLog(
-                            "INFO",
-                            spaceTight
-                                ? $"{task.LogName}：空间不足模式，最后一层过程物在成功后彻底删除"
-                                : $"{task.LogName}：特定解压其余物按删除档清理完毕");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog("WARN", $"{task.LogName}：特定解压其余物删除失败：{ex.Message}");
-                    }
-                }
+                /*
+                 * A 方案：特定解压只改内容物落点/命名。
+                 * 源包永远不在这里删；最后一层过程物也不在这里直接删，只把位置留在任务上，
+                 * 交给统一框架按证据和删除档处理；没有证据 ⇒ 一个字节都不动。
+                 */
 
                 AppendLog(
                     "INFO",

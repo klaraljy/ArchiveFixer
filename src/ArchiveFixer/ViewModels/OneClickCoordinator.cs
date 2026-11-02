@@ -1018,7 +1018,11 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", $"一键处理开始，共 {rootTargets.Count} 个任务。");
 
-            if (SpecialExtractionPlan.FromSettings(Settings).IsActive)
+            /*
+             * 特定解压 = 独立整理模式，不再由旧规则清单决定是否生效。
+             * 旧规则注册表里的“只留一层内容”已经不影响定稿；这里只看总开关。
+             */
+            if (Settings.UseSpecialExtraction)
             {
                 return await RunSpecificBatchAsync(rootTargets, runOptions).ConfigureAwait(true);
             }
