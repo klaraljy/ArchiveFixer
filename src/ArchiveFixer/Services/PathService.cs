@@ -424,16 +424,18 @@ namespace ArchiveFixer.Services
                 }
             }
 
-            return OutputPlacement.ResolveDestinationDirectory(
+            OutputPlan plan = OutputPlan.Create(
                 archivePath,
                 mode,
                 options.CustomOutputDirectory,
                 volumeGroupBaseName,
-                driveExists: null,
-                selectionKind: task.SourceSelectionKind,
-                selectionRoot: task.SourceSelectionRoot,
-                flattenIntoSourceFolder: options.ExtractIntoSourceFolder,
-                entryArchivePath: entryArchivePath);
+                task.SourceSelectionKind,
+                task.SourceSelectionRoot,
+                options.ExtractIntoSourceFolder,
+                entryArchivePath,
+                sourceRoot: FileNameHelper.GetDirectoryName(archivePath));
+
+            return plan.Placement;
         }
 
         /// <summary>
