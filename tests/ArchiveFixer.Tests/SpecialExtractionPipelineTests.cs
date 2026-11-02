@@ -211,6 +211,87 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 多分支：不塌 + WARN
 
 
+        // ================================================================ 人工抽查：普通/特定解压的成功后源包与过程物
+
+        [SevenZipFact]
+        public async Task 人工抽查_普通与特定解压_成功后源包与最后一层过程物()
+        {
+            string normalRoot = Path.Combine(_root, "manual-normal");
+            string normalBuild = Path.Combine(_root, "manual-normal-build");
+            WriteText(Path.Combine(normalBuild, "111", "a.txt"), "normal\n");
+            string normalPackage = Path.Combine(normalRoot, "111.7z");
+            Directory.CreateDirectory(normalRoot);
+            Run7z(normalBuild, "a", "-t7z", normalPackage, @"111\a.txt");
+
+            string specificRoot = Path.Combine(_root, "manual-specific", "合集");
+            string specificBuild = Path.Combine(_root, "manual-specific-build");
+            WriteText(Path.Combine(specificBuild, "111", "a.txt"), "specific\n");
+            string specificPackage = Path.Combine(specificRoot, "111.7z");
+            Directory.CreateDirectory(specificRoot);
+            Run7z(specificBuild, "a", "-t7z", specificPackage, @"111\a.txt");
+
+            string deleteRoot = Path.Combine(_root, "manual-delete");
+            string deleteBuild = Path.Combine(_root, "manual-delete-build");
+            WriteText(Path.Combine(deleteBuild, "222", "a.txt"), "delete\n");
+            string deletePackage = Path.Combine(deleteRoot, "222.7z");
+            Directory.CreateDirectory(deleteRoot);
+            Run7z(deleteBuild, "a", "-t7z", deletePackage, @"222\a.txt");
+
+            string nestedRoot = Path.Combine(_root, "manual-nested");
+            string innerBuild = Path.Combine(_root, "manual-nested-inner");
+            WriteText(Path.Combine(innerBuild, "content", "b.txt"), "nested\n");
+            string innerPackage = Path.Combine(_root, "manual-nested-inner.7z");
+            Run7z(innerBuild, "a", "-t7z", innerPackage, @"content\b.txt");
+            string nestedBuild = Path.Combine(_root, "manual-nested-build");
+            Directory.CreateDirectory(nestedBuild);
+            File.Copy(innerPackage, Path.Combine(nestedBuild, "inner.7z"));
+            string nestedPackage = Path.Combine(nestedRoot, "outer.7z");
+            Directory.CreateDirectory(nestedRoot);
+            Run7z(nestedBuild, "a", "-t7z", nestedPackage, "inner.7z");
+
+            Harness nested = CreateHarness("manual-nested", settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+            await nested.AddPathsAsync(nestedRoot);
+            await nested.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Harness normal = CreateHarness("manual-normal", settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+            await normal.AddPathsAsync(normalRoot);
+            await normal.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Harness delete = CreateHarness("manual-delete", settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+            await delete.AddPathsAsync(deleteRoot);
+            await delete.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Harness specific = CreateHarness("manual-specific", settings =>
+            {
+                settings.UseSpecificExtraction = true;
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+            await specific.AddPathsAsync(specificRoot);
+            await specific.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(File.Exists(normalPackage), "普通解压：源包按 KeepInPlace 必须保留");
+            Assert.True(File.Exists(Path.Combine(normalRoot, "111", "a.txt")), "普通解压：内容物应落在 111\\a.txt");
+            Assert.False(File.Exists(deletePackage), "普通解压：源包按 DeleteInPlace 成功后才删");
+            Assert.True(File.Exists(Path.Combine(deleteRoot, "222", "a.txt")), "普通解压：删源后内容物仍在");
+            Assert.True(File.Exists(nestedPackage), "普通解压：内层包成功后源包仍按 KeepInPlace 保留");
+            Assert.True(File.Exists(Path.Combine(nestedRoot, "outer", "inner", "content", "b.txt")), "普通解压：内层内容物应落位");
+            Assert.True(File.Exists(specificPackage), "特定解压：源包永远不删，即使设置是 DeleteInPlace");
+            Assert.True(File.Exists(Path.Combine(specificRoot, "111", "a.txt")), "特定解压：内容物应落在 合集\\111\\a.txt");
+        }
+
         // ================================================================ ④ 同名冲突：改名，绝不覆盖
 
 
