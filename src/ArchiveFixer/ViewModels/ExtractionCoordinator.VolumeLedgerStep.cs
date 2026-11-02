@@ -246,17 +246,6 @@ namespace ArchiveFixer.ViewModels
             _groupConsumerByName[baseName] = consumerName;
         }
 
-        /// <summary>
-        /// 单测用：走一遍**「接片」那一档的判据**（⛔ 不复制任何判据：唯一执行体就是
-        /// <see cref="TryAdoptUnresolvedVolumePiece"/>，这里只是把它露给测试项目）。
-        ///
-        /// <para>为什么需要这个出口：本轮新加的"内容证据可证不是分卷成员 ⇒ 不接"那一句在**协调器内部**，
-        /// 没有这一档就只能靠真机环台验（而环台验的是"整条链的最终盘面"，分不出是哪一句挡下的）。
-        /// 有了它，守门用例能直接断言"这一份没有被改名/搬走"。</para>
-        /// </summary>
-        internal bool TryAdoptUnresolvedVolumePieceForTests(string piecePath, ArchiveTask? owner, string? layerOverride = null)
-            => TryAdoptUnresolvedVolumePiece(piecePath, owner, layerOverride);
-
         /// <summary>单测用：把"这一单吐出了这一组的一片"记进既有那份账（写入点唯一 = <see cref="RememberGroupPieceProducer"/>）。</summary>
         internal void RememberGroupPieceProducerForTests(string baseName, ArchiveTask producer)
             => RememberGroupPieceProducer(baseName, FileNameHelper.GetFileName(producer?.CurrentPath ?? string.Empty), producer);

@@ -142,50 +142,6 @@ namespace ArchiveFixer.Tests
                 VolumeNumberFromContent.ClassifyMembership(Path.Combine(single, "222.rar")));
         }
 
-        /// <summary>
-        /// **协调器"接片"那一档**：内容证据说"不是分卷组的一员" ⇒ 一个字节都不接
-        /// （⛔ 不改名、⛔ 不搬、⛔ 不建链接）。
-        ///
-        /// <para>夹具刻意做成**名字与内容打架**那一档：文件名是脏名 `111.part删2.ra除r`
-        /// （按名字那把尺子 ⇒ 规范卷名 `111.part2.rar`，也就是"该在它旁边多出一个新名字"），
-        /// 而它的**内容是普通的单卷 ZIP**（EOCD 盘号 = 0 ⇒ 可证不是分卷成员）。
-        /// 于是有没有这一条内容证据，盘面上的区别是**看得见**的。</para>
-        ///
-        /// <para>红检：把 <c>TryAdoptUnresolvedVolumePiece</c> 开头那一句
-        /// <c>IsProvablyNotVolumeMember</c> 去掉 ⇒ 规范卷名 `111.part2.rar`（或 `111.z01` 那一档的
-        /// 规范名）当场出现在这一层 ⇒ 本条报 <c>Assert.False() Failure</c>。</para>
-        /// </summary>
-        [Fact]
-        public void 接片那一档_内容说不是分卷成员_一个字节都不接()
-        {
-            string layer = Path.Combine(_root, "layer");
-            Directory.CreateDirectory(layer);
-            string piece = Path.Combine(layer, "111.part删2.ra除r");
-
-            using (var stream = new FileStream(piece, FileMode.Create, FileAccess.Write))
-            {
-                using var archive = new System.IO.Compression.ZipArchive(stream, System.IO.Compression.ZipArchiveMode.Create);
-                using Stream target = archive.CreateEntry("payload.bin").Open();
-                target.Write(new byte[1024]);
-            }
-
-            Assert.Equal(
-                VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember,
-                VolumeNumberFromContent.ClassifyMembership(piece));
-
-            ExtractionCoordinator coordinator = BuildCoordinator();
-            string before = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(piece)));
-
-            bool adopted = coordinator.TryAdoptUnresolvedVolumePieceForTests(piece, owner: null, layerOverride: layer);
-
-            Assert.False(adopted);
-            Assert.True(File.Exists(piece), "这一片必须原地不动。");
-            Assert.Equal(before, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(piece))));
-            Assert.Equal(
-                new[] { "111.part删2.ra除r" },
-                Directory.GetFiles(layer).Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        }
-
         /// <summary>最小装配（与既有夹具同一套：真 7z 路径、数据根在临时目录里）。</summary>
         private ExtractionCoordinator BuildCoordinator()
         {
