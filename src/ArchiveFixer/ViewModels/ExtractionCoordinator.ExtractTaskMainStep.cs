@@ -1657,7 +1657,7 @@ namespace ArchiveFixer.ViewModels
                     PublishUnresolvedPieceLandingCopies(carried, task);
                 }
 
-                if (task.Status == StatusText.ExtractSuccess || hasPublishableProducts)
+                if (task.Outcome == TaskOutcome.Succeeded || hasPublishableProducts)
                 {
                     // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
                     bool recursionConclusionStands = await PostProcessSuccessAsync(
@@ -1672,7 +1672,7 @@ namespace ArchiveFixer.ViewModels
                         knownList: null,
                         recursion: recursion);
 
-                    if (recursionConclusionStands && task.Status == StatusText.ExtractSuccess)
+                    if (recursionConclusionStands && task.Outcome == TaskOutcome.Succeeded)
                     {
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                     }

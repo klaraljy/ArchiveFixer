@@ -903,7 +903,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (parent == null
                     || parent.Outcome is TaskOutcome.Succeeded or TaskOutcome.Skipped or TaskOutcome.Cancelled
-                    || (parent.Outcome == TaskOutcome.Failed && parent.Status != StatusText.VolumeMissing))
+                    || (parent.Outcome == TaskOutcome.Failed && parent.Reason != TaskReason.VolumeMissing))
                 {
                     continue;
                 }
@@ -917,8 +917,10 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                parent.Outcome = TaskOutcome.Succeeded;
-                parent.Status = StatusText.ExtractSuccess;
+                /*
+                 * 消费者成功只解除父任务的 deferred 标记；父任务自己的终态/状态不由它回写。
+                 * 父任务有没有产物证据，由它自己的收尾阶段决定。
+                 */
                 parent.IsVolumeDeficitDeferred = false;
                 _volumeDeficitDeferred.Remove(parent);
                 _volumeDeficitFinalPass.Remove(parent);
