@@ -340,7 +340,7 @@ namespace ArchiveFixer.Tests
                  * 它必须真的被解压管线读到 —— ExtractionCoordinator 的决定性判断就是
                  * SpecialExtractionPlan.FromSettings(Settings) 里的第一句（关着时规则清单一律不算）。
                  */
-                "UseSpecialExtraction",
+                "UseSpecificExtraction",
 
                 /*
                  * ⚠ 2026-10-14（用户最终设计：「设置：删除：工作区目录」+ 清理方式「工作区」改成默认）：

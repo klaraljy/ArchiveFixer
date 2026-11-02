@@ -874,6 +874,12 @@ namespace ArchiveFixer.Models
         public bool UseSpecialExtraction { get; set; }
 
         /// <summary>
+        /// 「特定解压」独立整理模式开关（阶段 3 起：只改内容物落点/命名，不碰源包与过程物删除）。
+        /// 旧 <see cref="UseSpecialExtraction"/> 只在读旧配置时迁移到这一格。
+        /// </summary>
+        public bool UseSpecificExtraction { get; set; }
+
+        /// <summary>
         /// 启用的**特定解压规则 Id**（②「解压方式」页那一栏里每条规则的开关）。
         ///
         /// <para>
@@ -1318,6 +1324,14 @@ namespace ArchiveFixer.Models
              * （一键处理的新默认值是"移动"——比删除保守，用户随时可以在设置里改成删除。）
              */
             SourceHandling = ParseSourceHandling(SourceHandling).ToString();
+
+            /*
+             * 旧配置迁移：旧「特定解压」开关现在只作为新模式开关的兼容读入。
+             */
+            if (!UseSpecificExtraction && UseSpecialExtraction)
+            {
+                UseSpecificExtraction = true;
+            }
 
             /*
              * 特定解压规则清单（用户 2026-09-24）：认不出的 Id 丢掉、去重、统一写法、按注册表顺序排。

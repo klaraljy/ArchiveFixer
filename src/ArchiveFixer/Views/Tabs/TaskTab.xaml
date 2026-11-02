@@ -217,7 +217,7 @@
                               Margin="12,0,0,0"
                               FontWeight="SemiBold"
                               VerticalAlignment="Center"
-                              IsChecked="{Binding SettingsEditor.Settings.UseSpecialExtraction, Mode=TwoWay}"
+                              IsChecked="{Binding SettingsEditor.Settings.UseSpecificExtraction, Mode=TwoWay}"
                               ToolTip="{Binding SettingsEditor.SpecialExtractionToolTip}" />
                 </WrapPanel>
             </Grid>

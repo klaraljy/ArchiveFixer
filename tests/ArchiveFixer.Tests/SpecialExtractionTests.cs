@@ -344,7 +344,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("{Binding Description, Mode=OneWay}", extraction, StringComparison.Ordinal);
 
             // ①页：一键处理旁边的开关 + 列出当前启用规则的 ToolTip。
-            Assert.Contains("SettingsEditor.Settings.UseSpecialExtraction", task, StringComparison.Ordinal);
+            Assert.Contains("SettingsEditor.Settings.UseSpecificExtraction", task, StringComparison.Ordinal);
             Assert.Contains("SettingsEditor.SpecialExtractionToolTip", task, StringComparison.Ordinal);
 
             // 「关掉全部 = 与现在完全一样」这句必须写在界面上（②页那一栏的开场白里）。
