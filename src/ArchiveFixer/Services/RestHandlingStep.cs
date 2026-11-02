@@ -1011,7 +1011,11 @@ namespace ArchiveFixer.Services
                 return;
             }
 
-            await RunRestHandlingAsync(task, runtime, oneClickRun: false, force: true);
+            await RunRestHandlingAsync(
+                task,
+                runtime,
+                oneClickRun: false,
+                trigger: RestHandlingTrigger.ChainEnd);
         }
 
         /// <summary>
@@ -1878,11 +1882,18 @@ namespace ArchiveFixer.Services
         /// 路径是定稿那一刻记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
         /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
         /// </summary>
+        /// <summary>这次其余物处理的触发点：任务收尾 vs 链尾补做（⛔ 不用 bool force）。</summary>
+        internal enum RestHandlingTrigger
+        {
+            TaskEnd = 0,
+            ChainEnd = 1
+        }
+
         internal async Task RunRestHandlingAsync(
             ArchiveTask task,
             ScheduledTaskRuntime runtime,
             bool oneClickRun,
-            bool force = false)
+            RestHandlingTrigger trigger = RestHandlingTrigger.TaskEnd)
         {
             string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
 
@@ -1894,7 +1905,7 @@ namespace ArchiveFixer.Services
              * CompleteRootSourcePackagesAfterChainAsync → ApplyRestHandlingAfterChainAsync 处理；
              * 手动「只解压」是单层路径，没有链可等，当场按档处理。
              */
-            if (oneClickRun && !force)
+            if (oneClickRun && trigger == RestHandlingTrigger.TaskEnd)
             {
                 if (!string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
                 {

@@ -172,6 +172,11 @@ namespace ArchiveFixer.Storage
                 return Skip("没有任务，未删除任何东西");
             }
 
+            if (mode != DeleteMode.Permanent)
+            {
+                return Skip("解压侧其余物只支持彻底删除（回收站档已整条下线），一个字节都不删");
+            }
+
             string name = string.IsNullOrWhiteSpace(task.FileName)
                 ? Path.GetFileName(task.CurrentPath)
                 : task.FileName;
@@ -563,6 +568,11 @@ namespace ArchiveFixer.Storage
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
+            }
+
+            if (mode != DeleteMode.Permanent)
+            {
+                return Skip("解压侧其余物只支持彻底删除（回收站档已整条下线），一个字节都不删");
             }
 
             string name = string.IsNullOrWhiteSpace(task.FileName)

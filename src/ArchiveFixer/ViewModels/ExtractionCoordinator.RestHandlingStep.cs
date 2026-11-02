@@ -214,8 +214,12 @@ namespace ArchiveFixer.ViewModels
             out string? failure) =>
             RestHandlingStep.TryMoveIntoRest(from, to, movedTargets, out target, out failure);
 
-        private Task RunRestHandlingAsync(ArchiveTask task, ScheduledTaskRuntime runtime, bool oneClickRun, bool force = false) =>
-            _restHandlingStep.RunRestHandlingAsync(task, runtime, oneClickRun, force);
+        private Task RunRestHandlingAsync(
+            ArchiveTask task,
+            ScheduledTaskRuntime runtime,
+            bool oneClickRun,
+            RestHandlingStep.RestHandlingTrigger trigger = RestHandlingStep.RestHandlingTrigger.TaskEnd) =>
+            _restHandlingStep.RunRestHandlingAsync(task, runtime, oneClickRun, trigger);
 
         internal static string DescribeLayerReclaimBlocker(ArchiveTask task) =>
             RestHandlingStep.DescribeLayerReclaimBlocker(task);

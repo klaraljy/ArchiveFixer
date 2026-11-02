@@ -11,14 +11,14 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 「删除操作」三档必须**当场看得懂、说得准**（用户 2026-09-25 第 32 条）。
+    /// 「删除操作」两档必须**当场看得懂、说得准**（用户 2026-09-25 第 32 条；2026-10-15 回收站档下线）。
     ///
     /// <para><b>用户原话（他亲自定的形态）</b>：「首先分 1.源包操作，1_原来的位置不动，2_放入其余物当中，
-    /// 2.删除操作，1_不动其余物，2_动，但是只删除在回收站的位置，3_动，而且是彻底删除，直接节约空间
+    /// 2.删除操作，1_不动其余物，2_动，而且是彻底删除，直接节约空间
     /// （这个就可以字体变红了，就不用再弄其他的没用的注释了）」＋「当用户点击了彻底删除那个选项时
     /// 就会在下面出现一个提示的选项，而且不能消掉，用户选择了就一直放在那」。</para>
     ///
-    /// <para>这一组钉四件事：①设置层的默认值与三档归一化；②ViewModel 那三档与"红字提示可见性"；
+    /// <para>这一组钉四件事：①设置层的默认值与两档归一化；②ViewModel 那两档与"红字提示可见性"；
     /// ③删除裁决的五道门槛里最关键的两条（失败 / 取消 → 一个字节都不删）；
     /// ④界面形态（③页两组单选 + 常驻提示；②页危险模式红区整块消失）。</para>
     /// </summary>
@@ -295,32 +295,6 @@ namespace ArchiveFixer.Tests
             Assert.Contains("一组素材", result.Message, StringComparison.Ordinal);
         }
 
-        /// <summary>
-        /// 同一现场走「移入回收站」那一档：消息必须说"回收站"（而不是"彻底删除"）。
-        ///
-        /// <para>⛔ **必须注入假执行体**（用户 2026-10-10：「回收站里面还有大小为 1KB 的其余物没有完全删除」）：
-        /// 这条用例原来用默认执行器（真 Shell 回收站）⇒ 每跑一次就往**用户自己的回收站**里塞一个
-        /// 48 字节的「其余物」壳。实测：跑一次该类 ⇒ 回收站里 `ArchiveFixerDeleteClarity` 那种条目 30 → 31。
-        /// 测试只许在夹具目录里动文件，**⛔ 绝不许碰用户的回收站**。</para>
-        /// </summary>
-        [Fact]
-        public void 回收站档_消息说清是回收站()
-        {
-            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
-
-            var executor = new FakeDeleteExecutor();
-
-            RestPurgeOutcome result = new RestItemPurger(executor).Purge(task, cancelled: false, DeleteMode.RecycleBin);
-
-            Assert.True(result.Succeeded, result.Message);
-            Assert.False(Directory.Exists(restDirectory));
-            Assert.Contains("回收站", result.Message, StringComparison.Ordinal);
-            Assert.Contains(RestItemPurger.AutoRecycleReason, string.Join(" | ", result.LogLines), StringComparison.Ordinal);
-
-            // 真的走了「移入回收站」那一档，而且走的是**注入的执行体**（不是真回收站）。
-            Assert.Single(executor.RecycleCalls);
-            Assert.Empty(executor.PermanentCalls);
-        }
 
         // ================================================================ 装配
 

@@ -1050,7 +1050,9 @@ namespace ArchiveFixer.ViewModels
                     logEntries,
                     LayerPurgeTrigger.SourceHandlingDelete,
                     reclaimVerdict: verdict,
-                    ignoreDoneState: recoveryOfOriginal || purgeOriginalOnly);
+                    donePolicy: recoveryOfOriginal || purgeOriginalOnly
+                        ? SourcePackageDonePolicy.AllowRecovery
+                        : SourcePackageDonePolicy.Respect);
 
                 if (purgeOriginalOnly && !File.Exists(originalPath))
                 {

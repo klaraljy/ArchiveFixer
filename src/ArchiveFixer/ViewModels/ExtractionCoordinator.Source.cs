@@ -635,6 +635,12 @@ namespace ArchiveFixer.ViewModels
         /// 文案 <c>StatusText.RecursionLayerKeepTriggerLabel</c> 一并删除（用户："老代码就是要删掉的"）。</para>
         /// </summary>
         /// <returns>失败时返回一句"内容物已好、源包没删掉"的说明（调用方据此标「部分完成」）；正常返回 null。</returns>
+        private enum SourcePackageDonePolicy
+        {
+            Respect = 0,
+            AllowRecovery = 1
+        }
+
         private string? PurgeLayerSourcePackage(
             ArchiveTask task,
             OutputVerificationResult? verification,
@@ -645,7 +651,7 @@ namespace ArchiveFixer.ViewModels
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
             string? reclaimWorkspaceDirectory = null,
-            bool ignoreDoneState = false)
+            SourcePackageDonePolicy donePolicy = SourcePackageDonePolicy.Respect)
         {
             if (task == null)
             {
@@ -712,7 +718,8 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            if (task.SourcePackageMove == SourcePackageMoveState.Done && !ignoreDoneState)
+            if (task.SourcePackageMove == SourcePackageMoveState.Done
+                && donePolicy == SourcePackageDonePolicy.Respect)
             {
                 // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
                 logEntries.Add(("INFO", $"{task.LogName}：{subject}已经处理过（删过或搬过），不再动第二次。"));

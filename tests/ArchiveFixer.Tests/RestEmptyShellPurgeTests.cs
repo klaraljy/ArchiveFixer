@@ -9,17 +9,16 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// **空壳不进回收站**（用户 2026-10-03 真机反馈）：「其余物」里递归地一个文件都没有（只剩空目录结构）时，
+    /// **空壳不进执行器**（用户 2026-10-03 真机反馈）：「其余物」里递归地一个文件都没有（只剩空目录结构）时，
     /// <see cref="RestItemPurger.Purge"/> 与 <see cref="RestItemPurger.PurgeExcept"/> 一律**就地永久删掉**，
-    /// ⛔ 不再把整个 `其余物\` 目录送进回收站 —— 回收站里那堆 1 KB 的同名「其余物」文件夹就是这么堆起来的。
+    /// ⛔ 不再把整个 `其余物\` 目录送进执行器。
     ///
     /// <para>判据唯一出口 = <c>RestItemPurger.IsFileFreeDirectoryTree</c>（只读文件系统事实：有没有文件）。
-    /// 四条用例钉四件事：① 空壳就地删 + 回收站零调用；② 有真文件照旧走回收站（防回归对照，断言不放宽）；
-    /// ③ 目录不存在 / 形状不像「其余物」照旧 Skip（空壳判据排在六道门槛之后，不许抢跑）；
-    /// ④ 部分完成那一档（<c>PurgeExcept</c>）走同一条路。</para>
+    /// 三条用例钉三件事：① 空壳就地删 + 执行器零调用；② 有真文件照旧走彻底删除（防回归对照，断言不放宽）；
+    /// ③ 目录不存在 / 形状不像「其余物」照旧 Skip（空壳判据排在六道门槛之后，不许抢跑）。</para>
     ///
     /// <para>与 <see cref="RecycleBinServiceTests"/> 同一套自我约束：**绝不往用户系统回收站里塞东西** ——
-    /// 回收站那一档全部走注入的假执行器；只在 <see cref="Path.GetTempPath"/> 下的独立临时目录里动真实文件系统，
+    /// 本类只走彻底删除档；只在 <see cref="Path.GetTempPath"/> 下的独立临时目录里动真实文件系统，
     /// <see cref="Dispose"/> 里清干净。测试数据一律合成值（`222.7z` / `payload.bin`），不含真实用户数据（AGENTS.md §8）。</para>
     /// </summary>
     public class RestEmptyShellPurgeTests : IDisposable
@@ -64,9 +63,9 @@ namespace ArchiveFixer.Tests
 
             var executor = new FakeDeleteExecutor();
 
-            // 走「移入回收站」那一档 —— 用户真机上正是这一档把回收站塞满的。
+            // 走「彻底删除」这一档；空壳仍应就地删掉、不调执行器。
             RestPurgeOutcome outcome = new RestItemPurger(executor)
-                .Purge(task, cancelled: false, DeleteMode.RecycleBin);
+                .Purge(task, cancelled: false, DeleteMode.Permanent);
 
             Assert.True(outcome.Succeeded, outcome.Message);
 
@@ -83,12 +82,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **空壳那一行的措辞**（用户 2026-10-03）：走「移入回收站」档也必须说"没有进回收站"，
-        /// ⛔ 不许复用"档名 + 条目数"那句 —— 否则真机上会写成
-        /// 「移入回收站：…\其余物（0 项 / 0 B）」，而空壳**一个字节都没进回收站**。
+        /// **空壳那一行的措辞**：空壳没有走执行器，必须说“没有送进回收站”，
+        /// ⛔ 不许复用“档名 + 条目数”那句。
         /// </summary>
         [Fact]
-        public void 空壳那一行_按事实位选文案_回收站档也不谎称进了回收站()
+        public void 空壳那一行_按事实位选文案_不谎称进了回收站()
         {
             var shell = new RestPurgeOutcome
             {
@@ -98,12 +96,12 @@ namespace ArchiveFixer.Tests
                 RemovedAsEmptyShell = true
             };
 
-            string shellLine = ExtractionCoordinator.DescribeRestPurgedLine(shell, DeleteMode.RecycleBin);
+            string shellLine = ExtractionCoordinator.DescribeRestPurgedLine(shell, DeleteMode.Permanent);
 
             Assert.Contains("没有进回收站", shellLine, StringComparison.Ordinal);
             Assert.DoesNotContain(StatusText.RestActionRecycleBin, shellLine, StringComparison.Ordinal);
 
-            // 对照：普通档照旧是"档名 + 条目数"那句（⛔ 这一档一个字都没改）。
+            // 对照：普通档照旧是“档名 + 条目数”那句。
             var normal = new RestPurgeOutcome
             {
                 Attempted = true,
@@ -113,21 +111,20 @@ namespace ArchiveFixer.Tests
                 FreedBytes = 2048
             };
 
-            string normalLine = ExtractionCoordinator.DescribeRestPurgedLine(normal, DeleteMode.RecycleBin);
+            string normalLine = ExtractionCoordinator.DescribeRestPurgedLine(normal, DeleteMode.Permanent);
 
-            Assert.Contains(StatusText.RestActionRecycleBin, normalLine, StringComparison.Ordinal);
+            Assert.Contains(StatusText.RestActionDelete, normalLine, StringComparison.Ordinal);
             Assert.Contains("3 项", normalLine, StringComparison.Ordinal);
         }
 
         // ================================================================ ② 有真文件 ⇒ 照旧走回收站（对照）
 
         /// <summary>
-        /// **防回归对照**：其余物里**有一个真文件**（摆在最里面那一层）⇒ 判据必须看不见"空"，照旧整份走回收站
-        /// （假执行器恰好被调用 1 次、参数就是那个目录）。⛔ 断言不许放宽 —— 这一条钉的就是
-        /// "只有空壳才就地删，别的一律按用户选的档走"。
+        /// **防回归对照**：其余物里**有一个真文件** ⇒ 照旧整份走彻底删除
+        /// （假执行器恰好被调用 1 次、参数就是那个目录）。
         /// </summary>
         [Fact]
-        public void 其余物里有一个真文件_照旧走回收站_执行器恰好一次()
+        public void 其余物里有一个真文件_照旧彻底删除_执行器恰好一次()
         {
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
 
@@ -136,16 +133,12 @@ namespace ArchiveFixer.Tests
 
             var executor = new FakeDeleteExecutor();
             RestPurgeOutcome outcome = new RestItemPurger(executor)
-                .Purge(task, cancelled: false, DeleteMode.RecycleBin);
+                .Purge(task, cancelled: false, DeleteMode.Permanent);
 
-            Assert.Equal(restDirectory, Assert.Single(executor.RecycleCalls));
-            Assert.Empty(executor.PermanentCalls);
+            Assert.Equal(restDirectory, Assert.Single(executor.PermanentCalls));
+            Assert.Empty(executor.RecycleCalls);
             Assert.True(outcome.Succeeded, outcome.Message);
-            Assert.False(File.Exists(deepFile), "照旧走回收站（假执行器把整个目录搬走）");
-            Assert.Contains(
-                RestItemPurger.AutoRecycleReason,
-                string.Join(" | ", outcome.LogLines),
-                StringComparison.Ordinal);
+            Assert.False(File.Exists(deepFile), "有真文件的其余物走彻底删除");
         }
 
         // ================================================================ ③ 老的门槛照旧
@@ -165,11 +158,12 @@ namespace ArchiveFixer.Tests
             var missingExecutor = new FakeDeleteExecutor();
 
             RestPurgeOutcome missing = new RestItemPurger(missingExecutor)
-                .Purge(missingTask, cancelled: false, DeleteMode.RecycleBin);
+                .Purge(missingTask, cancelled: false, DeleteMode.Permanent);
 
             Assert.False(missing.Attempted);
             Assert.False(missing.Succeeded);
             Assert.Empty(missingExecutor.RecycleCalls);
+            Assert.Empty(missingExecutor.PermanentCalls);
             Assert.Contains("不存在", missing.Message, StringComparison.Ordinal);
             Assert.False(Directory.Exists(missingRest));
 
@@ -181,10 +175,11 @@ namespace ArchiveFixer.Tests
 
             var shapedExecutor = new FakeDeleteExecutor();
             RestPurgeOutcome shaped = new RestItemPurger(shapedExecutor)
-                .Purge(shapedTask, cancelled: false, DeleteMode.RecycleBin);
+                .Purge(shapedTask, cancelled: false, DeleteMode.Permanent);
 
             Assert.False(shaped.Attempted);
             Assert.Empty(shapedExecutor.RecycleCalls);
+            Assert.Empty(shapedExecutor.PermanentCalls);
             Assert.Contains("形状不像", shaped.Message, StringComparison.Ordinal);
             Assert.True(Directory.Exists(contentDirectory), "形状不像其余物 ⇒ 一个字节都不许动（哪怕它是空壳）");
             Assert.True(Directory.Exists(Path.Combine(contentDirectory, "还没有内容")));
