@@ -1435,8 +1435,7 @@ namespace ArchiveFixer.ViewModels
                          */
                         var byteFitCompleteBases = new HashSet<string>(
                             analyzedGroups
-                                .Where(group => group.ByteFitPaired
-                                    && group.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
+                                .Where(group => group.ByteFitPaired)
                                 .Select(group => group.BaseName),
                             StringComparer.OrdinalIgnoreCase);
 
@@ -1513,8 +1512,7 @@ namespace ArchiveFixer.ViewModels
 
                             var byteFitBaseNames = new HashSet<string>(
                                 handoffGroups
-                                    .Where(group => group.ByteFitPaired
-                                        && group.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
+                                    .Where(group => group.ByteFitPaired)
                                     .Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
@@ -1524,8 +1522,7 @@ namespace ArchiveFixer.ViewModels
                             foreach (VolumeCandidateDiscovery.VolumeCandidate group in preparedCandidates)
                             {
                                 // 字节补齐配对已经给出可证完整的组 ⇒ 同一基名的 resolver Unknown 不再叠加。
-                                if (byteFitBaseNames.Contains(group.BaseName)
-                                    && group.Verdict != VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
+                                if (byteFitBaseNames.Contains(group.BaseName))
                                 {
                                     continue;
                                 }
