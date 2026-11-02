@@ -169,15 +169,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 一键处理路径上，`KeepInPlace` 的源文件保护快照**不能**把空间不足模式刚删掉的源包恢复回来。
-        ///
-        /// <para>真机现场（2026-10-25 链路测试 sp1）：日志先说「空间不足模式 —— 定稿 + 校验通过，
-        /// 已立刻永久删除源包 1 个」，紧接着又说「源包档=留下，但源名被搬走/改名 —— 已按原路径硬链接恢复」
-        /// ⇒ 源包又出现在原地，空间不足模式等于没删。保护快照是给「改名后恢复原名」用的；
-        /// 这个模式要删的源包不需要它。</para>
+        /// 一键处理路径上，即使「空间不足」模式也不许在单层成功后删用户原包：
+        /// 2026-11-02 口径是整条链完全成功前原包一直留在原位置。
         /// </summary>
         [Fact]
-        public async Task 空间不足模式_一键处理_KeepInPlace保护快照不许把已删源包恢复()
+        public async Task 空间不足模式_一键处理_原包也不许提前删()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -197,9 +193,9 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.True(task.IsOutputVerified);
-            Assert.False(
+            Assert.True(
                 File.Exists(source),
-                "空间不足模式下源包已经删了；KeepInPlace 保护快照不许在批末把它按硬链接恢复回来");
+                "用户 2026-11-02：空间不足模式也不许在单层成功后删用户原包；整条链成功前必须留在原地");
         }
 
         /// <summary>

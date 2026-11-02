@@ -93,7 +93,7 @@ namespace ArchiveFixer.Extraction
     /// <summary>一次归置规划请求。</summary>
     public sealed class ArtifactPlacementRequest
     {
-        /// <summary>目标目录 <c>D</c>（内容物目录）；其余物目录 = <c>D\其余物</c>（决策 D-10 见 <see cref="ProcessArtifactLayout.ResolveArtifactDirectory(string?, string?, bool)"/>）。</summary>
+        /// <summary>目标目录 <c>D</c>（内容物目录）；其余物目录 = <c>parent(D)\其余物</c>（与内容物文件夹同级）。</summary>
         public string TargetDirectory { get; init; } = string.Empty;
 
         /// <summary>相对路径的基准目录（例：本层产物目录）。留空时按文件名归置。</summary>
@@ -148,7 +148,7 @@ namespace ArchiveFixer.Extraction
     /// <summary>归置计划。<b>只是计划</b>：本类型不代表磁盘上已经发生了任何移动。</summary>
     public sealed class ArtifactMovePlan
     {
-        /// <summary>其余物目录的完整路径（<c>D\其余物</c>）；目标目录不合法时为空。</summary>
+        /// <summary>其余物目录的完整路径（<c>parent(D)\其余物</c>）；目标目录不合法时为空。</summary>
         public string ArtifactDirectory { get; init; } = string.Empty;
 
         public IReadOnlyList<ArtifactMove> Moves { get; init; } = Array.Empty<ArtifactMove>();
@@ -359,7 +359,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 给定目标目录 → 其余物目录的完整路径（<c>D\其余物</c>）。
+        /// 给定目标目录 → 其余物目录的完整路径（<c>parent(D)\其余物</c>）。
         /// 目标目录为空时返回空串（不抛异常：规划阶段拿不到目标目录是调用方的常见状态）。
         ///
         /// ⚠ 这是"集中一处"的那一档；**多个包共用同一个目标目录**时要走三参数重载，
@@ -376,7 +376,14 @@ namespace ArchiveFixer.Extraction
             {
                 string root = SafePathHelper.GetFullPathSafe(targetDirectory);
 
-                return Path.Combine(root, ResolveArtifactDirectoryName(root));
+                /*
+                 * 用户 2026-11-02 定案：其余物和**内容物文件夹同级**，不是塞进内容物里面。
+                 * 例：内容物 111\1111 → 其余物 111\其余物；内容物 111\1111\222 → 其余物 111\1111\其余物。
+                 * ⛔ 根层原包不产生其余物（原包不移动），所以不会出现“原包旁边凭空多一个其余物”。
+                 */
+                string parent = Path.GetDirectoryName(root) ?? root;
+
+                return Path.Combine(parent, ResolveArtifactDirectoryName(root));
             }
             catch
             {
@@ -442,7 +449,9 @@ namespace ArchiveFixer.Extraction
 
             try
             {
-                string directory = Path.Combine(SafePathHelper.GetFullPathSafe(contentRoot), name);
+                string contentRootFull = SafePathHelper.GetFullPathSafe(contentRoot);
+                string parent = Path.GetDirectoryName(contentRootFull) ?? contentRootFull;
+                string directory = Path.Combine(parent, name);
 
                 if (!sharedRoot)
                 {
@@ -902,7 +911,9 @@ namespace ArchiveFixer.Extraction
             {
                 try
                 {
-                    string directory = Path.Combine(SafePathHelper.GetFullPathSafe(targetDirectory), name);
+                    string targetRoot = SafePathHelper.GetFullPathSafe(targetDirectory);
+                    string parent = Path.GetDirectoryName(targetRoot) ?? targetRoot;
+                    string directory = Path.Combine(parent, name);
 
                     if (IsSameOrInside(path, directory))
                     {

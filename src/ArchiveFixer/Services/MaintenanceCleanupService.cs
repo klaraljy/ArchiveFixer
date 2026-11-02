@@ -327,6 +327,12 @@ namespace ArchiveFixer.Services
 
             bool shared = OutputPlacement.LandsInSourceDirectory(sourceArchivePath, outputFull);
 
+            /*
+             * 其余物现在和内容物文件夹同级，也就是 outputFull 的父目录；
+             * 允许删除的根必须跟着上移一层，否则 DeleteSafetyGuard 会把合法目标判成越界。
+             */
+            string allowedRoot = Path.GetDirectoryName(outputFull) ?? outputFull;
+
             if (!shared)
             {
                 /*
@@ -344,7 +350,7 @@ namespace ArchiveFixer.Services
                     return new ArtifactCleanupScope
                     {
                         Scope = CleanupScope.Artifacts,
-                        AllowedRoot = outputFull,
+                        AllowedRoot = allowedRoot,
                         BlockReason = $"没有可删除的其余物：当前任务的输出目录（{outputFull}）里没有 {ArtifactDirectoryName} 目录"
                     };
                 }
@@ -352,7 +358,7 @@ namespace ArchiveFixer.Services
                 return new ArtifactCleanupScope
                 {
                     Scope = CleanupScope.Artifacts,
-                    AllowedRoot = outputFull,
+                    AllowedRoot = allowedRoot,
                     ArtifactDirectories = own,
                     Description = $"当前任务自己的其余物目录：{string.Join("、", own)}"
                 };
@@ -369,7 +375,7 @@ namespace ArchiveFixer.Services
                 return new ArtifactCleanupScope
                 {
                     Scope = CleanupScope.Artifacts,
-                    AllowedRoot = outputFull,
+                    AllowedRoot = allowedRoot,
                     ArtifactDirectories = everything,
                     DeletesEverythingInDirectory = true,
                     OutputDirectoryIsShared = true,
@@ -410,7 +416,7 @@ namespace ArchiveFixer.Services
 
                     // 允许根是**共享根**而不是共享根\其余物：目标与允许根之间隔着
                     // 其余物\包名 两级，DeleteSafetyGuard 会逐级确认它们都不是符号链接。
-                    AllowedRoot = outputFull,
+                    AllowedRoot = allowedRoot,
                     ArtifactDirectories = new[]
                     {
                         ProcessArtifactLayout.ResolveArtifactDirectory(outputFull, packageBaseName, sharedRoot: true)
@@ -427,7 +433,7 @@ namespace ArchiveFixer.Services
             return new ArtifactCleanupScope
             {
                 Scope = CleanupScope.Artifacts,
-                AllowedRoot = outputFull,
+                AllowedRoot = allowedRoot,
                 ArtifactDirectories = existing,
                 OutputDirectoryIsShared = true,
                 Description = $"{outputFull} 是多个包共用的输出目录，本次只删「{packageBaseName}」这一份：{string.Join("、", existing)}"

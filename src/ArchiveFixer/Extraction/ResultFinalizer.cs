@@ -73,9 +73,6 @@ namespace ArchiveFixer.Extraction
         /// <summary>判定表 3：被多重空目录嵌套包裹 → 把最后那个有意义的文件夹提上来。</summary>
         PromoteInnermostFolder,
 
-        /// <summary>判定表 4：单链（每层只有一个文件夹、没有别的文件）→ 塌缩为最深层那个文件夹名。</summary>
-        CollapseSingleChain,
-
         /// <summary>只剩其余物（没有任何内容物）：只做其余物集中，目标目录下不会有内容物。</summary>
         ProcessArtifactsOnly
     }
@@ -484,31 +481,10 @@ namespace ArchiveFixer.Extraction
              * 正是这条规则的本意）；续解的那一层即便已经在落点路径里，规则也照旧把它里面多套的那一层去掉。
              * ⛔ 别在这里加"摊平了就跳过规则"那种判断 —— 那等于替用户把开着的开关关掉。
              */
-            bool specialCollapse = false;
-
-            if (specialExtraction is { IsActive: true }
-                && specialExtraction.Effect == SpecialExtractionEffect.SingleContentLayer
-                && kind is not (FinalizeLayoutKind.SingleFileToDestination
-                    or FinalizeLayoutKind.Empty
-                    or FinalizeLayoutKind.ProcessArtifactsOnly
-                    or FinalizeLayoutKind.Failed))
-            {
-                if (sharedOutputRoot)
-                {
-                    warnings.Add(specialExtraction.DescribeSkipSharedRoot(destDir));
-                }
-                else if (!IsSingleContentChain(shape))
-                {
-                    warnings.Add(specialExtraction.DescribeSkipBranch(
-                        CountBranches(shape),
-                        DescribeBranches(shape)));
-                }
-                else
-                {
-                    wrapperName = null;
-                    specialCollapse = true;
-                }
-            }
+            /*
+             * 用户 2026-11-02：旧「特定解压只留一层内容」的 specialCollapse 分支整段删除。
+             * 落点永远按判定表建层，不再因为某条规则把中间那层去掉。
+             */
 
             /*
              * ⛔ 最后一道闸门（用户 2026-09-30 红线）：**最里层不许被任何分支吃掉**。
@@ -546,18 +522,6 @@ namespace ArchiveFixer.Extraction
                 if (restored != null)
                 {
                     wrapperName = restored;
-                }
-
-                if (specialCollapse)
-                {
-                    specialCollapse = false;
-
-                    warnings.Add(
-                        "特定解压规则这一次没有生效：包里还有内层包（" + safeInnermostPackageBaseName
-                        + "），落点最少两层 —— 最里层是「最后一个压缩包」那一层，不许被吃掉。"
-                        + "内容物落进 " + (wrapperName == null
-                            ? destDir
-                            : SafePathHelper.Combine(destDir, wrapperName)));
                 }
             }
 
@@ -669,7 +633,7 @@ namespace ArchiveFixer.Extraction
             }
 
             string artifactRootDirectory = ProcessArtifactLayout.ResolveArtifactDirectoryWithName(
-                destDir,
+                contentParent,
                 artifactDirectoryName,
                 hasArchiveName ? archiveBaseName : null,
                 sharedRoot);
@@ -744,10 +708,10 @@ namespace ArchiveFixer.Extraction
                 ProcessArtifactTotalSize = artifactTotalSize,
                 ContentFileCount = contentFileCount,
                 ContentTotalSize = contentTotalSize,
-                SpecialExtractionApplied = specialCollapse,
+                SpecialExtractionApplied = false,
                 Summary = BuildSummary(
                     kind, contentParent, moves.Count, artifactMoves.Count, warnings.Count,
-                    specialCollapse ? specialExtraction!.RuleNames : null),
+                    specialRuleNames: null),
                 Warnings = warnings
             };
         }
@@ -847,13 +811,8 @@ namespace ArchiveFixer.Extraction
                 return FinalizeLayoutKind.PromoteInnermostFolder;
             }
 
-            // ④ 一路单链（每层只有一个文件夹、没有别的文件）→ 塌缩到最深处那个名字。
-            if (shape.Chain.Count >= 2)
-            {
-                return FinalizeLayoutKind.CollapseSingleChain;
-            }
-
-            // ② 其余：多个文件 / 多个文件夹 / 自带一层文件夹 → 在 destDir 下套一层。
+            // ④ 旧「单链塌缩」已删除（用户 2026-11-02）：不再按最深层文件夹名合并路径。
+            // 其余：多个文件 / 多个文件夹 / 自带一层文件夹 → 在 destDir 下套一层。
             return FinalizeLayoutKind.WrapInFolder;
         }
 
@@ -1256,8 +1215,7 @@ namespace ArchiveFixer.Extraction
                 {
                     FinalizeLayoutKind.SingleFileToDestination => "判定表 1：终端是单个文件，直接放进目标目录",
                     FinalizeLayoutKind.WrapInFolder => "判定表 2：在目标目录下套一层",
-                    FinalizeLayoutKind.PromoteInnermostFolder => "判定表 3：提上来的是最后那个有意义的文件夹（路上有纯空壳目录）",
-                    FinalizeLayoutKind.CollapseSingleChain => "判定表 4：单链塌缩到最深层那个文件夹名",
+                    FinalizeLayoutKind.PromoteInnermostFolder => "判定表 3：把最里面那层文件夹提上来",
                     FinalizeLayoutKind.ProcessArtifactsOnly => "只有其余物，没有内容物",
                     FinalizeLayoutKind.Empty => "暂存区里没有可定稿的东西",
                     _ => "定稿布局规划失败"

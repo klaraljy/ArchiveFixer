@@ -354,8 +354,21 @@ namespace ArchiveFixer.ViewModels
                  * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
                  * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
                  */
-                sourceMoveFailure = PurgeLayerSourcePackage(
-                    task, verification, commit, logEntries, LayerPurgeTrigger.SpaceTight);
+                if (!task.IsContinuationTask && oneClickRun)
+                {
+                    // 用户 2026-11-02：空间不足模式也不许先动用户原包，整条链跑完再判。
+                    task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
+
+                    logEntries.Add((
+                        "INFO",
+                        $"{task.LogName}：源包先留在原地 —— 整条链还没跑完，链尾再按「源包操作」处理"
+                        + "（空间不足模式也不提前删用户原包）。"));
+                }
+                else
+                {
+                    sourceMoveFailure = PurgeLayerSourcePackage(
+                        task, verification, commit, logEntries, LayerPurgeTrigger.SpaceTight);
+                }
             }
             else if (task.IsContinuationTask)
             {
@@ -422,7 +435,14 @@ namespace ArchiveFixer.ViewModels
                  * 只有链没跑完（递归未 Completed）、分卷组未完整、或还有未完成卷组时才延期。
                  * 这样一批里某个 300MB 失败，不会拖着 9G/5G/3G 那些已经成功任务的源包。
                  */
-                if (oneClickRun && !CanDeleteRootSourceImmediately(task, recursion, commit))
+                /*
+                 * 用户 2026-11-02 定案：**一键处理里原包永远不在单层成功后处理**。
+                 * 这一层看起来已经出了内容物，也可能只是后缀没露出来的内层包（真机 `7z.rar`
+                 * 吐出的 `1101.webp` 就是下一层 RAR）—— 后面还有没有层，这一刻无法证明。
+                 * ⇒ 一律记「延期到链尾」，由 `CompleteRootSourcePackagesAfterChainAsync`
+                 * 在整条链跑完后按最终成败处理。手动「只解压」没有链可等，仍走当场处理。
+                 */
+                if (oneClickRun)
                 {
                     task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
 
@@ -941,139 +961,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// ⛔ 只读事实位，不按名字或中文猜。
-        /// </summary>
-        private static bool CanDeleteRootSourceImmediately(
-            ArchiveTask task,
-            RecursionResult? recursion,
-            StageCommitResult? commit)
-        {
-            if (task == null)
-            {
-                return false;
-            }
-
-            if (task.HasUnresolvedVolumeGroup)
-            {
-                return false;
-            }
-
-            if (task.IsVolumeGroup && !task.IsVolumeComplete)
-            {
-                return false;
-            }
-
-            if (recursion != null &&
-                (!recursion.Completed ||
-                 recursion.PartiallyCompleted ||
-                 recursion.UnexpandedNames.Count > 0))
-            {
-                return false;
-            }
-
-            /*
-             * ⚠ 2026-11-01（用户口径「原包不能先动」）：这一轮吐出来的还是**分卷片**时，
-             * 后面还有第二大步要接手 ⇒ 源包必须留到链尾按源包档处理，不能凭"名字像内容物"当场删。
-             * 真机 901000019：产出片 `…\.404272删除7z` 是 7z 首片、名字后缀不成形，旧的名字判据没认出来，
-             * 用户包壳在第一层成功那一刻就被删掉（链后面要是失败，用户原件就再也救不回来）。
-             * 判据只读内容卡（与第二大步闸门同一套三条），⛔ 不按后缀猜。
-             */
-            if (commit != null && commit.ProducedFiles.Any(IsProducedVolumePiece))
-            {
-                return false;
-            }
-
-            /*
-             * 一键处理的“链”可能不是递归核心里展开的：第一层只把 inner.7z.001 当内容物落出来，
-             * 再交给下一轮续解。源码层看不出“后面还有没有一层”，所以这里看盘上事实：
-             * 产物树里还有归档/分卷候选 ⇒ 这一单还没到最终内容物，源包必须留着。
-             */
-            return !OutputLooksLikeIntermediateArchive(task.OutputPath);
-        }
-
-        /// <summary>这一份产出是不是**分卷片**（内容卡三条，与第二大步闸门同一套口径）。</summary>
-        private static bool IsProducedVolumePiece(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            {
-                return false;
-            }
-
-            if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(path)))
-            {
-                return true;
-            }
-
-            if (ArchiveFixer.Detection.AndroidPackageDetector.IsAndroidPackage(path))
-            {
-                return false;
-            }
-
-            try
-            {
-                FileNatureCard card = FileNature.Inspect(path);
-
-                if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
-                    || card.BodyKind == ArchiveBodyKind.VolumePiece)
-                {
-                    return true;
-                }
-
-                return (card.Format == VolumeContentFormat.Rar
-                        && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
-                    || (card.Format == VolumeContentFormat.Zip && card.ZipEndRecordMeansSplit);
-            }
-            catch
-            {
-                // 读不出 ⇒ 判不出 ⇒ 按"不是分卷片"处理（与这条判据之外的老行为一致）。
-                return false;
-            }
-        }
-
-        private static bool OutputLooksLikeIntermediateArchive(string? outputDirectory)
-        {
-            if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
-            {
-                return true;
-            }
-
-            try
-            {
-                foreach (string file in Directory.EnumerateFiles(
-                             outputDirectory,
-                             "*",
-                             SearchOption.AllDirectories).Take(2000))
-                {
-                    string name = Path.GetFileName(file);
-
-                    if (FileNameHelper.IsVolumePartFileName(name))
-                    {
-                        return true;
-                    }
-
-                    string extension = Path.GetExtension(name);
-
-                    if (extension.Equals(".7z", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".rar", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".zip", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".tar", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".gz", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".bz2", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".xz", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-            catch
-            {
-                // 读不出来就无法证明是最终内容物 ⇒ 保留源包（兜底方向是“不删”）。
-                return true;
-            }
-
-            return false;
-        }
 
         /// <summary>
         /// 这一份源包的内容证据是否**可证不是分卷成员**（只有这一档才让“半套分卷”闸门不适用）。

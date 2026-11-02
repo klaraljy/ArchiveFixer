@@ -55,9 +55,6 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public bool KeepDeepestProcessArtifact { get; init; }
 
-        /// <summary>空间不足模式：最外层源包在它自己那一层成功后立刻回收。</summary>
-        public bool ReclaimRootSourceAfterSuccess { get; init; }
-
         /// <summary>
         /// 单层展开比上限：该层解压后总大小 / 该层归档文件大小。
         /// 500 倍对正常资源包足够宽松（视频、图片再压也到不了），超了就是"疑似压缩炸弹"。
@@ -230,9 +227,6 @@ namespace ArchiveFixer.Extraction
         /// "工作区里的东西不算"同一条道理；⛔ 只排除这一棵，别的照旧一律算）。</para>
         /// </summary>
         public string WorkspaceTaskDirectory { get; init; } = string.Empty;
-
-        /// <summary>这一份是用户最外层源包（空间不足模式允许它在该层成功后立刻删）。</summary>
-        public bool IsRootSource { get; init; }
     }
 
     /// <summary>
@@ -1379,34 +1373,6 @@ namespace ArchiveFixer.Extraction
 
                             LayerReclaim(reclaimRequest);
                         }
-                    }
-
-                    if (item.IsRoot
-                        && _limits.ReclaimRootSourceAfterSuccess
-                        && LayerReclaim != null
-                        && outcome.Report != null)
-                    {
-                        RecursiveLayerReclaimRequest rootRequest = BuildLayerReclaim(
-                            item,
-                            item.ArchivePath,
-                            workspace,
-                            outcome.Report);
-
-                        var flaggedRootRequest = new RecursiveLayerReclaimRequest
-                        {
-                            ChildLayerLabel = rootRequest.ChildLayerLabel,
-                            GroupFiles = rootRequest.GroupFiles,
-                            Verdict = rootRequest.Verdict,
-                            WorkspaceTaskDirectory = rootRequest.WorkspaceTaskDirectory,
-                            IsRootSource = true
-                        };
-
-                        foreach (string groupFile in flaggedRootRequest.GroupFiles)
-                        {
-                            ReclaimedProcessArtifacts.Add(groupFile);
-                        }
-
-                        LayerReclaim(flaggedRootRequest);
                     }
 
                     RecursionLayerReport report = outcome.Report!;

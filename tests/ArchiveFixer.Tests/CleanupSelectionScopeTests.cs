@@ -717,11 +717,12 @@ namespace ArchiveFixer.Tests
         private ArchiveTask AddOwnOutputTask(Harness harness, string baseName, bool isSelected)
         {
             string sourceDirectory = Path.Combine(harness.Root, "src");
-            string outputDirectory = Path.Combine(harness.Root, "out", baseName);
+            string packageParent = Path.Combine(harness.Root, "out", baseName);
+            string outputDirectory = Path.Combine(packageParent, baseName);
 
             ArchiveTask task = CreateTask(harness, sourceDirectory, baseName, outputDirectory, isSelected);
 
-            string artifactDirectory = Path.Combine(outputDirectory, MaintenanceCleanupService.ArtifactDirectoryName);
+            string artifactDirectory = Path.Combine(packageParent, MaintenanceCleanupService.ArtifactDirectoryName);
             Directory.CreateDirectory(artifactDirectory);
             File.WriteAllText(Path.Combine(artifactDirectory, "inner.7z"), "中间产物（测试用，不会真的被删）");
 
@@ -739,7 +740,7 @@ namespace ArchiveFixer.Tests
             ArchiveTask task = CreateTask(harness, sourceDirectory, baseName, sourceDirectory, isSelected);
 
             string artifactDirectory = Path.Combine(
-                sourceDirectory,
+                harness.Root,
                 MaintenanceCleanupService.ArtifactDirectoryName,
                 baseName);
 

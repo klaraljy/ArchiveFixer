@@ -78,7 +78,7 @@ namespace ArchiveFixer.Tests
         {
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("其余物"));
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("过程物"));
-            Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName(@"C:\111\222\其余物"));
+            Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName(@"C:\111\其余物"));
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName(@"C:\111\222\过程物\"));
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("其余物".ToUpperInvariant()));
 
@@ -122,7 +122,7 @@ namespace ArchiveFixer.Tests
 
             // 内容物目录自己就叫「其余物」时，其余物落在它里面的 其余物(1)（不再叠一个同名的进去）。
             Assert.Equal(
-                Path.Combine(@"C:\111\其余物", "其余物(1)"),
+                @"C:\111\其余物(1)",
                 ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\111\其余物"));
         }
 
@@ -137,7 +137,7 @@ namespace ArchiveFixer.Tests
                 "222",
                 sharedRoot: false);
 
-            Assert.Equal(@"C:\111\222\其余物", directory);
+            Assert.Equal(@"C:\111\其余物", directory);
         }
 
         [Fact]
@@ -149,10 +149,10 @@ namespace ArchiveFixer.Tests
                 "222.7z.001",
                 sharedRoot: true);
 
-            Assert.Equal(@"C:\111\其余物\222.7z.001", directory);   // 基名清洗由调用方负责（分卷组取 222）
+            Assert.Equal(@"C:\其余物\222.7z.001", directory);   // 基名清洗由调用方负责（分卷组取 222）
 
             Assert.Equal(
-                @"C:\111\其余物\222",
+                @"C:\其余物\222",
                 ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\111", "222", sharedRoot: true));
         }
 
@@ -164,7 +164,7 @@ namespace ArchiveFixer.Tests
                 "222",
                 sharedRoot: false);
 
-            Assert.Equal(@"C:\root\222\其余物", directory);
+            Assert.Equal(@"C:\root\其余物", directory);
         }
 
         [Fact]
@@ -175,18 +175,18 @@ namespace ArchiveFixer.Tests
                 "222",
                 sharedRoot: true);
 
-            Assert.Equal(@"C:\root\其余物\222", directory);
+            Assert.Equal(@"C:\其余物\222", directory);
         }
 
         [Fact]
         public void 目录公式_共用根但拿不到包基名时退回集中一处()
         {
             Assert.Equal(
-                @"C:\root\其余物",
+                @"C:\其余物",
                 ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\root", null, sharedRoot: true));
 
             Assert.Equal(
-                @"C:\root\其余物",
+                @"C:\其余物",
                 ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\root", "   ", sharedRoot: true));
         }
 
@@ -290,7 +290,7 @@ namespace ArchiveFixer.Tests
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(new ArtifactPlacementRequest
             {
-                TargetDirectory = _root,
+                TargetDirectory = Path.Combine(_root, "content"),
                 Items = new[] { new ArtifactPlacementItem(source, "inner.7z", "内层归档") },
                 TargetProbe = EmptyArtifactTargetProbe.Instance
             });

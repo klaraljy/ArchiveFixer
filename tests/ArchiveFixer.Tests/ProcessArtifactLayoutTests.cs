@@ -20,10 +20,12 @@ namespace ArchiveFixer.Tests
     public class ProcessArtifactLayoutTests : IDisposable
     {
         private readonly string _root;
+        private readonly string _cleanupRoot;
 
         public ProcessArtifactLayoutTests()
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerArtifactTests", Guid.NewGuid().ToString("N"));
+            _cleanupRoot = Path.Combine(Path.GetTempPath(), "ArchiveFixerArtifactTests", Guid.NewGuid().ToString("N"));
+            _root = Path.Combine(_cleanupRoot, "target");
             Directory.CreateDirectory(_root);
         }
 
@@ -31,9 +33,9 @@ namespace ArchiveFixer.Tests
         {
             try
             {
-                if (Directory.Exists(_root))
+                if (Directory.Exists(_cleanupRoot))
                 {
-                    Directory.Delete(_root, recursive: true);
+                    Directory.Delete(_cleanupRoot, recursive: true);
                 }
             }
             catch
@@ -64,7 +66,7 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
-        private string ArtifactDirectory => PathOf(ProcessArtifactLayout.ArtifactDirectoryName);
+        private string ArtifactDirectory => Path.Combine(_cleanupRoot, ProcessArtifactLayout.ArtifactDirectoryName);
 
         private static ArtifactPlacementRequest Request(
             string targetDirectory,
@@ -154,7 +156,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_目标位置已有同名时也不覆盖()
         {
-            string existing = WriteFile(@"其余物\a.txt", "EXISTING");
+            string existing = WriteFile(@"..\其余物\a.txt", "EXISTING");
             string source = WriteFile(@"src\a.txt", "NEW");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
@@ -175,7 +177,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_源是目录时重名整名加序号不拆扩展名()
         {
-            string existing = MakeDirectory(@"其余物\v1.2");
+            string existing = MakeDirectory(@"..\其余物\v1.2");
             string source = MakeDirectory(@"src\v1.2");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
@@ -195,7 +197,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_批内序号与磁盘上已有名字都不会撞()
         {
-            WriteFile(@"其余物\pack(1).7z", "EXISTING");
+            WriteFile(@"..\其余物\pack(1).7z", "EXISTING");
             string first = WriteFile(@"a\pack.7z", "A");
             string second = WriteFile(@"b\pack.7z", "B");
             string third = WriteFile(@"c\pack.7z", "C");
@@ -211,7 +213,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack.7z"), plan.Moves[0].TargetPath);
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack(2).7z"), plan.Moves[1].TargetPath);
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack(3).7z"), plan.Moves[2].TargetPath);
-            Assert.Equal("EXISTING", File.ReadAllText(PathOf(@"其余物\pack(1).7z")));
+            Assert.Equal("EXISTING", File.ReadAllText(PathOf(@"..\其余物\pack(1).7z")));
         }
 
         // ---------- 纯规划：相对路径推算 ----------
@@ -326,7 +328,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_源已经在其余物目录里时跳过()
         {
-            string source = WriteFile(@"其余物\inner\pack.7z", "P");
+            string source = WriteFile(@"..\其余物\inner\pack.7z", "P");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
                 _root,
@@ -346,7 +348,7 @@ namespace ArchiveFixer.Tests
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
                 _root,
                 string.Empty,
-                new ArtifactPlacementItem(_root, "a.txt")));
+                new ArtifactPlacementItem(_cleanupRoot, "a.txt")));
 
             Assert.Empty(plan.Moves);
             Assert.Equal(ArtifactSkipReason.TargetInsideSource, Assert.Single(plan.Skipped).Reason);
@@ -430,7 +432,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_说明里报出改名与跳过数量()
         {
-            WriteFile(@"其余物\pack.7z", "EXISTING");
+            WriteFile(@"..\其余物\pack.7z", "EXISTING");
             string source = WriteFile(@"a\pack.7z", "A");
             string escaping = WriteFile(@"b\x.txt", "X");
 

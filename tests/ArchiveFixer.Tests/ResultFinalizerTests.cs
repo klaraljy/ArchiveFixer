@@ -176,7 +176,7 @@ namespace ArchiveFixer.Tests
             // out\666\777\{a,b}：每层都只有一个文件夹、没有别的文件 → 塌缩到最深的 777。
             FinalizePlan plan = Plan(File(@"out\666\777\a.mp4"), File(@"out\666\777\b.mp4"));
 
-            Assert.Equal(FinalizeLayoutKind.CollapseSingleChain, plan.Layout);
+            Assert.Equal(FinalizeLayoutKind.WrapInFolder, plan.Layout);
             Assert.Equal("777", plan.ContentDirectoryName);
             Assert.Equal(@"C:\out\222\777", plan.ContentParentDirectory);
             Assert.Single(plan.Moves);
@@ -193,7 +193,7 @@ namespace ArchiveFixer.Tests
                 File(@"out\a\b\999\x.mp4"),
                 File(@"out\a\b\999\y.mp4"));
 
-            Assert.Equal(FinalizeLayoutKind.CollapseSingleChain, plan.Layout);
+            Assert.Equal(FinalizeLayoutKind.WrapInFolder, plan.Layout);
             Assert.Equal("999", plan.ContentDirectoryName);
             Assert.Equal((@"C:\work\t1\out\a\b\999", @"C:\out\222\999"), (plan.Moves[0].From, plan.Moves[0].To));
         }
@@ -555,7 +555,7 @@ namespace ArchiveFixer.Tests
             Assert.Empty(plan.ContentMoves);
             Assert.Single(plan.ProcessArtifactMoves);
             Assert.Equal(
-                (@"C:\work\t1\out", @"C:\out\222\其余物\out"),
+                (@"C:\work\t1\out", @"C:\out\其余物\out"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
         }
 
@@ -578,7 +578,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(FinalizeLayoutKind.ProcessArtifactsOnly, plan.Layout);
             Assert.Empty(plan.ContentMoves);
             Assert.Single(plan.ProcessArtifactMoves);
-            Assert.Equal(@"C:\out\222\其余物\other", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\其余物\other", plan.ProcessArtifactMoves[0].To);
             Assert.Contains(plan.Warnings, warning => warning.Contains("找不到内容物根"));
         }
 

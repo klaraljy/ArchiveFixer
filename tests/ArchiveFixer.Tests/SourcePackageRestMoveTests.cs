@@ -508,11 +508,11 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_独立包成功立刻删源包_不再等整批结束()
+        public async Task 一键处理_独立包成功也留到链尾()
         {
             /*
-             * 用户 2026-10-26 口径：删除看**这一单自己**是否成功，不看整批是否全成功。
-             * 独立单包成功、校验通过、定稿完成 ⇒ 立刻删自己的源包，不拖到批末。
+             * 用户 2026-11-02 口径：一键处理的原包一律留到整条链跑完；
+             * 这一层看起来独立成功，也可能只是还没露出后缀的内层包，不能当场删。
              */
             Harness harness = CreateHarness(
                 settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
@@ -523,8 +523,8 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractForOneClickAsync();
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "独立包成功后应当立刻删除自己的源包");
-            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
+            Assert.True(File.Exists(source), "一键处理原包必须留到链尾，单层成功不许当场删");
+            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, task.SourcePackageMove);
         }
 
         [Fact]

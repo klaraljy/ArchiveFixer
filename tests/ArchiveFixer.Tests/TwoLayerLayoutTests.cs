@@ -407,32 +407,6 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 特定解压例外档_不许把最里层也塌掉_并且如实记没生效()
-        {
-            // 特定解压（规格 §3.5）本来会把"要套的那一层"去掉（`222\1111\内容物`）。包里还有内层包时
-            // 那一层正是最里层 ⇒ 红线优先，并且**绝不静默**（写 WARN 说清为什么、结论也不再报"规则已生效"）。
-            var plan = ResultFinalizer.Plan(
-                new[] { File(@"out\666\a.mp4") },
-                @"C:\111\222",
-                TerminalLayoutMode.KeepLastFolder,
-                "222",
-                "out",
-                Staging,
-                specialExtraction: SpecialExtractionPlan.FromSettings(new AppSettings
-                {
-                    UseSpecialExtraction = true,
-                    SpecialExtractionRules = new List<string> { SpecialExtractionRules.SingleContentLayer }
-                }),
-                innermostPackageBaseName: "inner");
-
-            Assert.False(plan.SpecialExtractionApplied);
-            Assert.NotEqual(@"C:\111\222", plan.ContentParentDirectory);
-            Assert.Equal(@"C:\111\222\666", plan.ContentParentDirectory);
-            Assert.Equal(@"C:\111\222\666", plan.Moves[0].To);
-            Assert.Contains(plan.Warnings, warning => warning.Contains("没有生效", StringComparison.Ordinal));
-        }
-
-        [Fact]
         public void 只出了其余物时_不硬造最里层()
         {
             // ⛔ 边界：暂存区里**只有其余物**（没有内容物）时不定稿、也不该凭空报出一层"内容物层"——
@@ -449,7 +423,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(FinalizeLayoutKind.ProcessArtifactsOnly, plan.Layout);
             Assert.Equal(string.Empty, plan.ContentDirectoryName);
             Assert.Empty(plan.ContentMoves);
-            Assert.Equal(@"C:\111\222\其余物", plan.ProcessArtifactDirectory);
+            Assert.Equal(@"C:\111\其余物", plan.ProcessArtifactDirectory);
         }
 
         // ══════════════════ 发布侧：内层包自己产出的那层文件夹不许被摊掉 ══════════════════

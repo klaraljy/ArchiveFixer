@@ -398,7 +398,7 @@ namespace ArchiveFixer.Tests
                 Staging,
                 innermostPackageBaseName: null);
 
-            Assert.Equal(FinalizeLayoutKind.CollapseSingleChain, plan.Layout);
+            Assert.Equal(FinalizeLayoutKind.WrapInFolder, plan.Layout);
             Assert.Equal("777", plan.ContentDirectoryName);
             Assert.Equal(@"C:\out\222\777", plan.ContentParentDirectory);
             Assert.Equal((Staging + @"\out\666\777", @"C:\out\222\777"), (plan.Moves[0].From, plan.Moves[0].To));

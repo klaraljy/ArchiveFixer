@@ -304,23 +304,23 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 其余物预览_报顶层项数与总大小且不删任何东西()
         {
-            MakeDirectory($@"out\{ArtifactName}\sub");
-            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");        // 5 字节
-            WriteFile($@"out\{ArtifactName}\sub\middle.zip", "1234567890"); // 10 字节
+            MakeDirectory($@"{ArtifactName}\sub");
+            WriteFile($@"{ArtifactName}\inner.7z.001", "12345");        // 5 字节
+            WriteFile($@"{ArtifactName}\sub\middle.zip", "1234567890"); // 10 字节
 
             MaintenanceCleanupService service = CreateCleanupService(out _);
             CleanupPreview preview = service.PreviewProcessArtifacts(OutputOnlyTask("out"));
 
-            Assert.True(preview.HasTarget);
-            Assert.Equal(PathOf($@"out\{ArtifactName}"), preview.ScopePath);
+            Assert.True(preview.HasTarget, preview.Message + " | scope=" + preview.ScopePath + " | root=" + _root);
+            Assert.Equal(PathOf($@"{ArtifactName}"), preview.ScopePath);
             Assert.Equal(2, preview.ItemCount);
             Assert.Equal(15L, preview.TotalBytes);
             Assert.True(preview.Determined);
             Assert.Contains("inner.7z.001", preview.Items);
 
             // 预览不删除：目录还在，文件也还在。
-            Assert.True(Directory.Exists(PathOf($@"out\{ArtifactName}")));
-            Assert.True(File.Exists(PathOf($@"out\{ArtifactName}\inner.7z.001")));
+            Assert.True(Directory.Exists(PathOf($@"{ArtifactName}")));
+            Assert.True(File.Exists(PathOf($@"{ArtifactName}\inner.7z.001")));
         }
 
         [Fact]
@@ -340,9 +340,9 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 其余物执行_默认档走回收站并留下路径理由条目数总大小()
         {
-            MakeDirectory($@"out\{ArtifactName}\sub");
-            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
-            WriteFile($@"out\{ArtifactName}\sub\middle.zip", "1234567890");
+            MakeDirectory($@"{ArtifactName}\sub");
+            WriteFile($@"{ArtifactName}\inner.7z.001", "12345");
+            WriteFile($@"{ArtifactName}\sub\middle.zip", "1234567890");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
             ArchiveTask task = OutputOnlyTask("out");
@@ -355,12 +355,12 @@ namespace ArchiveFixer.Tests
             Assert.Equal(15L, outcome.RecycledBytes);
             Assert.Equal(0L, outcome.FreedBytes);
             Assert.Empty(executor.PermanentCalls);
-            Assert.Equal(PathOf($@"out\{ArtifactName}"), Assert.Single(executor.RecycleCalls));
-            Assert.False(Directory.Exists(PathOf($@"out\{ArtifactName}")));
+            Assert.Equal(PathOf($@"{ArtifactName}"), Assert.Single(executor.RecycleCalls));
+            Assert.False(Directory.Exists(PathOf($@"{ArtifactName}")));
 
             // 日志四要素：路径 + 理由 + 条目数 + 总大小。
             string log = Assert.Single(outcome.LogLines);
-            Assert.Contains(PathOf($@"out\{ArtifactName}"), log, StringComparison.Ordinal);
+            Assert.Contains(PathOf($@"{ArtifactName}"), log, StringComparison.Ordinal);
             Assert.Contains(MaintenanceCleanupService.ProcessArtifactReason, log, StringComparison.Ordinal);
             Assert.Contains("条目数=3", log, StringComparison.Ordinal);
             Assert.Contains("总大小=15 字节", log, StringComparison.Ordinal);
@@ -369,8 +369,8 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 其余物执行_激进档彻底删除并报释放字节数()
         {
-            MakeDirectory($@"out\{ArtifactName}");
-            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
+            MakeDirectory($@"{ArtifactName}");
+            WriteFile($@"{ArtifactName}\inner.7z.001", "12345");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
             ArchiveTask task = OutputOnlyTask("out");
@@ -381,14 +381,14 @@ namespace ArchiveFixer.Tests
             Assert.Equal(5L, outcome.FreedBytes);
             Assert.Equal(0L, outcome.RecycledBytes);
             Assert.Empty(executor.RecycleCalls);
-            Assert.Equal(PathOf($@"out\{ArtifactName}"), Assert.Single(executor.PermanentCalls));
+            Assert.Equal(PathOf($@"{ArtifactName}"), Assert.Single(executor.PermanentCalls));
         }
 
         [Fact]
         public void 其余物执行_回收站不可用时不降级为永久删除()
         {
-            MakeDirectory($@"out\{ArtifactName}");
-            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
+            MakeDirectory($@"{ArtifactName}");
+            WriteFile($@"{ArtifactName}\inner.7z.001", "12345");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
             executor.RecycleResult = RecycleAttemptResult.Unavailable;
@@ -399,7 +399,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(0, outcome.SuccessCount);
             Assert.Equal(1, outcome.FailureCount);
             Assert.Empty(executor.PermanentCalls);
-            Assert.True(Directory.Exists(PathOf($@"out\{ArtifactName}")), "拒绝删除时目标必须原样留在原处");
+            Assert.True(Directory.Exists(PathOf($@"{ArtifactName}")), "拒绝删除时目标必须原样留在原处");
             Assert.Contains(outcome.FailureReasons, reason => reason.Contains("回收站", StringComparison.Ordinal));
         }
 
@@ -424,12 +424,12 @@ namespace ArchiveFixer.Tests
         {
             // 共享根 = 源目录（模式 B：输出目录就是源包所在目录）。
             string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"111\{ArtifactName}\222\volumes");
-            WriteFile($@"111\{ArtifactName}\222\volumes\222.7z.001", "222222");
-            WriteFile($@"111\{ArtifactName}\222\222.rar", "source-of-222");
-            MakeDirectory($@"111\{ArtifactName}\333");
-            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
-            WriteFile($@"111\{ArtifactName}\333\outer.7z.001", "333333");
+            MakeDirectory($@"{ArtifactName}\222\volumes");
+            WriteFile($@"{ArtifactName}\222\volumes\222.7z.001", "222222");
+            WriteFile($@"{ArtifactName}\222\222.rar", "source-of-222");
+            MakeDirectory($@"{ArtifactName}\333");
+            WriteFile($@"{ArtifactName}\333\333.rar", "source-of-333");
+            WriteFile($@"{ArtifactName}\333\outer.7z.001", "333333");
 
             // 只勾选 222：输出目录落在源目录里 → 共享模式。
             var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
@@ -438,7 +438,7 @@ namespace ArchiveFixer.Tests
             CleanupPreview preview = service.PreviewProcessArtifacts(task222);
 
             Assert.True(preview.HasTarget);
-            Assert.Equal(PathOf($@"111\{ArtifactName}\222"), preview.ScopePath);
+            Assert.Equal(PathOf($@"{ArtifactName}\222"), preview.ScopePath);
             Assert.True(preview.ResolvedScope!.OutputDirectoryIsShared);
             Assert.False(preview.ResolvedScope.DeletesEverythingInDirectory);
 
@@ -450,19 +450,19 @@ namespace ArchiveFixer.Tests
 
             // ① 删除调用里只有 222 那一条路径：333 的目录名一次都没出现在删除请求里。
             string recycled = Assert.Single(executor.RecycleCalls);
-            Assert.Equal(PathOf($@"111\{ArtifactName}\222"), recycled);
+            Assert.Equal(PathOf($@"{ArtifactName}\222"), recycled);
             Assert.DoesNotContain(@"\333", recycled, StringComparison.Ordinal);
             Assert.Empty(executor.PermanentCalls);
 
             // ② 333 那一份原样存在。
-            Assert.False(Directory.Exists(PathOf($@"111\{ArtifactName}\222")));
-            Assert.True(Directory.Exists(PathOf($@"111\{ArtifactName}\333")));
-            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\333\333.rar")));
-            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\333\outer.7z.001")));
+            Assert.False(Directory.Exists(PathOf($@"{ArtifactName}\222")));
+            Assert.True(Directory.Exists(PathOf($@"{ArtifactName}\333")));
+            Assert.True(File.Exists(PathOf($@"{ArtifactName}\333\333.rar")));
+            Assert.True(File.Exists(PathOf($@"{ArtifactName}\333\outer.7z.001")));
 
             // ③ 内容逐字未变。
-            Assert.Equal("source-of-333", File.ReadAllText(PathOf($@"111\{ArtifactName}\333\333.rar")));
-            Assert.Equal("333333", File.ReadAllText(PathOf($@"111\{ArtifactName}\333\outer.7z.001")));
+            Assert.Equal("source-of-333", File.ReadAllText(PathOf($@"{ArtifactName}\333\333.rar")));
+            Assert.Equal("333333", File.ReadAllText(PathOf($@"{ArtifactName}\333\outer.7z.001")));
 
             // 共享根自己（源目录）与它里面的别的包也不能被动。
             Assert.True(Directory.Exists(PathOf("111")));
@@ -477,8 +477,8 @@ namespace ArchiveFixer.Tests
         public void 共享目录下没有本任务那一份时_拒绝删除而不是退到上一层()
         {
             string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"111\{ArtifactName}\333");
-            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
+            MakeDirectory($@"{ArtifactName}\333");
+            WriteFile($@"{ArtifactName}\333\333.rar", "source-of-333");
 
             var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -495,7 +495,7 @@ namespace ArchiveFixer.Tests
             Assert.False(outcome.Attempted);
             Assert.Empty(executor.RecycleCalls);
             Assert.Empty(executor.PermanentCalls);
-            Assert.True(Directory.Exists(PathOf($@"111\{ArtifactName}\333")));
+            Assert.True(Directory.Exists(PathOf($@"{ArtifactName}\333")));
         }
 
         /// <summary>
@@ -506,10 +506,10 @@ namespace ArchiveFixer.Tests
         public void 老名字过程物也要能被删_与新名字同时存在时一起删()
         {
             string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"111\{LegacyArtifactName}\222");
-            WriteFile($@"111\{LegacyArtifactName}\222\legacy.7z.001", "legacy");
-            MakeDirectory($@"111\{ArtifactName}\222");
-            WriteFile($@"111\{ArtifactName}\222\current.7z.001", "current");
+            MakeDirectory($@"{LegacyArtifactName}\222");
+            WriteFile($@"{LegacyArtifactName}\222\legacy.7z.001", "legacy");
+            MakeDirectory($@"{ArtifactName}\222");
+            WriteFile($@"{ArtifactName}\222\current.7z.001", "current");
 
             var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -523,8 +523,8 @@ namespace ArchiveFixer.Tests
 
             Assert.True(outcome.Attempted);
             Assert.Equal(2, outcome.SuccessCount);
-            Assert.False(Directory.Exists(PathOf($@"111\{LegacyArtifactName}\222")));
-            Assert.False(Directory.Exists(PathOf($@"111\{ArtifactName}\222")));
+            Assert.False(Directory.Exists(PathOf($@"{LegacyArtifactName}\222")));
+            Assert.False(Directory.Exists(PathOf($@"{ArtifactName}\222")));
             Assert.Equal(2, executor.RecycleCalls.Count);
         }
 
@@ -533,8 +533,8 @@ namespace ArchiveFixer.Tests
         public void 只有老名字过程物时也能删掉()
         {
             string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"111\{LegacyArtifactName}\222");
-            WriteFile($@"111\{LegacyArtifactName}\222\legacy.7z.001", "legacy");
+            MakeDirectory($@"{LegacyArtifactName}\222");
+            WriteFile($@"{LegacyArtifactName}\222\legacy.7z.001", "legacy");
 
             var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -542,13 +542,13 @@ namespace ArchiveFixer.Tests
             CleanupPreview preview = service.PreviewProcessArtifacts(task222);
 
             Assert.True(preview.HasTarget);
-            Assert.Equal(PathOf($@"111\{LegacyArtifactName}\222"), preview.ScopePath);
+            Assert.Equal(PathOf($@"{LegacyArtifactName}\222"), preview.ScopePath);
 
             CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
 
             Assert.True(outcome.Attempted);
             Assert.Equal(1, outcome.SuccessCount);
-            Assert.False(Directory.Exists(PathOf($@"111\{LegacyArtifactName}\222")));
+            Assert.False(Directory.Exists(PathOf($@"{LegacyArtifactName}\222")));
         }
 
         /// <summary>
@@ -558,10 +558,10 @@ namespace ArchiveFixer.Tests
         public void 共享目录下勾选333时只删333那一份()
         {
             string sourceArchive = WriteFile(@"111\333.rar", "rar");
-            MakeDirectory($@"111\{ArtifactName}\222");
-            WriteFile($@"111\{ArtifactName}\222\222.rar", "source-of-222");
-            MakeDirectory($@"111\{ArtifactName}\333");
-            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
+            MakeDirectory($@"{ArtifactName}\222");
+            WriteFile($@"{ArtifactName}\222\222.rar", "source-of-222");
+            MakeDirectory($@"{ArtifactName}\333");
+            WriteFile($@"{ArtifactName}\333\333.rar", "source-of-333");
 
             var task333 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -570,8 +570,8 @@ namespace ArchiveFixer.Tests
             CleanupOutcome outcome = service.CleanProcessArtifacts(task333, DeleteMode.RecycleBin, preview);
 
             Assert.True(outcome.Attempted);
-            Assert.Equal(PathOf($@"111\{ArtifactName}\333"), Assert.Single(executor.RecycleCalls));
-            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\222\222.rar")), "222 那一份一个条目都不能被删");
+            Assert.Equal(PathOf($@"{ArtifactName}\333"), Assert.Single(executor.RecycleCalls));
+            Assert.True(File.Exists(PathOf($@"{ArtifactName}\222\222.rar")), "222 那一份一个条目都不能被删");
         }
 
         /// <summary>
@@ -581,8 +581,8 @@ namespace ArchiveFixer.Tests
         public void 删除本目录全部其余物_才覆盖整个共享目录()
         {
             string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"111\{ArtifactName}\222");
-            MakeDirectory($@"111\{ArtifactName}\333");
+            MakeDirectory($@"{ArtifactName}\222");
+            MakeDirectory($@"{ArtifactName}\333");
 
             var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -591,7 +591,7 @@ namespace ArchiveFixer.Tests
 
             Assert.True(preview.HasTarget);
             Assert.True(preview.ResolvedScope!.DeletesEverythingInDirectory);
-            Assert.Equal(PathOf($@"111\{ArtifactName}"), preview.ScopePath);
+            Assert.Equal(PathOf($@"{ArtifactName}"), preview.ScopePath);
 
             CleanupOutcome outcome = service.CleanProcessArtifacts(
                 task222,
@@ -601,7 +601,7 @@ namespace ArchiveFixer.Tests
 
             Assert.True(outcome.Attempted);
             Assert.Equal(1, outcome.SuccessCount);
-            Assert.Equal(PathOf($@"111\{ArtifactName}"), Assert.Single(executor.RecycleCalls));
+            Assert.Equal(PathOf($@"{ArtifactName}"), Assert.Single(executor.RecycleCalls));
             Assert.Contains(MaintenanceCleanupService.AllArtifactsReason, Assert.Single(outcome.LogLines), StringComparison.Ordinal);
         }
 
@@ -609,13 +609,13 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 默认模式下只删任务自己目录里的其余物()
         {
-            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            string sourceArchive = WriteFile(@"111\222\222.rar", "rar");
             MakeDirectory($@"111\222\{ArtifactName}");
             WriteFile($@"111\222\{ArtifactName}\inner.7z", "inner");
             MakeDirectory($@"111\333\{ArtifactName}");
             WriteFile($@"111\333\{ArtifactName}\other.7z", "other");
 
-            var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf(@"111\222") };
+            var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf(@"111\222\222") };
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
             CleanupPreview preview = service.PreviewProcessArtifacts(task);
@@ -642,11 +642,11 @@ namespace ArchiveFixer.Tests
         public void 预览里含源包时明确标出个数()
         {
             string sourceArchive = WriteFile(@"111\222.rar", "source");
-            MakeDirectory($@"111\{ArtifactName}\222\volumes");
-            WriteFile($@"111\{ArtifactName}\222\inner.7z.001", "12345");
+            MakeDirectory($@"{ArtifactName}\222\volumes");
+            WriteFile($@"{ArtifactName}\222\inner.7z.001", "12345");
 
             // 源包被移到其余物里（新布局），任务的 CurrentPath 仍然指着它原来那个位置。
-            File.Move(sourceArchive, PathOf($@"111\{ArtifactName}\222\222.rar"));
+            File.Move(sourceArchive, PathOf($@"{ArtifactName}\222\222.rar"));
 
             var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -673,9 +673,9 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 没有登记源文件时按扩展名兜底认源包()
         {
-            MakeDirectory($@"out\{ArtifactName}");
-            WriteFile($@"out\{ArtifactName}\222.rar", "source");
-            WriteFile($@"out\{ArtifactName}\readme.txt", "not-archive");
+            MakeDirectory($@"{ArtifactName}");
+            WriteFile($@"{ArtifactName}\222.rar", "source");
+            WriteFile($@"{ArtifactName}\readme.txt", "not-archive");
 
             // 空任务：没有任何源文件登记（CurrentPath 为空）。
             var task = new ArchiveTask { OutputPath = PathOf("out") };
@@ -692,11 +692,11 @@ namespace ArchiveFixer.Tests
         public void 预览里只有内层归档与分卷时不误报源包()
         {
             string sourceArchive = WriteFile(@"111\222.7z.001", "volume-1");
-            MakeDirectory($@"111\{ArtifactName}\222\volumes");
-            WriteFile($@"111\{ArtifactName}\222\inner.7z.001", "inner");
+            MakeDirectory($@"{ArtifactName}\222\volumes");
+            WriteFile($@"{ArtifactName}\222\inner.7z.001", "inner");
 
             // 内层归档（由源包生成，删了还能再解出来）也要留在其余物里。
-            WriteFile($@"111\{ArtifactName}\222\volumes\carved.zip", "carved");
+            WriteFile($@"{ArtifactName}\222\volumes\carved.zip", "carved");
 
             var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
 
@@ -764,12 +764,12 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 清理作用域_其余物目录由ProcessArtifactLayout唯一来源给出()
         {
-            MakeDirectory($@"out\{ArtifactName}");
+            MakeDirectory($@"{ArtifactName}");
 
             var task = OutputOnlyTask("out");
 
             Assert.Equal(
-                PathOf($@"out\{ArtifactName}"),
+                PathOf($@"{ArtifactName}"),
                 MaintenanceCleanupService.ResolveProcessArtifactScope(task));
 
             // 布局层给的规范名 + 历史名，两个都要认（老目录不能清不掉）。
@@ -837,11 +837,11 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 任务详情文本_带上其余物路径()
         {
-            MakeDirectory($@"out\{ArtifactName}");
+            MakeDirectory($@"{ArtifactName}");
 
             string text = MainViewModel.BuildTaskInfoText(OutputOnlyTask("out"));
 
-            Assert.Contains("其余物目录：" + PathOf($@"out\{ArtifactName}"), text, StringComparison.Ordinal);
+            Assert.Contains("其余物目录：" + PathOf($@"{ArtifactName}"), text, StringComparison.Ordinal);
         }
 
         // ================================================================ ⑤ 设置项真正生效
