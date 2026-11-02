@@ -482,9 +482,6 @@ namespace ArchiveFixer.Extraction
              * 它一次都没被打开过**时（真机 `…\111\111\111\111.zip` 那一格），那一层根本还不存在，
              * 凭空造一个就是把入口包埋深一层。判据与 ResolveWrapperName 同一处口径。
              *
-             * 特定解压例外档被这一条盖住时**绝不静默**：如实降成"这一次没生效"并写清原因，
-             * 日志与结论也不会再报"规则已生效"（SpecialExtractionApplied 保持 false）。
-             *
              * ⚠ 这一条要真的生效，还要求下面"内容物落法"那一支认 <c>wrapperName</c>
              * （判定表 ① 原本不读它）—— 见那里 `wrapperName == null` 那段说明。
              */

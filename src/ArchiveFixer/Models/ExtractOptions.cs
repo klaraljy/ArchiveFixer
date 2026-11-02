@@ -405,7 +405,7 @@ namespace ArchiveFixer.Models
         /// 「特定解压：&lt;规则名&gt;」——开了特定解压时才非空（用户 2026-09-24："我以为它按默认跑的"
         /// 是他最恨的一件事，所以这一行必须出现在**动手前**的那一个框里）。
         /// </summary>
-        public string SpecialExtractionEcho { get; init; } = string.Empty;
+        public string SpecificExtractionEcho { get; init; } = string.Empty;
 
         /// <summary>需要时的提醒两行（疑似无用物 / 没有可用密码的包）；空 = 不显示。</summary>
         public string NoticeEcho { get; init; } = string.Empty;

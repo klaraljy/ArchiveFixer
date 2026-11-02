@@ -89,7 +89,7 @@
                            Margin="0,6,0,0"
                            TextWrapping="Wrap"
                            Visibility="Collapsed"
-                           Text="{Binding SpecialExtractionEcho}" />
+                           Text="{Binding SpecificExtractionEcho}" />
 
                 <!--
                     「空间不足」模式那条**红字**（用户 2026-09-27）：

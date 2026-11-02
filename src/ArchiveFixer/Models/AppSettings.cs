@@ -876,8 +876,8 @@ namespace ArchiveFixer.Models
         /// 空行忽略、⛔ 不做通配 / 正则、只吃文件名。</para>
         ///
         /// <para><b>默认空 = 这个功能不生效</b>：一个关键词都没有时，程序的行为与加这条功能之前
-        /// **逐字相同**（有回归用例钉住）。容错口径与 <see cref="SpecialExtractionRules"/> 同一套：
-        /// 归一化只有一处实现（<c>ContentKeepRules.NormalizeKeywords</c>），
+        /// **逐字相同**（有回归用例钉住）。归一化只有一处实现
+        /// （<c>ContentKeepRules.NormalizeKeywords</c>），
         /// <c>null</c>（旧配置里没有这个字段）→ 空列表。</para>
         ///
         /// <para>⚠ 作用范围只在**内容物**：用户导入的源包不套用这条（<c>小明.zip</c> 是别人给的包时照常处理）。</para>
@@ -1284,12 +1284,11 @@ namespace ArchiveFixer.Models
             /*
              * 「内容物保留关键词」（用户 2026-10-04）：
              *
-             * 归一化放在设置层，与 EnginePriority / SpecialExtractionRules 同一口径 —— 到解压那一刻才发现
+             * 归一化放在设置层，与 EnginePriority 同一口径 —— 到解压那一刻才发现
              * "这一行读不懂"是最糟的（用户已经点了一键处理）。判定只有一处实现
              * （ContentKeepRules.NormalizeKeywords），这里不另写一套字符串比较。
              *
              * ⚠ null（旧配置里没有这个字段）与空列表**在这里是同一个结果**：都是"这个功能不生效"。
-             * 与 SpecialExtractionRules 不同 —— 那一档的 null 有"取默认集"的含义，这一档没有默认集。
              */
             ContentKeepKeywords = ArchiveFixer.Security.ContentKeepRules
                 .NormalizeKeywords(ContentKeepKeywords);

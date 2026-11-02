@@ -73,6 +73,9 @@ namespace ArchiveFixer.Extraction
 
         public int MovedFileCount { get; init; }
 
+        /// <summary>发布时明确失败的条目数；任何一条失败都不算整体成功。</summary>
+        public int FailedFileCount { get; init; }
+
         /// <summary>给人看的一句话；**重命名过的文件也写在这里**，让用户知道产物不是原样落进去的。</summary>
         public string Message { get; init; } = string.Empty;
 
@@ -377,9 +380,10 @@ namespace ArchiveFixer.Extraction
 
                 return new WorkspacePublishResult
                 {
-                    Success = movedCount > 0,
+                    Success = movedCount > 0 && errors.Count == 0,
                     DestinationPath = destination,
                     MovedFileCount = movedCount,
+                    FailedFileCount = errors.Count,
                     Message = BuildPublishMessage(
                         destination,
                         movedCount,

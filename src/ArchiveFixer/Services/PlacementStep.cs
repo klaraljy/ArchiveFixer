@@ -210,11 +210,6 @@ namespace ArchiveFixer.Services
         /// 参数本身留着 —— 它是 <see cref="ResultFinalizer.Plan"/> 的既有契约（其余物布局等路径也在用），
         /// 删掉只会白白动一大片与本次需求无关的代码。
         /// </param>
-        /// <param name="specialExtraction">
-        /// 本批生效的特定解压（规格 §3.5；默认 <see cref="SpecialExtractionPlan.Off"/> = 与以前逐字相同）。
-        /// 规则生效时判定表里"要套的那一层"不再套（<c>222\1111\内容物</c>）；包内有并列的多个文件夹、
-        /// 或几个包共用同一个成品目录时不塌，按原判定表套一层并写一条 WARN（见 <see cref="ResultFinalizer.Plan"/>）。
-        /// </param>
         /// <param name="innermostPackageBaseName">
         /// **最后一个被展开的内层包**的包基名（没有内层包时传空）。
         /// 唯一来源 = <see cref="PackageLayerRules.ResolveBaseName"/>（读递归结果，不自己数层数）。

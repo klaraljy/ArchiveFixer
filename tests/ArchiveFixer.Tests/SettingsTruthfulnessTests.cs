@@ -336,9 +336,8 @@ namespace ArchiveFixer.Tests
                 "SkipOneClickConfirm",
 
                 /*
-                 * 2026-09-24「特定解压」的总开关（①任务页、一键处理旁边）。
-                 * 它必须真的被解压管线读到 —— ExtractionCoordinator 的决定性判断就是
-                 * SpecialExtractionPlan.FromSettings(Settings) 里的第一句（关着时规则清单一律不算）。
+                 * 特定解压独立模式开关（①任务页、一键处理旁边）。
+                 * 它必须真的被一键处理读到 —— 入口只看这一格。
                  */
                 "UseSpecificExtraction",
 

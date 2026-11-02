@@ -68,7 +68,7 @@ namespace ArchiveFixer.Views
         /// 「特定解压：&lt;规则名&gt;」那一行（用户 2026-09-24）；空 = 整行不显示（没开特定解压）。
         /// 它是**事实**不是选项：值由调用方按同一个快照算好传进来，本窗口一个字都不推。
         /// </summary>
-        private string _specialExtractionEcho = string.Empty;
+        private string _specificExtractionEcho = string.Empty;
 
         /// <summary>
         /// 「空间不足」模式那条红字（用户 2026-09-27）；空 = 整块不显示（模式没开）。
@@ -117,7 +117,7 @@ namespace ArchiveFixer.Views
         /// <param name="sourceEcho">「源包…」那一行。</param>
         /// <param name="noticeEcho">需要时的提醒（疑似无用物 / 没有可用密码）；空 = 不显示。</param>
         /// <param name="destinationEchoFactory">折叠区改了落点之后重算第一行（可空）。</param>
-        /// <param name="specialExtractionEcho">
+        /// <param name="specificExtractionEcho">
         /// 「特定解压：&lt;规则名&gt;」那一行（用户 2026-09-24）；空 = 不显示（没开特定解压）。
         /// </param>
         /// <param name="spaceTightEcho">
@@ -135,7 +135,7 @@ namespace ArchiveFixer.Views
             string? sourceEcho,
             string? noticeEcho = null,
             Func<OneClickRunOptions, Task<string>>? destinationEchoFactory = null,
-            string? specialExtractionEcho = null,
+            string? specificExtractionEcho = null,
             string? spaceTightEcho = null,
             bool sourceEchoLocked = false)
         {
@@ -153,12 +153,12 @@ namespace ArchiveFixer.Views
             _restEcho = restEcho ?? string.Empty;
             _sourceEcho = sourceEcho ?? string.Empty;
             _noticeEcho = noticeEcho ?? string.Empty;
-            _specialExtractionEcho = specialExtractionEcho ?? string.Empty;
+            _specificExtractionEcho = specificExtractionEcho ?? string.Empty;
             _spaceTightEcho = spaceTightEcho ?? string.Empty;
             _sourceEchoLocked = sourceEchoLocked;
             _destinationEchoFactory = destinationEchoFactory;
 
-            ApplySpecialExtractionEcho();
+            ApplySpecificExtractionEcho();
             ApplySpaceTightEcho();
             ApplySeed(seed ?? OneClickRunOptions.FromSettings(_settings));
 
@@ -210,10 +210,10 @@ namespace ArchiveFixer.Views
         ///
         /// <para>用户在动手前必须能看见这一次到底按哪条特定规则跑 —— 他最恨"我以为它按默认跑的"。</para>
         /// </summary>
-        public string SpecialExtractionEcho
+        public string SpecificExtractionEcho
         {
-            get => _specialExtractionEcho;
-            private set => SetEcho(ref _specialExtractionEcho, value, nameof(SpecialExtractionEcho));
+            get => _specificExtractionEcho;
+            private set => SetEcho(ref _specificExtractionEcho, value, nameof(SpecificExtractionEcho));
         }
 
         /// <summary>
@@ -223,9 +223,9 @@ namespace ArchiveFixer.Views
         /// （那些选项里没有特定解压 —— 规则在②页挑、总开关在①页），是纯粹的"这是事实"，
         /// 构造时刷一次就够；塞进 <c>RefreshUi</c> 反而会让人以为它跟着落点走。</para>
         /// </summary>
-        private void ApplySpecialExtractionEcho()
+        private void ApplySpecificExtractionEcho()
         {
-            SpecialText.Visibility = string.IsNullOrWhiteSpace(_specialExtractionEcho)
+            SpecialText.Visibility = string.IsNullOrWhiteSpace(_specificExtractionEcho)
                 ? Visibility.Collapsed
                 : Visibility.Visible;
         }
@@ -340,7 +340,7 @@ namespace ArchiveFixer.Views
                 facts?.SourceEcho,
                 facts?.NoticeEcho,
                 destinationEchoFactory,
-                facts?.SpecialExtractionEcho,
+                facts?.SpecificExtractionEcho,
                 facts?.SpaceTightEcho,
                 facts?.SourceEchoLocked == true);
 

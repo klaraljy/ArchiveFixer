@@ -213,7 +213,7 @@
                         ⚠ 直接绑设置对象那一格（与②页「危险模式」那个开关同一写法）：它不需要
                         "勾一下就让别的控件跟着变"，而这一页要绑的正是**那个**设置项本身。
                     -->
-                    <CheckBox Content="{x:Static models:StatusText.SpecialExtractionToggleLabel}"
+                    <CheckBox Content="特定解压"
                               Margin="12,0,0,0"
                               FontWeight="SemiBold"
                               VerticalAlignment="Center"
