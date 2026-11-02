@@ -401,8 +401,7 @@ namespace ArchiveFixer.ViewModels
                     commit: null,
                     logEntries,
                     LayerPurgeTrigger.SourceHandlingDelete,
-                    reclaimVerdict: groupVerdict,
-                    groupComplete: true);
+                    reclaimVerdict: groupVerdict);
             }
 
             Reclaim(owner);
@@ -750,8 +749,7 @@ namespace ArchiveFixer.ViewModels
                         commit: null,
                         logEntries,
                         LayerPurgeTrigger.SourceHandlingDelete,
-                        reclaimVerdict: verdict,
-                        groupComplete: true);
+                        reclaimVerdict: verdict);
                 }
             }
 

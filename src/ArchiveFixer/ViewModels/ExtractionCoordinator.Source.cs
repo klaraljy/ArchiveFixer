@@ -645,8 +645,7 @@ namespace ArchiveFixer.ViewModels
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
             string? reclaimWorkspaceDirectory = null,
-            bool ignoreDoneState = false,
-            bool groupComplete = false)
+            bool ignoreDoneState = false)
         {
             if (task == null)
             {
@@ -774,18 +773,9 @@ namespace ArchiveFixer.ViewModels
             /*
              * 本组源包：组可证完整 + 内容校验通过 ⇒ 半套闸门不再适用。
              */
-            bool verifiedGroupSource =
-                (task.IsVolumeGroup
-                 && task.IsVolumeComplete
-                 && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
-                || (task.IsVolumeGroupFollower
-                    && reclaimVerdict != null
-                    && reclaimVerdict.AllowsSourceRemoval)
-                || (groupComplete
-                    && reclaimVerdict != null
-                    && reclaimVerdict.AllowsSourceRemoval);
+            bool canSkipHalfVolumeGate = CanSkipHalfVolumeGate(task, reclaimVerdict);
 
-            if (verifiedGroupSource && reclaimVerdict == null)
+            if (canSkipHalfVolumeGate && reclaimVerdict == null)
             {
                 logEntries.Add((
                     "INFO",
@@ -794,7 +784,7 @@ namespace ArchiveFixer.ViewModels
 
             CleanupCandidateKind candidateKind = ClassifyLayerCleanupCandidate(task, trigger);
 
-            string? splitBlocker = verifiedGroupSource
+            string? splitBlocker = canSkipHalfVolumeGate
                 ? null
                 : DescribeLayerSplitBlocker(
                     task,
@@ -1007,6 +997,26 @@ namespace ArchiveFixer.ViewModels
             }
 
             return CleanupCandidateKind.ProducedInnerPackage;
+        }
+
+        /// <summary>
+        /// 这一份源包/过程物是否已经属于“组可证完整 + 内容校验通过”的组，
+        /// 因而可以跳过“半套分卷”闸门。事实只来自任务终态账与回传 verdict。
+        /// </summary>
+        private static bool CanSkipHalfVolumeGate(
+            ArchiveTask task,
+            ResultCompletenessVerdict? reclaimVerdict)
+        {
+            if (task.IsVolumeGroup
+                && task.IsVolumeComplete
+                && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
+            {
+                return true;
+            }
+
+            return task.IsVolumeGroupFollower
+                   && reclaimVerdict != null
+                   && reclaimVerdict.AllowsSourceRemoval;
         }
 
         private string? DescribeLayerSplitBlocker(
