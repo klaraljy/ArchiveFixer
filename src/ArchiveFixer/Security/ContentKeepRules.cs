@@ -90,6 +90,9 @@ namespace ArchiveFixer.Security
             return result;
         }
 
+        /// <summary>路径非法、判不出文件名时的哨兵：调用方按“命中保留规则”处理（fail-closed）。</summary>
+        public const string UnreadableFileNameKeyword = "判不出文件名（按保留处理）";
+
         /// <summary>
         /// 命中的那个关键词（没命中 / 没关键词 ⇒ <c>null</c>）。日志点名"命中谁"读它，
         /// ⛔ 别在别处再写一遍包含判断。
@@ -104,7 +107,10 @@ namespace ArchiveFixer.Security
                 return null;
             }
 
-            string name = GetFileNameSafe(fileNameOrPath!);
+            if (!TryGetFileName(fileNameOrPath!, out string name))
+            {
+                return UnreadableFileNameKeyword;
+            }
 
             if (name.Length == 0)
             {
@@ -152,18 +158,25 @@ namespace ArchiveFixer.Security
 
         /// <summary>
         /// 取文件名：⛔ 只保留最后一段（判据只认文件名这件事在这里收口，消费点不许各写一遍）。
-        /// 非法路径 / 空 ⇒ 空串（调用方按"没命中"处理 —— 判不出就不拦）。
+        /// 非法路径 / 空 ⇒ 空串（仅用于展示；判据走 <see cref="TryGetFileName"/>）。
         /// </summary>
         private static string GetFileNameSafe(string path)
         {
+            return TryGetFileName(path, out string name) ? name : string.Empty;
+        }
+
+        private static bool TryGetFileName(string path, out string name)
+        {
             try
             {
-                return Path.GetFileName(path) ?? string.Empty;
+                name = Path.GetFileName(path) ?? string.Empty;
+                return true;
             }
             catch
             {
-                // 非法字符的路径：判不出文件名 ⇒ 当没命中（绝不因为一个怪名字就拦下整批）。
-                return string.Empty;
+                // 非法字符路径：判不出文件名 ⇒ 调用方按“保留”处理（fail-closed）。
+                name = string.Empty;
+                return false;
             }
         }
     }
