@@ -165,6 +165,12 @@ namespace ArchiveFixer.ViewModels
         private void DeleteHarvestTargets(ArchiveTask consumer, List<string> targets)
         {
             string reason = RestItemPurger.SettledPieceCopyPurgeReason;
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+
+            if (cancelled)
+            {
+                return;
+            }
 
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
             int deleted = 0;
@@ -181,15 +187,26 @@ namespace ArchiveFixer.ViewModels
                     string name = FileNameHelper.GetFileName(path);
                     string directory = Path.GetDirectoryName(path) ?? string.Empty;
 
-                    DeleteResult result = service.Delete(
-                        new DeleteRequest(path, reason),
-                        new DeleteOptions
-                        {
-                            AllowedRoot = directory,
-                            UserConfirmed = true,
-                            Mode = DeleteMode.Permanent,
-                            Reason = reason
-                        });
+                    var plan = new DeletionPlan
+                    {
+                        Targets = new[] { path },
+                        AllowedRoot = directory,
+                        DeletesEverything = true,
+                        Cancelled = cancelled,
+                        Reason = reason
+                    };
+
+                    DeleteResult result = CleanupExecutor.ExecuteDeletion(
+                        plan,
+                        p => service.Delete(
+                            new DeleteRequest(p.Targets[0], p.Reason),
+                            new DeleteOptions
+                            {
+                                AllowedRoot = p.AllowedRoot,
+                                UserConfirmed = true,
+                                Mode = DeleteMode.Permanent,
+                                Reason = p.Reason
+                            }));
 
                     if (result.SuccessCount > 0)
                     {

@@ -322,6 +322,7 @@ namespace ArchiveFixer.Tests
             Assert.True(result.Verified, result.Message);
 
             Assert.False(result.ManifestCrossChecked, "空清单核对不了任何东西 ⇒ 绝不许算「逐条核对过」");
+            Assert.False(result.AllowsSourceRemoval, "空清单绝不允许进入删源/不可逆动作");
             Assert.Contains("一个条目都没有", result.Message, StringComparison.Ordinal);
 
             // 「逐条核对过」正是唯一允许删源的那一档 ⇒ 分类器必须落「判不出」。
@@ -350,6 +351,7 @@ namespace ArchiveFixer.Tests
 
             Assert.True(result.Verified, result.Message);
             Assert.True(result.ManifestCrossChecked);
+            Assert.True(result.AllowsSourceRemoval);
 
             ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(result);
 

@@ -789,15 +789,31 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    DeleteResult result = service.Delete(
-                        new DeleteRequest(path, reason),
-                        new DeleteOptions
-                        {
-                            AllowedRoot = outputRoot,
-                            UserConfirmed = true,
-                            Mode = DeleteMode.Permanent,
-                            Reason = reason
-                        });
+                    var plan = new DeletionPlan
+                    {
+                        Targets = new[] { path },
+                        AllowedRoot = outputRoot,
+                        DeletesEverything = true,
+                        Cancelled = IsStopping || _operationCts?.IsCancellationRequested == true,
+                        Reason = reason
+                    };
+
+                    if (plan.Cancelled)
+                    {
+                        break;
+                    }
+
+                    DeleteResult result = CleanupExecutor.ExecuteDeletion(
+                        plan,
+                        p => service.Delete(
+                            new DeleteRequest(p.Targets[0], p.Reason),
+                            new DeleteOptions
+                            {
+                                AllowedRoot = p.AllowedRoot,
+                                UserConfirmed = true,
+                                Mode = DeleteMode.Permanent,
+                                Reason = p.Reason
+                            }));
 
                     DeleteOutcome? outcome = result.Outcomes.FirstOrDefault();
 

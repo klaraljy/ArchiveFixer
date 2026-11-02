@@ -157,14 +157,34 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public RestPurgeOutcome PurgeExcept(
             ArchiveTask? task,
-            IReadOnlyList<string>? keepPaths)
+            IReadOnlyList<string>? keepPaths,
+            DeletionPlan? plan = null)
         {
-            // 这一档（部分完成发布）没有"换证据来源"的需求：输出范围按本任务自己的算。
-            string? allowedRootEvidence = null;
-
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
+            }
+
+            string? allowedRootEvidence = null;
+
+            if (plan != null)
+            {
+                if (plan.Cancelled)
+                {
+                    return Skip("删除计划已取消，其余物一个字节都不删");
+                }
+
+                if (plan.Targets.Count != 1 ||
+                    string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
+                    !string.Equals(
+                        SafePathHelper.GetFullPathSafe(plan.Targets[0]),
+                        SafePathHelper.GetFullPathSafe(task.RestDirectoryPath),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
+                }
+
+                allowedRootEvidence = plan.AllowedRoot;
             }
 
             string name = string.IsNullOrWhiteSpace(task.FileName)

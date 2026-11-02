@@ -700,7 +700,7 @@ namespace ArchiveFixer.ViewModels
              */
             SourceCleanupEvidence evidence = reclaimVerdict?.AllowsSourceRemoval == true
                 ? SourceCleanupEvidence.LayerCompleteness
-                : (verification is { Verified: true, ManifestCrossChecked: true }
+                : (verification?.AllowsSourceRemoval == true
                     ? SourceCleanupEvidence.ManifestCrossChecked
                     : SourceCleanupEvidence.None);
             string verificationNoteForSourceRemoval = evidence != SourceCleanupEvidence.None

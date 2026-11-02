@@ -142,7 +142,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public SourceCleanupResult Cleanup(ArchiveTask? task, OutputVerificationResult? verification, bool enabled)
         {
-            SourceCleanupEvidence evidence = verification is { Verified: true, ManifestCrossChecked: true }
+            SourceCleanupEvidence evidence = verification?.AllowsSourceRemoval == true
                 ? SourceCleanupEvidence.ManifestCrossChecked
                 : SourceCleanupEvidence.None;
 

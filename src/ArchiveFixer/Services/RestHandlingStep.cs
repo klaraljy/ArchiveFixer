@@ -1839,8 +1839,8 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 「删除操作」那一档的**唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
         ///
-        /// <para>三档（用户 2026-09-25 第 32 条亲自定的）：不动（Keep）/ 移入回收站 / 彻底删除。
-        /// 后两档的门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「完成」+ 校验通过 + 未取消 +
+        /// <para>两档（用户 2026-09-25 第 32 条；2026-10-15 回收站档下线）：不动（Keep）/ 彻底删除。
+        /// 删除档的门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「完成」+ 校验通过 + 未取消 +
         /// 路径是定稿那一刻记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
         /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
         /// </summary>
@@ -2067,10 +2067,9 @@ namespace ArchiveFixer.Services
         /// —— 档名 + 短路径 + 条目数 + 释放大小（用户 2026-09-25 第 44 条："一次导出 713KB，这个多吓人"）。</description></item>
         /// </list>
         ///
-        /// <para>⚠ <b>为什么必须按事实位选、不能按数字猜</b>（用户 2026-10-03 真机）：空壳档在
-        /// 「移入回收站」这一档下会写成「移入回收站：…\其余物（0 项 / 0 B）」，而空壳**一个字节都没进回收站**
-        /// —— 那就是一句假话。判据只读 <see cref="RestPurgeOutcome.RemovedAsEmptyShell"/>（AGENTS.md §9.5：
-        /// 要删 / 要写盘的动作判据只准读事实；"0 项 0 B"证明不了"没进回收站"）。</para>
+        /// <para>⚠ <b>为什么必须按事实位选、不能按数字猜</b>（用户 2026-10-03 真机）：回收站档已下线，
+        /// 但空壳仍然**没有走删除执行体**；判据只读 <see cref="RestPurgeOutcome.RemovedAsEmptyShell"/>
+        /// （AGENTS.md §9.5：要删 / 要写盘的动作判据只准读事实；"0 项 0 B"证明不了"没进执行体"）。</para>
         /// </summary>
         internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome)
         {
@@ -2317,13 +2316,22 @@ namespace ArchiveFixer.Services
                 return;
             }
 
+            var plan = new DeletionPlan
+            {
+                Targets = new[] { task.RestDirectoryPath },
+                AllowedRoot = Path.GetDirectoryName(task.RestDirectoryPath) ?? string.Empty,
+                DeletesEverything = false,
+                Reason = "部分完成收尾：删其余物里除最外层源包以外的过程物"
+            };
+
             RestPurgeOutcome purge = new RestItemPurger(
                     null,
                     null,
                     ContentKeepRules.FromSettings(_host.Settings))
                 .PurgeExcept(
                 task,
-                new[] { rootSourceFull });
+                new[] { rootSourceFull },
+                plan);
 
             _host.AppendLog(
                 purge.Succeeded ? "INFO" : "WARN",
