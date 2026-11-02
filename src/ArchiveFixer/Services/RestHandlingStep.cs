@@ -2263,6 +2263,13 @@ namespace ArchiveFixer.Services
                 return;
             }
 
+            DeletionPlan plan = new()
+            {
+                Targets = new[] { task.RestDirectoryPath },
+                AllowedRoot = planAllowedRoot ?? string.Empty,
+                Reason = "成功链清空其余物"
+            };
+
             RestPurgeOutcome purge = new RestItemPurger(
                     null,
                     null,
@@ -2271,7 +2278,7 @@ namespace ArchiveFixer.Services
                     task,
                     cancelled: false,
                     DeleteMode.Permanent,
-                    allowedRootEvidence: planAllowedRoot);
+                    allowedRootEvidence: plan.AllowedRoot);
 
             _host.AppendLog(
                 purge.Succeeded ? "INFO" : "WARN",

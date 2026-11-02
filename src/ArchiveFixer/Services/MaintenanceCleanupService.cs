@@ -88,6 +88,14 @@ namespace ArchiveFixer.Services
 
         /// <summary>能不能删：算出来了、有边界、有落点。</summary>
         public bool IsResolved => ArtifactDirectories.Count > 0 && !string.IsNullOrWhiteSpace(AllowedRoot);
+
+        public DeletionPlan ToDeletionPlan(string reason) => new()
+        {
+            Targets = ArtifactDirectories,
+            AllowedRoot = AllowedRoot,
+            DeletesEverything = DeletesEverythingInDirectory,
+            Reason = reason
+        };
     }
 
     /// <summary>
@@ -113,6 +121,9 @@ namespace ArchiveFixer.Services
         /// 不再自己算一遍 —— 预览与执行分叉是这类删除功能最容易出事的地方。
         /// </summary>
         public ArtifactCleanupScope? ResolvedScope { get; init; }
+
+        /// <summary>预览与执行共用的删除计划；执行阶段直接用它，不再重算。</summary>
+        public DeletionPlan? Plan { get; init; }
 
         /// <summary>有没有可清理的东西（false 时不要进入确认流程）。</summary>
         public bool HasTarget { get; init; }
@@ -530,17 +541,20 @@ namespace ArchiveFixer.Services
             long totalBytes = 0;
             bool determined = true;
 
-            foreach (string directory in scope.ArtifactDirectories)
+            DeletionPlan plan = scope.ToDeletionPlan("手工清理其余物");
+
+            foreach (string directory in plan.Targets)
             {
                 // 容器内校验：目标必须落在允许根之内（不变量 4 的同一口径，不另写前缀比较）。
-                if (!ArchivePathGuard.IsInsideRoot(scope.AllowedRoot, directory, out string reason))
+                if (!ArchivePathGuard.IsInsideRoot(plan.AllowedRoot, directory, out string reason))
                 {
                     return new CleanupPreview
                     {
                         Scope = CleanupScope.Artifacts,
                         ScopePath = directory,
-                        AllowedRoot = scope.AllowedRoot,
+                        AllowedRoot = plan.AllowedRoot,
                         ResolvedScope = scope,
+                        Plan = plan,
                         HasTarget = false,
                         Message = $"其余物目录不在允许的范围内，已拒绝删除 —— {reason}"
                     };
@@ -599,7 +613,7 @@ namespace ArchiveFixer.Services
             }
 
             string message =
-                $"将删除其余物：{string.Join("、", scope.ArtifactDirectories)}"
+                $"将删除其余物：{string.Join("、", plan.Targets)}"
                 + $"（顶层 {items.Count} 项，共 {entryCount} 个条目 / {totalBytes} 字节）"
                 + (determined ? string.Empty : "，其中部分内容读不到，数字可能不全");
 
@@ -615,7 +629,7 @@ namespace ArchiveFixer.Services
              */
             (int affectedPackageCount, IReadOnlyList<string> affectedPackageNames) =
                 scope.DeletesEverythingInDirectory
-                    ? CountAffectedPackages(scope.ArtifactDirectories)
+                    ? CountAffectedPackages(plan.Targets)
                     : (0, (IReadOnlyList<string>)Array.Empty<string>());
 
             if (affectedPackageCount > 0)
@@ -627,8 +641,9 @@ namespace ArchiveFixer.Services
             {
                 Scope = CleanupScope.Artifacts,
                 ScopePath = scope.ArtifactDirectory,
-                AllowedRoot = scope.AllowedRoot,
+                AllowedRoot = plan.AllowedRoot,
                 ResolvedScope = scope,
+                Plan = plan,
 
                 // 量不准也能删（删除时服务自己会再判一次并拒绝），但预览要如实说"数字可能不全"。
                 HasTarget = true,
@@ -785,11 +800,13 @@ namespace ArchiveFixer.Services
                 return NotAttempted(CleanupScope.Artifacts, mode, "已拒绝删除其余物：" + scope.BlockReason);
             }
 
+            DeletionPlan plan = preview?.Plan ?? scope.ToDeletionPlan("手工清理其余物");
+
             // 作用域必须与预览时那一刻一致（拿不出证据一致就不动手）：
             // 预览给用户看的是 A、执行删的是 B，正是上一版的缺陷形态。
             if (preview != null
-                && (!SafePathHelper.PathEquals(preview.AllowedRoot, scope.AllowedRoot)
-                    || !SameDirectorySet(preview.ResolvedScope?.ArtifactDirectories, scope.ArtifactDirectories)))
+                && (!SafePathHelper.PathEquals(preview.Plan?.AllowedRoot ?? string.Empty, plan.AllowedRoot)
+                    || !SameDirectorySet(preview.Plan?.Targets, plan.Targets)))
             {
                 return NotAttempted(
                     CleanupScope.Artifacts,
@@ -797,17 +814,17 @@ namespace ArchiveFixer.Services
                     "作用域与预览不一致（预览之后目录有变动），已拒绝删除；请重新预览一次");
             }
 
-            string reason = scope.DeletesEverythingInDirectory ? AllArtifactsReason : ProcessArtifactReason;
+            string reason = plan.DeletesEverything ? AllArtifactsReason : ProcessArtifactReason;
             var requests = new List<DeleteRequest>();
 
-            foreach (string directory in scope.ArtifactDirectories)
+            foreach (string directory in plan.Targets)
             {
                 if (!Directory.Exists(directory))
                 {
                     continue;
                 }
 
-                if (!ArchivePathGuard.IsInsideRoot(scope.AllowedRoot, directory, out string outsideReason))
+                if (!ArchivePathGuard.IsInsideRoot(plan.AllowedRoot, directory, out string outsideReason))
                 {
                     return NotAttempted(
                         CleanupScope.Artifacts,
@@ -823,7 +840,7 @@ namespace ArchiveFixer.Services
                 return NotAttempted(
                     CleanupScope.Artifacts,
                     mode,
-                    $"没有可删除的其余物：{scope.ArtifactDirectory} 不存在");
+                    $"没有可删除的其余物：{plan.Targets.FirstOrDefault() ?? string.Empty} 不存在");
             }
 
             DeleteResult result;
@@ -835,7 +852,7 @@ namespace ArchiveFixer.Services
                     new DeleteOptions
                     {
                         // 允许根：包的输出目录，或共享输出目录。其余物目录必须落在它之内，且不得等于它。
-                        AllowedRoot = SafePathHelper.GetFullPathSafe(scope.AllowedRoot),
+                        AllowedRoot = SafePathHelper.GetFullPathSafe(plan.AllowedRoot),
                         UserConfirmed = true,
                         Mode = mode,
                         Reason = reason
