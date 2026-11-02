@@ -401,7 +401,8 @@ namespace ArchiveFixer.ViewModels
                      * 并发档在**计划之后**定（它要读计划里的净占用与空间建议）——
                      * 顺序与普通档相反，因为普通档读的是设置、这里读的是刚刚算出来的空间。
                      */
-                    maxParallel = ResolveSpaceTightParallelForBatch(plan);
+                    _spaceLimit = ResolveSpaceTightParallelForBatch(plan);
+                    maxParallel = Math.Min(_spaceLimit, CurrentAutoLimit());
                 }
 
                 PrepareRestHandlingForBatch();
@@ -439,8 +440,11 @@ namespace ArchiveFixer.ViewModels
 
                 if (_spaceTightThisBatch)
                 {
-                    maxParallel = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
-                    AppendLog("INFO", $"空间不足动态并发：批首按源包体积降序与当前可用空间定为 {maxParallel} 个");
+                    _spaceLimit = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
+                    maxParallel = Math.Min(_spaceLimit, CurrentAutoLimit());
+                    AppendLog(
+                        "INFO",
+                        $"空间不足动态并发：空间上限 {_spaceLimit} 个，自适应 {CurrentAutoLimit()} 个 ⇒ 批首实际 {maxParallel} 个");
                 }
 
                 /*
@@ -530,9 +534,9 @@ namespace ArchiveFixer.ViewModels
                          */
                         Task finished = await Task.WhenAny(runningTasks);
 
-                        if (!_spaceTightThisBatch && _autoConcurrency != null)
+                        if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedAutoTask))
                         {
-                            SampleAutoConcurrencyWindow(runningTasks, finished, ref maxParallel);
+                            ObserveCompletedTask(finishedAutoTask, runningTasks.Count, ref maxParallel);
                         }
 
                         runningTasks.Remove(finished);
@@ -540,7 +544,7 @@ namespace ArchiveFixer.ViewModels
 
                         if (_autoTaskMap.Remove(finished, out ArchiveTask? autoFinished))
                         {
-                            _autoProgress.Remove(autoFinished);
+                            DecrementAutoActive(autoFinished);
                         }
 
                         if (_spaceTightThisBatch && !IsStopping)
@@ -549,14 +553,15 @@ namespace ArchiveFixer.ViewModels
                                 .Where(candidate => !startedTasks.Contains(candidate.Task))
                                 .ToList();
 
-                            int dynamicMax = ResolveDynamicSpaceParallel(pending, runningTasks.Count);
+                            _spaceLimit = ResolveDynamicSpaceParallel(pending, runningTasks.Count);
+                            int combined = Math.Min(_spaceLimit, CurrentAutoLimit());
 
-                            if (dynamicMax != maxParallel)
+                            if (combined != maxParallel)
                             {
                                 AppendLog(
                                     "INFO",
-                                    $"空间不足动态并发：从 {maxParallel} 调整为 {dynamicMax} 个（正在跑 {runningTasks.Count} 个）");
-                                maxParallel = dynamicMax;
+                                    $"空间不足动态并发：空间上限 {_spaceLimit} 个，自适应 {CurrentAutoLimit()} 个 ⇒ 实际 {combined} 个（正在跑 {runningTasks.Count} 个）");
+                                maxParallel = combined;
                             }
                         }
 
@@ -641,8 +646,15 @@ namespace ArchiveFixer.ViewModels
                     runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
                     startedTasks.Add(task);
                     Task runningTask = RunScheduledTaskAsync(task, oneClickRun, runtime);
-                    _autoProgress[task] = Math.Max(0, task.ProgressPercent);
                     _autoTaskMap[runningTask] = task;
+
+                    if (_autoTaskRoots.TryGetValue(task, out string? autoRoot))
+                    {
+                        _autoActiveByRoot[autoRoot] = _autoActiveByRoot.TryGetValue(autoRoot, out int active)
+                            ? active + 1
+                            : 1;
+                    }
+
                     runningTasks.Add(runningTask);
                 }
 
@@ -1007,117 +1019,68 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 一个自适应窗口（建议 5 秒）：按活跃任务进度增量估算吞吐，交给控制器做 AIMD；
-        /// 变更上限时写一行日志（普通导出也保留，用户能看懂为什么快/慢）。
+        /// 每完成一个任务就喂一次该任务**所属卷**的控制器（不再等 5 秒窗口，小文件也能采到样）。
+        /// 空间不足档同样采样：实际并发取“空间上限”和“自适应值”的较小者。
         /// </summary>
-        private void SampleAutoConcurrencyWindow(
-            IReadOnlyList<Task> runningTasks,
-            Task finished,
-            ref int maxParallel)
+        private void ObserveCompletedTask(ArchiveTask finished, int activeTasks, ref int maxParallel)
         {
-            if (_autoConcurrency == null)
+            if (finished == null
+                || !_autoTaskRoots.TryGetValue(finished, out string? root)
+                || !_autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller)
+                || !finished.StartTime.HasValue
+                || !finished.EndTime.HasValue)
             {
                 return;
             }
 
-            double bytes = 0;
+            double elapsedSeconds = (finished.EndTime.Value - finished.StartTime.Value).TotalSeconds;
+            double gigabytes = Math.Max(1L, finished.SourceSizeBytes) / (1024.0 * 1024 * 1024);
 
-            foreach (KeyValuePair<Task, ArchiveTask> pair in _autoTaskMap)
-            {
-                ArchiveTask task = pair.Value;
-
-                if (task == null)
-                {
-                    continue;
-                }
-
-                int last = _autoProgress.TryGetValue(task, out int previous) ? previous : 0;
-                int current = Math.Clamp(task.ProgressPercent, 0, 100);
-
-                if (ReferenceEquals(pair.Key, finished)
-                    && task.Outcome == TaskOutcome.Succeeded)
-                {
-                    current = 100;
-                }
-
-                if (current > last)
-                {
-                    bytes += (current - last) / 100.0 * Math.Max(1L, task.SourceSizeBytes);
-                }
-
-                _autoProgress[task] = current;
-            }
-
-            /*
-             * P0：完成任务的**归一化延迟**（秒/GB）。用源包大小做分母（输出字节尚未逐任务记账），
-             * 跨包大小不同也能比较；窗口取中位数，避免单个缓存命中样本带偏。
-             */
-            if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedTask)
-                && finishedTask != null
-                && finishedTask.StartTime.HasValue
-                && finishedTask.EndTime.HasValue)
-            {
-                double elapsedSeconds = (finishedTask.EndTime.Value - finishedTask.StartTime.Value).TotalSeconds;
-                double gigabytes = Math.Max(1L, finishedTask.SourceSizeBytes) / (1024.0 * 1024 * 1024);
-
-                if (elapsedSeconds > 0 && gigabytes > 0)
-                {
-                    _autoWindowLatencies.Add(elapsedSeconds / gigabytes);
-                }
-
-                if (finishedTask.Outcome != TaskOutcome.Succeeded)
-                {
-                    _autoWindowFailures++;
-                }
-            }
-
-            double seconds = _autoWindow.Elapsed.TotalSeconds;
-
-            if (seconds < 5)
+            if (elapsedSeconds <= 0 || gigabytes <= 0)
             {
                 return;
             }
 
+            double latency = elapsedSeconds / gigabytes;
+            double perTaskMbps = gigabytes * 1024 / elapsedSeconds;
             int stalls = UiActivity.TakeUiStallCount();
-            double latency = Median(_autoWindowLatencies);
-            int next = _autoConcurrency.Observe(new ConcurrencyWindowSample(
+            int failures = finished.Outcome == TaskOutcome.Succeeded ? 0 : 1;
+            int before = controller.CurrentLimit;
+
+            controller.Observe(new ConcurrencyWindowSample(
                 latency,
-                bytes / seconds / (1024 * 1024),
-                runningTasks.Count,
+                perTaskMbps,
+                activeTasks,
                 stalls,
                 DiskSpaceLow: false,
-                _autoWindowFailures));
+                failures));
 
-            _autoWindow.Restart();
-            _autoWindowLatencies.Clear();
-            _autoWindowFailures = 0;
+            int autoLimit = CurrentAutoLimit();
+            int combined = _spaceTightThisBatch ? Math.Min(_spaceLimit, autoLimit) : autoLimit;
 
-            if (next != maxParallel)
+            if (controller.CurrentLimit != before || combined != maxParallel)
             {
                 AppendLog(
                     "INFO",
-                    $"并发调整 {maxParallel} → {next}：归一化延迟 {latency:F2} s/GB，"
-                    + $"基线 {_autoConcurrency.MinLatencySecondsPerGb:F2} s/GB，"
-                    + $"窗口吞吐 {bytes / seconds / (1024 * 1024):F1} MB/s，活跃 {runningTasks.Count} 个，"
-                    + $"UI 停顿 {stalls} 次（设备={_autoDevice}）");
-                maxParallel = next;
+                    $"并发调整（卷 {root}）{before} → {controller.CurrentLimit}："
+                    + $"归一化延迟 {latency:F2} s/GB，基线 {controller.MinLatencySecondsPerGb:F2} s/GB，"
+                    + $"本任务吞吐 {perTaskMbps:F1} MB/s，活跃 {activeTasks} 个，UI 停顿 {stalls} 次；"
+                    + $"全局自适应 {autoLimit} 个"
+                    + (_spaceTightThisBatch ? $"，空间上限 {_spaceLimit} 个" : string.Empty)
+                    + $" ⇒ 实际 {combined} 个");
             }
+
+            maxParallel = combined;
         }
 
-        private static double Median(List<double> values)
+        private void DecrementAutoActive(ArchiveTask task)
         {
-            if (values == null || values.Count == 0)
+            if (task != null
+                && _autoTaskRoots.TryGetValue(task, out string? root)
+                && _autoActiveByRoot.TryGetValue(root, out int active))
             {
-                return 0;
+                _autoActiveByRoot[root] = Math.Max(0, active - 1);
             }
-
-            var sorted = new List<double>(values);
-            sorted.Sort();
-            int middle = sorted.Count / 2;
-
-            return sorted.Count % 2 == 1
-                ? sorted[middle]
-                : (sorted[middle - 1] + sorted[middle]) / 2;
         }
 
         /// <summary>

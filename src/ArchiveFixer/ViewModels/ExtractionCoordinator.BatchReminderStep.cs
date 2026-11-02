@@ -91,81 +91,140 @@ namespace ArchiveFixer.ViewModels
             // 全速档已退役（用户 2026-11-01：全部交给算法）。
             fullSpeed = false;
 
-            _autoConcurrency = CreateAutoConcurrencyController(tasks);
+            _autoControllers.Clear();
+            _autoDevices.Clear();
+            _autoTaskRoots.Clear();
+            _autoActiveByRoot.Clear();
 
-            AppendLog(
-                "INFO",
-                $"并发：自动（设备={DescribeDevice(_autoDevice)}，"
-                + $"起点 {_autoConcurrency.InitialLimit} 个，上限 {_autoConcurrency.MaxLimit} 个，"
-                + $"基线 {(_autoConcurrency.MinLatencySecondsPerGb > 0 ? "继承 profile" : "首批学习")}）");
+            int minimumInitial = AdaptiveConcurrencyController.DefaultMaxLimit;
 
-            return _autoConcurrency.InitialLimit;
+            foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                string root = ResolveConcurrencyRoot(task);
+
+                if (root.Length == 0)
+                {
+                    continue;
+                }
+
+                _autoTaskRoots[task] = root;
+
+                if (!_autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller))
+                {
+                    StorageDeviceKind device = StorageDeviceProfile.Detect(root);
+                    _autoDevices[root] = device;
+
+                    ConcurrencyProfile? profile = ConcurrencyProfileStore.Load(
+                        _pathService.DataRootDirectory,
+                        root,
+                        device);
+
+                    int prior = Settings.ConcurrencyOverride > 0
+                        ? Settings.ConcurrencyOverride
+                        : profile?.LastGoodLimit
+                          ?? (device == StorageDeviceKind.Ssd
+                              ? Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
+                              : 1);
+
+                    controller = new AdaptiveConcurrencyController(
+                        prior,
+                        maxLimit: AdaptiveConcurrencyController.DefaultMaxLimit,
+                        bufferRatio: 0.20,
+                        knownMinLatencySecondsPerGb: profile?.MinLatencySecondsPerGb ?? 0,
+                        fixedLimit: Settings.ConcurrencyOverride > 0);
+
+                    _autoControllers[root] = controller;
+                    _autoActiveByRoot[root] = 0;
+
+                    AppendLog(
+                        "INFO",
+                        $"并发：自动（卷 {root}，设备={DescribeDevice(device)}，"
+                        + $"起点 {controller.InitialLimit} 个，上限 {controller.MaxLimit} 个，"
+                        + $"基线 {(controller.MinLatencySecondsPerGb > 0 ? "继承 profile" : "首批学习")}）");
+                }
+
+                minimumInitial = Math.Min(minimumInitial, controller.InitialLimit);
+            }
+
+            return minimumInitial == AdaptiveConcurrencyController.DefaultMaxLimit
+                ? 1
+                : minimumInitial;
         }
 
-        private AdaptiveConcurrencyController CreateAutoConcurrencyController(IReadOnlyList<ArchiveTask>? tasks)
+        /// <summary>本批实际可用的自适应并发 = 所有卷控制器的**最小值**（慢盘不会拖垮快盘，也不会让快盘把慢盘压垮）。</summary>
+        private int CurrentAutoLimit()
         {
-            ArchiveTask? first = tasks?.FirstOrDefault(task =>
-                task != null && !string.IsNullOrWhiteSpace(task.CurrentPath));
-            string? samplePath = first?.CurrentPath;
-            _autoDevice = StorageDeviceProfile.Detect(samplePath);
-            _autoProfileRoot = string.IsNullOrWhiteSpace(samplePath)
-                ? string.Empty
-                : Path.GetPathRoot(Path.GetFullPath(samplePath)) ?? string.Empty;
-
-            ConcurrencyProfile? profile = ConcurrencyProfileStore.Load(
-                _pathService.DataRootDirectory,
-                _autoProfileRoot,
-                _autoDevice);
-
-            int prior;
-
-            if (Settings.ConcurrencyOverride > 0)
+            if (_autoControllers.Count == 0)
             {
-                prior = Settings.ConcurrencyOverride;
-            }
-            else if (profile != null)
-            {
-                prior = profile.LastGoodLimit;
-            }
-            else
-            {
-                prior = _autoDevice == StorageDeviceKind.Ssd
-                    ? Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
-                    : 1;
+                return 1;
             }
 
-            return new AdaptiveConcurrencyController(
-                prior,
-                maxLimit: AdaptiveConcurrencyController.DefaultMaxLimit,
-                bufferRatio: 0.20,
-                knownMinLatencySecondsPerGb: profile?.MinLatencySecondsPerGb ?? 0,
-                fixedLimit: Settings.ConcurrencyOverride > 0);
+            return Math.Max(1, _autoControllers.Values.Min(controller => controller.CurrentLimit));
         }
 
-        /// <summary>批末把“这次稳定用的并发/基线”记到本机 profile（SQL DOP feedback 式持久化）。</summary>
+        private string ResolveConcurrencyRoot(ArchiveTask task)
+        {
+            string candidate = !string.IsNullOrWhiteSpace(task.OutputPath)
+                ? task.OutputPath
+                : Settings.CustomOutputDirectory;
+
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                candidate = task.CurrentPath;
+            }
+
+            try
+            {
+                return string.IsNullOrWhiteSpace(candidate)
+                    ? string.Empty
+                    : Path.GetPathRoot(Path.GetFullPath(candidate)) ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>批末把每块卷“这次稳定用的并发/基线”记到本机 profile（SQL DOP feedback 式持久化）。</summary>
         private void SaveConcurrencyProfile()
         {
-            if (_autoConcurrency == null || _autoProfileRoot.Length == 0 || _autoConcurrency.IsFixed)
+            // 空间不足档是“被空间逼出来的并发”，不是性能结论，⛔ 不写 profile。
+            if (_spaceTightThisBatch || _autoControllers.Count == 0)
             {
                 return;
             }
 
-            ConcurrencyProfileStore.Save(
-                _pathService.DataRootDirectory,
-                _autoProfileRoot,
-                _autoDevice,
-                new ConcurrencyProfile
+            foreach (KeyValuePair<string, AdaptiveConcurrencyController> pair in _autoControllers)
+            {
+                AdaptiveConcurrencyController controller = pair.Value;
+
+                if (controller.IsFixed || !_autoDevices.TryGetValue(pair.Key, out StorageDeviceKind device))
                 {
-                    /*
-                     * 只把**保守的已验证起点**写回去：
-                     * 本批从 1 起步、中途加到 2 ⇒ 存 1（加档只证明"这批混合跑更快"，
-                     * 不证明"下一批一开始就 2 更好"；H 盘实测从 2 冷启动反而慢一倍）。
-                     * 若中途降档，则存降下来的值（那是"更好"的证据）。
-                     */
-                    LastGoodLimit = Math.Min(_autoConcurrency.InitialLimit, _autoConcurrency.CurrentLimit),
-                    MinLatencySecondsPerGb = _autoConcurrency.MinLatencySecondsPerGb,
-                    UpdatedAt = DateTimeOffset.Now
-                });
+                    continue;
+                }
+
+                ConcurrencyProfileStore.Save(
+                    _pathService.DataRootDirectory,
+                    pair.Key,
+                    device,
+                    new ConcurrencyProfile
+                    {
+                        /*
+                         * 只把**保守的已验证起点**写回去：
+                         * 本批从 1 起步、中途加到 2 ⇒ 存 1（加档只证明"这批混合跑更快"，
+                         * 不证明"下一批一开始就 2 更好"；H 盘实测从 2 冷启动反而慢一倍）。
+                         * 若中途降档，则存降下来的值（那是"更好"的证据）。
+                         */
+                        LastGoodLimit = Math.Min(controller.InitialLimit, controller.CurrentLimit),
+                        MinLatencySecondsPerGb = controller.MinLatencySecondsPerGb,
+                        UpdatedAt = DateTimeOffset.Now
+                    });
+            }
         }
 
         private static string DescribeDevice(StorageDeviceKind device) => device switch

@@ -156,6 +156,12 @@ namespace ArchiveFixer.Tests
                 harness.Log.Logs,
                 x => x.Message.Contains("「空间不足」模式（本次运行，不写设置）", StringComparison.Ordinal));
 
+            // 空间档与自适应同时在场：日志必须写清“空间上限 + 自适应 ⇒ 实际”。
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("空间上限", StringComparison.Ordinal) &&
+                     x.Message.Contains("自适应", StringComparison.Ordinal));
+
             // 设置：内存与磁盘两处都不许被改写。
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), harness.Vm.Settings.SourceHandling);
             Assert.Equal(RestHandlingModes.Keep, harness.Vm.Settings.RestHandlingAfterVerify);
