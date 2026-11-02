@@ -4828,18 +4828,10 @@ namespace ArchiveFixer.Extraction
              *
              * ⛔ 只碰**我们自己产出的副本**：这里的路径全部来自本层产物目录（外层包刚解出来的东西），
              * 用户源目录里那一档归批首的「修正后缀」管，一步都不越界。
-             * ⛔ 执行体与判据都不在这里：整件事转调 `VolumeNameRepair.RestoreDisguisedInnerPackageNames`
-             * （它自己再转调 `VolumeNameRepair.TryApply` 与既有的两把去杂质尺子）。
-             * ⛔ 认不出底层 / 目标名被占 / 有一份改不动 ⇒ 那**一组**一个名字都不改（全成或全不成）。
-             *
-             * "回环"就在下一行：还原完照旧走 `CollapseSameGroupVolumes`（它按**还原之后**的名字
-             * 重新判"谁是首卷、哪些是它的续卷"）—— 一步都不跳。
+             * ⛔ 阶段 2 口径：自动还原本层伪装内层包名整条下线；名字只作为候选，
+             * 不在这里改盘。原路径原样进入 `CollapseSameGroupVolumes`，由组事实/族算法判。
              */
-            IReadOnlyList<string> restoredAll = ArchiveFixer.Extraction.SecondStepResidueState.Parked
-                ? restoreInput
-                : VolumeNameRepair.RestoreDisguisedInnerPackageNames(
-                    restoreInput,
-                    (level, message) => Log(level, layerLabel + "：" + message));
+            IReadOnlyList<string> restoredAll = restoreInput;
 
             /*
              * ⛔ 只把**归档候选**带进这一层的续解名单：
