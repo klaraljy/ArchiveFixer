@@ -26,12 +26,12 @@ namespace ArchiveFixer.Tests
     /// 输出校验也过了）就整份留着（真机日志 271/272 就是这个形状）。</para>
     ///
     /// <para><b>现在的口径</b>：根源包成功 + 输出校验通过 + 未取消 + 完整性可证 ⇒
-    /// 按③页「删除操作」处理其余物（Delete / RecycleBin）；⛔ 不再要求链上每个内层包都成功。
+    /// 按③页「删除操作」处理其余物（Delete；RecycleBin 已从解压侧下线）；⛔ 不再要求链上每个内层包都成功。
     /// 红线一个字没动：失败 / 部分完成 / 取消的**那一单** ⇒ 源包原地不动、其余物不生成；
     /// 删除只有 <c>RestItemPurger</c> 一个执行体，六道门槛（含「半套分卷」）照旧全过。</para>
     ///
     /// <para><b>四个用例</b>（真 7z + 真 <see cref="MainViewModel"/> + 真解压管线）：
-    /// ① 根源包成功 + 内层包失败 + 彻底删除 ⇒ **其余物真被删**（源包也随之按设置消失）；
+    /// ① 根源包成功 + 内层包失败 + 彻底删除 ⇒ **其余物真被删**；源包按“失败原包永不动”保留；
     /// ② 同场景 + 「不动其余物」 ⇒ 其余物留着（照设置）；
     /// ③ 根源包自己失败 / 部分完成 / 取消 ⇒ **一个字节都不动**（对照，⛔ 不许放宽）；
     /// ④ 「半套分卷」那道闸门照旧拦得住（回归）。</para>
@@ -44,6 +44,7 @@ namespace ArchiveFixer.Tests
     /// <para><b>⛔ 自我约束</b>：绝不往用户的系统回收站里塞东西 —— 回收站那一档全部走注入的假执行器
     /// （<c>ExtractionCoordinator.RestDeleteExecutor</c> 这个测试缝）；只在临时目录里动真实文件系统。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public class ChainRestHandlingSettingTests : IDisposable
     {
         /// <summary>拿它给内层包加密码、密码本里没有 ⇒ 那一层必然失败（用例 ①②）。</summary>
