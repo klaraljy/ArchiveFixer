@@ -481,11 +481,9 @@ namespace ArchiveFixer.ViewModels
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
             /*
-             * 「特定解压」那一行（用户 2026-09-24）：开关开着**且**至少有一条规则会真的跑时才写 ——
-             * 用户最恨"我以为它按默认跑的"，所以动手前的那个框里必须写明这一次用了哪条规则。
-             * 开关开着但一条规则都没勾时**不写**（那条路上行为与默认完全一样，写一行反而误导）。
+             * 「特定解压」那一行：只说明这是独立整理模式。
+             * 旧“按哪条规则跑”的清单已经下线，⛔ 不再把旧规则名写进确认框。
              */
-            SpecialExtractionPlan specialExtraction = SpecialExtractionPlan.FromSettings(Settings);
 
             /*
              * 「空间不足」模式：**动手前就把话说清**（用户 2026-09-27 要求确认框里有一条红字）——
@@ -550,8 +548,8 @@ namespace ArchiveFixer.ViewModels
                         ? StatusText.SpaceTightKeepSourceConfirmText
                         : StatusText.SpaceTightConfirmText
                     : string.Empty,
-                SpecialExtractionEcho = specialExtraction.IsActive
-                    ? StatusText.SpecialExtractionConfirmLabel + specialExtraction.RuleNames
+                SpecialExtractionEcho = Settings.UseSpecificExtraction || Settings.UseSpecialExtraction
+                    ? "特定解压：独立整理模式（只改内容物落点，源包/其余物按本页设置）"
                     : string.Empty,
                 NoticeEcho = BuildConfirmNotice(reminders, spaceRiskEcho)
             };

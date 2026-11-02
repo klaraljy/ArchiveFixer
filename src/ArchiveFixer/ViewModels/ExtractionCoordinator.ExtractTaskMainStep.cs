@@ -568,13 +568,8 @@ namespace ArchiveFixer.ViewModels
              * 留着旧依据会让用户读到一条已经不成立的解释）。
              */
             string runOptionsNote = RunOptions?.Describe() ?? string.Empty;
-            string specialExtractionNote = SpecialExtractionPlan.FromSettings(Settings).Describe();
 
-            task.RunOptionsNote = specialExtractionNote.Length == 0
-                ? runOptionsNote
-                : runOptionsNote.Length == 0
-                    ? specialExtractionNote
-                    : runOptionsNote + "；" + specialExtractionNote;
+            task.RunOptionsNote = runOptionsNote;
 
             /*
              * 落点（唯一实现：PathService.ResolveOutputPlacement → OutputPlacement）。

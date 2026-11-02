@@ -282,18 +282,6 @@ namespace ArchiveFixer.ViewModels
             SpecialExtractionPlan specialExtraction =
                 SpecialExtractionPlan.FromSettings(Settings);
 
-            if (specialExtraction.IsActive)
-            {
-                // 可追溯（用户 2026-09-24）：这一单按哪条特定规则跑，日志里必须看得见。
-                AppendLog(
-                    "INFO",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.SpecialExtractionAppliedLogFormat,
-                        task.FileName,
-                        specialExtraction.RuleNames));
-            }
-
             /*
              * 同名冲突的决定：Ask 档**必须在动最终目录之前**拿到答案（"暂停该任务"就发生在这里）。
              *
