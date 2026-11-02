@@ -750,7 +750,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis, TaskReason.VolumeMissing);
 
                 /*
                  * ⛔ 状态改了、终态也必须落：`MarkStoppedBeforeExtract` 先把 `Outcome` 清成 `Pending`，

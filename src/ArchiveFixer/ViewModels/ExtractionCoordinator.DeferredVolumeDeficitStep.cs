@@ -774,7 +774,7 @@ namespace ArchiveFixer.ViewModels
              * **"缺卷不开始解 + 如实报缺卷"是用户早先拍过并有用例钉住的口径**，
              * 真正该改的是"内容已被接手的那些单不该走到这一支"（见下面那行排障）。
              */
-            MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+            MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis, TaskReason.VolumeMissing);
             AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
 
             /*

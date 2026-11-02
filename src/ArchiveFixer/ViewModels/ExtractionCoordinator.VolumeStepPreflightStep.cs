@@ -101,7 +101,7 @@ namespace ArchiveFixer.ViewModels
                  * 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，两处口径当场打架
                  * （2026-09-30 真机 `222.z01`）。
                  */
-                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis, TaskReason.VolumeMissing);
 
                 AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
                 LogVolumeGroupEvidence(task, volumeVerdict);

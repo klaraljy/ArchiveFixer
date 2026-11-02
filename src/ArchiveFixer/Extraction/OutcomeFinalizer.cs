@@ -28,7 +28,7 @@ namespace ArchiveFixer.Extraction
                 return;
             }
 
-            task.Outcome = task.Status == StatusText.VolumeMissing
+            task.Outcome = task.Reason == TaskReason.VolumeMissing
                 ? TaskOutcome.PartiallyCompleted
                 : TaskOutcomeClassifier.FromProducedContent(producedContent);
         }

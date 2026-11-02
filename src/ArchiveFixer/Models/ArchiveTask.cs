@@ -44,6 +44,22 @@ namespace ArchiveFixer.Models
     }
 
     /// <summary>
+    /// 终态的机器可判原因（只解释“为什么”，不替代 <see cref="TaskOutcome"/>）。
+    /// </summary>
+    public enum TaskReason
+    {
+        None = 0,
+        VolumeMissing = 1,
+        VerificationFailed = 2,
+        EngineFailed = 3,
+        PasswordExhausted = 4,
+        UnsafePath = 5,
+        SourceChanged = 6,
+        Skipped = 7,
+        Other = 8
+    }
+
+    /// <summary>
     /// 任务的**机器可判终态**（见 <see cref="ArchiveTask.Outcome"/>）。
     ///
     /// <para>
@@ -1603,6 +1619,9 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public TaskOutcome Outcome { get; set; } = TaskOutcome.Pending;
+
+        /// <summary>终态原因（机器码）；显示文案仍只由 StatusText 给。</summary>
+        public TaskReason Reason { get; set; } = TaskReason.None;
 
         /// <summary>校验结论的一句话说明。</summary>
         public string VerifyMessage { get; set; } = string.Empty;

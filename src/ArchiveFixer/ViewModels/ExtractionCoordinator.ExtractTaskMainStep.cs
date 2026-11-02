@@ -1372,7 +1372,7 @@ namespace ArchiveFixer.ViewModels
                         + siblingText + advice
                         + "程序不会自己改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
 
-                    MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, volumeMissingMessage);
+                    MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, volumeMissingMessage, TaskReason.VolumeMissing);
                     FinalizeOutcomeIfPending(task);
 
                     AppendLog("ERROR", $"{task.LogName}：{volumeMissingMessage}");

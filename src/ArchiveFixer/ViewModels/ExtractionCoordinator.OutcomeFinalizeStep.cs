@@ -25,7 +25,11 @@ namespace ArchiveFixer.ViewModels
     /// <summary>任务终态收口（启动前停止 / 落点违规注记 / 没结论就按事实补一个；第 13 块，同一 partial 类）。</summary>
     internal sealed partial class ExtractionCoordinator
     {
-        private void MarkStoppedBeforeExtract(ArchiveTask task, string status, string errorMessage)
+        private void MarkStoppedBeforeExtract(
+            ArchiveTask task,
+            string status,
+            string errorMessage,
+            TaskReason reason = TaskReason.None)
         {
             /*
              * 这一轮没有任何产物、也没有任何校验：上一轮留下的**校验结论与机器终态**必须清干净
@@ -38,6 +42,7 @@ namespace ArchiveFixer.ViewModels
              */
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Pending;
+            task.Reason = reason;
 
             task.MarkFailed(StatusText.OpWaiting, status, errorMessage);
         }

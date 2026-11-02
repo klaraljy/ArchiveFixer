@@ -929,6 +929,7 @@ namespace ArchiveFixer.Services
                 if (!string.IsNullOrWhiteSpace(laterVolumeNote))
                 {
                     task.Status = StatusText.VolumeMissing;
+                    task.Reason = TaskReason.VolumeMissing;
                     task.Operation = StatusText.OpWaiting;
                     task.ProgressText = StatusText.ProgressCompleted;
                     task.ErrorMessage = laterVolumeNote;
