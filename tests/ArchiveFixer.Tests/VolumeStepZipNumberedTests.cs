@@ -29,7 +29,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipNumberedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.zip.001", "组.zip.002", "组.zip.003" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -51,7 +51,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipNumberedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
         }
 
         [Fact]
@@ -70,7 +70,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipNumberedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(4, result.NamePlan!.Items.Count);
         }
 

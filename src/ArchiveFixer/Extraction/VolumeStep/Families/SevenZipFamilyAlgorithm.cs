@@ -202,7 +202,7 @@ namespace ArchiveFixer.Extraction
             }
 
             return new FamilyResult(
-                VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete,
+                PreparedGroupState.Complete,
                 items.Select(item => item.PiecePath).ToList(),
                 Array.Empty<int>(),
                 new CanonicalNamePlan
@@ -294,7 +294,7 @@ namespace ArchiveFixer.Extraction
             }
 
             return new FamilyResult(
-                VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete,
+                PreparedGroupState.Complete,
                 ordered.Select(piece => piece.Path).ToList(),
                 Array.Empty<int>(),
                 new CanonicalNamePlan
@@ -351,7 +351,7 @@ namespace ArchiveFixer.Extraction
 
         private static FamilyResult Unknown(string evidence) =>
             new(
-                VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
+                PreparedGroupState.Unknown,
                 Array.Empty<string>(),
                 Array.Empty<int>(),
                 null,

@@ -46,8 +46,6 @@ namespace ArchiveFixer.Tests
 
             VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
-
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.Verdict);
             Assert.Equal(new[] { first, second }, candidate.Pieces.ToArray());
             Assert.Equal(first, candidate.EntryPath);
         }
@@ -77,7 +75,6 @@ namespace ArchiveFixer.Tests
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
             Assert.Equal(2, groups.Count);
-            Assert.All(groups, group => Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict));
             Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
             Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
         }

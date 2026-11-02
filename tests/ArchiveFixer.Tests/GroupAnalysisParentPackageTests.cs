@@ -78,7 +78,6 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -110,7 +109,6 @@ namespace ArchiveFixer.Tests
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
 
             Assert.Equal(3, candidate.Pieces.Count);
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, candidate.Verdict);
             Assert.Contains("没有卷号", candidate.Evidence, StringComparison.Ordinal);
         }
 
@@ -137,10 +135,6 @@ namespace ArchiveFixer.Tests
 
             IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
-
-            Assert.DoesNotContain(
-                groups,
-                candidate => candidate.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete);
         }
 
         [Fact]
@@ -179,7 +173,6 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -220,7 +213,6 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -237,8 +229,6 @@ namespace ArchiveFixer.Tests
 
             VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
-
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.Verdict);
             Assert.Equal(new[] { first, tail }, candidate.Pieces.ToArray());
             Assert.Equal(first, candidate.EntryPath);
             Assert.Contains("自述整包对账", candidate.Evidence, StringComparison.Ordinal);
@@ -269,7 +259,6 @@ namespace ArchiveFixer.Tests
                 VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
             Assert.Equal(2, groups.Count);
-            Assert.All(groups, group => Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict));
             Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
             Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
         }

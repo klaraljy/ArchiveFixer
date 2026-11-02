@@ -30,7 +30,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.z01", "组.z02", "组.zip" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -53,7 +53,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.z01", "组.z02", "组.zip" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -92,7 +92,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.z01", "组.z02", "组.zip" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -113,7 +113,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing, result.Verdict);
+            Assert.Equal(PreparedGroupState.Missing, result.Verdict);
             Assert.Equal(new[] { 2 }, result.MissingNumbers.ToArray());
             Assert.Null(result.NamePlan);
         }
@@ -134,7 +134,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
             Assert.Null(result.NamePlan);
         }
 
@@ -153,7 +153,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
         }
 
         [Fact]
@@ -172,7 +172,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+            Assert.Equal(PreparedGroupState.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.z01", "组.z02", "组.zip" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -194,7 +194,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
         }
 
         private static string NewLayer() =>

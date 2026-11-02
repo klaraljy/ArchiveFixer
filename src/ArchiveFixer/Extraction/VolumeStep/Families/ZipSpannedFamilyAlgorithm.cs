@@ -162,7 +162,7 @@ namespace ArchiveFixer.Extraction
                 if (missing.Count != unnamed.Count)
                 {
                     return new FamilyResult(
-                        VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing,
+                        PreparedGroupState.Missing,
                         named.OrderBy(item => item.Index).Select(item => item.Fact.Path)
                             .Append(zipPiece.Path)
                             .ToList(),
@@ -185,7 +185,7 @@ namespace ArchiveFixer.Extraction
             if (missing.Count > 0)
             {
                 return new FamilyResult(
-                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing,
+                    PreparedGroupState.Missing,
                     named.OrderBy(item => item.Index).Select(item => item.Fact.Path)
                         .Append(zipPiece.Path)
                         .ToList(),
@@ -218,7 +218,7 @@ namespace ArchiveFixer.Extraction
             planItems.Add(BuildItem(zipPiece.Path, stem + ".zip", isEntry: true, unit.SourceLayer));
 
             return new FamilyResult(
-                VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete,
+                PreparedGroupState.Complete,
                 planItems.Select(item => item.PiecePath).ToList(),
                 Array.Empty<int>(),
                 new CanonicalNamePlan
@@ -249,7 +249,7 @@ namespace ArchiveFixer.Extraction
 
         private static FamilyResult Unknown(string evidence) =>
             new(
-                VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
+                PreparedGroupState.Unknown,
                 Array.Empty<string>(),
                 Array.Empty<int>(),
                 null,

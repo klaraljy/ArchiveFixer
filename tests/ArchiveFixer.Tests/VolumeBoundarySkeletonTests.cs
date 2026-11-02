@@ -203,7 +203,7 @@ namespace ArchiveFixer.Tests
                     VolumeCandidateDiscovery.AnalyzePrepared(new[] { group }));
 
                 Assert.Equal("111", candidate.BaseName);
-                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.SuggestedVerdict);
+                Assert.Equal(PreparedGroupState.Complete, candidate.PreparedGroup!.State);
                 Assert.Equal(canonical, candidate.EntryPath);
                 Assert.Equal(group.OriginalEntryPath, candidate.OriginalEntryPath);
                 Assert.Same(group, candidate.PreparedGroup);

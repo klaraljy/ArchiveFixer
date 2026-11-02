@@ -7,7 +7,7 @@ namespace ArchiveFixer.Extraction
     /// 成员判据 / 卷号来源 / 片数（完整性） / 规范名计划。
     ///
     /// <para>输入只有 <see cref="VolumeGroupUnit"/>（里面是交界处交来的原始事实），⛔ 不重读盘、不猜名字；
-    /// 判不出就返回 <see cref="VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown"/>，调用方一个字节都不动。</para>
+    /// 判不出就返回 <see cref="PreparedGroupState.Unknown"/>，调用方一个字节都不动。</para>
     /// </summary>
     public interface IVolumeFamilyAlgorithm
     {
@@ -18,7 +18,7 @@ namespace ArchiveFixer.Extraction
 
     /// <summary>族算法的结论（唯一输出形状）。</summary>
     public sealed record FamilyResult(
-        VolumeCandidateDiscovery.VolumeCandidateVerdict Verdict,
+        PreparedGroupState Verdict,
         IReadOnlyList<string> OrderedPieces,
         IReadOnlyList<int> MissingNumbers,
         CanonicalNamePlan? NamePlan,

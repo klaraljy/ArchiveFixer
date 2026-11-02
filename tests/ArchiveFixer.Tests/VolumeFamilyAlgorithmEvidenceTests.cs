@@ -46,7 +46,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
             Assert.DoesNotContain("缺片", result.Evidence, System.StringComparison.Ordinal);
         }
 
@@ -79,7 +79,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
+            Assert.Equal(PreparedGroupState.Unknown, result.Verdict);
             Assert.DoesNotContain("缺片", result.Evidence, System.StringComparison.Ordinal);
         }
 
@@ -267,7 +267,7 @@ namespace ArchiveFixer.Tests
                     new[] { root });
 
                 VolumeCandidateDiscovery.VolumeCandidate group = Assert.Single(groups);
-                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, group.Verdict);
+                Assert.Empty(group.MissingNumbers);
                 Assert.DoesNotContain("缺", group.Describe(), StringComparison.Ordinal);
             }
             finally
@@ -321,7 +321,7 @@ namespace ArchiveFixer.Tests
 
                 FamilyResult result = new ZipNumberedFamilyAlgorithm().Evaluate(unit);
 
-                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+                Assert.Equal(PreparedGroupState.Complete, result.Verdict);
                 Assert.Equal(
                     new[] { "组.zip.001", "组.zip.002", "组.zip.003", "组.zip.004" },
                     result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -377,7 +377,7 @@ namespace ArchiveFixer.Tests
 
                 FamilyResult result = new ZipSpannedFamilyAlgorithm().Evaluate(unit);
 
-                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+                Assert.Equal(PreparedGroupState.Complete, result.Verdict);
                 Assert.Equal(
                     new[] { "组.z01", "组.z02", "组.z03", "组.zip" },
                     result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -484,7 +484,7 @@ namespace ArchiveFixer.Tests
 
                 FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
+                Assert.Equal(PreparedGroupState.Complete, result.Verdict);
                 Assert.Equal(
                     new[] { "P53-8.7z.001", "P53-8.7z.002", "P53-8.7z.003", "P53-8.7z.004" },
                     result.NamePlan!.Items.Select(item => item.TargetName).ToArray());

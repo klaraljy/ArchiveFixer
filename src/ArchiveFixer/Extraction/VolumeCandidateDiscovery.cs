@@ -26,17 +26,6 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class VolumeCandidateDiscovery
     {
-        public enum VolumeCandidateVerdict
-        {
-            /// <summary>判不出（缺证据 / 卷号冲突 / 连不成 1..N）。</summary>
-            Unknown = 0,
-
-            /// <summary>可证完整：连成 1..N，入口 = 第 1 片。</summary>
-            Complete = 1,
-
-            /// <summary>明显缺卷（缺口能点名）。</summary>
-            Missing = 2
-        }
 
         public sealed class VolumeCandidate
         {
@@ -52,10 +41,10 @@ namespace ArchiveFixer.Extraction
             /// 候选建议，不是最终结论；⛔ 第二大步的完整性/缺片/规范名只认
             /// <see cref="VolumeGroupService"/> + 族算法。保留 <see cref="Verdict"/> 只做旧调用兼容。
             /// </summary>
-            public VolumeCandidateVerdict SuggestedVerdict { get; init; }
+            public PreparedGroupState SuggestedVerdict { get; init; }
 
             /// <summary>兼容旧调用：等价于 <see cref="SuggestedVerdict"/>；⛔ 不许当最终判据。</summary>
-            public VolumeCandidateVerdict Verdict => SuggestedVerdict;
+            public PreparedGroupState Verdict => SuggestedVerdict;
 
             public string Evidence { get; init; } = string.Empty;
 
@@ -97,7 +86,7 @@ namespace ArchiveFixer.Extraction
                 Array.Empty<ArchiveFixer.Detection.FileNatureCard>();
 
             public string Describe() =>
-                $"{BaseName} ｜ 族={Format} ｜ 找到 {Pieces.Count} 片 ｜ 结论={Verdict}"
+                $"{BaseName} ｜ 族={Format} ｜ 找到 {Pieces.Count} 片 ｜ 候选"
                 + $" ｜ 入口={(EntryPath.Length == 0 ? "判不出" : Path.GetFileName(EntryPath))}"
                 + (MissingNumbers.Count == 0 ? string.Empty : $" ｜ 缺={string.Join(",", MissingNumbers)}")
                 + (DeclaredPieceCount > 0
@@ -194,12 +183,6 @@ namespace ArchiveFixer.Extraction
                     Format = FormatForFamily(group.Family),
                     Pieces = pieces,
                     EntryPath = entryPath,
-                    SuggestedVerdict = group.State switch
-                    {
-                        PreparedGroupState.Complete => VolumeCandidateVerdict.Complete,
-                        PreparedGroupState.Missing => VolumeCandidateVerdict.Missing,
-                        _ => VolumeCandidateVerdict.Unknown
-                    },
                     Evidence = group.Describe(),
                     MissingNumbers = group.MissingNumbers,
                     ReceivedPieceCount = pieces.Count,
@@ -1039,7 +1022,6 @@ namespace ArchiveFixer.Extraction
                     Format = format,
                     Pieces = new[] { items[0].Path },
                     EntryPath = items[0].Path,
-                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = 1,
                     DeclaredTotalBytes = declaredTotalBytes,
@@ -1147,7 +1129,6 @@ namespace ArchiveFixer.Extraction
                     Format = format,
                     Pieces = OrderVolumePieces(items, items.FirstOrDefault(item => item.IsFirstPiece)?.Path),
                     EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
-                    SuggestedVerdict = complete ? VolumeCandidateVerdict.Complete : VolumeCandidateVerdict.Missing,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -1182,7 +1163,6 @@ namespace ArchiveFixer.Extraction
                 Format = format,
                 Pieces = bySize.Select(item => item.Path).ToList(),
                 EntryPath = string.Empty,
-                SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,
                 DeclaredTotalBytes = declaredTotalBytes,
@@ -1367,7 +1347,6 @@ namespace ArchiveFixer.Extraction
                     Format = format,
                     Pieces = ordered.Select(item => item.Path).ToList(),
                     EntryPath = entry,
-                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
                     DeclaredTotalBytes = declaredTotalBytes,
@@ -1393,7 +1372,6 @@ namespace ArchiveFixer.Extraction
                     Format = format,
                     Pieces = ordered.Select(item => item.Path).ToList(),
                     EntryPath = entry,
-                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -1410,7 +1388,6 @@ namespace ArchiveFixer.Extraction
                 Format = format,
                 Pieces = ordered.Select(item => item.Path).ToList(),
                 EntryPath = entry,
-                SuggestedVerdict = contiguous ? VolumeCandidateVerdict.Complete : VolumeCandidateVerdict.Missing,
                 MissingNumbers = missing,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,
