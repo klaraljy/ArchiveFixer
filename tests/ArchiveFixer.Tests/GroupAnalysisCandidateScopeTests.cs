@@ -9,7 +9,7 @@ namespace ArchiveFixer.Tests
     /// <summary>
     /// 第二大步候选范围：只扫交接目录顶层，不能递归进已解出的内容物子树。
     /// </summary>
-    public sealed class GroupAnalysisCandidateScopeTests
+    public sealed class VolumeCandidateDiscoveryCandidateScopeTests
     {
         [Fact]
         public void 组分析_不递归扫描子目录里的同名片()
@@ -28,11 +28,11 @@ namespace ArchiveFixer.Tests
                 File.WriteAllText(seed, "1");
                 File.WriteAllText(nestedPiece, "2");
 
-                List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(
+                List<VolumeCandidateDiscovery.VolumeCandidate> groups = VolumeCandidateDiscovery.Analyze(
                     new[] { seed },
                     new[] { root });
 
-                GroupAnalysis.GroupCandidate group = Assert.Single(groups);
+                VolumeCandidateDiscovery.VolumeCandidate group = Assert.Single(groups);
                 Assert.Single(group.Pieces);
                 Assert.Equal(seed, group.Pieces[0]);
             }

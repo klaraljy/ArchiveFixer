@@ -155,7 +155,7 @@ namespace ArchiveFixer.ViewModels
                      * 候选 = 这一层里与"这一单手上那一片"同族的文件（既有尺子 `BelongsToSameGroup`），
                      * ⛔ 不递归、⛔ 不猜。
                      */
-                    List<string> gatherCandidates = CollectGroupCandidatePaths(
+                    List<string> gatherCandidates = CollectVolumeCandidatePaths(
                         task,
                         entryLayer,
                         out string gatherReference,

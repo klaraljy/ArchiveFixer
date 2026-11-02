@@ -150,7 +150,7 @@ namespace ArchiveFixer.Extraction
             }
 
             return new FamilyResult(
-                GroupAnalysis.GroupAnalysisVerdict.Complete,
+                VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete,
                 ordered.Select(piece => piece.Path).ToList(),
                 Array.Empty<int>(),
                 new CanonicalNamePlan
@@ -183,7 +183,7 @@ namespace ArchiveFixer.Extraction
 
         private static FamilyResult Unknown(string evidence) =>
             new(
-                GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
                 Array.Empty<string>(),
                 Array.Empty<int>(),
                 null,

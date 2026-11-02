@@ -168,7 +168,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void GroupAnalysis_吃prepared组_只收标准名_不扫用户源目录()
+        public void VolumeCandidateDiscovery_吃prepared组_只收标准名_不扫用户源目录()
         {
             string root = Path.Combine(Path.GetTempPath(), "af-prepared-group-" + Guid.NewGuid().ToString("N"));
 
@@ -199,11 +199,11 @@ namespace ArchiveFixer.Tests
                     }
                 };
 
-                GroupAnalysis.GroupCandidate candidate = Assert.Single(
-                    GroupAnalysis.AnalyzePrepared(new[] { group }));
+                VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
+                    VolumeCandidateDiscovery.AnalyzePrepared(new[] { group }));
 
                 Assert.Equal("111", candidate.BaseName);
-                Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, candidate.SuggestedVerdict);
+                Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.SuggestedVerdict);
                 Assert.Equal(canonical, candidate.EntryPath);
                 Assert.Equal(group.OriginalEntryPath, candidate.OriginalEntryPath);
                 Assert.Same(group, candidate.PreparedGroup);

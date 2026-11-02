@@ -31,7 +31,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(3, result.OrderedPieces.Count);
             Assert.Empty(result.MissingNumbers);
             Assert.NotNull(result.NamePlan);
@@ -58,7 +58,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "9953.part1.rar", "9953.part2.rar", "9953.part3.rar" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -80,7 +80,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "9953.part1.rar", "9953.part2.rar", "9953.part3.rar" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -101,7 +101,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Missing, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing, result.Verdict);
             Assert.Equal(new[] { 2 }, result.MissingNumbers.ToArray());
             Assert.Null(result.NamePlan);
         }
@@ -121,7 +121,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
             Assert.Empty(result.OrderedPieces);
             Assert.Null(result.NamePlan);
         }
@@ -142,7 +142,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.rar", "组.r00", "组.r01" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -166,7 +166,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new RarFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.part1.rar", "组.part2.rar", "组.part3.rar" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());

@@ -32,7 +32,7 @@ namespace ArchiveFixer.ViewModels
         /// 交给族算法；试不开/不适用 ⇒ 照旧不带顺序建组，由族算法判 Unknown。
         /// </summary>
         internal async Task<VolumeGroupUnit?> TryCommitVolumeGroupAsync(
-            GroupAnalysis.GroupCandidate? group,
+            VolumeCandidateDiscovery.VolumeCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
             bool standardNameFastPath = false,
@@ -91,7 +91,7 @@ namespace ArchiveFixer.ViewModels
         /// 族判不出 / 源层非法 / 入口为空 ⇒ 返回 null，一个字节都不动。
         /// </summary>
         internal VolumeGroupUnit? TryCommitVolumeGroup(
-            GroupAnalysis.GroupCandidate? group,
+            VolumeCandidateDiscovery.VolumeCandidate? group,
             ArchiveTask? ownerTask,
             string? entryLayer,
             IReadOnlyList<string>? confirmedOrder = null,
@@ -173,7 +173,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 已接线的族：**由族算法判完整性**；GroupAnalysis 的候选建议不参与最终结论。
+             * 已接线的族：**由族算法判完整性**；VolumeCandidateDiscovery 的候选建议不参与最终结论。
              */
             VolumeGroupUnit? unit = _volumeGroupService.TryCommit(
                 group.BaseName,

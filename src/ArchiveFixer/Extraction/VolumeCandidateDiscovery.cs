@@ -24,9 +24,9 @@ namespace ArchiveFixer.Extraction
     /// <para>⚠ 用户口径（2026-10-23）：「基名相同、体积也相同但其实是两个包」的概率非常小，**不做处理** ——
     /// 所以这一层<b>不按族/格式分桶</b>，族只作为证据字段如实写出来。</para>
     /// </summary>
-    public static class GroupAnalysis
+    public static class VolumeCandidateDiscovery
     {
-        public enum GroupAnalysisVerdict
+        public enum VolumeCandidateVerdict
         {
             /// <summary>判不出（缺证据 / 卷号冲突 / 连不成 1..N）。</summary>
             Unknown = 0,
@@ -38,7 +38,7 @@ namespace ArchiveFixer.Extraction
             Missing = 2
         }
 
-        public sealed class GroupCandidate
+        public sealed class VolumeCandidate
         {
             public string BaseName { get; init; } = string.Empty;
 
@@ -52,10 +52,10 @@ namespace ArchiveFixer.Extraction
             /// 候选建议，不是最终结论；⛔ 第二大步的完整性/缺片/规范名只认
             /// <see cref="VolumeGroupService"/> + 族算法。保留 <see cref="Verdict"/> 只做旧调用兼容。
             /// </summary>
-            public GroupAnalysisVerdict SuggestedVerdict { get; init; }
+            public VolumeCandidateVerdict SuggestedVerdict { get; init; }
 
             /// <summary>兼容旧调用：等价于 <see cref="SuggestedVerdict"/>；⛔ 不许当最终判据。</summary>
-            public GroupAnalysisVerdict Verdict => SuggestedVerdict;
+            public VolumeCandidateVerdict Verdict => SuggestedVerdict;
 
             public string Evidence { get; init; } = string.Empty;
 
@@ -113,7 +113,7 @@ namespace ArchiveFixer.Extraction
         /// 全树组分析（只读）。<paramref name="seeds"/> 是任意几份文件（含中间卷、判不出的片），
         /// <paramref name="scanRoots"/> 是要扫的根目录（本批产物树 / 用户源目录）。
         /// </summary>
-        public static List<GroupCandidate> Analyze(
+        public static List<VolumeCandidate> Analyze(
             IEnumerable<string>? seeds,
             IEnumerable<string>? scanRoots)
             => AnalyzeCore(seeds, scanRoots, handoffByPath: null);
@@ -124,7 +124,7 @@ namespace ArchiveFixer.Extraction
         /// ⛔ 不再对已经登记过的片重新 `FileNature.Inspect`；盘上只补“同基名但没登记过的兄弟片”，
         /// 补到的那几片才回盘上读一次证据。
         /// </summary>
-        public static List<GroupCandidate> Analyze(
+        public static List<VolumeCandidate> Analyze(
             IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry>? handoffs,
             IEnumerable<string>? scanRoots,
             IEnumerable<string>? extraSeeds = null,
@@ -166,9 +166,9 @@ namespace ArchiveFixer.Extraction
         /// 只把已经标准化的片收成候选，⛔ 不再扫用户源目录、⛔ 不再从脏名重排。
         /// 旧 <see cref="Analyze(IEnumerable{string}?, IEnumerable{string}?)"/> 保留给未迁移族。
         /// </summary>
-        public static List<GroupCandidate> AnalyzePrepared(IReadOnlyList<PreparedVolumeGroup>? groups)
+        public static List<VolumeCandidate> AnalyzePrepared(IReadOnlyList<PreparedVolumeGroup>? groups)
         {
-            var result = new List<GroupCandidate>();
+            var result = new List<VolumeCandidate>();
 
             foreach (PreparedVolumeGroup group in groups ?? Array.Empty<PreparedVolumeGroup>())
             {
@@ -188,7 +188,7 @@ namespace ArchiveFixer.Extraction
                     ? group.CanonicalEntryPath
                     : group.OriginalEntryPath;
 
-                var candidate = new GroupCandidate
+                var candidate = new VolumeCandidate
                 {
                     BaseName = group.BaseName,
                     Format = FormatForFamily(group.Family),
@@ -196,9 +196,9 @@ namespace ArchiveFixer.Extraction
                     EntryPath = entryPath,
                     SuggestedVerdict = group.State switch
                     {
-                        PreparedGroupState.Complete => GroupAnalysisVerdict.Complete,
-                        PreparedGroupState.Missing => GroupAnalysisVerdict.Missing,
-                        _ => GroupAnalysisVerdict.Unknown
+                        PreparedGroupState.Complete => VolumeCandidateVerdict.Complete,
+                        PreparedGroupState.Missing => VolumeCandidateVerdict.Missing,
+                        _ => VolumeCandidateVerdict.Unknown
                     },
                     Evidence = group.Describe(),
                     MissingNumbers = group.MissingNumbers,
@@ -225,13 +225,13 @@ namespace ArchiveFixer.Extraction
             };
         }
 
-        private static List<GroupCandidate> AnalyzeCore(
+        private static List<VolumeCandidate> AnalyzeCore(
             IEnumerable<string>? seeds,
             IEnumerable<string>? scanRoots,
             IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath,
             IReadOnlyCollection<string>? excludedSources = null)
         {
-            var result = new List<GroupCandidate>();
+            var result = new List<VolumeCandidate>();
             var excluded = new HashSet<string>(
                 (excludedSources ?? Array.Empty<string>())
                     .Where(path => !string.IsNullOrWhiteSpace(path)),
@@ -265,7 +265,7 @@ namespace ArchiveFixer.Extraction
                     byteFitConsumed.Add(piece);
                 }
 
-                GroupCandidate pairCandidate = Evaluate(pairBaseName, pairPieces, handoffByPath);
+                VolumeCandidate pairCandidate = Evaluate(pairBaseName, pairPieces, handoffByPath);
                 pairCandidate.ByteFitPaired = true;
                 result.Add(pairCandidate);
             }
@@ -348,7 +348,7 @@ namespace ArchiveFixer.Extraction
                 /*
                  * 同基名跨目录收片是对的，但**两个各自完整的同名组**不能被并成一个：
                  * 判据用第一片的自述事实（DeclaredTotalBytes）分桶 —— 不是按目录猜。
-                 * 守门 `GroupAnalysisNonUniformTests.同名同族但在不同目录_必须分成两组`：
+                 * 守门 `VolumeCandidateDiscoveryNonUniformTests.同名同族但在不同目录_必须分成两组`：
                  * `a\组.7z.001` 自述 1200 字节、`b\组.7z.001` 自述 600 字节 ⇒ 这是两组。
                  * ⛔ 只有"≥2 个互不相同的自述整包"时才分桶；任一片无法唯一归桶 ⇒ **不分**
                  * （保持跨目录合并，交给族 resolver 判），⛔ 不猜。
@@ -372,7 +372,7 @@ namespace ArchiveFixer.Extraction
         /// 同目录同族有多个组同时缺这个号 ⇒ 判不出，不补。</para>
         /// </summary>
         private static void EnrichGroupsWithContentMembers(
-            List<GroupCandidate> groups,
+            List<VolumeCandidate> groups,
             IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
         {
             if (handoffByPath == null || handoffByPath.Count == 0)
@@ -399,7 +399,7 @@ namespace ArchiveFixer.Extraction
                     directory = SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(entry.Path) ?? string.Empty);
                 }
 
-                List<GroupCandidate> targets = groups
+                List<VolumeCandidate> targets = groups
                     .Where(group => group.Format == entry.Format
                         && string.Equals(
                             SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(group.EntryPath) ?? string.Empty),
@@ -413,7 +413,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                GroupCandidate target = targets[0];
+                VolumeCandidate target = targets[0];
                 var pieces = new List<string>(target.Pieces);
 
                 if (pieces.Any(path => string.Equals(path, entry.Path, StringComparison.OrdinalIgnoreCase)))
@@ -422,7 +422,7 @@ namespace ArchiveFixer.Extraction
                 }
 
                 pieces.Add(entry.Path);
-                GroupCandidate enriched = Evaluate(target.BaseName, pieces, handoffByPath);
+                VolumeCandidate enriched = Evaluate(target.BaseName, pieces, handoffByPath);
 
                 int index = groups.IndexOf(target);
                 groups[index] = enriched;
@@ -980,7 +980,7 @@ namespace ArchiveFixer.Extraction
         /// 定序 + 判完整性：内容卷号 &gt; 名字卷标记 &gt; 大小分布。
         /// ⛔ 排不出顺序或连不成 1..N ⇒ 判不出（绝不猜缺哪几片）。
         /// </summary>
-        private static GroupCandidate Evaluate(
+        private static VolumeCandidate Evaluate(
             string baseName,
             List<string> pieces,
             IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
@@ -1000,7 +1000,7 @@ namespace ArchiveFixer.Extraction
             List<VolumeFacts> publicFacts = items.Select(ToPublicFact).ToList();
             List<ArchiveFixer.Detection.FileNatureCard> cards = items.Select(item => item.Card).ToList();
 
-            GroupCandidate Finish(GroupCandidate candidate)
+            VolumeCandidate Finish(VolumeCandidate candidate)
             {
                 candidate.PieceFacts = publicFacts;
                 candidate.Cards = cards;
@@ -1033,13 +1033,13 @@ namespace ArchiveFixer.Extraction
              */
             if (items.Count == 1 && IsProvablySingleCompleteNonMember(items[0]))
             {
-                return Finish(new GroupCandidate
+                return Finish(new VolumeCandidate
                 {
                     BaseName = baseName,
                     Format = format,
                     Pieces = new[] { items[0].Path },
                     EntryPath = items[0].Path,
-                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = 1,
                     DeclaredTotalBytes = declaredTotalBytes,
@@ -1141,13 +1141,13 @@ namespace ArchiveFixer.Extraction
             {
                 bool complete = receivedBytes == declaredTotalBytes;
 
-                return Finish(new GroupCandidate
+                return Finish(new VolumeCandidate
                 {
                     BaseName = baseName,
                     Format = format,
                     Pieces = OrderVolumePieces(items, items.FirstOrDefault(item => item.IsFirstPiece)?.Path),
                     EntryPath = items.FirstOrDefault(item => item.IsFirstPiece)?.Path ?? string.Empty,
-                    SuggestedVerdict = complete ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
+                    SuggestedVerdict = complete ? VolumeCandidateVerdict.Complete : VolumeCandidateVerdict.Missing,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -1176,13 +1176,13 @@ namespace ArchiveFixer.Extraction
                 && bySize.Take(bySize.Count - 1).All(item => item.Size == bySize[0].Size)
                 && bySize[^1].Size <= bySize[0].Size;
 
-            return Finish(new GroupCandidate
+            return Finish(new VolumeCandidate
             {
                 BaseName = baseName,
                 Format = format,
                 Pieces = bySize.Select(item => item.Path).ToList(),
                 EntryPath = string.Empty,
-                SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,
                 DeclaredTotalBytes = declaredTotalBytes,
@@ -1295,7 +1295,7 @@ namespace ArchiveFixer.Extraction
                 EvidenceSource: item.Handoff != null ? "handoff+content" : "content-card");
 
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
-        private static GroupCandidate Judge(
+        private static VolumeCandidate Judge(
             string baseName,
             ArchiveFixer.Detection.VolumeContentFormat format,
             List<PieceFacts> items,
@@ -1361,13 +1361,13 @@ namespace ArchiveFixer.Extraction
              */
             if (numbers.Count != items.Count)
             {
-                return new GroupCandidate
+                return new VolumeCandidate
                 {
                     BaseName = baseName,
                     Format = format,
                     Pieces = ordered.Select(item => item.Path).ToList(),
                     EntryPath = entry,
-                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
                     DeclaredTotalBytes = declaredTotalBytes,
@@ -1387,13 +1387,13 @@ namespace ArchiveFixer.Extraction
                     && (items.Count != declaredPieceCount
                         || (declaredTotalBytes > 0 && receivedBytes != declaredTotalBytes))))
             {
-                return new GroupCandidate
+                return new VolumeCandidate
                 {
                     BaseName = baseName,
                     Format = format,
                     Pieces = ordered.Select(item => item.Path).ToList(),
                     EntryPath = entry,
-                    SuggestedVerdict = GroupAnalysisVerdict.Unknown,
+                    SuggestedVerdict = VolumeCandidateVerdict.Unknown,
                     MissingNumbers = Array.Empty<int>(),
                     DeclaredPieceCount = declaredPieceCount,
                     ReceivedPieceCount = items.Count,
@@ -1404,13 +1404,13 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
-            return new GroupCandidate
+            return new VolumeCandidate
             {
                 BaseName = baseName,
                 Format = format,
                 Pieces = ordered.Select(item => item.Path).ToList(),
                 EntryPath = entry,
-                SuggestedVerdict = contiguous ? GroupAnalysisVerdict.Complete : GroupAnalysisVerdict.Missing,
+                SuggestedVerdict = contiguous ? VolumeCandidateVerdict.Complete : VolumeCandidateVerdict.Missing,
                 MissingNumbers = missing,
                 DeclaredPieceCount = declaredPieceCount,
                 ReceivedPieceCount = items.Count,

@@ -228,8 +228,8 @@ namespace ArchiveFixer.Extraction
                 unit.Verdict = result.Evidence;
                 unit.State = result.Verdict switch
                 {
-                    GroupAnalysis.GroupAnalysisVerdict.Complete => VolumeGroupState.Complete,
-                    GroupAnalysis.GroupAnalysisVerdict.Missing => VolumeGroupState.Missing,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete => VolumeGroupState.Complete,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing => VolumeGroupState.Missing,
                     _ => VolumeGroupState.Unknown
                 };
 

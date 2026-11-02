@@ -1231,9 +1231,9 @@ namespace ArchiveFixer.ViewModels
                      *
                      * 用户 2026-10-24：交接处先只做「读」—— 交接单是事实来源（族/卷号/首卷/自述片数/自述整包），
                      * 这一遍只打 `[第二大步·组分析]` 事实行；⛔ 不点名、不搬片、不改名、不动盘。
-                     * 组分析实现从 `SecondStepResidue/GroupAnalysis.cs` 挑回来的（只读纯函数）。
+                     * 组分析实现从 `SecondStepResidue/VolumeCandidateDiscovery.cs` 挑回来的（只读纯函数）。
                      */
-                    var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
+                    var handoffGroups = new List<VolumeCandidateDiscovery.VolumeCandidate>();
 
                     try
                     {
@@ -1373,22 +1373,22 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
-                        List<GroupAnalysis.GroupCandidate> analyzedGroups = await Task.Run(
-                            () => GroupAnalysis.Analyze(
+                        List<VolumeCandidateDiscovery.VolumeCandidate> analyzedGroups = await Task.Run(
+                            () => VolumeCandidateDiscovery.Analyze(
                                 ledgerHandoff,
                                 analysisRoots,
                                 extraGroupSeeds.Distinct(StringComparer.OrdinalIgnoreCase),
                                 nonVolumeRootSources).ToList());
                         UiActivity.Mark("空闲");
 
-                        foreach (GroupAnalysis.GroupCandidate group in analyzedGroups)
+                        foreach (VolumeCandidateDiscovery.VolumeCandidate group in analyzedGroups)
                         {
                             handoffGroups.Add(group);
                             AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
                         }
 
                         /*
-                         * 共用骨架接线点：族 resolver 先出 prepared 组，再让 GroupAnalysis 只吃标准名。
+                         * 共用骨架接线点：族 resolver 先出 prepared 组，再让 VolumeCandidateDiscovery 只吃标准名。
                          * 骨架阶段一个族都没注册 ⇒ 返回空，下面的过滤与追加都不会发生，既有行为不变。
                          */
                         foreach (ArchiveTask ledgerTask in Tasks)
@@ -1436,7 +1436,7 @@ namespace ArchiveFixer.ViewModels
                         var byteFitCompleteBases = new HashSet<string>(
                             analyzedGroups
                                 .Where(group => group.ByteFitPaired
-                                    && group.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                    && group.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
                                 .Select(group => group.BaseName),
                             StringComparer.OrdinalIgnoreCase);
 
@@ -1451,7 +1451,7 @@ namespace ArchiveFixer.ViewModels
                         if (preparedGroups.Count > 0)
                         {
                             /*
-                             * 标准名硬链接必须在 GroupAnalysis 之前建好：GroupAnalysis 只吃临时入口层。
+                             * 标准名硬链接必须在 VolumeCandidateDiscovery 之前建好：VolumeCandidateDiscovery 只吃临时入口层。
                              * 建不出来 ⇒ 这一组落 Unknown（⛔ 不退回脏名硬拼、⛔ 不猜）。
                              */
                             var materialized = new List<PreparedVolumeGroup>();
@@ -1514,18 +1514,18 @@ namespace ArchiveFixer.ViewModels
                             var byteFitBaseNames = new HashSet<string>(
                                 handoffGroups
                                     .Where(group => group.ByteFitPaired
-                                        && group.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                        && group.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
                                     .Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
-                            List<GroupAnalysis.GroupCandidate> preparedCandidates =
-                                GroupAnalysis.AnalyzePrepared(preparedGroups);
+                            List<VolumeCandidateDiscovery.VolumeCandidate> preparedCandidates =
+                                VolumeCandidateDiscovery.AnalyzePrepared(preparedGroups);
 
-                            foreach (GroupAnalysis.GroupCandidate group in preparedCandidates)
+                            foreach (VolumeCandidateDiscovery.VolumeCandidate group in preparedCandidates)
                             {
                                 // 字节补齐配对已经给出可证完整的组 ⇒ 同一基名的 resolver Unknown 不再叠加。
                                 if (byteFitBaseNames.Contains(group.BaseName)
-                                    && group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete)
+                                    && group.Verdict != VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete)
                                 {
                                     continue;
                                 }
@@ -1552,7 +1552,7 @@ namespace ArchiveFixer.ViewModels
                     var volumeEntryTasks = new List<ArchiveTask>();
                     var secondStepEntryCandidates = new List<InnerArchiveCandidate>();
                     var secondStepEntryGroups =
-                        new List<(GroupAnalysis.GroupCandidate Group, ArchiveFixer.Extraction.VolumeGroupUnit Unit)>();
+                        new List<(VolumeCandidateDiscovery.VolumeCandidate Group, ArchiveFixer.Extraction.VolumeGroupUnit Unit)>();
 
                     /*
                      * 标准名前置快通道的控制名单：只收“同目录全部标准名、且同基名没有
@@ -1584,7 +1584,7 @@ namespace ArchiveFixer.ViewModels
                         }
                     }
 
-                    foreach (GroupAnalysis.GroupCandidate group in handoffGroups)
+                    foreach (VolumeCandidateDiscovery.VolumeCandidate group in handoffGroups)
                     {
                         /*
                          * ⛔ 这里不再用候选 Verdict 当闸门（那只是交界处的“建议”）：
@@ -1781,7 +1781,7 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         /*
-                         * 最终结论只认 VolumeGroupService + 族算法；GroupAnalysis 的 Verdict
+                         * 最终结论只认 VolumeGroupService + 族算法；VolumeCandidateDiscovery 的 Verdict
                          * 只是候选建议，不能拿来给未建组的候选兜底放行。
                          */
                         if (committedUnit == null)
@@ -1943,7 +1943,7 @@ namespace ArchiveFixer.ViewModels
                              * 7z 找不到 `.7z.001` 兄弟卷，直接把入口判成“无法识别”，
                              * 之后又因“上一轮 Failed”永不重跑（真机 15151515 现场）。
                              */
-                            foreach ((GroupAnalysis.GroupCandidate group, ArchiveFixer.Extraction.VolumeGroupUnit unit)
+                            foreach ((VolumeCandidateDiscovery.VolumeCandidate group, ArchiveFixer.Extraction.VolumeGroupUnit unit)
                                      in secondStepEntryGroups)
                             {
                                 ArchiveTask? createdTask = createdSecondStepTasks.FirstOrDefault(task =>

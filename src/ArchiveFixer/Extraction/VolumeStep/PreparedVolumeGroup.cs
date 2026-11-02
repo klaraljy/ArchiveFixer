@@ -42,7 +42,7 @@ namespace ArchiveFixer.Extraction
     /// <summary>
     /// **边界 resolver 的统一产物**（共用骨架）：族、顺序、标准名、原始映射、结论。
     ///
-    /// <para>它是在 `GroupAnalysis` **之前**产出的；`GroupAnalysis` 只吃这个对象，
+    /// <para>它是在 `VolumeCandidateDiscovery` **之前**产出的；`VolumeCandidateDiscovery` 只吃这个对象，
     /// 不再自己从脏名/全树重排。</para>
     /// </summary>
     public sealed class PreparedVolumeGroup

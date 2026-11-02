@@ -7,7 +7,7 @@ using ArchiveFixer.Helpers;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
-    /// **临时组入口目录**（共用骨架）：把一组的标准名做成硬链接，供 GroupAnalysis/引擎读取。
+    /// **临时组入口目录**（共用骨架）：把一组的标准名做成硬链接，供 VolumeCandidateDiscovery/引擎读取。
     ///
     /// <para>优先放在**这一单自己的目标工作区**（<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry</c>），
     /// 这样“在哪里解压，临时入口就在哪里”；只有目标盘与源片不同卷、硬链接做不了时，

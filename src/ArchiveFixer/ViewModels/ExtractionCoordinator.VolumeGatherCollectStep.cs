@@ -669,7 +669,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private List<string> CollectGroupCandidatePaths(ArchiveTask task, string entryLayer, out string referenceName, out int scannedInEntryLayer)
+        private List<string> CollectVolumeCandidatePaths(ArchiveTask task, string entryLayer, out string referenceName, out int scannedInEntryLayer)
         {
             var paths = new List<string>();
 

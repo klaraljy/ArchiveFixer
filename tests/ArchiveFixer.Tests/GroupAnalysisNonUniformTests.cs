@@ -10,13 +10,13 @@ namespace ArchiveFixer.Tests
     /// <summary>
     /// 非均匀 7z：首卷可以比后续卷更大；片顺序必须由入口/名字决定，不能按大小排。
     /// </summary>
-    public sealed class GroupAnalysisNonUniformTests : IDisposable
+    public sealed class VolumeCandidateDiscoveryNonUniformTests : IDisposable
     {
         private readonly string _root = Path.Combine(
             Path.GetTempPath(),
             "af-nonuniform-" + Guid.NewGuid().ToString("N"));
 
-        public GroupAnalysisNonUniformTests()
+        public VolumeCandidateDiscoveryNonUniformTests()
         {
             Directory.CreateDirectory(_root);
         }
@@ -44,10 +44,10 @@ namespace ArchiveFixer.Tests
                 Handoff(second, 200)
             };
 
-            GroupAnalysis.GroupCandidate candidate = Assert.Single(
-                GroupAnalysis.Analyze(handoffs, new[] { _root }));
+            VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, candidate.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.Verdict);
             Assert.Equal(new[] { first, second }, candidate.Pieces.ToArray());
             Assert.Equal(first, candidate.EntryPath);
         }
@@ -73,11 +73,11 @@ namespace ArchiveFixer.Tests
                 Handoff(b2, 100)
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
             Assert.Equal(2, groups.Count);
-            Assert.All(groups, group => Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict));
+            Assert.All(groups, group => Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict));
             Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
             Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
         }

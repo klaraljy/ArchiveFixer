@@ -1043,7 +1043,7 @@ namespace ArchiveFixer.ViewModels
         /// 找不到入口任务 ⇒ 只写一行 WARN、什么都不做（⛔ 不新建任务绕过任务表）。</para>
         /// </summary>
         internal IReadOnlyList<ArchiveTask> TryMarkHandoffGroupEntryTasks(
-            IReadOnlyList<ArchiveFixer.Extraction.GroupAnalysis.GroupCandidate>? groups,
+            IReadOnlyList<ArchiveFixer.Extraction.VolumeCandidateDiscovery.VolumeCandidate>? groups,
             IReadOnlyCollection<ArchiveTask> tasks)
         {
             var result = new List<ArchiveTask>();
@@ -1053,10 +1053,10 @@ namespace ArchiveFixer.ViewModels
                 return result;
             }
 
-            foreach (ArchiveFixer.Extraction.GroupAnalysis.GroupCandidate group in groups)
+            foreach (ArchiveFixer.Extraction.VolumeCandidateDiscovery.VolumeCandidate group in groups)
             {
                 if (group == null
-                    || group.SuggestedVerdict != ArchiveFixer.Extraction.GroupAnalysis.GroupAnalysisVerdict.Complete
+                    || group.SuggestedVerdict != ArchiveFixer.Extraction.VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete
                     || string.IsNullOrWhiteSpace(group.EntryPath))
                 {
                     continue;

@@ -16,13 +16,13 @@ namespace ArchiveFixer.Tests
     /// 就不许判 `Complete`（真机 `2` 组是 4 片只有 2 个槽、却被判 Complete）；
     /// ③ 普通单卷 zip 不许再出 `名字卷标记连成 1..1` 的假分卷组。</para>
     /// </summary>
-    public sealed class GroupAnalysisParentPackageTests : IDisposable
+    public sealed class VolumeCandidateDiscoveryParentPackageTests : IDisposable
     {
         private readonly string _root = Path.Combine(
             Path.GetTempPath(),
             "af-parent-group-" + Guid.NewGuid().ToString("N"));
 
-        public GroupAnalysisParentPackageTests()
+        public VolumeCandidateDiscoveryParentPackageTests()
         {
             Directory.CreateDirectory(_root);
         }
@@ -69,16 +69,16 @@ namespace ArchiveFixer.Tests
                 RarPart(part3, 50, 3)
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
-            GroupAnalysis.GroupCandidate? group = groups
+            VolumeCandidateDiscovery.VolumeCandidate? group = groups
                 .FirstOrDefault(candidate => candidate.Pieces.Contains(part1));
 
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -106,11 +106,11 @@ namespace ArchiveFixer.Tests
                 }
             };
 
-            GroupAnalysis.GroupCandidate candidate = Assert.Single(
-                GroupAnalysis.Analyze(handoffs, new[] { _root }));
+            VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
 
             Assert.Equal(3, candidate.Pieces.Count);
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, candidate.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, candidate.Verdict);
             Assert.Contains("没有卷号", candidate.Evidence, StringComparison.Ordinal);
         }
 
@@ -135,12 +135,12 @@ namespace ArchiveFixer.Tests
                 }
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
             Assert.DoesNotContain(
                 groups,
-                candidate => candidate.Verdict == GroupAnalysis.GroupAnalysisVerdict.Complete);
+                candidate => candidate.Verdict == VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete);
         }
 
         [Fact]
@@ -170,16 +170,16 @@ namespace ArchiveFixer.Tests
                 RarPart(part3, 50, 3)
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root }, extraSeeds: null, excludedSources: new[] { parent });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }, extraSeeds: null, excludedSources: new[] { parent });
 
-            GroupAnalysis.GroupCandidate? group = groups
+            VolumeCandidateDiscovery.VolumeCandidate? group = groups
                 .FirstOrDefault(candidate => candidate.Pieces.Contains(part1));
 
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -211,16 +211,16 @@ namespace ArchiveFixer.Tests
                 RarPart(part3, 50, 3)
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
-            GroupAnalysis.GroupCandidate? group = groups
+            VolumeCandidateDiscovery.VolumeCandidate? group = groups
                 .FirstOrDefault(candidate => candidate.Pieces.Contains(part1));
 
             Assert.NotNull(group);
             Assert.DoesNotContain(parent, group!.Pieces);
             Assert.Equal(3, group.Pieces.Count);
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict);
         }
 
         [Fact]
@@ -235,10 +235,10 @@ namespace ArchiveFixer.Tests
                 UnknownTail(tail, 200, "风景02")
             };
 
-            GroupAnalysis.GroupCandidate candidate = Assert.Single(
-                GroupAnalysis.Analyze(handoffs, new[] { _root }));
+            VolumeCandidateDiscovery.VolumeCandidate candidate = Assert.Single(
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root }));
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, candidate.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, candidate.Verdict);
             Assert.Equal(new[] { first, tail }, candidate.Pieces.ToArray());
             Assert.Equal(first, candidate.EntryPath);
             Assert.Contains("自述整包对账", candidate.Evidence, StringComparison.Ordinal);
@@ -265,11 +265,11 @@ namespace ArchiveFixer.Tests
                 UnknownTail(b2, 100, "风景02")
             };
 
-            IReadOnlyList<GroupAnalysis.GroupCandidate> groups =
-                GroupAnalysis.Analyze(handoffs, new[] { _root });
+            IReadOnlyList<VolumeCandidateDiscovery.VolumeCandidate> groups =
+                VolumeCandidateDiscovery.Analyze(handoffs, new[] { _root });
 
             Assert.Equal(2, groups.Count);
-            Assert.All(groups, group => Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, group.Verdict));
+            Assert.All(groups, group => Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, group.Verdict));
             Assert.Contains(groups, group => group.Pieces.Contains(a1) && group.Pieces.Contains(a2));
             Assert.Contains(groups, group => group.Pieces.Contains(b1) && group.Pieces.Contains(b2));
         }

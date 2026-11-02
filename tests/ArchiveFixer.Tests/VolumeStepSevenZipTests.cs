@@ -28,7 +28,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.7z.001", "组.7z.002" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -49,7 +49,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.7z.001", "组.7z.002", "组.7z.003" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -70,7 +70,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.7z.001", "组.7z.002" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -90,7 +90,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
             Assert.Null(result.NamePlan);
             Assert.DoesNotContain("缺片", result.Evidence, StringComparison.Ordinal);
         }
@@ -110,7 +110,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
             Assert.DoesNotContain("缺片", result.Evidence, StringComparison.Ordinal);
         }
 
@@ -129,7 +129,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Complete, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete, result.Verdict);
             Assert.Equal(
                 new[] { "组.7z.001", "组.7z.002", "组.7z.003" },
                 result.NamePlan!.Items.Select(item => item.TargetName).ToArray());
@@ -150,7 +150,7 @@ namespace ArchiveFixer.Tests
 
             FamilyResult result = new SevenZipFamilyAlgorithm().Evaluate(unit);
 
-            Assert.Equal(GroupAnalysis.GroupAnalysisVerdict.Unknown, result.Verdict);
+            Assert.Equal(VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown, result.Verdict);
         }
 
         private static string NewLayer() =>

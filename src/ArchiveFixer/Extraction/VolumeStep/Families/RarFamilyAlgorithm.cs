@@ -42,7 +42,7 @@ namespace ArchiveFixer.Extraction
             if (unit == null || unit.Pieces.Count == 0)
             {
                 return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
                     Array.Empty<string>(),
                     Array.Empty<int>(),
                     null,
@@ -85,7 +85,7 @@ namespace ArchiveFixer.Extraction
             if (unnumbered.Count > 0 || numbered.Count == 0)
             {
                 return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
                     Array.Empty<string>(),
                     Array.Empty<int>(),
                     null,
@@ -95,7 +95,7 @@ namespace ArchiveFixer.Extraction
             if (numbered.GroupBy(item => item.Number).Any(group => group.Count() > 1))
             {
                 return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Unknown,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Unknown,
                     Array.Empty<string>(),
                     Array.Empty<int>(),
                     null,
@@ -132,7 +132,7 @@ namespace ArchiveFixer.Extraction
                 List<int> missing = Enumerable.Range(1, max).Except(numbers).ToList();
 
                 return new FamilyResult(
-                    GroupAnalysis.GroupAnalysisVerdict.Missing,
+                    VolumeCandidateDiscovery.VolumeCandidateVerdict.Missing,
                     ordered,
                     missing,
                     null,
@@ -142,7 +142,7 @@ namespace ArchiveFixer.Extraction
             CanonicalNamePlan plan = BuildNamePlan(unit, orderedNumbered);
 
             return new FamilyResult(
-                GroupAnalysis.GroupAnalysisVerdict.Complete,
+                VolumeCandidateDiscovery.VolumeCandidateVerdict.Complete,
                 ordered,
                 Array.Empty<int>(),
                 plan,
