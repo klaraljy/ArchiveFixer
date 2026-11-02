@@ -225,6 +225,9 @@ namespace ArchiveFixer.ViewModels
         private readonly ExtractionCoordinator _extractionCoordinator;
         private readonly DialogService _dialogService;
 
+        /// <summary>本次运行的不可变快照（阶段 4 影子：先冻结，尚未替换所有读取点）。</summary>
+        internal RunSnapshot? CurrentRunSnapshot { get; private set; }
+
         /// <summary>
         /// 内层包候选的"这真的是包吗"判据（用户 2026-09-24 要求加的下限；2026-09-25 第 33 条改成**只认内容**）。
         ///
@@ -1018,13 +1021,25 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", $"一键处理开始，共 {rootTargets.Count} 个任务。");
 
+            OneClickRunOptions snapshotOptions = runOptions
+                ?? OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
+
+            CurrentRunSnapshot = RunSnapshot.Capture(
+                rootTargets,
+                snapshotOptions,
+                _vm.SpaceTightMode,
+                _vm.SpaceTightKeepSource,
+                Settings.UseSpecificExtraction,
+                _vm.SelectedOutputDirectory,
+                _extractionCoordinator.SpecificExtractionPasswords);
+
             /*
              * 特定解压 = 独立整理模式，不再由旧规则清单决定是否生效。
              * 旧规则注册表里的“只留一层内容”已经不影响定稿；这里只看总开关。
              */
-            if (Settings.UseSpecificExtraction)
+            if (CurrentRunSnapshot.UseSpecificExtraction)
             {
-                return await RunSpecificBatchAsync(rootTargets, runOptions).ConfigureAwait(true);
+                return await RunSpecificBatchAsync(rootTargets, snapshotOptions).ConfigureAwait(true);
             }
 
             // 处理过的任务按轮累加：汇总要算"本次一共处理了多少个"，只算第一轮会和实际不符。
