@@ -331,7 +331,7 @@ namespace ArchiveFixer.Services
              * 其余物现在和内容物文件夹同级，也就是 outputFull 的父目录；
              * 允许删除的根必须跟着上移一层，否则 DeleteSafetyGuard 会把合法目标判成越界。
              */
-            string allowedRoot = Path.GetDirectoryName(outputFull) ?? outputFull;
+            string allowedRoot = CleanupPlanner.ResolveAllowedRoot(outputFull);
 
             if (!shared)
             {
