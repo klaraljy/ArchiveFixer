@@ -129,7 +129,8 @@ namespace ArchiveFixer.Services
         internal async Task CollectChainInnerPackagesIntoRestAsync(
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string? planAllowedRoot = null)
         {
             if (chainTasks == null || chainTasks.Count == 0)
             {
@@ -279,7 +280,7 @@ namespace ArchiveFixer.Services
              */
             if (ChainFullySucceeded(rootTask, chainTasks))
             {
-                PurgeRestAfterSuccess(rootTask);
+                PurgeRestAfterSuccess(rootTask, planAllowedRoot);
             }
         }
 
@@ -2255,7 +2256,7 @@ namespace ArchiveFixer.Services
         /// 失败 / 部分完成仍然只能走 <see cref="PurgeRestItemsExceptChainRootSource"/>，
         /// 那条路继续要求源包在盘上。
         /// </summary>
-        internal void PurgeRestAfterSuccess(ArchiveTask task)
+        internal void PurgeRestAfterSuccess(ArchiveTask task, string? planAllowedRoot = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(task.RestDirectoryPath))
             {
@@ -2266,7 +2267,11 @@ namespace ArchiveFixer.Services
                     null,
                     null,
                     ContentKeepRules.FromSettings(_host.Settings))
-                .Purge(task, cancelled: false, DeleteMode.Permanent);
+                .Purge(
+                    task,
+                    cancelled: false,
+                    DeleteMode.Permanent,
+                    allowedRootEvidence: planAllowedRoot);
 
             _host.AppendLog(
                 purge.Succeeded ? "INFO" : "WARN",

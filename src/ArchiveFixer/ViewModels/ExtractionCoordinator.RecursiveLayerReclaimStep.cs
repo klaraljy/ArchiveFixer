@@ -228,6 +228,14 @@ namespace ArchiveFixer.ViewModels
                 if (!string.IsNullOrWhiteSpace(used))
                 {
                     _chainInnerLayerInputs.Add(used);
+
+                    _cleanupLedger.Add(new CleanupItem
+                    {
+                        Path = used,
+                        Kind = CleanupItemKind.LayerInput,
+                        ChainId = request.ChildLayerLabel ?? string.Empty,
+                        LayerIndex = _cleanupLedger.Items.Count
+                    });
                 }
             }
 

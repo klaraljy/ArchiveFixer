@@ -176,33 +176,15 @@ namespace ArchiveFixer.Storage
                 ? Path.GetFileName(task.CurrentPath)
                 : task.FileName;
 
-            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
-            {
-                return Skip($"{name}：没记下本次定稿实际用的其余物目录，不敢猜路径，一个字节都不删");
-            }
+            string? targetError = ValidateRestTarget(
+                task,
+                allowedRootEvidence,
+                out string directory,
+                out string allowedRoot);
 
-            string directory = SafePathHelper.GetFullPathSafe(task.RestDirectoryPath);
-
-            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            if (targetError != null)
             {
-                return Skip($"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容");
-            }
-
-            if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out string allowedRoot, out string why))
-            {
-                return Skip($"{name}：{why}，已拒绝删除");
-            }
-
-            if (!LooksLikeArtifactDirectory(directory))
-            {
-                return Skip(
-                    $"{name}：{directory} 的形状不像「其余物」目录（既不是 {ProcessArtifactLayout.ArtifactDirectoryName}，"
-                    + "上一级也不是），已拒绝删除");
-            }
-
-            if (!ArchivePathGuard.IsInsideRoot(allowedRoot, directory, out string outsideReason))
-            {
-                return Skip($"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}");
+                return Skip(targetError);
             }
 
             string? splitGroupBlocker = Extraction.RestVolumeCompletenessGate.DescribeBlocker(directory);
@@ -500,6 +482,53 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
+        /// 两档共用：解析并校验「要删的其余物目录」。只判路径事实，不判断该不该删。
+        /// </summary>
+        private string? ValidateRestTarget(
+            ArchiveTask task,
+            string? allowedRootEvidence,
+            out string directory,
+            out string allowedRoot)
+        {
+            directory = string.Empty;
+            allowedRoot = string.Empty;
+
+            string name = string.IsNullOrWhiteSpace(task.FileName)
+                ? Path.GetFileName(task.CurrentPath)
+                : task.FileName;
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return $"{name}：没记下本次定稿实际用的其余物目录，不敢猜路径，一个字节都不删";
+            }
+
+            directory = SafePathHelper.GetFullPathSafe(task.RestDirectoryPath);
+
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return $"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容";
+            }
+
+            if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out allowedRoot, out string why))
+            {
+                return $"{name}：{why}，已拒绝删除";
+            }
+
+            if (!LooksLikeArtifactDirectory(directory))
+            {
+                return $"{name}：{directory} 的形状不像「其余物」目录（既不是 {ProcessArtifactLayout.ArtifactDirectoryName}，"
+                    + "上一级也不是），已拒绝删除";
+            }
+
+            if (!ArchivePathGuard.IsInsideRoot(allowedRoot, directory, out string outsideReason))
+            {
+                return $"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}";
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// 试着删除一个任务的其余物。**任何一条门槛不成立都返回"没动"**，并给出原因（不抛异常）。
         /// </summary>
         /// <param name="task">目标任务。</param>
@@ -572,33 +601,15 @@ namespace ArchiveFixer.Storage
                     $"{name}：{completeness.Message}（机器结论：{completeness.Evidence}），其余物一个字节都不删");
             }
 
-            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
-            {
-                return Skip($"{name}：没记下本次定稿实际用的其余物目录，不敢猜路径，一个字节都不删");
-            }
+            string? targetError = ValidateRestTarget(
+                task,
+                allowedRootEvidence,
+                out string directory,
+                out string allowedRoot);
 
-            string directory = SafePathHelper.GetFullPathSafe(task.RestDirectoryPath);
-
-            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            if (targetError != null)
             {
-                return Skip($"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容");
-            }
-
-            if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out string allowedRoot, out string why))
-            {
-                return Skip($"{name}：{why}，已拒绝删除");
-            }
-
-            if (!LooksLikeArtifactDirectory(directory))
-            {
-                return Skip(
-                    $"{name}：{directory} 的形状不像「其余物」目录（既不是 {ProcessArtifactLayout.ArtifactDirectoryName}，"
-                    + "上一级也不是），已拒绝删除");
-            }
-
-            if (!ArchivePathGuard.IsInsideRoot(allowedRoot, directory, out string outsideReason))
-            {
-                return Skip($"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}");
+                return Skip(targetError);
             }
 
             /*
@@ -770,17 +781,19 @@ namespace ArchiveFixer.Storage
              */
             if (!string.IsNullOrWhiteSpace(allowedRootEvidence))
             {
-                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(allowedRootEvidence));
+                candidates.Add(SafePathHelper.GetFullPathSafe(allowedRootEvidence));
             }
-
-            if (!string.IsNullOrWhiteSpace(task.CollectedPath))
+            else
             {
-                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.CollectedPath));
-            }
+                if (!string.IsNullOrWhiteSpace(task.CollectedPath))
+                {
+                    AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.CollectedPath));
+                }
 
-            if (!string.IsNullOrWhiteSpace(task.OutputPath))
-            {
-                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.OutputPath));
+                if (!string.IsNullOrWhiteSpace(task.OutputPath))
+                {
+                    AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.OutputPath));
+                }
             }
 
             foreach (string candidate in candidates)

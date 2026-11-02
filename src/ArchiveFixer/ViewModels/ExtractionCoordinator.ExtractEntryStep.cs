@@ -405,6 +405,7 @@ namespace ArchiveFixer.ViewModels
                     maxParallel = Math.Min(_spaceLimit, CurrentAutoLimit());
                 }
 
+                _cleanupLedger.Clear();
                 PrepareRestHandlingForBatch();
 
                 foreach (string line in plan.DescribeLines())

@@ -135,8 +135,10 @@ namespace ArchiveFixer.ViewModels
         private Task CollectChainInnerPackagesIntoRestAsync(
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
-            CancellationToken cancellationToken) =>
-            _restHandlingStep.CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
+            CancellationToken cancellationToken,
+            string? planAllowedRoot = null) =>
+            _restHandlingStep.CollectChainInnerPackagesIntoRestAsync(
+                rootTask, chainTasks, cancellationToken, planAllowedRoot);
 
         private void CollectChainInnerLayerInputsIntoRest(ArchiveTask rootTask, string restDirectory, string outputRoot) =>
             _restHandlingStep.CollectChainInnerLayerInputsIntoRest(rootTask, restDirectory, outputRoot);

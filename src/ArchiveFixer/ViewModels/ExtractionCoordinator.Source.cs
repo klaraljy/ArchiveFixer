@@ -25,6 +25,8 @@ namespace ArchiveFixer.ViewModels
 {
     internal sealed partial class ExtractionCoordinator
     {
+        /// <summary>本批清理账本；只记事实，链尾规划读取。</summary>
+        private readonly CleanupLedger _cleanupLedger = new();
         /// <summary>
         /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 处理源包。
         ///
@@ -1619,54 +1621,89 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 这里不再留第二份（同一件事只允许一个出口）。
                  */
                 /*
-                 * 链尾统一顺序（用户 2026-11-02）：先收内层过程物 → 按档处理其余物 →
-                 * 最后才轮到源包补搬。成功、失败、部分完成都走同一条路；
-                 * 空间不足档的源包已在各层当场处理，这里不会再动它。
+                 * 链尾唯一顺序由 CleanupPlanner 给出：
+                 * 收过程物 → 按档处理其余物 → 过路层 → 源包最后补搬。
+                 * 空间不足档的源包已在各层当场处理，规划器不会给出 ProcessUserSource。
                  */
-                await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
-
-                ReportLeftBehindInnerPackages(rootTask, chainTasks);
-
-                await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
-
-                await SweepPassThroughRestDirectoriesAsync(rootTask, cancellationToken);
-
-                if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
+                if (!string.IsNullOrWhiteSpace(rootTask.CurrentPath))
                 {
-                    /*
-                     * 后台重活（目录遍历 + 可能的整包跨盘拷贝 + 链尾那一档"其余物处理"），
-                     * 日志先收集、回到 UI 线程再写。
-                     */
-                    DeferredSourceMoveWork work = await Task.Run(
-                            () => RunDeferredSourceMoveWorkAsync(
-                                rootTask,
-                                chainTasks,
-                                sourceHandling,
-                                cancellationToken),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    foreach ((string level, string message) in work.LogEntries)
+                    _cleanupLedger.Add(new CleanupItem
                     {
-                        AppendLog(level, message);
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(work.Failure))
-                    {
-                        /*
-                         * 与"本轮直接搬"同一口径（决策 D-12）：内容物已经好了，所以**不**顶掉"解压成功"，
-                         * 但任务整体没做完 —— 标成「部分完成」并写明原因（不变量 6 的反面同样成立）。
-                         */
-                        rootTask.Status = StatusText.PartiallyCompleted;
-                        rootTask.ErrorMessage = work.Failure;
-
-                        rootTask.VerifyMessage = string.IsNullOrWhiteSpace(rootTask.VerifyMessage)
-                            ? work.Failure
-                            : $"{rootTask.VerifyMessage}；{work.Failure}";
-                    }
-
-                    continue;
+                        Path = rootTask.CurrentPath,
+                        Kind = CleanupItemKind.UserSource,
+                        ChainId = rootTask.LogName,
+                        OwnerTaskId = rootTask.LogName
+                    });
                 }
+
+                if (!string.IsNullOrWhiteSpace(rootTask.RestDirectoryPath))
+                {
+                    _cleanupLedger.Add(new CleanupItem
+                    {
+                        Path = rootTask.RestDirectoryPath,
+                        Kind = CleanupItemKind.RestArtifact,
+                        ChainId = rootTask.LogName,
+                        OwnerTaskId = rootTask.LogName
+                    });
+                }
+
+                ChainCleanupPlan cleanupPlan = CleanupPlanner.BuildChainPlan(
+                    CleanupPlanner.ResolveAllowedRoot(rootTask.OutputPath),
+                    sourcePending: rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
+
+                await CleanupExecutor.ExecuteAsync(
+                    cleanupPlan,
+                    async (step, stepCancellation) =>
+                    {
+                        switch (step)
+                        {
+                            case ChainCleanupStep.CollectProcessArtifacts:
+                                await CollectChainInnerPackagesIntoRestAsync(
+                                    rootTask, chainTasks, stepCancellation, cleanupPlan.AllowedRoot).ConfigureAwait(false);
+                                break;
+
+                            case ChainCleanupStep.ApplyRestHandling:
+                                ReportLeftBehindInnerPackages(rootTask, chainTasks);
+                                await ApplyRestHandlingAfterChainAsync(
+                                    rootTask, chainTasks, stepCancellation).ConfigureAwait(false);
+                                break;
+
+                            case ChainCleanupStep.SweepPassThrough:
+                                await SweepPassThroughRestDirectoriesAsync(
+                                    rootTask, stepCancellation).ConfigureAwait(false);
+                                break;
+
+                            case ChainCleanupStep.ProcessUserSource:
+                                {
+                                    DeferredSourceMoveWork work = await Task.Run(
+                                            () => RunDeferredSourceMoveWorkAsync(
+                                                rootTask,
+                                                chainTasks,
+                                                sourceHandling,
+                                                stepCancellation),
+                                            stepCancellation)
+                                        .ConfigureAwait(false);
+
+                                    foreach ((string level, string message) in work.LogEntries)
+                                    {
+                                        AppendLog(level, message);
+                                    }
+
+                                    if (!string.IsNullOrWhiteSpace(work.Failure))
+                                    {
+                                        rootTask.Status = StatusText.PartiallyCompleted;
+                                        rootTask.ErrorMessage = work.Failure;
+
+                                        rootTask.VerifyMessage = string.IsNullOrWhiteSpace(rootTask.VerifyMessage)
+                                            ? work.Failure
+                                            : $"{rootTask.VerifyMessage}；{work.Failure}";
+                                    }
+
+                                    break;
+                                }
+                        }
+                    },
+                    cancellationToken).ConfigureAwait(false);
 
             }
         }
