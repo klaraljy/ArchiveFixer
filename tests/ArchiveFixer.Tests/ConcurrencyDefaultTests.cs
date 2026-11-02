@@ -110,10 +110,11 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置界面_并发只显示自动_没有手动控件()
+        public void 解压方式页没有并发与空间卡片()
         {
             /*
-             * 用户 2026-11-01：并发数不再给用户选（自动算法决定），界面不留下拉/全速/建议按钮。
+             * 用户 2026-11-02：并发与空间那张卡直接删掉，留着没有用。
+             * 并发全自动；解压方式页不再保留任何相关控件或提示。
              */
             string path = Path.Combine(
                 XamlBindingScan.RepositoryRoot,
@@ -126,12 +127,14 @@ namespace ArchiveFixer.Tests
 
             string xaml = File.ReadAllText(path);
 
-            Assert.Contains("自动（程序按磁盘类型与实时吞吐决定", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("并发与空间", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("MaxParallelExtractCount", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("RunAtFullSpeed", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("全速", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("并发档", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("RefreshParallelAdviceCommand", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("SpaceModeText", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("SpaceTightOverrideText", xaml, StringComparison.Ordinal);
         }
     }
 }

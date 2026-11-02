@@ -7,7 +7,7 @@
 
     <!--
         ② 解压方式页（用户 2026-09-24 第 11 条）。
-        内容全部按功能归位：嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
+        内容全部按功能归位：嵌套与覆盖 / 解压前后 / 引擎。
         （输出位置只在①「任务」页；用户 2026-10-26 拍板把②页那一组重复入口整组删除。）
         ⛔ 页面最底下那块「高风险区（危险模式 + 自测凭证 + 风险四条 + 红横幅）」按用户
         2026-09-25 第 32 条**整块退役**：那条需求现在是③页「删除操作」里的第三档，
@@ -218,55 +218,6 @@
                                Margin="0,6,0,0"
                                TextWrapping="Wrap"
                                Text="{x:Static models:StatusText.ContentKeepKeywordsRulesHint}" />
-                </StackPanel>
-            </GroupBox>
-
-            <!-- ==================== 并发与空间 ==================== -->
-            <GroupBox Header="并发与空间">
-                <StackPanel>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="并发："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <!--
-                            用户 2026-11-01：并发数不再给用户选，完全由程序按设备与实时吞吐决定
-                            （AutoConcurrencyController）。这里只说明是自动，不提供任何输入控件。
-                        -->
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource HintTextStyle}"
-                                   VerticalAlignment="Center"
-                                   TextWrapping="Wrap"
-                                   Text="自动（程序按磁盘类型与实时吞吐决定，无需设置）" />
-                    </Grid>
-
-                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,8,0,0">
-                        <StackPanel>
-                            <TextBlock Text="{Binding SpaceModeText}"
-                                       Style="{StaticResource BannerTextStyle}"
-                                       Foreground="{StaticResource InfoTextBrush}"
-                                       TextWrapping="Wrap" />
-
-                            <!--
-                                ①页那个「空间不足」开关开着时的**覆盖提示**（用户 2026-09-27）：
-                                这一页正是他核对"源包 / 其余物 / 并发"的地方，只写在①页等于没写。
-                                关着时整行收起（空字符串 → Collapsed，见 BoolToVisibility 那一套的同款做法）。
-                            -->
-                            <TextBlock Text="{Binding SpaceTightOverrideText}"
-                                       Style="{StaticResource BannerTextStyle}"
-                                       Foreground="{StaticResource WarningTextBrush}"
-                                       TextWrapping="Wrap"
-                                       Margin="0,3,0,0"
-                                       Visibility="{Binding HasSpaceTightOverride, Converter={StaticResource BoolToVisibilityConverter}}" />
-
-                                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailSpaceGateHeader}"
-                                                Detail="{x:Static models:StatusText.BoxDetailSpaceGateDetail}" />
-                        </StackPanel>
-                    </Border>
                 </StackPanel>
             </GroupBox>
 
