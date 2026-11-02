@@ -228,6 +228,8 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本次运行的不可变快照（阶段 4 影子：先冻结，尚未替换所有读取点）。</summary>
         internal RunSnapshot? CurrentRunSnapshot { get; private set; }
 
+        private bool _batchFinalized;
+
         /// <summary>
         /// 内层包候选的"这真的是包吗"判据（用户 2026-09-24 要求加的下限；2026-09-25 第 33 条改成**只认内容**）。
         ///
@@ -1023,6 +1025,8 @@ namespace ArchiveFixer.ViewModels
 
             OneClickRunOptions snapshotOptions = runOptions
                 ?? OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
+
+            _batchFinalized = false;
 
             CurrentRunSnapshot = RunSnapshot.Capture(
                 rootTargets,
@@ -2190,6 +2194,8 @@ namespace ArchiveFixer.ViewModels
              * 批末收卷（`HarvestRememberedGroupVolumesForBatch`）仍停用（不在本段范围内）。
              */
             _extractionCoordinator.AppendVolumeHandoffBatchSummary();
+
+            FinalizeBatch();
 
             string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 
@@ -3788,6 +3794,25 @@ namespace ArchiveFixer.ViewModels
 
 
         /// <summary>
+        /// 批末唯一副作用阶段：清卷入口、清 group-entry 壳、恢复源名、清冗余片名。
+        /// 汇总函数只拼文字，调它不许改盘；本方法幂等。
+        /// </summary>
+        internal void FinalizeBatch()
+        {
+            if (_batchFinalized)
+            {
+                return;
+            }
+
+            _batchFinalized = true;
+
+            _extractionCoordinator.CleanupAllVolumeStepEntryDirectories();
+            _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
+            _extractionCoordinator.RestoreKeepInPlaceSourceNames();
+            _extractionCoordinator.PurgeRedundantPieceAliases();
+        }
+
+        /// <summary>
         /// 一行汇总。
         ///
         /// 硬要求：各分项加起来**必须等于本次处理的任务数**。
@@ -3826,18 +3851,6 @@ namespace ArchiveFixer.ViewModels
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
              * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
              */
-            /*
-             * **一键处理真正收尾时**才收"产品树里多余的片名"（唯一时机，被两次真跑钉死）：
-             * 挂在 `RunBatch` 的批尾**太早** —— 第二大步（`FinalizeDeferredVolumeDeficits`）与跨链收拢
-             * 在它之后才跑，整批 30 份实测当场退步 `13131313` / `28282828` 的判据 ①（成品为空）。
-             * 判据见 `ExtractionCoordinator.PurgeRedundantPieceAliases`：只碰"名字像分卷片 **且** 还有别的名字"
-             * 的文件 ⇒ 删掉一个名字**一个字节都不丢**（真机 `6666` 实测：两个名字同 File ID）。
-             */
-            _extractionCoordinator.CleanupAllVolumeStepEntryDirectories();
-            _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
-            _extractionCoordinator.RestoreKeepInPlaceSourceNames();
-            _extractionCoordinator.PurgeRedundantPieceAliases();
-
             BatchOutcomeTally tally = BatchOutcomeTally.Count(targets);
 
             var parts = new List<string>(tally.BuildParts());
