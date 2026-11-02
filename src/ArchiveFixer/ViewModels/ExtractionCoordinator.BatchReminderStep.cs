@@ -156,7 +156,13 @@ namespace ArchiveFixer.ViewModels
                 _autoDevice,
                 new ConcurrencyProfile
                 {
-                    LastGoodLimit = _autoConcurrency.CurrentLimit,
+                    /*
+                     * 只把**保守的已验证起点**写回去：
+                     * 本批从 1 起步、中途加到 2 ⇒ 存 1（加档只证明"这批混合跑更快"，
+                     * 不证明"下一批一开始就 2 更好"；H 盘实测从 2 冷启动反而慢一倍）。
+                     * 若中途降档，则存降下来的值（那是"更好"的证据）。
+                     */
+                    LastGoodLimit = Math.Min(_autoConcurrency.InitialLimit, _autoConcurrency.CurrentLimit),
                     MinLatencySecondsPerGb = _autoConcurrency.MinLatencySecondsPerGb,
                     UpdatedAt = DateTimeOffset.Now
                 });
