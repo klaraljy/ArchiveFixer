@@ -80,9 +80,6 @@ namespace ArchiveFixer.ViewModels
                  */
                 string taskOutputPathBeforeRecheck = task.OutputPath;
 
-                // ① 再收一次卷：那时缺的那几卷可能已经被解出来 / 被收拢到位。
-                TryGatherVolumesBeforeExtract(task, out _);
-
                 /*
                  * ①.5 这一组的内容**正在由本批另一单解出来**、而它还没收尾 ⇒ 这一单**先不落结论**。
                  *
