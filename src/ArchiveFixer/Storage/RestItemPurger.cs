@@ -770,17 +770,17 @@ namespace ArchiveFixer.Storage
              */
             if (!string.IsNullOrWhiteSpace(allowedRootEvidence))
             {
-                candidates.Add(SafePathHelper.GetFullPathSafe(allowedRootEvidence));
+                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(allowedRootEvidence));
             }
 
             if (!string.IsNullOrWhiteSpace(task.CollectedPath))
             {
-                candidates.Add(SafePathHelper.GetFullPathSafe(task.CollectedPath));
+                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.CollectedPath));
             }
 
             if (!string.IsNullOrWhiteSpace(task.OutputPath))
             {
-                candidates.Add(SafePathHelper.GetFullPathSafe(task.OutputPath));
+                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.OutputPath));
             }
 
             foreach (string candidate in candidates)
@@ -799,6 +799,28 @@ namespace ArchiveFixer.Storage
 
             why = $"其余物目录 {directory} 不在本任务的输出目录（{string.Join(" / ", candidates.Where(c => c.Length > 0))}）之内";
             return false;
+        }
+
+        /// <summary>
+        /// 允许根本身 + 它的**父目录**各算一次：其余物现在和内容物文件夹同级，
+        /// 落在输出目录的父目录下（`out\包名` 的其余物在 `out\其余物`），
+        /// 只拿输出目录自己当允许根会把合法目标判成越界。
+        /// </summary>
+        private static void AddAllowedRootCandidate(List<string> candidates, string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            candidates.Add(path);
+
+            string? parent = Path.GetDirectoryName(path);
+
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                candidates.Add(parent);
+            }
         }
 
         /// <summary>

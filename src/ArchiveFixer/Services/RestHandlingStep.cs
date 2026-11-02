@@ -279,7 +279,7 @@ namespace ArchiveFixer.Services
              */
             if (ChainFullySucceeded(rootTask, chainTasks))
             {
-                PurgeRestItemsExceptChainRootSource(rootTask);
+                PurgeRestItemsExceptChainRootSource(rootTask, chainFullySucceeded: true);
             }
         }
 
@@ -2260,7 +2260,12 @@ namespace ArchiveFixer.Services
         /// 它不在了（已被删 / 路径失效）⇒ **一个字节都不删**（判不出 ⇒ 什么都不做）——
         /// 源包是唯一能重建整条链的东西，它都没了还清过程物，等于把最后一份可恢复路径也删掉。</para>
         /// </summary>
-        internal void PurgeRestItemsExceptChainRootSource(ArchiveTask task)
+        /// <param name="chainFullySucceeded">
+        /// 调用方已判定整条链完全成功。成功链的源包可能已经按「彻底删除」先删掉（空间不足档就是每层删），
+        /// 此时其余物里的过程物不再承担“从源包重建整条链”的恢复职责，仍应清空。
+        /// 失败 / 部分完成档没有这个事实，源包不在盘上就必须一个字节都不删。
+        /// </param>
+        internal void PurgeRestItemsExceptChainRootSource(ArchiveTask task, bool chainFullySucceeded = false)
         {
             string rootSource = task.ChainRootIdentity;
 
@@ -2281,16 +2286,24 @@ namespace ArchiveFixer.Services
 
             if (rootSourceFull.Length == 0 || !SafePathHelper.FileExists(rootSourceFull))
             {
-                _host.AppendLog(
-                    "WARN",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.PartialPublishRestKeptFormat,
-                        task.FileName,
-                        $"这条链的最外层源包不在盘上了（{rootSource}）—— 它是唯一能把整条链重新解出来的东西，"
-                        + "所以其余物里的过程物一个都不删"));
+                if (!chainFullySucceeded)
+                {
+                    _host.AppendLog(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PartialPublishRestKeptFormat,
+                            task.FileName,
+                            $"这条链的最外层源包不在盘上了（{rootSource}）—— 它是唯一能把整条链重新解出来的东西，"
+                            + "所以其余物里的过程物一个都不删"));
 
-                return;
+                    return;
+                }
+
+                _host.AppendLog(
+                    "INFO",
+                    $"{task.FileName}：整条链已完全成功，最外层源包已按源包档删除（{rootSource}）—— "
+                    + "其余物里的过程物不再需要保留，继续清空。");
             }
 
             if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))

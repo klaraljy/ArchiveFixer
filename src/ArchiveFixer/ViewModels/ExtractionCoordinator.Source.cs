@@ -769,8 +769,18 @@ namespace ArchiveFixer.ViewModels
              * + 内容物校验通过**证明，不该再要一次名字证明；同组邻居检查（基名 + 族）照旧跑。
              * 判据本体一字不改，默认值 true 保住了逐层回收/空间不足那两档。
              */
+            /*
+             * ⛔ 严格档只给**分卷组**的逐层回收：
+             * 续解任务里那种独立内层包（例如 `.exe` 自解压包）本来就不是分卷，
+             * 名字/后缀认不出归档也不能因此把它留到链尾 —— 用户 2026-11-02 口径：
+             * 过程物逐层删除，原包最后再删。独立内层包按“本层成功 + 它在递归工作区里”直接删；
+             * 只有任务确实属于分卷组（`IsVolumeGroup` / `IsVolumeGroupFollower`）时，
+             * 才要求候选能认出归档件，避免把缺片的一组拆开。
+             */
             bool requireRecognizedCandidates =
-                trigger != LayerPurgeTrigger.SourceHandlingDelete || task.IsContinuationTask;
+                trigger == LayerPurgeTrigger.SourceHandlingDelete
+                    ? task.IsContinuationTask
+                    : task.IsVolumeGroup || task.IsVolumeGroupFollower;
 
             /*
              * ===== 本组源包：**组可证完整 + 内容校验通过 ⇒ 半套闸门不再适用**（2026-10-18 用户 `&&` 口径）=====
@@ -1600,6 +1610,26 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
+                    /*
+                     * 用户 2026-11-02 顺序：**其余物先处理，原包最后删**。
+                     * 旧顺序是先跑源包补搬（删原包），再收内层包/清其余物 ⇒ 成功链的其余物
+                     * 因为“最外层源包已不在盘上”被整份保留（真机 222 的 .exe 残留 3–5 GB）。
+                     * 这里先把这条链的其余物收好、按档处理，再走源包补搬；失败链的其余物
+                     * 仍然按失败档保留，源包也仍然一个字节不动。
+                     */
+                    bool chainFullySucceeded =
+                        rootTask.Outcome == TaskOutcome.Succeeded
+                        && (chainTasks == null
+                            || chainTasks.All(task => task != null
+                                && task.Outcome is TaskOutcome.Succeeded or TaskOutcome.Skipped));
+
+                    if (chainFullySucceeded)
+                    {
+                        await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
+
+                        await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
+                    }
+
                     /*
                      * 后台重活（目录遍历 + 可能的整包跨盘拷贝 + 链尾那一档"其余物处理"），
                      * 日志先收集、回到 UI 线程再写。
