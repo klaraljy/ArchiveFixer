@@ -197,6 +197,11 @@ namespace ArchiveFixer.Models
         public bool KeepArchiveNameFolder { get; set; } = true;
 
         /// <summary>
+        /// 新落点模式的唯一持久化格；null = 旧配置，读入时由两个旧布尔迁移一次。
+        /// </summary>
+        public ArchiveFixer.Extraction.OutputPlacementMode? PlacementMode { get; set; }
+
+        /// <summary>
         /// 同名冲突处理档（<see cref="ConflictActions"/> 的四个值之一）。
         ///
         /// **默认 <c>AutoRename</c>**：同名时把新产物落成 <c>名字(1)</c>，不丢产物、不动旧文件，
@@ -1230,6 +1235,12 @@ namespace ArchiveFixer.Models
              * ⚠ 刻意**不**动 ExtractToOriginalDirectory：它决定"有没有指定位置"，是两档的判据本身。
              */
             KeepArchiveNameFolder = true;
+
+            PlacementMode ??= ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags(
+                ExtractToOriginalDirectory,
+                KeepArchiveNameFolder,
+                CustomOutputDirectory);
+            PlacementMode = ArchiveFixer.Extraction.OutputPlacement.NormalizeLegacyMode(PlacementMode.Value);
 
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;

@@ -36,10 +36,15 @@ namespace ArchiveFixer.Extraction
         public bool Verified { get; init; }
 
         /// <summary>
-        /// 删源/不可逆动作的唯一放行位：只有“底线校验通过 + 清单逐条核对过”才为 true。
+        /// 这次校验到底有没有拿到可判的事实（区别于“没校验过”）。判不出时下游必须按不可发布/不可删处理。
+        /// </summary>
+        public bool Known { get; init; } = true;
+
+        /// <summary>
+        /// 删源/不可逆动作的唯一放行位：只有“校验事实已知 + 底线校验通过 + 清单逐条核对过”才为 true。
         /// ⛔ 空清单/引擎没给清单时 <see cref="ManifestCrossChecked"/> 为 false，这里必须为 false。
         /// </summary>
-        public bool AllowsSourceRemoval => Verified && ManifestCrossChecked;
+        public bool AllowsSourceRemoval => Known && Verified && ManifestCrossChecked;
 
         /// <summary>机器可判的结论（<see cref="Verified"/> 的枚举形态；二者恒一致）。</summary>
         public OutputVerificationOutcome Outcome =>

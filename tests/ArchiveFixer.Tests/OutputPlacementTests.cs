@@ -688,20 +688,6 @@ namespace ArchiveFixer.Tests
         // ── 旧布尔 ↔ 新枚举（旧配置迁移，规格 §1.3） ───────────────────────────
 
         [Theory]
-        [InlineData(OutputPlacementMode.PerArchiveSubfolder, true, true)]
-        [InlineData(OutputPlacementMode.CustomRootPerArchive, false, true)]
-        public void ToLegacyFlags_MapsRetainedModes(
-            OutputPlacementMode mode,
-            bool expectedExtractToOriginalDirectory,
-            bool expectedKeepArchiveNameFolder)
-        {
-            (bool extractToOriginalDirectory, bool keepArchiveNameFolder) = OutputPlacement.ToLegacyFlags(mode);
-
-            Assert.Equal(expectedExtractToOriginalDirectory, extractToOriginalDirectory);
-            Assert.Equal(expectedKeepArchiveNameFolder, keepArchiveNameFolder);
-        }
-
-        [Theory]
         [InlineData(true, true, @"D:\out", OutputPlacementMode.PerArchiveSubfolder)]
         [InlineData(false, true, @"D:\out", OutputPlacementMode.CustomRootPerArchive)]
 
@@ -726,17 +712,5 @@ namespace ArchiveFixer.Tests
                 OutputPlacement.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot));
         }
 
-        [Theory]
-        [InlineData(OutputPlacementMode.PerArchiveSubfolder)]
-        [InlineData(OutputPlacementMode.CustomRootPerArchive)]
-        public void LegacyFlags_RoundTripIsExactWhenCustomRootIsKept(OutputPlacementMode mode)
-        {
-            (bool extractToOriginalDirectory, bool keepArchiveNameFolder) = OutputPlacement.ToLegacyFlags(mode);
-
-            OutputPlacementMode back = OutputPlacement.FromLegacyFlags(
-                extractToOriginalDirectory, keepArchiveNameFolder, @"D:\out");
-
-            Assert.Equal(mode, back);
-        }
     }
 }

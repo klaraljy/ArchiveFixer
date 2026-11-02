@@ -327,24 +327,6 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 枚举 → 旧的"两个布尔"（<c>ExtractToOriginalDirectory</c> + <c>KeepArchiveNameFolder</c>），
-        /// 用于把旧调用点（<c>PathService.BuildOutputPath</c> 只有这两个布尔）平滑接到本实现上。
-        ///
-        /// <code>
-        /// PerArchiveSubfolder  → (true,  true )
-        /// CustomRootPerArchive → (false, true )
-        /// </code>
-        ///
-        /// ⚠ 第二个布尔**永远是 true**（用户 2026-09-24 第 13 条删掉了两档"不建子文件夹"的落点）。
-        /// 它仍然写出来，是为了让设置文件保持"旧版本也读得懂"的形状（回退旧版本不会炸）。
-        /// </summary>
-        public static (bool ExtractToOriginalDirectory, bool KeepArchiveNameFolder) ToLegacyFlags(OutputPlacementMode mode)
-        {
-            // 先迁移：旧值 1/3 进来时也要得到"保留的那一档"对应的布尔，别把 3（指定位置）算成源目录。
-            return (!UsesCustomRoot(NormalizeLegacyMode(mode)), true);
-        }
-
-        /// <summary>
         /// 旧的两个布尔 + 自定义根 → 新枚举（**旧配置迁移的唯一实现处**，规格 §1.3）。
         ///
         /// <para>

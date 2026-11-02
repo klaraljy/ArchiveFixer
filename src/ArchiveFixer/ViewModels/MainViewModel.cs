@@ -4045,8 +4045,8 @@ namespace ArchiveFixer.ViewModels
         /// </para>
         ///
         /// <para>
-        /// 翻译只走既有实现：落点两个布尔由 <see cref="OutputPlacement.ToLegacyFlags"/> 给出、
-        /// 源包处理由 <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 ——
+        /// 落点只写 <see cref="AppSettings.PlacementMode"/>；源包处理由
+        /// <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 ——
         /// 与②「解压方式」/③「清理与删除」页写的是同一套字符串口径，不新造第三种表示法。
         /// </para>
         /// <para>
@@ -4064,11 +4064,7 @@ namespace ArchiveFixer.ViewModels
 
             if (options.IsPlacementValid)
             {
-                (bool extractToOriginalDirectory, bool keepArchiveNameFolder) =
-                    OutputPlacement.ToLegacyFlags(options.PlacementMode);
-
-                Settings.ExtractToOriginalDirectory = extractToOriginalDirectory;
-                Settings.KeepArchiveNameFolder = keepArchiveNameFolder;
+                Settings.PlacementMode = options.PlacementMode;
 
                 /*
                  * 自定义根只在"指定位置"两档下才有意义，也只在非空时才写 ——

@@ -271,10 +271,11 @@ namespace ArchiveFixer.Models
 
             return new OneClickRunOptions
             {
-                PlacementMode = OutputPlacement.FromLegacyFlags(
-                    settings.ExtractToOriginalDirectory,
-                    settings.KeepArchiveNameFolder,
-                    customRoot),
+                PlacementMode = settings.PlacementMode
+                    ?? OutputPlacement.FromLegacyFlags(
+                        settings.ExtractToOriginalDirectory,
+                        settings.KeepArchiveNameFolder,
+                        customRoot),
                 CustomRoot = customRoot,
                 SourceHandling = AppSettings.ParseSourceHandling(settings.SourceHandling),
                 RestHandling = RestHandlingModes.Normalize(settings.RestHandlingAfterVerify)
@@ -285,10 +286,8 @@ namespace ArchiveFixer.Models
         /// 把本次选项**翻译成解压选项上的既有字段**（唯一入口，规格 §9.2 硬要求①）。
         ///
         /// <para>
-        /// 落点那三个字段的翻译只有一种写法：<see cref="OutputPlacement.ToLegacyFlags"/>。
-        /// 之后 <c>PathService.BuildOutputPath</c> 会用 <see cref="OutputPlacement.FromLegacyFlags"/>
-        /// 反推回模式、再由 <see cref="OutputPlacement.ResolveDestinationDirectory"/> 算路径 ——
-        /// 全项目就这一条推导链，面板不新增第二条。
+        /// 新写入只写 <see cref="ExtractOptions.PlacementMode"/>；旧两个布尔只留给旧调用方/旧配置读入，
+        /// 不再由这里回写。之后 <see cref="OutputPlacement.ResolveDestinationDirectory"/> 仍算唯一落点公式。
         /// </para>
         /// <para>
         /// 落点无效（<see cref="IsPlacementValid"/> 为 false）时**不碰**那三个字段：

@@ -73,6 +73,9 @@ namespace ArchiveFixer.Extraction
 
         public int MovedFileCount { get; init; }
 
+        /// <summary>本次发布尝试的条目数（搬成 + 明确失败）。</summary>
+        public int ExpectedFileCount { get; init; }
+
         /// <summary>发布时明确失败的条目数；任何一条失败都不算整体成功。</summary>
         public int FailedFileCount { get; init; }
 
@@ -378,11 +381,14 @@ namespace ArchiveFixer.Extraction
                     }
                 }
 
+                int expectedFileCount = movedCount + errors.Count;
+
                 return new WorkspacePublishResult
                 {
-                    Success = movedCount > 0 && errors.Count == 0,
+                    Success = expectedFileCount > 0 && movedCount == expectedFileCount,
                     DestinationPath = destination,
                     MovedFileCount = movedCount,
+                    ExpectedFileCount = expectedFileCount,
                     FailedFileCount = errors.Count,
                     Message = BuildPublishMessage(
                         destination,
