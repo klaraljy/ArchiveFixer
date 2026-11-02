@@ -70,14 +70,11 @@ namespace ArchiveFixer.Extraction
         /// <summary>试开确认的顺序（物理路径，末片在最后）；null = 没试开/没确认。</summary>
         public IReadOnlyList<string>? ConfirmedOrder { get; set; }
 
-        /// <summary>这一组每一片来自哪里；建组时写入，收场器只查这份账。</summary>
-        public IReadOnlyList<VolumePieceFact> PieceOrigins { get; set; } = Array.Empty<VolumePieceFact>();
-
         /// <summary>组状态（唯一写者 = <see cref="VolumeGroupService"/>；⛔ 交界处不许写）。</summary>
         public VolumeGroupState State { get; set; } = VolumeGroupState.Candidate;
 
         /// <summary>这一组的片（原始事实；卷号可为空，由族算法决定怎么用）。</summary>
-        public IReadOnlyList<GroupPieceFact> Pieces { get; set; } = Array.Empty<GroupPieceFact>();
+        public IReadOnlyList<VolumeFacts> Pieces { get; set; } = Array.Empty<VolumeFacts>();
 
         /// <summary>族算法定好的片顺序（按卷号；判不出 = 空）。</summary>
         public IReadOnlyList<string> OrderedPieces { get; set; } = Array.Empty<string>();

@@ -139,11 +139,11 @@ namespace ArchiveFixer.Tests
             Assert.Same(unitB, byB);
         }
 
-        private static IReadOnlyList<GroupPieceFact> Pieces(
+        private static IReadOnlyList<VolumeFacts> Pieces(
             string layer,
             VolumeHandoffSource source)
         {
-            return new List<GroupPieceFact>
+            return new List<VolumeFacts>
             {
                 Piece(layer, 1, first: true, source),
                 Piece(layer, 2, first: false, source),
@@ -151,13 +151,13 @@ namespace ArchiveFixer.Tests
             };
         }
 
-        private static GroupPieceFact Piece(
+        private static VolumeFacts Piece(
             string layer,
             int number,
             bool first,
             VolumeHandoffSource source)
         {
-            return new GroupPieceFact(
+            return new VolumeFacts(
                 Path.Combine(layer, $"9953.part{number}.rar"),
                 100,
                 VolumeContentFormat.Rar,

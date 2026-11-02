@@ -221,7 +221,7 @@ namespace ArchiveFixer.ViewModels
                     ? owner.FileName
                     : owner.DisplayFileName;
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
                     candidate != null
@@ -282,7 +282,7 @@ namespace ArchiveFixer.ViewModels
                 ? owner.FileName
                 : owner.DisplayFileName;
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
                     candidate != null
@@ -406,7 +406,7 @@ namespace ArchiveFixer.ViewModels
 
             Reclaim(owner);
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 if (piece.Source != VolumeHandoffSource.UserImported
                     && !IsUserImportedSourcePath(piece.Path))
@@ -612,7 +612,7 @@ namespace ArchiveFixer.ViewModels
             var pieceSettleLogs = new List<(string Level, string Message)>();
             IReadOnlyList<ArchiveTask> taskSnapshot = SnapshotTaskTable(Tasks);
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 ArchiveTask? pieceTask = taskSnapshot.FirstOrDefault(candidate =>
                     candidate != null
@@ -726,7 +726,7 @@ namespace ArchiveFixer.ViewModels
                 ReclaimSucceededGroupSources(unit, owner);
 
                 // 包装壳：它的产出片被这一组接手、组又可证完整 ⇒ 原包按同一档处理（⛔ 不是过程物）。
-                foreach (GroupPieceFact piece in unit.Pieces)
+                foreach (VolumeFacts piece in unit.Pieces)
                 {
                     if (piece.Source == VolumeHandoffSource.UserImported
                         || IsUserImportedSourcePath(piece.Path))

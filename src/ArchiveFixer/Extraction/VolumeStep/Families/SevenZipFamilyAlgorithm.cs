@@ -29,7 +29,7 @@ namespace ArchiveFixer.Extraction
                 return Unknown("7z：没有片事实 ⇒ 判不出");
             }
 
-            List<GroupPieceFact> firsts = unit.Pieces
+            List<VolumeFacts> firsts = unit.Pieces
                 .Where(piece => piece.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
                 .ToList();
 
@@ -38,7 +38,7 @@ namespace ArchiveFixer.Extraction
                 return Unknown($"7z：首卷自述的证据有 {firsts.Count} 个（应恰好 1 个）⇒ 判不出");
             }
 
-            GroupPieceFact first = firsts[0];
+            VolumeFacts first = firsts[0];
             int total = first.DeclaredVolumeCount;
 
             /*
@@ -83,10 +83,10 @@ namespace ArchiveFixer.Extraction
                 return confirmed;
             }
 
-            var slots = new Dictionary<int, GroupPieceFact> { [1] = first };
-            var unassigned = new List<GroupPieceFact>();
+            var slots = new Dictionary<int, VolumeFacts> { [1] = first };
+            var unassigned = new List<VolumeFacts>();
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 if (ReferenceEquals(piece, first))
                 {
@@ -140,7 +140,7 @@ namespace ArchiveFixer.Extraction
                  * 7z -v 切出来的除末片外等大、末片更小。只剩两个槽位且其中一个必是末片时，
                  * 只有“严格更小的那一份是末片”这一条能定序；两份一样大 ⇒ 顺序不明，不猜。
                  */
-                List<GroupPieceFact> bySize = unassigned.OrderBy(piece => piece.Size).ToList();
+                List<VolumeFacts> bySize = unassigned.OrderBy(piece => piece.Size).ToList();
 
                 if (bySize[0].Size < bySize[1].Size)
                 {
@@ -197,7 +197,7 @@ namespace ArchiveFixer.Extraction
 
             for (int index = 1; index <= total; index++)
             {
-                GroupPieceFact piece = slots[index];
+                VolumeFacts piece = slots[index];
                 items.Add(BuildItem(piece.Path, targets[index - 1], isEntry: index == 1, unit.SourceLayer));
             }
 
@@ -219,7 +219,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static FamilyResult? TryCompleteFromConfirmedOrder(
             VolumeGroupUnit unit,
-            GroupPieceFact first,
+            VolumeFacts first,
             int total)
         {
             IReadOnlyList<string>? confirmed = unit.ConfirmedOrder;
@@ -248,7 +248,7 @@ namespace ArchiveFixer.Extraction
                 return Unknown("7z：试开确认顺序与片清单对不上 ⇒ 判不出");
             }
 
-            List<GroupPieceFact> ordered = confirmed
+            List<VolumeFacts> ordered = confirmed
                 .Select(path => byPath[Path.GetFullPath(path)])
                 .ToList();
 

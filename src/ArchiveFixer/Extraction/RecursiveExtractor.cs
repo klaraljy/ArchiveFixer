@@ -398,9 +398,6 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public IReadOnlyList<string> UnresolvedVolumePieces { get; init; } = Array.Empty<string>();
 
-        /// <summary>停下时分卷片的完整事实（路径/卡/物理身份/大小）；建组用。</summary>
-        public IReadOnlyList<VolumePieceFact> UnresolvedPieceFacts { get; init; } = Array.Empty<VolumePieceFact>();
-
         /// <summary>一行中文结论，直接显示给用户。</summary>
         public string Summary { get; init; } = string.Empty;
 
@@ -683,8 +680,6 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private readonly List<string> _unresolvedVolumePieces = new();
 
-        private readonly List<VolumePieceFact> _unresolvedPieceFacts = new();
-
         /// <summary>
         /// **这一趟打不开的那几片，抢救到哪个目录**（调用方在跑之前给；⛔ 空 = 不抢救）。
         ///
@@ -749,28 +744,6 @@ namespace ArchiveFixer.Extraction
             }
 
             _unresolvedVolumePieces.Add(path!);
-
-            try
-            {
-                if (File.Exists(path))
-                {
-                    FileNatureCard card = FileNature.Inspect(path!);
-                    FileIdentity.TryGetIdentity(path!, out ulong volumeSerial, out ulong fileIndex);
-
-                    _unresolvedPieceFacts.Add(new VolumePieceFact
-                    {
-                        Path = path!,
-                        Card = card,
-                        Size = new FileInfo(path!).Length,
-                        VolumeSerial = volumeSerial,
-                        FileIndex = fileIndex
-                    });
-                }
-            }
-            catch
-            {
-                // 片事实读不出就不登记；路径账仍然保留。
-            }
         }
 
         /// <summary>
@@ -1068,7 +1041,6 @@ namespace ArchiveFixer.Extraction
             _crossBoundaryLinks.Clear();
             _consumedVolumeSources.Clear();
             _unresolvedVolumePieces.Clear();
-            _unresolvedPieceFacts.Clear();
 
             /*
              * 换引擎兜底那句结论也**每次运行从零开始**：同一个实例可能被同一个包的续跑复用
@@ -5925,7 +5897,6 @@ namespace ArchiveFixer.Extraction
                 FinalOutputPath = finalOutputPath,
                 ConsumedVolumeSources = _consumedVolumeSources.ToList(),
                 UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),
-                UnresolvedPieceFacts = _unresolvedPieceFacts.ToList(),
                 UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
                 Summary = BuildSummary(
                     stopReason,

@@ -119,7 +119,7 @@ namespace ArchiveFixer.Extraction
             string sourceLayer,
             string entryPath,
             string? ownerTaskFileName,
-            IReadOnlyList<GroupPieceFact>? pieces,
+            IReadOnlyList<VolumeFacts>? pieces,
             IReadOnlyList<int>? missingNumbers,
             string evidence,
             int? declaredPieceCount,
@@ -270,8 +270,8 @@ namespace ArchiveFixer.Extraction
 
             string key = BuildKey(prepared.BaseName, prepared.Family.Value, prepared.OriginalSourceLayer, prepared.OriginalEntryPath);
 
-            List<GroupPieceFact> pieces = prepared.Pieces
-                .Select(piece => new GroupPieceFact(
+            List<VolumeFacts> pieces = prepared.Pieces
+                .Select(piece => new VolumeFacts(
                         piece.OriginalPath,
                         piece.Size,
                         FormatForFamily(prepared.Family),
@@ -424,25 +424,25 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>两组候选的“原始事实”是否逐片相同（路径/卷号/首卷/内容身份/ZIP 首末片证据）。</summary>
         private static bool SamePieces(
-            IReadOnlyList<GroupPieceFact> left,
-            IReadOnlyList<GroupPieceFact> right)
+            IReadOnlyList<VolumeFacts> left,
+            IReadOnlyList<VolumeFacts> right)
         {
             if (left.Count != right.Count)
             {
                 return false;
             }
 
-            List<GroupPieceFact> orderedLeft = left
+            List<VolumeFacts> orderedLeft = left
                 .OrderBy(piece => piece.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            List<GroupPieceFact> orderedRight = right
+            List<VolumeFacts> orderedRight = right
                 .OrderBy(piece => piece.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             for (int index = 0; index < orderedLeft.Count; index++)
             {
-                GroupPieceFact a = orderedLeft[index];
-                GroupPieceFact b = orderedRight[index];
+                VolumeFacts a = orderedLeft[index];
+                VolumeFacts b = orderedRight[index];
 
                 if (!string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase)
                     || a.VolumeNumber != b.VolumeNumber

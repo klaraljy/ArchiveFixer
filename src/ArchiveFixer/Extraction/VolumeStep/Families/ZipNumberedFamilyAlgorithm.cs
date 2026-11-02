@@ -29,7 +29,7 @@ namespace ArchiveFixer.Extraction
                 return Unknown("ZIP 通用分片：片数少于 3 ⇒ 判不出");
             }
 
-            List<GroupPieceFact> ends = unit.Pieces
+            List<VolumeFacts> ends = unit.Pieces
                 .Where(piece => piece.HasZipEndRecord && piece.ZipEndRecordMeansSplit)
                 .ToList();
 
@@ -38,9 +38,9 @@ namespace ArchiveFixer.Extraction
                 return Unknown($"ZIP 通用分片：带 EOCD 的末片有 {ends.Count} 个（应恰好 1 个）⇒ 判不出");
             }
 
-            GroupPieceFact end = ends[0];
+            VolumeFacts end = ends[0];
 
-            List<GroupPieceFact> firsts = unit.Pieces
+            List<VolumeFacts> firsts = unit.Pieces
                 .Where(piece => piece.HasZipLocalHeader && !ReferenceEquals(piece, end))
                 .ToList();
 
@@ -50,7 +50,7 @@ namespace ArchiveFixer.Extraction
             }
 
             int total = unit.Pieces.Count;
-            List<GroupPieceFact> ordered;
+            List<VolumeFacts> ordered;
 
             if (unit.ConfirmedOrder is { Count: > 0 } confirmedOrder
                 && confirmedOrder.Count == total)
@@ -85,11 +85,11 @@ namespace ArchiveFixer.Extraction
                     return Unknown("ZIP 通用分片：3 片时缺“本地头首片”这条内容证据 ⇒ 判不出");
                 }
 
-                GroupPieceFact first = firsts[0];
-                GroupPieceFact middle = unit.Pieces
+                VolumeFacts first = firsts[0];
+                VolumeFacts middle = unit.Pieces
                     .First(piece => !ReferenceEquals(piece, first) && !ReferenceEquals(piece, end));
 
-                ordered = new List<GroupPieceFact> { first, middle, end };
+                ordered = new List<VolumeFacts> { first, middle, end };
             }
             else
             {
@@ -102,9 +102,9 @@ namespace ArchiveFixer.Extraction
                     return Unknown($"ZIP 通用分片：{total} 片时“本地头首片”证据有 {firsts.Count} 个 ⇒ 判不出");
                 }
 
-                var byNumber = new Dictionary<int, GroupPieceFact>();
+                var byNumber = new Dictionary<int, VolumeFacts>();
 
-                foreach (GroupPieceFact piece in unit.Pieces)
+                foreach (VolumeFacts piece in unit.Pieces)
                 {
                     int? index = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
 

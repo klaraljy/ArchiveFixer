@@ -181,7 +181,7 @@ namespace ArchiveFixer.Tests
             string baseName,
             string layer,
             string entry,
-            params GroupPieceFact[] pieces)
+            params VolumeFacts[] pieces)
         {
             var unit = new VolumeGroupUnit(baseName, VolumeNamingFamily.RarPart, layer, entry)
             {
@@ -191,7 +191,7 @@ namespace ArchiveFixer.Tests
             return unit;
         }
 
-        private static GroupPieceFact Fact(
+        private static VolumeFacts Fact(
             string path,
             int? volumeNumber,
             string? canonicalVolumeName = null,

@@ -26,7 +26,7 @@ namespace ArchiveFixer.Tests
                 @"C:\in",
                 @"C:\in\P53-8.7z.001");
 
-            unit.Pieces = new List<GroupPieceFact>
+            unit.Pieces = new List<VolumeFacts>
             {
                 Piece(
                     @"C:\in\P53-8.7z.001",
@@ -59,7 +59,7 @@ namespace ArchiveFixer.Tests
                 @"C:\in",
                 @"C:\in\P55-8.7z.001");
 
-            unit.Pieces = new List<GroupPieceFact>
+            unit.Pieces = new List<VolumeFacts>
             {
                 Piece(
                     @"C:\in\P55-8.7z.001",
@@ -309,7 +309,7 @@ namespace ArchiveFixer.Tests
                     layer,
                     first)
                 {
-                    Pieces = new List<GroupPieceFact>
+                    Pieces = new List<VolumeFacts>
                     {
                         ZipPiece(first, first: true, end: false),
                         ZipPiece(middle1, first: false, end: false),
@@ -365,7 +365,7 @@ namespace ArchiveFixer.Tests
                     layer,
                     end)
                 {
-                    Pieces = new List<GroupPieceFact>
+                    Pieces = new List<VolumeFacts>
                     {
                         ZipSpannedPiece(first, first: true, end: false, total: 4),
                         ZipSpannedPiece(middle1, first: false, end: false, total: 4),
@@ -394,13 +394,13 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        private static GroupPieceFact ZipSpannedPiece(
+        private static VolumeFacts ZipSpannedPiece(
             string path,
             bool first,
             bool end,
             int total)
         {
-            return new GroupPieceFact(
+            return new VolumeFacts(
                 path,
                 1,
                 VolumeContentFormat.Zip,
@@ -420,9 +420,9 @@ namespace ArchiveFixer.Tests
                 HasZipLocalHeader: first);
         }
 
-        private static GroupPieceFact ZipPiece(string path, bool first, bool end)
+        private static VolumeFacts ZipPiece(string path, bool first, bool end)
         {
-            return new GroupPieceFact(
+            return new VolumeFacts(
                 path,
                 1,
                 VolumeContentFormat.Zip,
@@ -472,7 +472,7 @@ namespace ArchiveFixer.Tests
                     layer,
                     paths[0])
                 {
-                    Pieces = new List<GroupPieceFact>
+                    Pieces = new List<VolumeFacts>
                     {
                         Piece(paths[0], size: 100, number: null, first: true, declaredCount: 4, declaredBytes: 400),
                         Piece(paths[1], size: 100, number: null, first: false, declaredCount: 0, declaredBytes: 0),
@@ -524,7 +524,7 @@ namespace ArchiveFixer.Tests
             };
         }
 
-        private static GroupPieceFact Piece(
+        private static VolumeFacts Piece(
             string path,
             long size,
             int? number,
@@ -532,7 +532,7 @@ namespace ArchiveFixer.Tests
             int declaredCount,
             long declaredBytes)
         {
-            return new GroupPieceFact(
+            return new VolumeFacts(
                 path,
                 size,
                 VolumeContentFormat.SevenZip,

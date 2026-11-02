@@ -75,7 +75,7 @@ namespace ArchiveFixer.Extraction
             public long ReceivedBytes { get; init; }
 
             /// <summary>每片的原始事实（第二大步建组用；卷号可为空，⛔ 不在这里补）。</summary>
-            public IReadOnlyList<GroupPieceFact> PieceFacts { get; set; } = Array.Empty<GroupPieceFact>();
+            public IReadOnlyList<VolumeFacts> PieceFacts { get; set; } = Array.Empty<VolumeFacts>();
 
             /// <summary>
             /// 这一组是**字节补齐配对**出来的（首片自述整包 = 首片 + 同目录唯一无魔数尾片）。
@@ -997,7 +997,7 @@ namespace ArchiveFixer.Extraction
             long declaredTotalBytes = items.Select(item => item.DeclaredTotalBytes).DefaultIfEmpty(0).Max();
             long receivedBytes = items.Sum(item => item.Size);
 
-            List<GroupPieceFact> publicFacts = items.Select(ToPublicFact).ToList();
+            List<VolumeFacts> publicFacts = items.Select(ToPublicFact).ToList();
             List<ArchiveFixer.Detection.FileNatureCard> cards = items.Select(item => item.Card).ToList();
 
             GroupCandidate Finish(GroupCandidate candidate)
@@ -1266,7 +1266,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>把内部证据折成第二大步拿得走的原始事实（⛔ 不补判不出的字段）。</summary>
-        private static GroupPieceFact ToPublicFact(PieceFacts item) =>
+        private static VolumeFacts ToPublicFact(PieceFacts item) =>
             new(
                 item.Path,
                 item.Size,
@@ -1287,7 +1287,12 @@ namespace ArchiveFixer.Extraction
                 item.Card.HasZipLocalHeader,
                 item.Card.CanonicalVolumeName,
                 item.Card.FirstVolumeNameByName,
-                item.Card.ArchiveBaseName);
+                item.Card.ArchiveBaseName,
+                HasIdentity: item.Card.HasIdentity,
+                VolumeSerial: item.Card.VolumeSerial,
+                FileIndex: item.Card.FileIndex,
+                Confidence: VolumeFactConfidence.Content,
+                EvidenceSource: item.Handoff != null ? "handoff+content" : "content-card");
 
         /// <summary>用一组卷号判完整性（连成 1..N ⇒ 完整；1..max 有洞 ⇒ 缺卷）。</summary>
         private static GroupCandidate Judge(

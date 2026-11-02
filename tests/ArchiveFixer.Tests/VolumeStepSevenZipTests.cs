@@ -160,10 +160,10 @@ namespace ArchiveFixer.Tests
             string baseName,
             string layer,
             string entry,
-            params GroupPieceFact[] pieces) =>
+            params VolumeFacts[] pieces) =>
             new(baseName, VolumeNamingFamily.SevenZipNumbered, layer, entry) { Pieces = pieces };
 
-        private static GroupPieceFact Fact(
+        private static VolumeFacts Fact(
             string path,
             long size,
             bool first = false,

@@ -204,10 +204,10 @@ namespace ArchiveFixer.Tests
             string baseName,
             string layer,
             string entry,
-            params GroupPieceFact[] pieces) =>
+            params VolumeFacts[] pieces) =>
             new(baseName, VolumeNamingFamily.ZipSpanned, layer, entry) { Pieces = pieces };
 
-        private static GroupPieceFact Fact(string path, int? volumeNumber, int declaredVolumeCount = 0) =>
+        private static VolumeFacts Fact(string path, int? volumeNumber, int declaredVolumeCount = 0) =>
             new(
                 path,
                 10,

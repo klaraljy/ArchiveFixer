@@ -49,10 +49,10 @@ namespace ArchiveFixer.Extraction
                     "RAR：没有片事实 ⇒ 判不出");
             }
 
-            var numbered = new List<(GroupPieceFact Fact, int Number)>();
-            var unnumbered = new List<GroupPieceFact>();
+            var numbered = new List<(VolumeFacts Fact, int Number)>();
+            var unnumbered = new List<VolumeFacts>();
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 int? number = piece.VolumeNumber;
 
@@ -123,7 +123,7 @@ namespace ArchiveFixer.Extraction
              * 第 3 卷的链接指到第 1 卷上（真机 10101010：part3 变成了 part1 的硬链接，
              * 引擎随后报 part4 缺失）。
              */
-            List<(GroupPieceFact Fact, int Number)> orderedNumbered = numbered
+            List<(VolumeFacts Fact, int Number)> orderedNumbered = numbered
                 .OrderBy(item => item.Number)
                 .ToList();
 
@@ -154,7 +154,7 @@ namespace ArchiveFixer.Extraction
         /// 都返回 null，交给后面的按名字兜底。⛔ 不在这里猜后缀。
         /// </summary>
         private static List<string>? TryBuildCanonicalTargets(
-            List<(GroupPieceFact Fact, int Number)> numbered)
+            List<(VolumeFacts Fact, int Number)> numbered)
         {
             if (numbered.Count == 0)
             {
@@ -164,7 +164,7 @@ namespace ArchiveFixer.Extraction
             var targets = new List<string>();
             string? baseName = null;
 
-            foreach ((GroupPieceFact fact, _) in numbered)
+            foreach ((VolumeFacts fact, _) in numbered)
             {
                 string canonical = Path.GetFileName(fact.CanonicalVolumeName ?? string.Empty);
 
@@ -210,7 +210,7 @@ namespace ArchiveFixer.Extraction
 
         private static CanonicalNamePlan BuildNamePlan(
             VolumeGroupUnit unit,
-            List<(GroupPieceFact Fact, int Number)> numbered)
+            List<(VolumeFacts Fact, int Number)> numbered)
         {
             /*
              * 规范名必须按**族算法认出来的第 1 卷**那条名字来推，⛔ 不能用 unit.EntryPath：
@@ -233,7 +233,7 @@ namespace ArchiveFixer.Extraction
             /*
              * **内容卡已经给出的规范名优先**：每片卡上的 CanonicalVolumeName 是
              * `VolumeGroupResolver.TryGetCanonicalVolumeName` 的唯一出口算出来的；
-             * 8.15 的根因就是这一层没有把卡上的规范名带进 GroupPieceFact，族算法只能
+             * 8.15 的根因就是这一层没有把卡上的规范名带进 VolumeFacts，族算法只能
              * 拿入口名 `9953.part1.a1` 的 `.a1` 后缀去猜。
              */
             targets = TryBuildCanonicalTargets(numbered);
@@ -329,7 +329,7 @@ namespace ArchiveFixer.Extraction
 
             for (int index = 0; index < numbered.Count; index++)
             {
-                GroupPieceFact piece = numbered[index].Fact;
+                VolumeFacts piece = numbered[index].Fact;
                 string targetName = targets[index];
                 string targetPath = Path.Combine(sourceLayer, targetName);
                 string conflict = string.Empty;

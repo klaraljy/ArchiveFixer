@@ -41,11 +41,11 @@ namespace ArchiveFixer.Extraction
                 return Unknown("跨盘 ZIP：片数不足 ⇒ 判不出");
             }
 
-            GroupPieceFact? zipPiece = null;
-            var named = new List<(GroupPieceFact Fact, int Index)>();
-            var unnamed = new List<GroupPieceFact>();
+            VolumeFacts? zipPiece = null;
+            var named = new List<(VolumeFacts Fact, int Index)>();
+            var unnamed = new List<VolumeFacts>();
 
-            foreach (GroupPieceFact piece in unit.Pieces)
+            foreach (VolumeFacts piece in unit.Pieces)
             {
                 string name = Path.GetFileName(piece.Path);
 
@@ -119,7 +119,7 @@ namespace ArchiveFixer.Extraction
                     return Unknown("跨盘 ZIP：试开确认顺序与片清单对不上 ⇒ 判不出");
                 }
 
-                List<GroupPieceFact> confirmed = confirmedOrder
+                List<VolumeFacts> confirmed = confirmedOrder
                     .Select(path => byPath[Path.GetFullPath(path)])
                     .ToList();
 
@@ -209,7 +209,7 @@ namespace ArchiveFixer.Extraction
 
             var planItems = new List<CanonicalNamePlanItem>();
 
-            foreach ((GroupPieceFact fact, int index) in named.OrderBy(item => item.Index))
+            foreach ((VolumeFacts fact, int index) in named.OrderBy(item => item.Index))
             {
                 string targetName = stem + ".z" + index.ToString("D2", System.Globalization.CultureInfo.InvariantCulture);
                 planItems.Add(BuildItem(fact.Path, targetName, isEntry: false, unit.SourceLayer));
