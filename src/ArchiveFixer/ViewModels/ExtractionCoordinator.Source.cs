@@ -1608,28 +1608,21 @@ namespace ArchiveFixer.ViewModels
                  * 加在任何一个调用者上都会漏。⇒ 判据已落在 `Plan` 里（`ArtifactSkipReason.SourceIsOurOwnContent`），
                  * ⛔ 这里不再留第二份（同一件事只允许一个出口）。
                  */
+                /*
+                 * 链尾统一顺序（用户 2026-11-02）：先收内层过程物 → 按档处理其余物 →
+                 * 最后才轮到源包补搬。成功、失败、部分完成都走同一条路；
+                 * 空间不足档的源包已在各层当场处理，这里不会再动它。
+                 */
+                await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
+
+                ReportLeftBehindInnerPackages(rootTask, chainTasks);
+
+                await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
+
+                await SweepPassThroughRestDirectoriesAsync(rootTask, cancellationToken);
+
                 if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
-                    /*
-                     * 用户 2026-11-02 顺序：**其余物先处理，原包最后删**。
-                     * 旧顺序是先跑源包补搬（删原包），再收内层包/清其余物 ⇒ 成功链的其余物
-                     * 因为“最外层源包已不在盘上”被整份保留（真机 222 的 .exe 残留 3–5 GB）。
-                     * 这里先把这条链的其余物收好、按档处理，再走源包补搬；失败链的其余物
-                     * 仍然按失败档保留，源包也仍然一个字节不动。
-                     */
-                    bool chainFullySucceeded =
-                        rootTask.Outcome == TaskOutcome.Succeeded
-                        && (chainTasks == null
-                            || chainTasks.All(task => task != null
-                                && task.Outcome is TaskOutcome.Succeeded or TaskOutcome.Skipped));
-
-                    if (chainFullySucceeded)
-                    {
-                        await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
-
-                        await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
-                    }
-
                     /*
                      * 后台重活（目录遍历 + 可能的整包跨盘拷贝 + 链尾那一档"其余物处理"），
                      * 日志先收集、回到 UI 线程再写。
@@ -1665,80 +1658,6 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                /*
-                 * 先把**这条链里被真正解过的内层包**收进其余物（2026-09-25 第 35 条的真机故障）。
-                 *
-                 * 现场：外层包里装的是下一层的包（`2222.rar` → `222.ra删除r` → 内容物），
-                 * 第一层定稿时那个内层包被当成**内容物**放在成品目录里（它只是个文件，不是分卷），
-                 * 于是 `RestDirectoryPath` 一直是空的 —— 用户选了「彻底删除」，链尾这一步直接
-                 * 因为"没有其余物"返回，**内层包原样留在成品目录里**（`CCC\2222\222.rar`）。
-                 * 正确口径（本来就是设计里的）：过程物集中进其余物，源包与过程物一起按档处理。
-                 *
-                 * 判据是**事实**、不是猜名字：这个文件是这条链里某个续解任务的输入
-                 * （它的 `CurrentPath`，且那个任务成功 + 校验通过）。
-                 *
-                 * ⚠ 2026-10-03（用户拍板的第 ② 条）：**普通档「逐层回收」那一档下这一整段都不调**
-                 * —— 内层包已经在**各层当场回收**掉了（`PurgeLayerSourcePackage` +
-                 * `LayerPurgeTrigger.LayerReclaim` 那一支），
-                 * 链尾这一档从今天起**只处理最外层源包**；再去搬只会"找不到"（`PlanChainInnerPackageMoves`
-                 * 按 `File.Exists` 过滤，搬不出任何东西，却要在日志里走一遍"留在成品目录里的内层包"清点）。
-                 *
-                 * ⚠ 2026-10-15：逐层回收现在**恒开**（成功链的过程物一律当场永久删，与档位解绑）
-                 * ⇒ 这一整个分支在普通档下**永远不执行**，实际上只剩「空间不足」模式会走到它
-                 * （那个模式每一层的源包早就当场删了 ⇒ 这里同样搬不出东西）。
-                 * ⛔ 判据仍然只有 `_layerReclaimThisBatch` 一个出口（⛔ 这里不另判一次档位）。
-                 * ⛔ 2026-11-01：上面这套"普通档不调"的旧口径已被用户新口径取代 ——
-                 * 未解开的内层包也要收进其余物，故链尾改为**无条件调用**（见下方 2026-11-01 注释）。
-                 */
-                /*
-                 * ⛔ 2026-11-01 用户新口径：**未解开的内层包也放进其余物**，让用户按「删除操作」选择删/不删。
-                 * 以前这段只在 `!_layerReclaimThisBatch` 下跑，普通档永不执行 ⇒ 被逐层回收闸门挡下的
-                 * 内层包、没展开的片一直躺在成品目录里（真机 2.part1/2/3 就是这样）。
-                 * 现在改为**链尾无条件收一次**：搬进根任务的 `destDir\其余物\`；
-                 * 整条链全部成功 ⇒ `CollectChainInnerPackagesIntoRestAsync` 末尾直接清空其余物；
-                 * 有跳过/失败/未展开 ⇒ 留在其余物里，由 `ApplyRestHandlingAfterChainAsync` 按设置处理。
-                 */
-                await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
-
-                /*
-                 * ⛔ **「成品目录里还留着的内层包」那一句诊断无条件跑**（2026-10-15 从上面那个方法里拆出来）。
-                 *
-                 * 它原来长在 `CollectChainInnerPackagesIntoRestAsync` 里 ⇒ 跟着"链尾要不要**搬**"那一个判据
-                 * （`!_layerReclaimThisBatch`）一起被跳过；而"逐层回收"现在**恒开**（成功链的过程物一律当场删）
-                 * ⇒ 那一整段在普通档下永不执行 ⇒ **那句点名也跟着消失**（实测：`ChainRestSweepTests` 三条守门
-                 * 当场变红，报告里再无「成品目录里还留着 N 个内层包」）。
-                 *
-                 * ⛔ 那是**静默**：没解开过的内层包**本来就不搬**（用户 2026-09-28：「不是没解开你为什么要放在
-                 * 其余物里面」）⇒ 它会一直躺在成品目录里，用户唯一的线索就是这一句（AGENTS：不许静默）。
-                 * ⇒ 判据与动作分开：**诊断恒做**；"搬"照旧只在链尾真有东西可收时做（普通档下它是空跑）。
-                 */
-                ReportLeftBehindInnerPackages(rootTask, chainTasks);
-
-                /*
-                 * 一键处理里「删除操作」那一档是**留到链尾统一做**的（见 RunRestHandlingAsync 的说明：
-                 * 任务收尾那一刻其余物里还躺着内层包，删了就没法接着解）。
-                 * 到得了这里就说明整条续解链已经跑完 —— 除了上面那种"待补搬"的任务，
-                 * 其余成功任务也要在这里把各自的其余物按档处理掉，否则选了「彻底删除」的人会发现
-                 * 过程物那几份一直留着。
-                 */
-                await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
-
-                /*
-                 * ===== 再补**这一条链自己那些"过路层"的其余物**（用户 2026-10-06 拍板）=====
-                 *
-                 * ⛔ **试过一版"批末对全表每一单再扫一遍"，已撤回**（如实记账）：它当场把三条既有红线的
-                 * 守门用例打红 —— `ChainRestHandlingSettingTests.用例1`、
-                 * `ChainSpaceReclaimTests.空间不足模式…不回滚`、`ChainManifestCompletenessTests.形状3对照`
-                 * （"链中途失败 ⇒ 源包与其余物一个字节都不动"）。⇒ **不能靠"对全表补一遍"来做**。
-                 *
-                 * 真机现场：`111.rar` 这一单只出过程物（它解出来的 `111.zip` 就是下一层的输入）
-                 * ⇒ 它的其余物在**它自己那条链的落点那一层**（`111\111\其余物`），而上面那一调只处理
-                 * `rootTask` 自己的其余物 ⇒ `111\111\其余物\111.zip`（48.35 MB）一直留到用户看见
-                 * （他原话：「其余物会在每层的过程中会删掉，我无法理解为什么还会有其余物留着」）。
-                 *
-                 * ⇒ 这里只补**落在这个根任务那棵树里、且自己成功**的那几单；判据与执行体仍是既有出口。
-                 */
-                await SweepPassThroughRestDirectoriesAsync(rootTask, cancellationToken);
             }
         }
 

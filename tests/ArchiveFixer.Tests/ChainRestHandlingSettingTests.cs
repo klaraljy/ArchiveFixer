@@ -110,14 +110,42 @@ namespace ArchiveFixer.Tests
             Assert.NotEmpty(FindFiles("outer.7z"));
             Assert.Empty(FindDirectories(ProcessArtifactLayout.ArtifactDirectoryName));
 
-            // ③ 部分完成 ⇒ 不调用删除执行体（红线：失败/部分完成一个字节都不删）。
-            Assert.Empty(harness.RecycleExecutor.PermanentCalls);
-            Assert.Empty(harness.RecycleExecutor.RecycleCalls);
+            // ③ 部分完成 ⇒ 源包一个字节都不动；「彻底删除」档只允许删其余物里的过程物。
+            Assert.DoesNotContain(
+                harness.RecycleExecutor.PermanentCalls,
+                path => string.Equals(path, outer, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                harness.RecycleExecutor.RecycleCalls,
+                path => string.Equals(path, outer, StringComparison.OrdinalIgnoreCase));
 
             // ④ ⛔ 不再有"链尾的其余物不处理"那句（判据换了，那句话就该消失）。
             Assert.DoesNotContain(
                 harness.Log.Logs,
                 entry => entry.Message.Contains(StatusText.ChainRestBlockedPrefix, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 222 形状：续解内层包后缀是 .exe（内容仍是归档），逐层回收必须当场删掉；
+        /// 成功链其余物清空，源包最后才删。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 成功链_续解内层包是exe_逐层删掉且其余物清空_源包最后删()
+        {
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.DeleteInPlace);
+            string outer = BuildTwoLayerChain(failInner: false, innerName: "level2.exe");
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("一个都认不出是归档件", StringComparison.Ordinal)
+                         && entry.Message.Contains("level2.exe", StringComparison.Ordinal));
+
+            Assert.Empty(FindFiles("level2.exe"));
+            Assert.Empty(FindDirectories(ProcessArtifactLayout.ArtifactDirectoryName));
+            Assert.False(File.Exists(outer), "整条链成功后，源包最后才删");
         }
 
         /// <summary>
@@ -303,7 +331,7 @@ namespace ArchiveFixer.Tests
         /// 密码不进密码本 ⇒ 内层那一单必然失败，而根源包那一层成功（<c>layer1.txt</c> 会定稿）。
         /// <paramref name="lockOuter"/> = true ⇒ 外层包自己就是密码包 ⇒ 根源包那一层就失败。</para>
         /// </summary>
-        private string BuildTwoLayerChain(bool failInner, bool lockOuter = false)
+        private string BuildTwoLayerChain(bool failInner, bool lockOuter = false, string innerName = "level2.7z")
         {
             string build = Path.Combine(_root, "chain-build");
             Directory.CreateDirectory(build);
@@ -313,11 +341,11 @@ namespace ArchiveFixer.Tests
 
             if (failInner)
             {
-                Run7z(build, "a", "-t7z", "level2.7z", "-p" + UnknownLayerPassword, "-mhe=on", "final.txt", "layer2.txt");
+                Run7z(build, "a", "-t7z", innerName, "-p" + UnknownLayerPassword, "-mhe=on", "final.txt", "layer2.txt");
             }
             else
             {
-                Run7z(build, "a", "-t7z", "level2.7z", "final.txt", "layer2.txt");
+                Run7z(build, "a", "-t7z", innerName, "final.txt", "layer2.txt");
             }
 
             File.WriteAllText(Path.Combine(build, "layer1.txt"), "第 1 层自己的内容\n", new UTF8Encoding(false));
@@ -329,11 +357,11 @@ namespace ArchiveFixer.Tests
 
             if (lockOuter)
             {
-                Run7z(build, "a", "-t7z", outer, "-p" + UnknownLayerPassword, "-mhe=on", "level2.7z", "layer1.txt");
+                Run7z(build, "a", "-t7z", outer, "-p" + UnknownLayerPassword, "-mhe=on", innerName, "layer1.txt");
             }
             else
             {
-                Run7z(build, "a", "-t7z", outer, "level2.7z", "layer1.txt");
+                Run7z(build, "a", "-t7z", outer, innerName, "layer1.txt");
             }
 
             // 造样本的脚手架不是管线产物：留着会让"盘上还剩什么"这类断言自欺欺人。
