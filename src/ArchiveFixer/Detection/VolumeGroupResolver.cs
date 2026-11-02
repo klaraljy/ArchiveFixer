@@ -1899,6 +1899,7 @@ namespace ArchiveFixer.Detection
                 Evidence = evidence ?? source.Evidence,
                 Reason = source.Reason,
                 GroupFilePaths = source.GroupFilePaths,
+                VariantFilePaths = source.VariantFilePaths,
                 HasRenamedVolume = source.HasRenamedVolume,
                 CanEnterDeletableRestItems = source.CanEnterDeletableRestItems
             };
