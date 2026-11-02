@@ -278,10 +278,6 @@ namespace ArchiveFixer.ViewModels
             string baseName,
             out List<(ArchiveTask Task, string PieceName)> producers) =>
             TrySnapshotGroupPieceProducers(baseName, out producers);
-
-        void IRestHandlingStepHost.PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName) =>
-            PurgeGroupLandedPieces(consumer, groupBaseName);
-
         void IRestHandlingStepHost.CollectConsumedSourcePiecesIntoRest(ArchiveTask consumer) =>
             CollectConsumedSourcePiecesIntoRest(consumer);
 

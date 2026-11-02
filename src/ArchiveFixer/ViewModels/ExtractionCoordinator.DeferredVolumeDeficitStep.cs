@@ -1143,14 +1143,6 @@ namespace ArchiveFixer.ViewModels
 
             if (!stagedOrderGroup)
             {
-                TryGatherGroupPiecesInto(
-                    task,
-                    entryLayer,
-                    _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
-                    allowMoveIntoGroup: allowMoveIntoGroup,
-                    cardEntryPath: cardReading.EntryPath,
-                    cardEvidence: cardReading);
-
                 /*
                  * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
                  * 再走一步**字节数**那条硬证据（7z 起始头自述）把缺口按规范槽位名**硬链接**补上

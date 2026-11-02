@@ -61,8 +61,6 @@ namespace ArchiveFixer.Services
 
         bool TrySnapshotGroupPieceProducers(string baseName, out List<(ArchiveTask Task, string PieceName)> producers);
 
-        void PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName);
-
         void CollectConsumedSourcePiecesIntoRest(ArchiveTask consumer);
 
         ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task);
@@ -849,7 +847,6 @@ namespace ArchiveFixer.Services
                                 out List<(ArchiveTask Task, string PieceName)> producers)
                             && producers.Any(item => item.Task != null && ReferenceEquals(item.Task, task)))
                         {
-                            _host.PurgeGroupLandedPieces(task, groupBaseName);
                         }
                     }
 
@@ -876,7 +873,6 @@ namespace ArchiveFixer.Services
                                  .Select(item => item.GroupBaseName)
                                  .Distinct(StringComparer.OrdinalIgnoreCase))
                     {
-                        _host.PurgeGroupLandedPieces(task, groupBaseName);
                     }
 
                     // 我亲手链接过来源的那几组 —— 只处理**这一单正是那一组的接手方**的那些
@@ -888,7 +884,6 @@ namespace ArchiveFixer.Services
                         if (_host.GroupConsumerByName.TryGetValue(groupBaseName, out string? consumerName)
                             && string.Equals(consumerName, task.FileName, StringComparison.Ordinal))
                         {
-                            _host.PurgeGroupLandedPieces(task, groupBaseName);
                         }
                     }
 
@@ -897,7 +892,6 @@ namespace ArchiveFixer.Services
 
                     if (ownBaseName.Length > 0)
                     {
-                        _host.PurgeGroupLandedPieces(task, ownBaseName);
                     }
                 }
 
