@@ -713,6 +713,7 @@ namespace ArchiveFixer.ViewModels
                 Targets = sourceTargets,
                 AllowedRoot = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty,
                 DeletesEverything = true,
+                Cancelled = IsStopping || _operationCts?.IsCancellationRequested == true,
                 Reason = $"{triggerLabel}：删除源包"
             };
 

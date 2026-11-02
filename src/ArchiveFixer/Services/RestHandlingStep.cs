@@ -1587,19 +1587,26 @@ namespace ArchiveFixer.Services
 
             bool cancelled = _host.IsStopping || _host.OperationCts?.IsCancellationRequested == true;
 
+            var plan = new DeletionPlan
+            {
+                Targets = new[] { restDirectory },
+                AllowedRoot = Path.GetDirectoryName(restDirectory) ?? string.Empty,
+                DeletesEverything = false,
+                Cancelled = cancelled,
+                Reason = "过路层那一单的其余物：本组已由消费方可证完整解开"
+            };
+
             RestPurgeOutcome outcome;
 
             try
             {
-                outcome = new RestItemPurger(
-                        _host.RestDeleteExecutor,
-                        null,
-                        ContentKeepRules.FromSettings(_host.Settings))
-                    .Purge(
-                        producer,
-                        cancelled,
-                        completenessEvidence: evidence,
-                        allowedRootEvidence: Path.GetDirectoryName(restDirectory) ?? string.Empty);
+                outcome = CleanupExecutor.ExecuteDeletion(
+                    plan,
+                    p => new RestItemPurger(
+                            _host.RestDeleteExecutor,
+                            null,
+                            ContentKeepRules.FromSettings(_host.Settings))
+                        .Purge(producer, p, evidence));
             }
             catch (Exception ex)
             {
@@ -1949,6 +1956,19 @@ namespace ArchiveFixer.Services
 
             bool cancelled = _host.IsStopping || _host.OperationCts?.IsCancellationRequested == true;
 
+            var plan = new DeletionPlan
+            {
+                Targets = string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                    ? Array.Empty<string>()
+                    : new[] { task.RestDirectoryPath },
+                AllowedRoot = string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                    ? string.Empty
+                    : Path.GetDirectoryName(task.RestDirectoryPath) ?? string.Empty,
+                DeletesEverything = true,
+                Cancelled = cancelled,
+                Reason = "任务收尾：按「删除操作」处理本任务其余物"
+            };
+
             RestPurgeOutcome outcome;
 
             try
@@ -1972,8 +1992,8 @@ namespace ArchiveFixer.Services
                         return _host.SpaceTightThisBatch
                             && !string.IsNullOrWhiteSpace(keepLast)
                             && File.Exists(keepLast)
-                                ? purger.PurgeExcept(task, new[] { keepLast })
-                                : purger.Purge(task, cancelled);
+                                ? purger.PurgeExcept(task, new[] { keepLast }, plan)
+                                : purger.Purge(task, plan);
                     });
             }
             catch (Exception ex)

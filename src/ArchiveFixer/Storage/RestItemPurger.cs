@@ -773,7 +773,8 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public RestPurgeOutcome Purge(
             ArchiveTask? task,
-            DeletionPlan plan)
+            DeletionPlan plan,
+            ResultCompletenessVerdict? completenessEvidence = null)
         {
             if (task == null || plan == null)
             {
@@ -797,7 +798,7 @@ namespace ArchiveFixer.Storage
             return Purge(
                 task,
                 plan.Cancelled,
-                completenessEvidence: null,
+                completenessEvidence: completenessEvidence,
                 allowedRootEvidence: plan.AllowedRoot);
         }
 

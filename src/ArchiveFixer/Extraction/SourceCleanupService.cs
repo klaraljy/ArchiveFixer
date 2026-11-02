@@ -198,6 +198,15 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
+            if (decision.Plan?.Cancelled == true)
+            {
+                return new SourceCleanupResult
+                {
+                    Attempted = false,
+                    Message = "用户已请求停止，源文件一个字节都不删"
+                };
+            }
+
             /*
              * 规则 2：没有本链自己的完整性证据就不删。
              * 宁可留下一个已经没用的源包，也不能把没解压全的包删掉 —— 后者无法恢复。
