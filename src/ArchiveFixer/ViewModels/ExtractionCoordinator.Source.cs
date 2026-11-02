@@ -770,27 +770,7 @@ namespace ArchiveFixer.ViewModels
              * 判据本体一字不改，默认值 true 保住了逐层回收/空间不足那两档。
              */
             /*
-             * ⛔ 严格档只给**分卷组**的逐层回收：
-             * 续解任务里那种独立内层包（例如 `.exe` 自解压包）本来就不是分卷，
-             * 名字/后缀认不出归档也不能因此把它留到链尾 —— 用户 2026-11-02 口径：
-             * 过程物逐层删除，原包最后再删。独立内层包按“本层成功 + 它在递归工作区里”直接删；
-             * 只有任务确实属于分卷组（`IsVolumeGroup` / `IsVolumeGroupFollower`）时，
-             * 才要求候选能认出归档件，避免把缺片的一组拆开。
-             */
-            bool requireRecognizedCandidates =
-                trigger == LayerPurgeTrigger.SourceHandlingDelete
-                    ? task.IsContinuationTask
-                    : task.IsVolumeGroup || task.IsVolumeGroupFollower;
-
-            /*
-             * ===== 本组源包：**组可证完整 + 内容校验通过 ⇒ 半套闸门不再适用**（2026-10-18 用户 `&&` 口径）=====
-             *
-             * 用户拍板：「第一大步成功 && 第二大步成功（组可证完整、内容物校验通过）才动原包」。
-             * 走到这里、而且这一单就是**这一组的入口任务**（`IsVolumeGroup`）且组可证完整
-             * （`IsVolumeComplete`）且**这一单自己的内容物已可证完整** ⇒ 这一组已经整组解开，
-             * 它的源片不再需要留着拼组 —— 半套闸门放行（⛔ 只放行这两种：组任务自己的源包、
-             * **已验证组里的跟班源片**（`IsVolumeGroupFollower` + 接手方 verdict 允许）。
-             * 单包任务 / 组不完整 / 判不出 ⇒ 照旧过闸门，25 GB 那次的形状照样拦得住）。
+             * 本组源包：组可证完整 + 内容校验通过 ⇒ 半套闸门不再适用。
              */
             bool verifiedGroupSource =
                 (task.IsVolumeGroup
@@ -810,12 +790,14 @@ namespace ArchiveFixer.ViewModels
                     $"{task.LogName}：这一组可证完整且内容物校验通过 ⇒ 组源包按「{triggerLabel}」处理时不再过半套闸门（整组已解开，源片不再需要拼组）。"));
             }
 
+            CleanupCandidateKind candidateKind = ClassifyLayerCleanupCandidate(task, trigger);
+
             string? splitBlocker = verifiedGroupSource
                 ? null
                 : DescribeLayerSplitBlocker(
                     task,
                     reclaimWorkspaceDirectory,
-                    requireRecognizedCandidates);
+                    candidateKind);
 
             if (splitBlocker != null)
             {
@@ -997,10 +979,38 @@ namespace ArchiveFixer.ViewModels
         /// （⛔ 不在这里另写一份）；候选清单也转调删除侧那一个出口
         /// <see cref="SourceCleanupService.BuildTargetList"/>（判据与真删看同一份清单）。</para>
         /// </summary>
+        /// <summary>
+        /// 待删除对象的身份。身份决定“要不要证明它是归档/分卷”：
+        /// 只有真正的分卷组才要求名字/内容能认出归档；独立续解内层包和用户源包按更直接的事实处理。
+        /// </summary>
+        private enum CleanupCandidateKind
+        {
+            UserSource,
+            ProducedInnerPackage,
+            VolumeGroup
+        }
+
+        private static CleanupCandidateKind ClassifyLayerCleanupCandidate(
+            ArchiveTask task,
+            LayerPurgeTrigger trigger)
+        {
+            if (task.IsVolumeGroup || task.IsVolumeGroupFollower)
+            {
+                return CleanupCandidateKind.VolumeGroup;
+            }
+
+            if (trigger == LayerPurgeTrigger.SourceHandlingDelete && !task.IsContinuationTask)
+            {
+                return CleanupCandidateKind.UserSource;
+            }
+
+            return CleanupCandidateKind.ProducedInnerPackage;
+        }
+
         private string? DescribeLayerSplitBlocker(
             ArchiveTask task,
             string? reclaimWorkspaceDirectory = null,
-            bool requireRecognizedCandidates = true)
+            CleanupCandidateKind candidateKind = CleanupCandidateKind.VolumeGroup)
         {
             /*
              * 内容卡已经**可证不是分卷成员**（SingleComplete / ProvablyNotVolumeMember）⇒ 它不可能是
@@ -1047,7 +1057,7 @@ namespace ArchiveFixer.ViewModels
                     candidates,
                     artifactRoot,
                     excluded,
-                    requireRecognizedCandidates);
+                    candidateKind == CleanupCandidateKind.VolumeGroup);
 
                 if (blocker != null)
                 {
