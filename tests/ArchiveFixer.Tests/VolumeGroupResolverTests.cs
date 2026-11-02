@@ -386,7 +386,7 @@ namespace ArchiveFixer.Tests
             WriteFile(stage, "一只顶美.z03", 4096);
             string renamed = WriteFile(stage, "一只顶美.z删除ip", 1024);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-case2"),
                 sharedOutputRoot: false,
@@ -418,7 +418,7 @@ namespace ArchiveFixer.Tests
             string nameless = WriteFile(stage, "111", 4096);
             WriteFile(stage, "111.7z.003", 512);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-case1"),
                 sharedOutputRoot: false,
@@ -439,7 +439,7 @@ namespace ArchiveFixer.Tests
             WriteFile(stage, "电影.7z.001", 8192);
             string disguised = WriteFile(stage, "电影.mp4", 8192);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-case3"),
                 sharedOutputRoot: false,

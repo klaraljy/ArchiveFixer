@@ -16,7 +16,7 @@ namespace ArchiveFixer.ViewModels
     {
         private readonly PlacementStep _placementStep;
 
-        internal FinalLayoutPlan PlanFinalLayoutForTask(
+        internal FinalizePlan PlanFinalLayoutForTask(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
@@ -33,7 +33,7 @@ namespace ArchiveFixer.ViewModels
                 recursion,
                 stageFilesAreProducedContent);
 
-        internal static FinalLayoutPlan PlanFinalLayout(
+        internal static FinalizePlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,

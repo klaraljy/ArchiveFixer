@@ -376,10 +376,11 @@ namespace ArchiveFixer.Services
                 };
             }
 
-            OutputPlacementMode mode = OutputPlacement.FromLegacyFlags(
-                options.ExtractToOriginalDirectory,
-                options.KeepArchiveNameFolder,
-                options.CustomOutputDirectory);
+            OutputPlacementMode mode = options.PlacementMode
+                ?? OutputPlacement.FromLegacyFlags(
+                    options.ExtractToOriginalDirectory,
+                    options.KeepArchiveNameFolder,
+                    options.CustomOutputDirectory);
 
             /*
              * 第 1 卷（用户 2026-10-05 落点口径："落在**第一卷的位置**"，而且他点名了现场：

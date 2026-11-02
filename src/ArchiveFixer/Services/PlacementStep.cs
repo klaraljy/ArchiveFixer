@@ -69,7 +69,7 @@ namespace ArchiveFixer.Services
         /// 迟早会漂移成"预检按平铺算、定稿按套层算"（预检说有冲突、实际没有，或者反过来）。
         /// </para>
         /// </summary>
-        internal FinalLayoutPlan PlanFinalLayoutForTask(
+        internal FinalizePlan PlanFinalLayoutForTask(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
@@ -252,7 +252,7 @@ namespace ArchiveFixer.Services
             }
         }
 
-        internal static FinalLayoutPlan PlanFinalLayout(
+        internal static FinalizePlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,
@@ -269,7 +269,7 @@ namespace ArchiveFixer.Services
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
                 !Directory.Exists(stageDirectory))
             {
-                return new FinalLayoutPlan();
+                return new FinalizePlan();
             }
 
             string stageRoot = SafePathHelper.GetFullPathSafe(stageDirectory);
@@ -544,9 +544,9 @@ namespace ArchiveFixer.Services
             {
                 string detail = string.Join("；", incompleteVolumeGroups.Distinct(StringComparer.Ordinal).Take(3));
 
-                return new FinalLayoutPlan
+                return new FinalizePlan
                 {
-                    Failed = true,
+                    Layout = FinalizeLayoutKind.Failed,
                     BlockedByIncompleteVolumeGroup = true,
                     FailureReason = $"这一层里有分卷组不完整：{detail}。已按「什么都不动」处理 —— "
                         + "产物与源包一个字节都不搬、不删（补齐全套分卷后再来）",
@@ -575,7 +575,7 @@ namespace ArchiveFixer.Services
              */
             if (totalStageBytes <= 0 && staged.Count > 0)
             {
-                return new FinalLayoutPlan
+                return new FinalizePlan
                 {
                     ZeroByteProductsOnly = true,
                     Summary = "暂存区里只有 0 字节产物（没有解出任何内容）"
@@ -595,7 +595,7 @@ namespace ArchiveFixer.Services
 
             if (staged.Count == 0)
             {
-                return new FinalLayoutPlan();
+                return new FinalizePlan();
             }
 
             FinalizePlan finalize = ResultFinalizer.Plan(
@@ -622,17 +622,21 @@ namespace ArchiveFixer.Services
                 processSources.Add(move.From);
             }
 
-            return new FinalLayoutPlan
+            return new FinalizePlan
             {
-                Failed = finalize.Layout == FinalizeLayoutKind.Failed,
                 FailureReason = finalize.FailureReason,
                 Layout = finalize.Layout,
+                DestinationDirectory = finalize.DestinationDirectory,
+                ContentParentDirectory = finalize.ContentParentDirectory,
+                ContentDirectoryName = finalize.ContentDirectoryName,
                 Moves = finalize.Moves,
-                PlannedContentCount = finalize.ContentMoves.Count,
+                ContentMoves = finalize.ContentMoves,
+                ProcessArtifactMoves = finalize.ProcessArtifactMoves,
                 ProcessArtifactSources = processSources,
                 ProcessArtifactDirectory = finalize.ProcessArtifactDirectory,
                 ProcessArtifactTotalSize = finalize.ProcessArtifactTotalSize,
                 ContentFileCount = finalize.ContentFileCount,
+                ContentTotalSize = finalize.ContentTotalSize,
                 Summary = finalize.Summary,
                 Warnings = finalize.Warnings.Concat(warnings).ToList()
             };
@@ -764,7 +768,7 @@ namespace ArchiveFixer.Services
                 return precheck;
             }
 
-            FinalLayoutPlan plan;
+            FinalizePlan plan;
 
             try
             {
@@ -863,7 +867,7 @@ namespace ArchiveFixer.Services
                 };
             }
 
-            FinalLayoutPlan plan;
+            FinalizePlan plan;
 
             try
             {

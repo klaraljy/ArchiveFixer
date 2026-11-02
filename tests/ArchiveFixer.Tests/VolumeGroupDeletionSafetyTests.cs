@@ -16,7 +16,7 @@ namespace ArchiveFixer.Tests
     /// 再叠加「空间不足」模式的永久删除 ⇒ 那 25 GB 当场没了，而日志写着"解压成功 ｜ 校验通过"。</para>
     ///
     /// <para><b>红线</b>：分卷要进"可删的其余物"，必须**先能证明整组完整**；证明不了 ⇒
-    /// 整份定稿计划作废（<see cref="FinalLayoutPlan.Failed"/>），
+    /// 整份定稿计划作废（<see cref="FinalizePlan.Failed"/>），
     /// 于是"源包删除 / 其余物删除"这两条（都挂在"定稿 + 校验通过"之后）一个都不会发生。</para>
     ///
     /// <para><b>红检</b>：把 <c>PlanFinalLayout</c> 里那道闸门去掉（或让
@@ -50,7 +50,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("一只顶美.z01", "一只顶美.z02", "一只顶美.z03", "一只顶美.z04", "一只顶美.z05");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "一只顶美");
 
             Assert.True(plan.Failed, "缺末卷（同名 .zip）的跨盘组必须让整份计划作废");
@@ -65,7 +65,7 @@ namespace ArchiveFixer.Tests
             string stage = CreateStage(
                 "一只顶美.z01", "一只顶美.z02", "一只顶美.z03", "一只顶美.z04", "一只顶美.z05", "一只顶美.zip");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "一只顶美");
 
             Assert.False(plan.Failed);
@@ -77,7 +77,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("x.7z.002", "x.7z.003");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "x");
 
             Assert.True(plan.Failed, "只剩后续卷（缺 .001）必须让整份计划作废");
@@ -90,7 +90,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("x.7z.001", "x.7z.002", "x.7z.003");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "x");
 
             Assert.False(plan.Failed);
@@ -106,7 +106,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("x.r00", "x.r01");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "x");
 
             Assert.True(plan.Failed, "缺 x.rar 的 .r00 族必须让整份计划作废");
@@ -120,7 +120,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("x.part02.rar", "x.part03.rar");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "x");
 
             Assert.True(plan.Failed, "缺 .part01.rar 的 part 族必须让整份计划作废");
@@ -134,7 +134,7 @@ namespace ArchiveFixer.Tests
         {
             string stage = CreateStage("x.part01.rar", "x.part02.rar", "x.part03.rar");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage, Path.Combine(_root, "out"), sharedOutputRoot: false, "x");
 
             Assert.False(plan.Failed);

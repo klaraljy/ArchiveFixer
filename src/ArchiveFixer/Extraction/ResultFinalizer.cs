@@ -128,6 +128,21 @@ namespace ArchiveFixer.Extraction
         /// <summary>规划过程中的提醒（忽略的非法条目、退而求其次的取名等），不改变结论。</summary>
         public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+        /// <summary>整份计划作废（不搬、不删）。</summary>
+        public bool Failed => Layout == FinalizeLayoutKind.Failed;
+
+        /// <summary>因为分卷组证明不了完整而整份作废（不是失败，调用方按跳过处理）。</summary>
+        public bool BlockedByIncompleteVolumeGroup { get; init; }
+
+        /// <summary>暂存区里只有 0 字节产物（没有可定稿内容）。</summary>
+        public bool ZeroByteProductsOnly { get; init; }
+
+        /// <summary>计划里的内容物条数。</summary>
+        public int PlannedContentCount => ContentMoves.Count;
+
+        /// <summary>哪几条是其余物（按 From 查，执行时用）。</summary>
+        public IReadOnlyCollection<string> ProcessArtifactSources { get; init; } = Array.Empty<string>();
+
         internal static FinalizePlan Failure(string reason)
         {
             return new FinalizePlan
@@ -247,6 +262,32 @@ namespace ArchiveFixer.Extraction
         /// 传空 = 与加这条红线之前**逐字相同**（既有用例钉着那一份口径，不许弄红）。
         /// </para>
         /// </param>
+        public static FinalizePlan Plan(
+            OutputPlan outputPlan,
+            IReadOnlyList<StagedEntry>? stagedEntries,
+            string? contentRoot = null,
+            string? stagingRoot = null,
+            bool sharedOutputRoot = false,
+            bool suppressPackageFolderLayer = false,
+            string? innermostPackageBaseName = null)
+        {
+            if (outputPlan == null || !outputPlan.Success)
+            {
+                return FinalizePlan.Failure(
+                    outputPlan?.Message ?? "没有落点计划（OutputPlan 为空），无法规划定稿布局");
+            }
+
+            return Plan(
+                stagedEntries,
+                outputPlan.DestinationDirectory,
+                archiveBaseName: outputPlan.PackageBaseName,
+                contentRoot: contentRoot,
+                stagingRoot: stagingRoot,
+                sharedOutputRoot: sharedOutputRoot,
+                suppressPackageFolderLayer: suppressPackageFolderLayer,
+                innermostPackageBaseName: innermostPackageBaseName);
+        }
+
         public static FinalizePlan Plan(
             IReadOnlyList<StagedEntry>? stagedEntries,
             string? destinationDirectory,

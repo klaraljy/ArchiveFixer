@@ -30,6 +30,12 @@ namespace ArchiveFixer.Models
         public bool KeepArchiveNameFolder { get; set; } = true;
 
         /// <summary>
+        /// 新落点计划的直接输入；非空时优先于上面两个旧布尔。
+        /// 旧布尔只留给旧调用方/旧配置读入，新写入只写这一格。
+        /// </summary>
+        public OutputPlacementMode? PlacementMode { get; set; }
+
+        /// <summary>
         /// 手动档「**解压到当前文件夹**」（用户 2026-09-27 新加的那一档，语义 = WinRAR 的"解压到当前文件夹"）：
         /// 内容物直接落在**压缩包所在的那一层**，⛔ 不套包名文件夹（<c>111\222.rar</c> → <c>111\内容物</c>）。
         ///
@@ -299,14 +305,7 @@ namespace ArchiveFixer.Models
 
             if (IsPlacementValid)
             {
-                (bool extractToOriginalDirectory, bool keepArchiveNameFolder) =
-                    OutputPlacement.ToLegacyFlags(PlacementMode);
-
-                options.ExtractToOriginalDirectory = extractToOriginalDirectory;
-                options.KeepArchiveNameFolder = keepArchiveNameFolder;
-
-                // 源目录家族的模式下这个字段是惰性的（FromLegacyFlags 会忽略它），
-                // 但仍然写上：万一将来有人只看字段不看模式，看到的是用户真正填的那个根。
+                options.PlacementMode = PlacementMode;
                 options.CustomOutputDirectory = CustomRoot ?? string.Empty;
             }
 

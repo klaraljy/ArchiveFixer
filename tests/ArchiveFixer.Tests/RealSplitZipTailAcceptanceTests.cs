@@ -78,7 +78,7 @@ namespace ArchiveFixer.Tests
             long tailSizeBefore = new FileInfo(copiedTail).Length;
 
             // ② 定稿前整组改名：必须变成 222.zip + 222.z01。
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out"),
                 sharedOutputRoot: false,

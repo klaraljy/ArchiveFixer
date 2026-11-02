@@ -123,7 +123,7 @@ namespace ArchiveFixer.Tests
 
             byte[] before = File.ReadAllBytes(tail);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-split"),
                 sharedOutputRoot: false,
@@ -155,7 +155,7 @@ namespace ArchiveFixer.Tests
             string occupant = Path.Combine(stage, "222.zip");
             File.WriteAllBytes(occupant, new byte[64]);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-occupied"),
                 sharedOutputRoot: false,
@@ -179,7 +179,7 @@ namespace ArchiveFixer.Tests
             string stage = NewDirectory("stage-alone");
             string tail = WriteSplitZipTail(stage, "222.zi删除p", centralDirectoryBytes: 350, entries: 6);
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-alone"),
                 sharedOutputRoot: false,

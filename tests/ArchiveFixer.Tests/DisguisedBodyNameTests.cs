@@ -285,7 +285,7 @@ namespace ArchiveFixer.Tests
                 FinalOutputPath = stage
             };
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out"),
                 sharedOutputRoot: false,
@@ -329,7 +329,7 @@ namespace ArchiveFixer.Tests
 
             Assert.True(TryCreateHardLink(second, first), "本机文件系统不支持硬链接，这条用例失去意义");
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out2"),
                 sharedOutputRoot: false,
@@ -362,7 +362,7 @@ namespace ArchiveFixer.Tests
                 FinalOutputPath = stage
             };
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out3"),
                 sharedOutputRoot: false,
@@ -429,7 +429,7 @@ namespace ArchiveFixer.Tests
                 }
             };
 
-            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalizePlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-manifest"),
                 sharedOutputRoot: false,
