@@ -227,10 +227,10 @@ namespace ArchiveFixer.Tests
                 x => x.Message.Contains("空间不足模式", StringComparison.Ordinal));
         }
 
-        // ================================================================ ③ 失败 / 校验不过：源包按用户接受的风险删除
+        // ================================================================ ③ 失败 / 校验不过：源包原地不动
 
         [Fact]
-        public async Task 空间不足模式_解压失败_源包按接受风险删除()
+        public async Task 空间不足模式_解压失败_源包原地不动()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -254,12 +254,12 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "空间不足模式失败也要删源包（用户接受风险）");
+            Assert.True(File.Exists(source), "失败没有可证完整证据，源包必须原地不动");
             Assert.True(harness.Engine.Extracted == false);
         }
 
         [Fact]
-        public async Task 空间不足模式_校验不过_源包按接受风险删除()
+        public async Task 空间不足模式_校验不过_源包原地不动()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -278,7 +278,7 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "空间不足模式校验不过也要删源包（用户接受风险）");
+            Assert.True(File.Exists(source), "校验不过没有可证完整证据，源包必须原地不动");
         }
 
         [Fact]

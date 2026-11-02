@@ -77,6 +77,7 @@ namespace ArchiveFixer.Tests
             return new OutputVerificationResult
             {
                 Verified = true,
+                ManifestCrossChecked = true,
                 Message = "测试用：校验通过"
             };
         }

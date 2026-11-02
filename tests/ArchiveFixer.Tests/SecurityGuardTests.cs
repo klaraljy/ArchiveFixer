@@ -207,11 +207,12 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void CheckEntries_NullInput_ReportsNothingWasChecked()
+        public void CheckEntries_NullInput_ReportsNothingWasChecked_AndIsNotSafe()
         {
             PathSafetyReport report = ArchivePathGuard.CheckEntries(null);
 
-            Assert.True(report.IsSafe);
+            Assert.False(report.IsSafe);
+            Assert.False(report.Known);
             Assert.Equal(0, report.CheckedEntryCount);
             Assert.Empty(report.UnsafeEntries);
             Assert.Equal("没有可检查的条目", report.Summary);
@@ -223,6 +224,7 @@ namespace ArchiveFixer.Tests
             PathSafetyReport report = ArchivePathGuard.CheckEntries(new List<ArchiveEntry>());
 
             Assert.True(report.IsSafe);
+            Assert.True(report.Known);
             Assert.Equal(0, report.CheckedEntryCount);
             Assert.Equal("没有可检查的条目", report.Summary);
         }
@@ -369,6 +371,19 @@ namespace ArchiveFixer.Tests
 
             Assert.True(result.Allowed);
             Assert.Contains("运行时预算", result.Reason);
+        }
+
+        [Fact]
+        public void CheckBeforeExtract_NoList_StillRejectsWhenDiskCannotHoldSource()
+        {
+            BudgetCheckResult result = new ResourceBudget().CheckBeforeExtract(
+                null,
+                long.MaxValue / 2,
+                Path.GetTempPath());
+
+            Assert.False(result.Allowed);
+            Assert.True(result.IsSpaceShortage);
+            Assert.Contains("条目清单", result.Reason);
         }
 
         [Fact]

@@ -24,6 +24,28 @@ namespace ArchiveFixer.Extraction
         public string Message { get; init; } = string.Empty;
     }
 
+    /// <summary>删源裁决所依据的证据种类（⛔ 不再用 bool verified 绕过）。</summary>
+    public enum SourceCleanupEvidence
+    {
+        None = 0,
+        ManifestCrossChecked = 1,
+        LayerCompleteness = 2
+    }
+
+    /// <summary>
+    /// 一次删源裁决的完整输入。调用方只填事实，是否可删由 <see cref="SourceCleanupService"/> 判。
+    /// </summary>
+    public sealed class SourceCleanupDecision
+    {
+        public bool Enabled { get; init; } = true;
+
+        public SourceCleanupEvidence Evidence { get; init; }
+
+        public string Note { get; init; } = string.Empty;
+
+        public bool IncludeRestAliases { get; init; }
+    }
+
     /// <summary>
     /// 删除动作的唯一出口（用户 2026-09-24 要求：删除裁决要能被测试钉死）。
     ///
@@ -113,69 +135,45 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 解压收尾那条路用的入口（判据是**这一次真的跑过的那份校验结果**）。
+        /// 解压收尾那条路用的入口：只有**清单逐条核对通过**才算可删。
         /// </summary>
         public SourceCleanupResult Cleanup(ArchiveTask? task, OutputVerificationResult? verification, bool enabled)
         {
-            return CleanupCore(
-                task,
-                enabled,
-                verified: verification != null && verification.Verified,
-                verificationNote: verification == null ? "没有校验结果" : verification.Message);
+            SourceCleanupEvidence evidence = verification is { Verified: true, ManifestCrossChecked: true }
+                ? SourceCleanupEvidence.ManifestCrossChecked
+                : SourceCleanupEvidence.None;
+
+            return Cleanup(task, new SourceCleanupDecision
+            {
+                Enabled = enabled,
+                Evidence = evidence,
+                Note = verification == null ? "没有校验结果" : verification.Message
+            });
         }
 
         /// <summary>
-        /// 续解链跑完之后那条路用的入口（判据由调用方按**明确的既有事实**给出）。
-        ///
-        /// <para>
-        /// 为什么要单独一个入口：链结束时的"内容物已好"不是一个 <see cref="OutputVerificationResult"/> 对象
-        /// （那是**整条链**的结论：根任务校验通过、链里每个落在同一目录的任务都校验通过、目录里确实有内容物），
-        /// 硬造一个假的校验结果对象反而更危险（数字是编的）。
-        /// 所以这里要求调用方把<strong>事实</strong>作为参数传进来，而"不满足就不删"这条判断仍然在本类里，
-        /// 一处定义 —— 与 <see cref="Cleanup"/> 共用同一段执行体。
-        /// </para>
+        /// 唯一删源入口：调用方只交事实（证据种类/说明/是否含其余物别名），可不可删在本类判。
         /// </summary>
-        /// <param name="verified">
-        /// 输出校验是否通过。⛔ 只有调用方逐条查过"根任务校验通过 + 全链校验通过 + 那个目录里有内容物"之后才允许传 true。
-        /// </param>
-        /// <param name="verificationNote">这一条事实的说明（进日志与结论，便于事后对账）。</param>
-        public SourceCleanupResult CleanupVerified(
-            ArchiveTask? task,
-            bool verified,
-            string verificationNote,
-            bool enabled,
-            bool includeRestAliases = false)
+        public SourceCleanupResult Cleanup(ArchiveTask? task, SourceCleanupDecision decision)
         {
-            return CleanupCore(task, enabled, verified, verificationNote, includeRestAliases);
-        }
-
-        /// <summary>
-        /// 空间不足模式：用户已接受「失败也会丢源包」的风险，所以不看校验，直接按同一执行体删源。
-        /// 只给空间不足的失败/取消分支用；其它任何路径都不许调。
-        /// </summary>
-        public SourceCleanupResult CleanupAcceptedRisk(ArchiveTask? task, bool enabled)
-        {
-            return CleanupCore(
-                task,
-                enabled,
-                verified: true,
-                verificationNote: "空间不足模式：用户已接受源包丢失风险",
-                includeRestAliases: false);
+            return CleanupCore(task, decision ?? new SourceCleanupDecision
+            {
+                Enabled = false,
+                Evidence = SourceCleanupEvidence.None,
+                Note = "没有删源裁决"
+            });
         }
 
         private SourceCleanupResult CleanupCore(
             ArchiveTask? task,
-            bool enabled,
-            bool verified,
-            string verificationNote,
-            bool includeRestAliases = false)
+            SourceCleanupDecision decision)
         {
             /*
              * 规则 1：开关没开就什么都不做。
              * 这一条放在最前面，是为了让"默认关闭"成为代码层面的保证，
              * 而不是靠调用方记得别传 true。
              */
-            if (!enabled)
+            if (!decision.Enabled)
             {
                 return new SourceCleanupResult
                 {
@@ -194,21 +192,21 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 规则 2：校验没过（或压根没校验）就不删。
+             * 规则 2：没有本链自己的完整性证据就不删。
              * 宁可留下一个已经没用的源包，也不能把没解压全的包删掉 —— 后者无法恢复。
              */
-            if (!verified)
+            if (decision.Evidence == SourceCleanupEvidence.None)
             {
-                string reason = string.IsNullOrWhiteSpace(verificationNote) ? "没有校验结果" : verificationNote;
+                string reason = string.IsNullOrWhiteSpace(decision.Note) ? "没有完整性证据" : decision.Note;
 
                 return new SourceCleanupResult
                 {
                     Attempted = false,
-                    Message = $"校验未通过，已保留源文件（{reason}）"
+                    Message = $"校验未通过或判不出完整性，已保留源文件（{reason}）"
                 };
             }
 
-            List<string> targets = BuildTargetList(task, includeRestAliases);
+            List<string> targets = BuildTargetList(task, decision.IncludeRestAliases);
 
             if (targets.Count == 0)
             {

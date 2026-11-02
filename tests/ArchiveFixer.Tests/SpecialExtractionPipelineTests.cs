@@ -114,7 +114,7 @@ namespace ArchiveFixer.Tests
 
 
         [SevenZipFact]
-        public async Task 特定解压_空间不足模式_失败也删源包()
+        public async Task 特定解压_空间不足模式_失败不删源包()
         {
             string source = Path.Combine(_root, "bad.7z");
             File.WriteAllText(source, "这不是压缩包");
@@ -132,9 +132,9 @@ namespace ArchiveFixer.Tests
 
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
 
-            Assert.False(
+            Assert.True(
                 File.Exists(source),
-                "空间不足模式按用户接受的风险处理：失败也要删源包（不是留在原地）");
+                "空间不足模式也不能用“用户接受风险”替代本单成功/校验证据；失败必须保留源包");
         }
 
         [SevenZipFact]

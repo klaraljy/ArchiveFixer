@@ -76,13 +76,13 @@ namespace ArchiveFixer.Tests
 
 
         [Fact]
-        public void 分卷任务默认字段是安全的()
+        public void 分卷任务默认不携带完整事实()
         {
             var task = new ArchiveTask(@"C:\t\normal.7z");
 
             Assert.False(task.IsVolumeGroup);
             Assert.Equal(0, task.VolumeCount);
-            Assert.True(task.IsVolumeComplete);
+            Assert.False(task.IsVolumeComplete);
             Assert.Empty(task.MissingVolumeNames);
             Assert.Equal(string.Empty, task.VolumeInfoText);
         }

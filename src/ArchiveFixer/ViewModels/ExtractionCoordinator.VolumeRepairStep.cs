@@ -258,75 +258,48 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// **开工前跨目录收卷**（用户 2026-10-05 原话：「各分卷在不同的目录，你就将其全部移动到头文件 .001
-        /// 同级目录里面去」）。
+        /// 收集本批任务**账上明确登记**的用户源路径：OriginalPath、CurrentPath、VolumePaths。
         ///
-        /// <para><b>判据与执行体都是既有出口</b>（§9.5）：<see cref="VolumeNameRepair.ResolveCrossLayerVolumeGather"/>
-        /// 出纯计划、<see cref="VolumeNameRepair.TryApply"/> 动手（全成或全不成、绝不覆盖、失败倒序回滚、
-        /// 只同盘）。这里只做三件事：**给窗口**、**同步任务路径**、**收完重新读一次盘上事实**。</para>
-        ///
-        /// <para><b>找卷的基准 = 手上那一卷</b>（用户口径：手上最浅的那一卷，⛔ 绝不是 001）：
-        /// 窗口由 <see cref="VolumeNameRepair.EnumerateVolumeCandidatesNearby"/> 按**这一单手上那一卷**
-        /// 算出来 —— 真机形状是 <c>555\B250135(1)\B250135.7z.001</c> + <c>555\B250135(2)\B250135.7z.002</c>
-        /// （两半在两个兄弟文件夹里），窗口的"父一层"正好把兄弟目录带进来；
-        /// 拿一个解出来的 <c>001</c> 当基准就看不到那个父文件夹。</para>
-        ///
-        /// <para>⛔ 兜底一律落"什么都不做"：任何意外 ⇒ 返回 false，后面的流程照旧（让引擎去判）。
-        /// ⛔ 不动内容：只搬 + 改规范卷名，绝不覆盖任何已存在的文件。</para>
+        /// <para>⛔ 不按祖先目录递归扫描：目录名不是源包身份；扫描会把用户同层的无关文件带进来。
+        /// 源包保护只认任务账/卷清单，判不出就少保护几份，由既有源包删除闸门兜底。</para>
         /// </summary>
-        /// <returns>true = 入口那一层现在**自证完整**（引擎解得开）。false = 不确定 / 没收成。</returns>
         private static IEnumerable<string> CollectOriginalSourceFiles(IEnumerable<ArchiveTask> tasks)
         {
-            var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = new List<string>();
+
+            void Add(string? path)
+            {
+                if (string.IsNullOrWhiteSpace(path) || files.Count >= 400)
+                {
+                    return;
+                }
+
+                string full = SafePathHelper.GetFullPathSafe(path);
+
+                if (string.IsNullOrWhiteSpace(full)
+                    || ProcessArtifactLayout.IsInsideDeletableProcessFolders(full)
+                    || !seen.Add(full))
+                {
+                    return;
+                }
+
+                files.Add(full);
+            }
 
             foreach (ArchiveTask task in tasks)
             {
-                string original = task?.OriginalPath ?? string.Empty;
-
-                if (original.Length == 0)
+                if (task == null)
                 {
                     continue;
                 }
 
-                string? cursor = Path.GetDirectoryName(original);
+                Add(task.OriginalPath);
+                Add(task.CurrentPath);
 
-                for (int up = 0; up < 5 && !string.IsNullOrWhiteSpace(cursor); up++)
+                foreach (string volume in task.VolumePaths)
                 {
-                    string name = Path.GetFileName(cursor);
-
-                    if (name.Contains("大测试原包", StringComparison.OrdinalIgnoreCase)
-                        || name.Contains("大测试指定位置", StringComparison.OrdinalIgnoreCase))
-                    {
-                        roots.Add(cursor!);
-                        break;
-                    }
-
-                    cursor = Path.GetDirectoryName(cursor);
-                }
-            }
-
-            var files = new List<string>();
-
-            foreach (string root in roots)
-            {
-                try
-                {
-                    foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-                    {
-                        if (files.Count >= 400)
-                        {
-                            break;
-                        }
-
-                        if (!ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
-                        {
-                            files.Add(file);
-                        }
-                    }
-                }
-                catch
-                {
-                    // 源根读不动 ⇒ 少保护几份，不影响既有闸门。
+                    Add(volume);
                 }
             }
 

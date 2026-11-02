@@ -41,16 +41,8 @@ namespace ArchiveFixer.ViewModels
 
                 await RunRestHandlingAsync(task, runtime, oneClickRun);
 
-                if (_spaceTightThisBatch
-                    && task.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted)
-                {
-                    SourceCleanupResult cleanup = new SourceCleanupService()
-                        .CleanupAcceptedRisk(task, enabled: true);
-
-                    AppendLog(
-                        cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                        $"{task.LogName}：空间不足模式失败后删源包（用户已接受风险）—— {cleanup.Message}");
-                }
+                // 空间不足也不能拿“用户接受风险”替代本单成功/校验证据：
+                // 失败/部分完成时源包保留，由链尾按用户档位处理。
             }
             finally
             {

@@ -661,6 +661,7 @@ namespace ArchiveFixer.Tests
                 Status = StatusText.Recognized,
                 IsSelected = true,
                 IsVolumeGroup = true,
+                IsVolumeComplete = true,
                 VolumeGroupKey = Path.Combine(_root, "src") + "|222"
             };
 

@@ -1494,8 +1494,8 @@ namespace ArchiveFixer.Models
         /// <summary>已找到的卷数。</summary>
         public int VolumeCount => VolumePaths.Count;
 
-        /// <summary>卷序是否从 1 连续、无缺口。</summary>
-        public bool IsVolumeComplete { get; set; } = true;
+        /// <summary>卷序是否从 1 连续、无缺口（未知/未归组 = false，删除闸门不得 fail-open）。</summary>
+        public bool IsVolumeComplete { get; set; }
 
         /// <summary>缺失的卷文件名（总数无法确定时为空）。</summary>
         public List<string> MissingVolumeNames { get; } = new();

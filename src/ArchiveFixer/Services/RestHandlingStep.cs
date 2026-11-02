@@ -280,7 +280,7 @@ namespace ArchiveFixer.Services
              */
             if (ChainFullySucceeded(rootTask, chainTasks))
             {
-                PurgeRestAfterSuccess(rootTask, planAllowedRoot);
+                PurgeRestAfterSuccess(rootTask, planAllowedRoot, cancellationToken);
             }
         }
 
@@ -2256,10 +2256,21 @@ namespace ArchiveFixer.Services
         /// 失败 / 部分完成仍然只能走 <see cref="PurgeRestItemsExceptChainRootSource"/>，
         /// 那条路继续要求源包在盘上。
         /// </summary>
-        internal void PurgeRestAfterSuccess(ArchiveTask task, string? planAllowedRoot = null)
+        internal void PurgeRestAfterSuccess(
+            ArchiveTask task,
+            string? planAllowedRoot = null,
+            CancellationToken cancellationToken = default)
         {
             if (task == null || string.IsNullOrWhiteSpace(task.RestDirectoryPath))
             {
+                return;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                _host.AppendLog(
+                    "WARN",
+                    $"{task.FileName}：用户已请求停止，成功链的其余物清空已取消（一个字节都不删）");
                 return;
             }
 
@@ -2276,7 +2287,7 @@ namespace ArchiveFixer.Services
                     ContentKeepRules.FromSettings(_host.Settings))
                 .Purge(
                     task,
-                    cancelled: false,
+                    cancelled: cancellationToken.IsCancellationRequested,
                     DeleteMode.Permanent,
                     allowedRootEvidence: plan.AllowedRoot);
 

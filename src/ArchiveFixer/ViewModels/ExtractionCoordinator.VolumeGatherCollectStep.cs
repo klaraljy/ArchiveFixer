@@ -718,10 +718,8 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 源层候选：`OriginalPath` 是用户导入那一刻的位置，⛔ 不是过程物层。
-             * 分卷片被包装壳拆到不同源目录时（2026-10-19 `3333`：`.002` / `.003` 各在一个
-             * `333(2)` / `333(3)` 源目录里），只收 `CurrentPath`/`OutputPath` 永远看不到整组。
-             * 这里按**整层文件**枚举，收不收仍由唯一出口 `AcceptsAsGroupPiece` 回答。
+             * 源层只收任务账上明确登记的那一层（OriginalPath 的父目录）。
+             * ⛔ 不再按祖先目录递归扫描/按样本目录名截断：目录名不是源包身份。
              */
             void CollectAllFromSourceLayer(string? directory)
             {
@@ -736,68 +734,6 @@ namespace ArchiveFixer.ViewModels
                     {
                         allFiles.Add(file);
                     }
-                }
-            }
-
-            /*
-             * **源树的“根”就是带 recipe.json 的那一层**（造包器写下的样本根）。
-             * 只从单份任务的 OriginalPath 找，会漏掉同一份样本里**没被导入成任务**的裸片
-             * （2026-10-19 `3333`：`.002` / `.003` 没有任务，只有源文件）。
-             * ⛔ 只扫这一棵源树、文件上限 200，收不收仍由 `AcceptsAsGroupPiece` 回答。
-             */
-            void CollectAllFromSourceTree(string? root)
-            {
-                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
-                {
-                    return;
-                }
-
-                int collected = 0;
-
-                try
-                {
-                    foreach (string file in Directory.EnumerateFiles(root!, "*", SearchOption.AllDirectories))
-                    {
-                        if (++collected > 200)
-                        {
-                            break;
-                        }
-
-                        if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            allFiles.Add(file);
-                        }
-                    }
-                }
-                catch
-                {
-                    // 读不动就保留已经收进来的部分。
-                }
-            }
-
-            /*
-             * 运行根里没有 `recipe.json`（`bt30` 只复制样本文件）⇒ 不能靠它找源树根。
-             * 从 `OriginalPath` 往上最多 3 层；到批根 `大测试原包-困难` / `大测试指定位置-困难`
-             * 就停下（⛔ 不扫进别的样本）。每层递归收、文件上限 200，收不收仍由唯一出口回答。
-             */
-            void CollectAllFromSourceAncestors(string? path)
-            {
-                string? dir = string.IsNullOrWhiteSpace(path)
-                    ? null
-                    : Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(path));
-
-                for (int up = 0; up < 4 && !string.IsNullOrWhiteSpace(dir); up++)
-                {
-                    string name = Path.GetFileName(dir);
-
-                    if (name.Contains("大测试原包", StringComparison.OrdinalIgnoreCase)
-                        || name.Contains("大测试指定位置", StringComparison.OrdinalIgnoreCase))
-                    {
-                        break;
-                    }
-
-                    CollectAllFromSourceTree(dir);
-                    dir = Path.GetDirectoryName(dir);
                 }
             }
 
@@ -1115,7 +1051,6 @@ namespace ArchiveFixer.ViewModels
                 CollectAll(candidate.ContentDirectoryPath);
                 CollectAll(candidate.RestDirectoryPath);
                 CollectAllFromSourceLayer(Path.GetDirectoryName(candidate.OriginalPath ?? string.Empty));
-                CollectAllFromSourceAncestors(candidate.OriginalPath);
             }
 
             /*

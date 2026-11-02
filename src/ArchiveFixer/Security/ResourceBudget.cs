@@ -175,14 +175,20 @@ namespace ArchiveFixer.Security
              */
             if (list == null || !list.Success)
             {
-                (string? unknownListSpaceShortage, bool unknownSpaceShortage) = CheckFreeSpace(freeSpaceBytes, 0);
+                /*
+                 * 没有清单时解压后的总量未知，但**至少要在目标盘容纳源包本身**。
+                 * 不能拿 required=0 只看"余量 ≥ 保留"就放行（小余量盘上大包会直接写满）。
+                 */
+                long atLeastSourceBytes = Math.Max(0, archiveSizeBytes);
+                (string? unknownListSpaceShortage, bool unknownSpaceShortage) =
+                    CheckFreeSpace(freeSpaceBytes, atLeastSourceBytes);
 
                 if (unknownListSpaceShortage != null)
                 {
                     return new BudgetCheckResult
                     {
                         Allowed = false,
-                        Reason = $"引擎未能提供条目清单（本应改为运行时预算），但{unknownListSpaceShortage}",
+                        Reason = $"引擎未能提供条目清单（解压总量未知），且{unknownListSpaceShortage}",
                         EstimatedTotalSize = 0,
                         ExpansionRatio = 0d,
                         FreeSpaceBytes = freeSpaceBytes,
@@ -193,7 +199,8 @@ namespace ArchiveFixer.Security
                 return new BudgetCheckResult
                 {
                     Allowed = true,
-                    Reason = "引擎未能提供条目清单，改为运行时预算：解压过程中按累计大小与文件数设限，超限即停",
+                    Reason = "引擎未能提供条目清单，解压总量未知；已按源包体积做最低空间检查，"
+                        + "解压过程中改为运行时预算：按累计大小与文件数设限，超限即停",
                     EstimatedTotalSize = 0,
                     ExpansionRatio = 0d,
                     FreeSpaceBytes = freeSpaceBytes

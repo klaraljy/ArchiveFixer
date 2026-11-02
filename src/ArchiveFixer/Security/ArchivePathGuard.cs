@@ -67,6 +67,9 @@ namespace ArchiveFixer.Security
         /// <summary>没有任何危险条目。<b>只代表"条目名"这一层没问题</b>，不代表解压落点安全。</summary>
         public bool IsSafe { get; init; }
 
+        /// <summary>是否真的拿到了条目清单；false = 引擎没给清单，不能把"没检查"当安全。</summary>
+        public bool Known { get; init; }
+
         public IReadOnlyList<UnsafeArchiveEntry> UnsafeEntries { get; init; } = Array.Empty<UnsafeArchiveEntry>();
 
         /// <summary>
@@ -230,7 +233,8 @@ namespace ArchiveFixer.Security
             {
                 return new PathSafetyReport
                 {
-                    IsSafe = true,
+                    IsSafe = false,
+                    Known = false,
                     UnsafeEntries = Array.Empty<UnsafeArchiveEntry>(),
                     CheckedEntryCount = 0,
                     Summary = NoEntrySummary
@@ -277,6 +281,7 @@ namespace ArchiveFixer.Security
                 return new PathSafetyReport
                 {
                     IsSafe = true,
+                    Known = true,
                     UnsafeEntries = Array.Empty<UnsafeArchiveEntry>(),
                     NamingHazards = Array.Empty<UnsafeArchiveEntry>(),
                     CheckedEntryCount = 0,
@@ -288,6 +293,7 @@ namespace ArchiveFixer.Security
             return new PathSafetyReport
             {
                 IsSafe = unsafeEntries.Count == 0,
+                Known = true,
                 UnsafeEntries = unsafeEntries,
                 NamingHazards = namingHazards,
                 CheckedEntryCount = checkedCount,

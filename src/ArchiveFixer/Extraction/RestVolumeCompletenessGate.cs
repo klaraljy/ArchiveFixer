@@ -195,7 +195,13 @@ namespace ArchiveFixer.Extraction
                     candidateDirectories.Add(fullCandidate);
                     hasDirectoryCandidate = true;
 
-                    foreach (string file in EnumerateTopLevelFiles(fullCandidate))
+                    if (!TryEnumerateTopLevelFiles(fullCandidate, out IReadOnlyList<string> topLevel, out string topLevelError))
+                    {
+                        return $"{candidatePrefix}「{Path.GetFileName(fullCandidate)}」读不动（{topLevelError}）"
+                            + "—— 判不出这一份里面还有没有同组的片，所以这一个字节都不删";
+                    }
+
+                    foreach (string file in topLevel)
                     {
                         if (TryGetArchivePieceBaseName(file, out string baseName))
                         {
@@ -424,22 +430,22 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>其余物**顶层**的文件（卷都是摆在这一层的，⛔ 不递归下去翻用户的东西）。</summary>
-        private static IEnumerable<string> EnumerateTopLevelFiles(string directory)
+        private static bool TryEnumerateTopLevelFiles(
+            string directory,
+            out IReadOnlyList<string> files,
+            out string error)
         {
-            string[] files;
-
             try
             {
                 files = Directory.GetFiles(directory);
+                error = string.Empty;
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
-                yield break;
-            }
-
-            foreach (string file in files)
-            {
-                yield return file;
+                files = Array.Empty<string>();
+                error = ex.Message;
+                return false;
             }
         }
 

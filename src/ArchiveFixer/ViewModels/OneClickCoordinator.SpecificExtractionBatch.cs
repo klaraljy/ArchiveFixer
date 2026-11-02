@@ -187,26 +187,12 @@ namespace ArchiveFixer.ViewModels
 
             if (entrySuccess)
             {
-                bool deleteSource = runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace
-                    || spaceTight;
-
-                if (deleteSource)
-                {
-                    SourceCleanupResult cleanup = new SourceCleanupService().CleanupVerified(
-                        follower,
-                        verified: true,
-                        verificationNote: $"同组入口「{entry.LogName}」已成功",
-                        enabled: true);
-
-                    AppendLog(
-                        cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                        $"{follower.LogName}：跟班卷随同组入口处理源包 —— {cleanup.Message}");
-                }
-
+                // 跟班卷自己没有产物校验，不能拿“同组入口成功”替代本单证据；
+                // 源包保留，由唯一删源决策在整组可证完整后再处理。
                 return;
             }
 
-            DeleteSourceOnSpaceRisk(follower, spaceTight);
+            // 空间不足也不能用“用户接受风险”替代本单成功/校验证据：源包保留。
         }
 
         private async Task<bool> ProcessSpecificTaskAsync(
@@ -239,7 +225,6 @@ namespace ArchiveFixer.ViewModels
 
                 if (freeBytes < sourceBytes)
                 {
-                    DeleteSourceOnSpaceRisk(task, spaceTight);
                     MarkSpecificTaskFailed(
                         task,
                         $"空间不足：需要 {sourceBytes:N0} 字节，当前只剩 {freeBytes:N0} 字节");
@@ -305,22 +290,8 @@ namespace ArchiveFixer.ViewModels
                 task.EndTime = DateTime.Now;
                 task.ApplyProgress(100, null);
 
-                bool deleteSource = runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace
-                    || spaceTight;
-
-                SourceCleanupResult cleanup = new SourceCleanupService().CleanupVerified(
-                    task,
-                    verified: true,
-                    verificationNote: "特定解压内容物已落地",
-                    enabled: deleteSource,
-                    includeRestAliases: true);
-
-                if (deleteSource)
-                {
-                    AppendLog(
-                        cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                        $"{task.LogName}：特定解压后源包处理 —— {cleanup.Message}");
-                }
+                // 特定解压这一支目前没有产物清单校验；源包保留，等接入统一
+                // SourceCleanupDecision 后再按“可证完整”处置。
 
                 if ((spaceTight
                         || string.Equals(runOptions.RestHandling, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
@@ -362,7 +333,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             task.RestDirectoryPath = result.RestDirectory;
-            DeleteSourceOnSpaceRisk(task, spaceTight);
             MarkSpecificTaskFailed(task, result.Message);
             AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
 
@@ -433,21 +403,6 @@ namespace ArchiveFixer.ViewModels
                     source,
                     task.SourceSelectionKind,
                     task.SourceSelectionRoot);
-        }
-
-        private void DeleteSourceOnSpaceRisk(ArchiveTask task, bool spaceTight)
-        {
-            if (!spaceTight)
-            {
-                return;
-            }
-
-            SourceCleanupResult cleanup = new SourceCleanupService()
-                .CleanupAcceptedRisk(task, enabled: true);
-
-            AppendLog(
-                cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                $"{task.LogName}：空间不足模式删源包（用户已接受风险）—— {cleanup.Message}");
         }
 
         private static void MarkSpecificTaskFailed(ArchiveTask task, string message)

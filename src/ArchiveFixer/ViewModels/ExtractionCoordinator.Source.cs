@@ -799,12 +799,29 @@ namespace ArchiveFixer.ViewModels
 
             RestoreGatheredUserSourcePieces(logEntries);
 
-            SourceCleanupResult cleanup = SourcePackageCleanup.CleanupVerified(
+            /*
+             * 删源证据必须是“本链自己”的完整性结论：
+             * ① 递归层回收用本层的 ResultCompletenessVerdict；
+             * ② 单层/任务收尾用这次 OutputVerifier 的清单逐条核对结果。
+             * ⛔ 不能由调用方传 verified:true，也不能只读 Verified 而忽略 ManifestCrossChecked。
+             */
+            SourceCleanupEvidence evidence = reclaimVerdict?.AllowsSourceRemoval == true
+                ? SourceCleanupEvidence.LayerCompleteness
+                : (verification is { Verified: true, ManifestCrossChecked: true }
+                    ? SourceCleanupEvidence.ManifestCrossChecked
+                    : SourceCleanupEvidence.None);
+            string verificationNoteForSourceRemoval = evidence != SourceCleanupEvidence.None
+                ? $"{triggerLabel}：内容物可证完整（{evidence}）"
+                : $"{triggerLabel}：判不出完整性（未拿清单逐条核对），保留源文件";
+
+            SourceCleanupResult cleanup = SourcePackageCleanup.Cleanup(
                 task,
-                verified: true,
-                verificationNote: $"{triggerLabel}：内容物已定稿，校验通过",
-                enabled: true,
-                includeRestAliases: _vm.SpaceTightMode);
+                new SourceCleanupDecision
+                {
+                    Evidence = evidence,
+                    Note = verificationNoteForSourceRemoval,
+                    IncludeRestAliases = _spaceTightThisBatch
+                });
 
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
             {
