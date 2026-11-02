@@ -354,21 +354,8 @@ namespace ArchiveFixer.ViewModels
                  * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
                  * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
                  */
-                if (!task.IsContinuationTask && oneClickRun)
-                {
-                    // 用户 2026-11-02：空间不足模式也不许先动用户原包，整条链跑完再判。
-                    task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
-
-                    logEntries.Add((
-                        "INFO",
-                        $"{task.LogName}：源包先留在原地 —— 整条链还没跑完，链尾再按「源包操作」处理"
-                        + "（空间不足模式也不提前删用户原包）。"));
-                }
-                else
-                {
-                    sourceMoveFailure = PurgeLayerSourcePackage(
-                        task, verification, commit, logEntries, LayerPurgeTrigger.SpaceTight);
-                }
+                sourceMoveFailure = PurgeLayerSourcePackage(
+                    task, verification, commit, logEntries, LayerPurgeTrigger.SpaceTight);
             }
             else if (task.IsContinuationTask)
             {

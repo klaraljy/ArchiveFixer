@@ -169,11 +169,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 一键处理路径上，即使「空间不足」模式也不许在单层成功后删用户原包：
-        /// 2026-11-02 口径是整条链完全成功前原包一直留在原位置。
+        /// 一键处理路径上，空间不足档覆盖普通源包规则：根层定稿 + 校验通过后立刻就地删源包；
+        /// 该档没有“原包固定保留”这一说。
         /// </summary>
         [Fact]
-        public async Task 空间不足模式_一键处理_原包也不许提前删()
+        public async Task 空间不足模式_一键处理_根层成功后立刻删源包()
         {
             Harness harness = CreateHarness(settings =>
             {
@@ -193,9 +193,9 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.True(task.IsOutputVerified);
-            Assert.True(
+            Assert.False(
                 File.Exists(source),
-                "用户 2026-11-02：空间不足模式也不许在单层成功后删用户原包；整条链成功前必须留在原地");
+                "空间不足档要覆盖普通源包规则：根层成功后源包应被就地删除，不等到链尾");
         }
 
         /// <summary>
