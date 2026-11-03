@@ -67,7 +67,7 @@ namespace ArchiveFixer.ViewModels
         private async Task ProcessExtractTaskAsync(ArchiveTask task, bool oneClickRun)
         {
             var taskCts = new CancellationTokenSource();
-            TrackRunningTask(taskCts);
+            TrackRunningTask(taskCts, task);
 
             BeginTaskLogCapture(task);
 

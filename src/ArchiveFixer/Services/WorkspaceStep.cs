@@ -425,8 +425,9 @@ namespace ArchiveFixer.Services
             RecursiveExtractor? recursiveExtractor = _host.TakeTaskRecursiveExtractor(task);
 
             bool concludedSuccess =
-                string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal) &&
-                task.Outcome != TaskOutcome.PartiallyCompleted;
+                task.Outcome == TaskOutcome.Succeeded &&
+                task.Reason != TaskReason.Cancelled &&
+                task.OutputVerification != OutputVerificationOutcome.Failed;
 
             if (concludedSuccess)
             {

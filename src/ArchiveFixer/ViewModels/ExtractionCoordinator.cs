@@ -121,6 +121,8 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly List<CancellationTokenSource> _runningTaskCts = new();
 
+        private readonly Dictionary<CancellationTokenSource, ArchiveTask> _runningTaskOwners = new();
+
         private readonly object _runningTaskCtsLock = new();
 
         /// <summary>
@@ -129,11 +131,12 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
 
-        private void TrackRunningTask(CancellationTokenSource cts)
+        private void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
         {
             lock (_runningTaskCtsLock)
             {
                 _runningTaskCts.Add(cts);
+                _runningTaskOwners[cts] = task;
             }
         }
 
@@ -142,6 +145,7 @@ namespace ArchiveFixer.ViewModels
             lock (_runningTaskCtsLock)
             {
                 _runningTaskCts.Remove(cts);
+                _runningTaskOwners.Remove(cts);
             }
         }
 
@@ -366,6 +370,23 @@ namespace ArchiveFixer.ViewModels
 
                 foreach (CancellationTokenSource cts in running)
                 {
+                    ArchiveTask? owner;
+
+                    lock (_runningTaskCtsLock)
+                    {
+                        _runningTaskOwners.TryGetValue(cts, out owner);
+                    }
+
+                    /*
+                     * 取消是用户的选择，必须在收尾清理之前就落成机器事实；
+                     * 否则工作区清理会把还没跑完的“成功”状态当成真成功。
+                     */
+                    if (owner != null)
+                    {
+                        owner.Outcome = TaskOutcome.Cancelled;
+                        owner.Reason = TaskReason.Cancelled;
+                    }
+
                     try
                     {
                         cts.Cancel();
