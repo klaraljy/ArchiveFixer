@@ -1144,14 +1144,20 @@ namespace ArchiveFixer.Services
              * 第一大步已经用内容卡确认 SingleComplete：先按卡上的基名 + 规范格式名，
              * ⛔ 不能先落到"分卷名"分支（`aaa-W1-1.rar.000001` 会被 VolumeNameRepair 原样退回）。
              */
-            string singleCompleteBase = TryGetSingleCompleteBaseName(task);
-
-            if (singleCompleteBase.Length > 0
-                && task.ExtensionStatus != StatusText.ExtensionNormal
-                && task.ExtensionStatus != StatusText.ExtensionEmbedded
-                && task.ExtensionStatus != StatusText.ExtensionVolume)
+            FileNatureCard? singleCompleteCard = TryGetSingleCompleteCard(task);
+            bool singleNameLooksLikeVolume = LegacyVolumeNames.IsVolumePart(fileName);
+            if (singleCompleteCard != null
+                && (singleNameLooksLikeVolume
+                    || (task.ExtensionStatus != StatusText.ExtensionNormal
+                        && task.ExtensionStatus != StatusText.ExtensionEmbedded)))
             {
-                string singleExtension = task.SuggestedExtension;
+                string cardExtension = VolumeContentInference.ExtensionFor(singleCompleteCard.Format);
+                string singleExtension = string.IsNullOrWhiteSpace(cardExtension) ? string.Empty : "." + cardExtension;
+
+                if (string.IsNullOrWhiteSpace(singleExtension))
+                {
+                    singleExtension = task.SuggestedExtension;
+                }
 
                 if (string.IsNullOrWhiteSpace(singleExtension))
                 {
@@ -1160,7 +1166,7 @@ namespace ArchiveFixer.Services
 
                 singleExtension = NormalizeExtension(singleExtension, options.TargetExtension);
 
-                return NormalizeResultFileName(singleCompleteBase + singleExtension);
+                return NormalizeResultFileName(singleCompleteCard.ArchiveBaseName + singleExtension);
             }
             /*
              * 分卷文件：先看"名字被改坏的第一卷"能不能靠这一颗按钮修好（2026-09-26 审计：入口收敛）。
@@ -1325,7 +1331,7 @@ namespace ArchiveFixer.Services
             return NormalizeResultFileName(baseName + suggestedExtension);
         }
 
-        private static string TryGetSingleCompleteBaseName(ArchiveTask task)
+        private static FileNatureCard? TryGetSingleCompleteCard(ArchiveTask task)
         {
             try
             {
@@ -1333,20 +1339,20 @@ namespace ArchiveFixer.Services
 
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                 {
-                    return string.Empty;
+                    return null;
                 }
 
                 FileNatureCard card = FileNature.Inspect(path);
 
                 return card.BodyKind == ArchiveBodyKind.SingleComplete
                        && !string.IsNullOrWhiteSpace(card.ArchiveBaseName)
-                    ? card.ArchiveBaseName
-                    : string.Empty;
+                    ? card
+                    : null;
             }
             catch
             {
                 // 读不到内容卡 = 判不出 ⇒ 回落到既有后缀修复路径，不在改名里猜。
-                return string.Empty;
+                return null;
             }
         }
 

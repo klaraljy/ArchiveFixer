@@ -112,8 +112,12 @@ namespace ArchiveFixer.ViewModels
                         ? LegacyVolumeNames.TryGetIndex(entryName)
                         : null;
 
+                bool contentSingleComplete =
+                    entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete;
+
                 bool nameSlotVolumeCandidate =
-                    nameSlotIndex > 1
+                    !contentSingleComplete
+                    && nameSlotIndex > 1
                     &&
                     /*
                      * 7z 的中间片/末片没有卷号，内容卡常落 SingleComplete / Unknown；
@@ -130,24 +134,26 @@ namespace ArchiveFixer.ViewModels
                  * 多卷加密头按用户口径走标准名快速通道。⛔ 只收 RAR 标准名，不扩到所有 .002。
                  */
                 bool rarNameSlotCandidate =
-                    entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
+                    !contentSingleComplete
+                    && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
                     && entryCard.Size > 0
                     && nameSlotIndex > 1;
 
                 bool contentVolumeCandidate =
-                    entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
-                    /*
-                     * RAR4 老编号的 `.r00` 卡上没有 BodyKind，但 Membership 可靠；
-                     * ZIP 的 `Membership=VolumeMember` 只说明"开头像 zip 流"（普通单卷也成立），
-                     * ⛔ 不能单凭它把 `pipe.zip` 这类单卷挡在第一大步外。ZIP 只认 split EOCD。
-                     */
-                    || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
-                        && entryCard.Size > 0
-                        && entryCard.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
-                    || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip
-                        && entryCard.Size > 0
-                        && entryCard.ZipEndRecordMeansSplit);
+                    !contentSingleComplete
+                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
+                        /*
+                         * RAR4 老编号的 `.r00` 卡上没有 BodyKind，但 Membership 可靠；
+                         * ZIP 的 `Membership=VolumeMember` 只说明"开头像 zip 流"（普通单卷也成立），
+                         * ⛔ 不能单凭它把 `pipe.zip` 这类单卷挡在第一大步外。ZIP 只认 split EOCD。
+                         */
+                        || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Rar
+                            && entryCard.Size > 0
+                            && entryCard.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                        || (entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip
+                            && entryCard.Size > 0
+                            && entryCard.ZipEndRecordMeansSplit));
 
                 string handoffEvidence = contentVolumeCandidate
                     ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven.ToString()
