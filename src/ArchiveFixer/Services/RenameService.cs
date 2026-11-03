@@ -1141,6 +1141,28 @@ namespace ArchiveFixer.Services
             }
 
             /*
+             * 第一大步已经用内容卡确认 SingleComplete：先按卡上的基名 + 规范格式名，
+             * ⛔ 不能先落到"分卷名"分支（`aaa-W1-1.rar.000001` 会被 VolumeNameRepair 原样退回）。
+             */
+            string singleCompleteBase = TryGetSingleCompleteBaseName(task);
+
+            if (singleCompleteBase.Length > 0
+                && task.ExtensionStatus != StatusText.ExtensionNormal
+                && task.ExtensionStatus != StatusText.ExtensionEmbedded
+                && task.ExtensionStatus != StatusText.ExtensionVolume)
+            {
+                string singleExtension = task.SuggestedExtension;
+
+                if (string.IsNullOrWhiteSpace(singleExtension))
+                {
+                    singleExtension = GetSuggestedExtensionByFormat(task.DetectedFormat);
+                }
+
+                singleExtension = NormalizeExtension(singleExtension, options.TargetExtension);
+
+                return NormalizeResultFileName(singleCompleteBase + singleExtension);
+            }
+            /*
              * 分卷文件：先看"名字被改坏的第一卷"能不能靠这一颗按钮修好（2026-09-26 审计：入口收敛）。
              *
              * 判据仍然是 VolumeNameRepair.Plan 那六条（与失败清单里写的建议、与①页「修复分卷名并重试」
@@ -1256,20 +1278,6 @@ namespace ArchiveFixer.Services
             }
 
             string suggestedExtension = task.SuggestedExtension;
-            /*
-             * 第一大步的单包改名只认内容卡：基名 + 识别格式后缀。
-             * ⛔ 不再用"文件名去掉最后一个 Path.GetExtension 再拼"推基名 ——
-             * `aaa-W2-2.7z...删除` 会在那里被削成 `aaa-W2-2.7z..`。
-             * 分卷/Unknown/内嵌归档已在上面各自的分支返回；这里只接 SingleComplete。
-             */
-            string cardBaseName = TryGetSingleCompleteBaseName(task);
-
-            if (cardBaseName.Length > 0)
-            {
-                return NormalizeResultFileName(cardBaseName + suggestedExtension);
-            }
-
-
             if (string.IsNullOrWhiteSpace(suggestedExtension))
             {
                 suggestedExtension = GetSuggestedExtensionByFormat(task.DetectedFormat);
