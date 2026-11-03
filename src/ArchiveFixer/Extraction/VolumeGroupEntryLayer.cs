@@ -329,6 +329,14 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
+                    // 入口层是按文件名建的硬链接；删之前必须确认它确实是这一片的同一份物理文件，
+                    // ⛔ 否则不同组同名时会把别组的链接删掉（2026-11-03 补的 FileIdentity 门）。
+                    if (!FileIdentity.IsSamePhysicalFile(piece, candidate))
+                    {
+                        log?.Invoke("WARN", $"{Path.GetFileName(candidate)}：入口层同名但不是同一物理片，不删");
+                        continue;
+                    }
+
                     FileOperations.Delete(candidate);
                     deleted++;
                     log?.Invoke("INFO", $"{Path.GetFileName(candidate)}：这一组已经解开 ⇒ 入口层里的片按过程物删除");

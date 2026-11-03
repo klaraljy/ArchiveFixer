@@ -218,10 +218,15 @@ namespace ArchiveFixer.Services
 
             if (missing.Length > 0)
             {
+                string rollbackNote = TryRollback(target, plan.OriginalContent, out string rollbackFailure);
+
                 return PasswordBookWriteBackResult.Failure(
                     target,
-                    "写入后自检没通过（" + missing + "）。备份文件在：" + backupPath
-                    + "；请用这个备份核对密码本内容。");
+                    "写入后自检没通过（" + missing + "）。"
+                    + (rollbackFailure.Length == 0
+                        ? "原文件已回滚到写入前的内容，没有留下半截追加。"
+                        : "⚠ 原文件可能留下了半截内容，回滚也没成功：" + rollbackFailure + "。")
+                    + "备份文件在：" + backupPath);
             }
 
             return new PasswordBookWriteBackResult

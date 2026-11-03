@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
@@ -407,7 +408,16 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                AddTarget(targets, seen, Path.Combine(task.RestDirectoryPath, name));
+                string alias = Path.Combine(task.RestDirectoryPath, name);
+
+                // 只有"确实是同一份物理文件"的硬链接别名才能进删除清单；
+                // ⛔ 其余物里同名但不是同一份的文件，删了就是删用户的另一份数据。
+                if (!File.Exists(alias) || !FileIdentity.IsSamePhysicalFile(path, alias))
+                {
+                    continue;
+                }
+
+                AddTarget(targets, seen, alias);
             }
         }
 
