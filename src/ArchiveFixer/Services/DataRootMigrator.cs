@@ -17,6 +17,9 @@ namespace ArchiveFixer.Services
     /// </summary>
     public static class DataRootMigrator
     {
+        public const string VersionFileName = "data-root.migration.version";
+        public const int CurrentVersion = 1;
+
         public static readonly string[] MigratableFileNames =
         {
             "appsettings.json",
@@ -34,6 +37,13 @@ namespace ArchiveFixer.Services
             var copied = new List<string>();
 
             if (string.IsNullOrWhiteSpace(destinationRoot))
+            {
+                return copied;
+            }
+
+            string versionPath = Path.Combine(destinationRoot, VersionFileName);
+
+            if (ReadVersion(versionPath) >= CurrentVersion)
             {
                 return copied;
             }
@@ -82,7 +92,7 @@ namespace ArchiveFixer.Services
 
                     try
                     {
-                        File.Copy(source, destination, overwrite: false);
+                        CopyAtomically(source, destination, overwrite: false);
                         copied.Add(destination);
                         log?.Invoke($"旧数据已迁入固定数据目录：{fileName}");
                     }
@@ -94,7 +104,84 @@ namespace ArchiveFixer.Services
             }
 
             MergePasswordsIfSourceIsRicher(sourceDirectories, destinationRoot, copied, log);
+            WriteVersionAtomically(versionPath);
             return copied;
+        }
+
+        private static void CopyAtomically(string source, string destination, bool overwrite)
+        {
+            string temp = destination + ".migration-tmp";
+
+            try
+            {
+                File.Copy(source, temp, overwrite: true);
+
+                if (new FileInfo(source).Length != new FileInfo(temp).Length)
+                {
+                    throw new IOException("迁移临时文件长度不一致：" + destination);
+                }
+
+                File.Move(temp, destination, overwrite);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temp))
+                    {
+                        File.Delete(temp);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static void WriteLinesAtomically(string path, IEnumerable<string> lines)
+        {
+            string[] expected = lines.ToArray();
+            string temp = path + ".merge-tmp";
+            File.WriteAllLines(temp, expected);
+
+            string[] actual = File.ReadAllLines(temp);
+
+            if (!expected.SequenceEqual(actual, StringComparer.Ordinal))
+            {
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch
+                {
+                }
+
+                throw new IOException("合并后的密码本自检失败：" + path);
+            }
+
+            File.Move(temp, path, overwrite: true);
+        }
+
+        private static void WriteVersionAtomically(string versionPath)
+        {
+            string temp = versionPath + ".tmp";
+            File.WriteAllText(temp, CurrentVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            File.Move(temp, versionPath, overwrite: true);
+        }
+
+        private static int ReadVersion(string path)
+        {
+            try
+            {
+                return File.Exists(path)
+                    && int.TryParse(File.ReadAllText(path), out int version)
+                    ? version
+                    : 0;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         /// <summary>
@@ -157,7 +244,7 @@ namespace ArchiveFixer.Services
             {
                 // 目标里的值全在旧数据里、且没有已删除的值：直接用旧文件恢复完整顺序。
                 BackupFile(destinationPasswords);
-                File.Copy(Path.Combine(bestSourceDirectory, "passwords.txt"), destinationPasswords, overwrite: true);
+                CopyAtomically(Path.Combine(bestSourceDirectory, "passwords.txt"), destinationPasswords, overwrite: true);
 
                 string sourceMeta = Path.Combine(bestSourceDirectory, "passwords.meta.json");
                 string destinationMeta = Path.Combine(destinationRoot, "passwords.meta.json");
@@ -165,7 +252,7 @@ namespace ArchiveFixer.Services
                 if (File.Exists(sourceMeta))
                 {
                     BackupFile(destinationMeta);
-                    File.Copy(sourceMeta, destinationMeta, overwrite: true);
+                    CopyAtomically(sourceMeta, destinationMeta, overwrite: true);
                 }
 
                 string sourceEncrypted = Path.Combine(bestSourceDirectory, "password-list.dat");
@@ -174,7 +261,7 @@ namespace ArchiveFixer.Services
                 if (File.Exists(sourceEncrypted))
                 {
                     BackupFile(destinationEncrypted);
-                    File.Copy(sourceEncrypted, destinationEncrypted, overwrite: true);
+                    CopyAtomically(sourceEncrypted, destinationEncrypted, overwrite: true);
                 }
 
                 copied.Add(destinationPasswords);
@@ -199,7 +286,7 @@ namespace ArchiveFixer.Services
             }
 
             BackupFile(destinationPasswords);
-            File.WriteAllLines(destinationPasswords, mergedLines);
+            WriteLinesAtomically(destinationPasswords, mergedLines);
             MergeMetadata(
                 Path.Combine(bestSourceDirectory, "passwords.meta.json"),
                 Path.Combine(destinationRoot, "passwords.meta.json"),
