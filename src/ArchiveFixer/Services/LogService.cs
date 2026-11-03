@@ -1380,78 +1380,7 @@ namespace ArchiveFixer.Services
         /// 日志脱敏。
         /// 不允许记录明文密码。
         /// </summary>
-        public string Sanitize(string message)
-        {
-            if (string.IsNullOrEmpty(message))
-            {
-                return string.Empty;
-            }
-
-            string result = message;
-
-            result = PasswordMasker.Sanitize(result);
-
-            // -p明文密码
-            result = Regex.Replace(
-                result,
-                @"(?i)(^|\s)-p[^\s]+",
-                m =>
-                {
-                    string prefix = m.Value.StartsWith(" ") ? " " : string.Empty;
-                    return prefix + "-p******";
-                });
-
-            // --password=明文
-            result = Regex.Replace(
-                result,
-                @"(?i)(--password\s*=\s*)([^\s;]+)",
-                "$1******");
-
-            // password=明文
-            result = Regex.Replace(
-                result,
-                @"(?i)(password\s*=\s*)([^\s;]+)",
-                "$1******");
-
-            // Password: 明文
-            result = Regex.Replace(
-                result,
-                @"(?i)(password\s*:\s*)([^\r\n]+)",
-                "$1******");
-
-            // 使用密码 明文
-            result = Regex.Replace(
-                result,
-                @"使用密码\s*[^\r\n]+",
-                "使用密码 ******");
-
-            /*
-             * 「尝试密码 …」那一条**只在 PasswordMasker 里有一份**（上面第一行就调过它了）——
-             * 这里过去又抄了一遍 `尝试密码\s*[^\r\n]+`，于是 2026-10-04 真机那一行
-             * 「尝试密码列表第 3 项：******」被这一份二次擦成「尝试密码 ******」，
-             * 第几项 / 什么来源全没了。⛔ 同一个脱敏规则只许有一个出口。
-             */
-
-            // 统一密码：明文
-            result = Regex.Replace(
-                result,
-                @"统一密码\s*[:：]\s*[^\r\n]+",
-                "统一密码：******");
-
-            // 单任务密码：明文
-            result = Regex.Replace(
-                result,
-                @"单任务密码\s*[:：]\s*[^\r\n]+",
-                "单任务密码：******");
-
-            // 密码：明文
-            result = Regex.Replace(
-                result,
-                @"密码\s*[:：]\s*[^\r\n]+",
-                "密码：******");
-
-            return result;
-        }
+        public string Sanitize(string message) => LogSanitizer.Sanitize(message);
 
         /// <summary>
         /// **导出全部日志**（用户 2026-09-25 第 37 条：不是只导这一次的，是**所有**日志）。
