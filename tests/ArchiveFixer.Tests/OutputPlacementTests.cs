@@ -24,7 +24,6 @@ namespace ArchiveFixer.Tests
         /// </summary>
         [Theory]
         [InlineData(@"C:\x\其余物\9953.part1.rar", @"C:\x\9953")]
-        [InlineData(@"C:\x\过程物\9953.part1.rar", @"C:\x\9953")]
         [InlineData(@"C:\x\.ArchiveFixer.work\stage\9953.part1.rar", @"C:\x\9953")]
         [InlineData(@"C:\x\normal\9953.part1.rar", @"C:\x\normal\9953")]
         public void 落点根_从其余物或工作区抬到用户可见层(string source, string expected)

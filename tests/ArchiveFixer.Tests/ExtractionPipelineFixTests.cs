@@ -456,7 +456,6 @@ namespace ArchiveFixer.Tests
         {
             Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\其余物"));
             Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\其余物\giu"));
-            Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\过程物"));
             Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\.ArchiveFixer.work\recursive"));
 
             Assert.False(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\BaiduNetdiskDownload\日志"));

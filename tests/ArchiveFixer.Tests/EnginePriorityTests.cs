@@ -145,7 +145,10 @@ namespace ArchiveFixer.Tests
         {
             AppSettings settings = AppSettings.CreateDefault();
 
-            settings.CustomUnRarExePath = @"Z:\不存在的目录\UnRAR.exe";
+            settings.CustomUnRarExePath = Path.Combine(
+                Path.GetTempPath(),
+                "af-missing-unrar-" + Guid.NewGuid().ToString("N"),
+                "UnRAR.exe");
             settings.Normalize();
 
             // 归一化把它清空 → ToolLocator 走"已装 WinRAR 目录 → 内置"两级回落。

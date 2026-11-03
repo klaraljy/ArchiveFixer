@@ -320,6 +320,7 @@ namespace ArchiveFixer.Tests
         private static VmHarness CreateViewModel(string dataRoot, DialogService dialogService)
         {
             Directory.CreateDirectory(dataRoot);
+            WorkspaceRootIndex.ResetForTests();
 
             var pathService = new PathService { DataRootDirectory = dataRoot, WorkDirectory = Path.Combine(dataRoot, ".ArchiveFixer.work") };
             var settingsService = new SettingsService(pathService);

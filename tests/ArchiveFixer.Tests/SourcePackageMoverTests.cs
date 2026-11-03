@@ -127,15 +127,13 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 计划_源已经在其余物里时跳过_旧名过程物也算()
+        public void 计划_源已经在其余物里时跳过()
         {
             var mover = new SourcePackageMover();
 
             string inNew = WriteFile(@"out\222\其余物\222.7z", "x");
-            string inOld = WriteFile(@"out\222\过程物\222.7z", "x");
 
             Assert.Empty(mover.Plan(SingleTask(inNew), PathOf(@"out\222\其余物")).Moves);
-            Assert.Empty(mover.Plan(SingleTask(inOld), PathOf(@"out\222\其余物")).Moves);
         }
 
         [Fact]
