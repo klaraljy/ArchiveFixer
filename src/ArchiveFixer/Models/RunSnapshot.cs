@@ -33,6 +33,9 @@ namespace ArchiveFixer.Models
         /// <summary>开跑时可见的密码候选（只读副本；无密码为空串，不是 null）。</summary>
         public IReadOnlyList<string?> PasswordCandidates { get; init; } = Array.Empty<string?>();
 
+        /// <summary>本次运行专用停止令牌；UI 停止只翻它。</summary>
+        public RunStopToken StopToken { get; init; } = new();
+
         public static RunSnapshot Capture(
             IEnumerable<ArchiveTask>? targets,
             OneClickRunOptions options,
@@ -40,7 +43,8 @@ namespace ArchiveFixer.Models
             bool spaceTightKeepSource,
             bool useSpecificExtraction,
             string? selectedOutputDirectory,
-            IEnumerable<string?>? passwordCandidates = null)
+            IEnumerable<string?>? passwordCandidates = null,
+            RunStopToken? stopToken = null)
         {
             return new RunSnapshot
             {
@@ -54,7 +58,8 @@ namespace ArchiveFixer.Models
                 SelectedOutputDirectory = selectedOutputDirectory ?? string.Empty,
                 PasswordCandidates = (passwordCandidates ?? Array.Empty<string?>())
                     .Select(value => value ?? string.Empty)
-                    .ToArray()
+                    .ToArray(),
+                StopToken = stopToken ?? new RunStopToken()
             };
         }
     }

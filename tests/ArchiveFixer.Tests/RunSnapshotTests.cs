@@ -42,6 +42,18 @@ namespace ArchiveFixer.Tests
             Assert.True(snapshot.SpaceTightMode);
             Assert.False(snapshot.SpaceTightKeepSource);
             Assert.True(snapshot.UseSpecificExtraction);
+
+            var stop = new RunStopToken();
+            var withStop = RunSnapshot.Capture(
+                targets: Array.Empty<ArchiveTask>(),
+                options: options,
+                spaceTightMode: false,
+                spaceTightKeepSource: false,
+                useSpecificExtraction: false,
+                selectedOutputDirectory: null,
+                stopToken: stop);
+            stop.RequestStop();
+            Assert.True(withStop.StopToken.IsStopRequested);
         }
     }
 }

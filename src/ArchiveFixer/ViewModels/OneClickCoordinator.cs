@@ -1026,6 +1026,8 @@ namespace ArchiveFixer.ViewModels
             OneClickRunOptions snapshotOptions = runOptions
                 ?? OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
 
+            RunStopToken stopToken = new();
+
             _batchFinalized = false;
 
             CurrentRunSnapshot = RunSnapshot.Capture(
@@ -1035,7 +1037,8 @@ namespace ArchiveFixer.ViewModels
                 _vm.SpaceTightKeepSource,
                 Settings.UseSpecificExtraction,
                 _vm.SelectedOutputDirectory,
-                _extractionCoordinator.SpecificExtractionPasswords);
+                _extractionCoordinator.SpecificExtractionPasswords,
+                stopToken);
 
             /*
              * 特定解压 = 独立整理模式，不再由旧规则清单决定是否生效。
@@ -1086,6 +1089,7 @@ namespace ArchiveFixer.ViewModels
             {
                 if (e.PropertyName == nameof(MainViewModel.IsStopping) && _vm.IsStopping)
                 {
+                    stopToken.RequestStop();
                     stopRequested = true;
                 }
             }
@@ -2179,6 +2183,8 @@ namespace ArchiveFixer.ViewModels
              * · 撞到轮数上限：更深的包还没解，内容物可能不全，不能在此时把源包搬走。
              * 两种情况都写 WARN 说明原因，绝不静默。
              */
+            stopRequested |= stopToken.IsStopRequested;
+
             await CompleteRootSourcePackagesAsync(
                 rootTargets,
                 processed,
