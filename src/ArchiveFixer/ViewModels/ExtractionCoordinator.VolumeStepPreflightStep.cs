@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Storage;
 using ArchiveFixer.Services;
 
 namespace ArchiveFixer.ViewModels
@@ -285,7 +286,7 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    File.Delete(piecePath);
+                    FileOperations.Delete(piecePath);
                     removedProcessPieces++;
                 }
                 catch (Exception ex)

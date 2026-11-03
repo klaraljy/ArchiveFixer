@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using System;
@@ -483,7 +484,7 @@ namespace ArchiveFixer.Engines.WinRar
                         throw new IOException("目标已存在同名条目：" + name);
                     }
 
-                    File.Move(entry, target);
+                    FileOperations.Move(entry, target);
                     continue;
                 }
 

@@ -904,7 +904,7 @@ namespace ArchiveFixer.Packing
                     return;
                 }
 
-                File.Delete(outerPath);
+                FileOperations.Delete(outerPath);
                 write($"已清理没做完的{outerName}：{outerPath}");
             }
             catch (Exception ex)

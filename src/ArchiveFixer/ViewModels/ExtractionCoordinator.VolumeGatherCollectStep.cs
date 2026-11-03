@@ -217,7 +217,7 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
-                File.Move(piecePath, target);
+                FileOperations.Move(piecePath, target);
                 return File.Exists(target);
             }
             catch
@@ -1378,7 +1378,7 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    File.Delete(target);
+                    FileOperations.Delete(target);
 
                     AppendLog(
                         "INFO",

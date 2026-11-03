@@ -736,7 +736,7 @@ namespace ArchiveFixer.Extraction
 
                 if (File.Exists(actual))
                 {
-                    File.Delete(actual);
+                    FileOperations.Delete(actual);
                 }
             }
             catch (Exception ex)
@@ -927,7 +927,7 @@ namespace ArchiveFixer.Extraction
                 {
                     if (File.Exists(actual))
                     {
-                        File.Delete(actual);
+                        FileOperations.Delete(actual);
                     }
                 }
                 catch (Exception ex)
@@ -1261,7 +1261,7 @@ namespace ArchiveFixer.Extraction
                     if (File.Exists(targetPath)
                         && FileIdentity.IsSamePhysicalFile(sourceFile, targetPath))
                     {
-                        File.Delete(sourceFile);
+                        FileOperations.Delete(sourceFile);
                         movedFromTo[SafePathHelper.GetFullPathSafe(sourceFile)] = SafePathHelper.GetFullPathSafe(targetPath);
 
                         return true;
@@ -1283,7 +1283,7 @@ namespace ArchiveFixer.Extraction
                  * 这是最后一道保险：即使 AutoRename 与 Move 之间有人往目标目录里塞了同名文件，
                  * 也只会少移动一个文件并记进 Message，不会把别人的文件冲掉。
                  */
-                File.Move(sourceFile, targetPath);
+                FileOperations.Move(sourceFile, targetPath);
 
                 movedFromTo[SafePathHelper.GetFullPathSafe(sourceFile)] = SafePathHelper.GetFullPathSafe(targetPath);
 

@@ -711,7 +711,7 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    File.Move(piece, target);
+                    FileOperations.Move(piece, target);
 
                     if (File.Exists(target))
                     {

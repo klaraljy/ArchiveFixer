@@ -3181,7 +3181,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (sidecar.Length > 0 && File.Exists(sidecar))
                 {
-                    File.Delete(sidecar);
+                    FileOperations.Delete(sidecar);
                     AppendLog("INFO", "已清掉旧的外部密码本路径（password-book.path）；用户原始文件未动。");
                 }
             }

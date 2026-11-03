@@ -620,7 +620,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         if (File.Exists(link))
                         {
-                            File.Delete(link);
+                            FileOperations.Delete(link);
                         }
                     }
                     catch
@@ -691,7 +691,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     try
                     {
-                        File.Delete(path);
+                        FileOperations.Delete(path);
                     }
                     catch
                     {
@@ -1014,7 +1014,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         try
                         {
-                            File.Delete(built);
+                            FileOperations.Delete(built);
                         }
                         catch
                         {

@@ -287,7 +287,7 @@ namespace ArchiveFixer.Extraction
             {
                 foreach ((string from, string to) in moves)
                 {
-                    File.Move(from, to);
+                    FileOperations.Move(from, to);
                     done.Add((from, to));
                 }
 
@@ -306,7 +306,7 @@ namespace ArchiveFixer.Extraction
                 {
                     try
                     {
-                        File.Move(done[i].To, done[i].From);
+                        FileOperations.Move(done[i].To, done[i].From);
                     }
                     catch
                     {

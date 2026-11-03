@@ -435,7 +435,7 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    File.Move(entry.Path, target);
+                    FileOperations.Move(entry.Path, target);
 
                     string oldPath = entry.Path;
                     entry.Path = target;
@@ -941,7 +941,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     Directory.CreateDirectory(directory);
-                    File.Move(currentPath, originalPath);
+                    FileOperations.Move(currentPath, originalPath);
 
                     logEntries?.Add((
                         "INFO",

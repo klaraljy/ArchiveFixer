@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
@@ -185,7 +186,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    File.Move(source, unique);
+                    FileOperations.Move(source, unique);
 
                     moved++;
                     movedBytes += size > 0 ? size : 0;

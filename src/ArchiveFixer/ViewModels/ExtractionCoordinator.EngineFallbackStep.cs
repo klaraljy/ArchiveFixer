@@ -326,7 +326,7 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    File.Delete(carvedPath);
+                    FileOperations.Delete(carvedPath);
 
                     AppendLog(
                         "INFO",

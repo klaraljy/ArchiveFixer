@@ -319,7 +319,7 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        File.Delete(file);
+                        FileOperations.Delete(file);
 
                         AppendLog(
                             "INFO",

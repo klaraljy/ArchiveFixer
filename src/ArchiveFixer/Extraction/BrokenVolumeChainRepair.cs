@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -246,13 +247,13 @@ namespace ArchiveFixer.Extraction
                         directory,
                         $"~afxvol~{Guid.NewGuid():N}~{Path.GetFileName(sourcePath)}");
 
-                    File.Move(sourcePath, temporary);
+                    FileOperations.Move(sourcePath, temporary);
                     staged.Add((temporary, sourcePath, Path.Combine(directory, targetName)));
                 }
 
                 foreach ((string temporary, string _, string target) in staged)
                 {
-                    File.Move(temporary, target);
+                    FileOperations.Move(temporary, target);
                 }
 
                 return true;
@@ -369,7 +370,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    File.Move(current, original);
+                    FileOperations.Move(current, original);
                 }
                 catch
                 {

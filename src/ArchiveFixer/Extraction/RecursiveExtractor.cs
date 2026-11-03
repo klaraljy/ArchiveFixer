@@ -828,7 +828,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    File.Delete(path);
+                    FileOperations.Delete(path);
                 }
                 catch
                 {

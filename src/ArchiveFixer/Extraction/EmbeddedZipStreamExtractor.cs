@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -1371,7 +1372,7 @@ namespace ArchiveFixer.Extraction
                     }
 
                     // 先写临时名 → 成功后改名落位。中途失败/取消时只删临时名，不留半截产物。
-                    File.Move(tempPath, finalPath);
+                    FileOperations.Move(tempPath, finalPath);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1804,7 +1805,7 @@ namespace ArchiveFixer.Extraction
             {
                 if (File.Exists(path))
                 {
-                    File.Delete(path);
+                    FileOperations.Delete(path);
                 }
             }
             catch

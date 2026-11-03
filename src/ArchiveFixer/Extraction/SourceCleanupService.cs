@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -73,7 +74,7 @@ namespace ArchiveFixer.Extraction
 
         public bool FileExists(string path) => SourceCleanupService.SafeFileExists(path);
 
-        public void DeleteFile(string path) => File.Delete(path);
+        public void DeleteFile(string path) => FileOperations.Delete(path);
     }
 
     /// <summary>

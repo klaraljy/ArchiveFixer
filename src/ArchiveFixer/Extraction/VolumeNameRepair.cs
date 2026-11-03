@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -4672,7 +4673,7 @@ namespace ArchiveFixer.Extraction
                 {
                     try
                     {
-                        File.Delete(path);
+                        FileOperations.Delete(path);
                     }
                     catch
                     {
@@ -5255,7 +5256,7 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 照着计划**只改名字**。⛔ 绝无覆盖、绝无删除、绝不改内容：
-        /// 目标名已存在就原地拒绝（<see cref="File.Move(string, string)"/> 在没有 overwrite 参数时
+        /// 目标名已存在就原地拒绝（<see cref="FileOperations.Move(string, string)"/> 在没有 overwrite 参数时
         /// 碰到已存在的目标会抛 —— 这里不用"先判断再移动"的写法当唯一防线，两道都在）。
         /// </summary>
         public static VolumeNameRepairResult TryApply(VolumeNameRepairPlan? plan)
@@ -5295,7 +5296,7 @@ namespace ArchiveFixer.Extraction
 
                 sizeBefore = new FileInfo(plan.CurrentPath).Length;
 
-                File.Move(plan.CurrentPath, plan.TargetPath);
+                FileOperations.Move(plan.CurrentPath, plan.TargetPath);
 
                 applied.Add((plan.CurrentPath, plan.TargetPath));
             }
@@ -5376,7 +5377,7 @@ namespace ArchiveFixer.Extraction
                     }
 
                     long before = new FileInfo(item.CurrentPath).Length;
-                    File.Move(item.CurrentPath, item.TargetPath);
+                    FileOperations.Move(item.CurrentPath, item.TargetPath);
 
                     applied.Add((item.CurrentPath, item.TargetPath));
 
@@ -5435,7 +5436,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    File.Move(to, from);
+                    FileOperations.Move(to, from);
                 }
                 catch
                 {

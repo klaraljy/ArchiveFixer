@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using ArchiveFixer.Helpers;
 using System;
 using System.IO;
@@ -242,7 +243,7 @@ namespace ArchiveFixer.Extraction
             {
                 if (File.Exists(path))
                 {
-                    File.Delete(path);
+                    FileOperations.Delete(path);
                 }
             }
             catch

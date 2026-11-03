@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
@@ -70,7 +71,7 @@ namespace ArchiveFixer.Extraction
                     }
                     else
                     {
-                        File.Move(moved[i].To, moved[i].From);
+                        FileOperations.Move(moved[i].To, moved[i].From);
                     }
                 }
                 catch

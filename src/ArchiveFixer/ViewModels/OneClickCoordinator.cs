@@ -4100,7 +4100,7 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        File.Delete(fullArtifact);
+                        FileOperations.Delete(fullArtifact);
                         task.LastProcessArtifactPath = string.Empty;
                         deleted++;
                         log?.Invoke(

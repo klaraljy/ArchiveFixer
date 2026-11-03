@@ -325,7 +325,7 @@ namespace ArchiveFixer.ViewModels
                         destination = SafePathHelper.AutoRenameFilePath(destination);
                     }
 
-                    File.Move(file, destination);
+                    FileOperations.Move(file, destination);
                     moved++;
                 }
                 catch

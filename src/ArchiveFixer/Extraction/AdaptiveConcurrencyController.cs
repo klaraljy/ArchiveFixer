@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -300,7 +301,7 @@ namespace ArchiveFixer.Extraction
                 string temp = path + ".tmp";
                 string json = JsonSerializer.Serialize(profile);
                 File.WriteAllText(temp, json, new UTF8Encoding(false));
-                File.Move(temp, path, overwrite: true);
+                FileOperations.Move(temp, path, overwrite: true);
             }
             catch
             {

@@ -233,7 +233,7 @@ namespace ArchiveFixer.Packing
                 }
                 else
                 {
-                    File.Move(source, Path.Combine(target, name));
+                    FileOperations.Move(source, Path.Combine(target, name));
                 }
 
                 string moved = Path.Combine(target, name);

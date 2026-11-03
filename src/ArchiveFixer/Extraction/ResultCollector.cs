@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -324,7 +325,7 @@ namespace ArchiveFixer.Extraction
                  * 这里是最后一道保险：即使 AutoRename 与 Move 之间有并发写入（并行解压时同名包会撞），
                  * 也只会少搬一个文件并记进 errors，不会把别人的文件冲掉。
                  */
-                File.Move(sourceFile, targetPath);
+                FileOperations.Move(sourceFile, targetPath);
                 return true;
             }
             catch (Exception ex)

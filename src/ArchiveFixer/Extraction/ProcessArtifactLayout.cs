@@ -1102,11 +1102,11 @@ namespace ArchiveFixer.Extraction
         }
 
         // 两参数版本：目标已存在直接抛 IOException，**不会覆盖**（AGENTS.md §6 第 3 条）。
-        public void MoveFile(string source, string target) => File.Move(source, target);
+        public void MoveFile(string source, string target) => FileOperations.Move(source, target);
 
         public void CopyFile(string source, string target) => File.Copy(source, target, overwrite: false);
 
-        public void DeleteFile(string path) => File.Delete(path);
+        public void DeleteFile(string path) => FileOperations.Delete(path);
     }
 
 

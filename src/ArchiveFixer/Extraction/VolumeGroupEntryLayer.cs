@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -121,7 +122,7 @@ namespace ArchiveFixer.Extraction
 
                     if (HardLinkHelper.CanHardLink(piece, entryLayerDirectory))
                     {
-                        File.Move(piece, target);
+                        FileOperations.Move(piece, target);
                         result.Moved++;
                         result.Details.Add($"{Path.GetFileName(piece)}：程序产出的片，同卷搬进入口层");
                     }
@@ -274,7 +275,7 @@ namespace ArchiveFixer.Extraction
 
                 try
                 {
-                    File.Delete(name);
+                    FileOperations.Delete(name);
                     deleted++;
                     log?.Invoke("INFO", $"{Path.GetFileName(name)}：这一组已经解开 ⇒ 链接按过程物删除");
                 }
@@ -328,7 +329,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    File.Delete(candidate);
+                    FileOperations.Delete(candidate);
                     deleted++;
                     log?.Invoke("INFO", $"{Path.GetFileName(candidate)}：这一组已经解开 ⇒ 入口层里的片按过程物删除");
                 }

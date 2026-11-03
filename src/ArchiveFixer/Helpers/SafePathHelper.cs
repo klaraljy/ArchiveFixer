@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -382,7 +383,7 @@ namespace ArchiveFixer.Helpers
 
                 string testFile = Path.Combine(directory, $".write_test_{Guid.NewGuid():N}.tmp");
                 File.WriteAllText(testFile, "test");
-                File.Delete(testFile);
+                FileOperations.Delete(testFile);
                 return true;
             }
             catch

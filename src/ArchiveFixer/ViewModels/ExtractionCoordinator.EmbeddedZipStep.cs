@@ -261,7 +261,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                File.Move(carvedPath, target, overwrite: true);
+                FileOperations.Move(carvedPath, target, overwrite: true);
             }
             catch (Exception ex)
             {
