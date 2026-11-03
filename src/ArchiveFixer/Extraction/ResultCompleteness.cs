@@ -41,7 +41,7 @@ namespace ArchiveFixer.Extraction
     ///
     /// <para>它只描述结论，不做任何动作 —— 删源 / 搬源 / 保留的**判据**读它，
     /// 但动作本身仍归各自的唯一出口（<c>SourceCleanupService</c> / <c>RestItemPurger</c> /
-    /// <c>MoveSourcePackageIntoRest</c>）。</para>
+    /// <c>源包移入其余物旧入口</c>）。</para>
     /// </summary>
     public sealed class ResultCompletenessVerdict
     {

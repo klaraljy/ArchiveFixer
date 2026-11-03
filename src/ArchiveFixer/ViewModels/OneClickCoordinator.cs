@@ -3029,7 +3029,7 @@ namespace ArchiveFixer.ViewModels
         /// 从本轮成功任务的产物里找"还能继续解"的内层包。
         ///
         /// <para><b>判据（2026-09-25 第 33 条改）：只认内容，⛔ 后缀不参与判决。</b>
-        /// 老实现的第一道门是后缀白名单（<see cref="IsArchiveStartPoint"/>）。真机现场：
+        /// 老实现的第一道门是后缀白名单（IsArchiveStartPoint）。真机现场：
         /// 第一层解出来的下一层叫 <c>222.ra删除r</c>（打包方在 <c>.rar</c> 中间插了「删除」两个字），
         /// 后缀 <c>.ra删除r</c> 不认识 → <b>在魔数体检之前就被扔掉</b> →
         /// 日志只写"第 1 层没有发现可继续解压的内层包"，用户看到的就是"只解了一层"。
@@ -3774,40 +3774,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 判断一个文件是不是"归档的起点"（分卷组的第一卷，或者单文件归档）。
-        ///
-        /// <para>⚠ <b>它只用于"按名字粗筛 + 列表/断言"，⛔ 不再是续解扫描的判据</b>
-        /// （2026-09-25 第 33 条：后缀可以骗人，续解必须按内容认，见
-        /// <see cref="ClassifyArchiveByContentAsync"/>）。</para>
-        ///
-        /// 排除项：<c>.002</c> 及更大编号、<c>.z01/.z02…</c>、<c>.r00/.r01…</c>、
-        /// <c>.part2</c> 及更大的分卷段 —— 它们既不是完整归档，也不是组的开头。
-        /// </summary>
-        internal static bool IsArchiveStartPoint(string filePath)
-        {
-            if (string.IsNullOrWhiteSpace(filePath))
-            {
-                return false;
-            }
-
-            string fileName = Path.GetFileName(filePath);
-            string extension = Path.GetExtension(fileName);
-
-            if (string.IsNullOrWhiteSpace(extension))
-            {
-                return false;
-            }
-
-            if (IsVolumeContinuationPart(filePath))
-            {
-                return false;
-            }
-
-            return ExtensionHelper.IsKnownArchiveExtension(extension);
-        }
-
-
-        /// <summary>
         /// 批末唯一副作用阶段：清卷入口、清 group-entry 壳、恢复源名、清冗余片名。
         /// 汇总函数只拼文字，调它不许改盘；本方法幂等。
         /// </summary>
@@ -3990,7 +3956,7 @@ namespace ArchiveFixer.ViewModels
         /// 这个任务"这一轮处理过了"吗 —— 有终态的都算处理过。
         /// 没有终态的（已识别 / 等待解压 / 解压中…）说明它**根本没轮到**，那就是被「停止后续」截断的信号。
         ///
-        /// internal 是为了让测试直接钉住"新增状态有没有被认账"（同类先例：<see cref="IsArchiveStartPoint"/>）：
+        /// internal 是为了让测试直接钉住"新增状态有没有被认账"（同类先例：IsArchiveStartPoint）：
         /// 漏一个状态不会编译失败，只会让汇总把"跑完了"说成"已停止 / 未处理 N"。
         /// </summary>
         internal static bool IsHandled(ArchiveTask task)

@@ -1885,7 +1885,7 @@ namespace ArchiveFixer.Services
                      * 现在**按事实说**（用户要求：真删了才说已回收，被拒就如实说没回收 + 原因）。
                      *
                      * 事实位 = `task.SourcePackageMove == Done`：对续解任务它**只可能**由
-                     * `_host.PurgeLayerSourcePackage` 写（`MoveSourcePackageIntoRest` 那一支对续解任务走不到，
+                     * `_host.PurgeLayerSourcePackage` 写（`源包移入其余物旧入口` 那一支对续解任务走不到，
                      * 上面那个 `else if (task.IsContinuationTask)` 先接住了），而它只在
                      * "真的删掉了至少一个文件、且一个都没失败"时才落 —— 正是"真删了"。
                      */
