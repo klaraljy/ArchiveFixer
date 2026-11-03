@@ -415,7 +415,9 @@ namespace ArchiveFixer.ViewModels
                                 new List<IReadOnlyList<VolumeCandidate>> { restOrder },
                                 cancellationToken,
                                 Path.Combine(entryLayer, ".ArchiveFixer.work"),
-                                trialProbeFamily)
+                                trialProbeFamily,
+                                testVolumes: true,
+                                passwordCandidates: BuildVolumeProbePasswordCandidates(first))
                             .ConfigureAwait(false);
 
                         if (outcomeOrder.Confirmed)
@@ -454,7 +456,9 @@ namespace ArchiveFixer.ViewModels
                     new List<IReadOnlyList<VolumeCandidate>> { rest },
                     cancellationToken,
                     Path.Combine(entryLayer, ".ArchiveFixer.work"),
-                    probeFamily)
+                    probeFamily,
+                    testVolumes: true,
+                    passwordCandidates: BuildVolumeProbePasswordCandidates(firstVolume))
                 .ConfigureAwait(false);
 
             if (outcomeFallback.Confirmed)

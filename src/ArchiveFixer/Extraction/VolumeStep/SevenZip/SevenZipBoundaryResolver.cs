@@ -351,7 +351,9 @@ namespace ArchiveFixer.Extraction
                     new List<IReadOnlyList<VolumeCandidate>> { rest },
                     cancellationToken,
                     context.WorkspaceRoot,
-                    VolumeContentFormat.SevenZip)
+                    VolumeContentFormat.SevenZip,
+                    testVolumes: true,
+                    passwordCandidates: context.PasswordCandidates)
                 .ConfigureAwait(false);
 
             if (!outcome.Confirmed || outcome.OrderedVolumes.Count != count)
