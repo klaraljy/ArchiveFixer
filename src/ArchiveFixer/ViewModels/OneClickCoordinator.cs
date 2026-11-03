@@ -801,6 +801,14 @@ namespace ArchiveFixer.ViewModels
              */
             OneClickRunOptions? runOptions = null;
             OneClickRunOptions seed = OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
+            RunSnapshot confirmSnapshot = RunSnapshot.Capture(
+                targets,
+                seed,
+                _vm.SpaceTightMode,
+                _vm.SpaceTightKeepSource,
+                Settings.UseSpecificExtraction,
+                _vm.SelectedOutputDirectory,
+                _extractionCoordinator.SpecificExtractionPasswords);
 
             try
             {
@@ -829,7 +837,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     OneClickConfirmFacts facts = await _extractionCoordinator
-                        .BuildConfirmFactsAsync(targets, seed, reminders)
+                        .BuildConfirmFactsAsync(targets, seed, reminders, confirmSnapshot)
                         .ConfigureAwait(true);
 
                     OneClickOptionsPrompt prompt = AskRunOptionsOnce(seed, facts, targets);

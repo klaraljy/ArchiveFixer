@@ -459,6 +459,7 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<ArchiveTask> targets,
             OneClickRunOptions? pendingOptions,
             BatchReminderFacts? reminders,
+            RunSnapshot? snapshot = null,
             CancellationToken cancellationToken = default)
         {
             string destination = await DescribePlannedDestinationAsync(targets, pendingOptions, cancellationToken)
@@ -475,9 +476,11 @@ namespace ArchiveFixer.ViewModels
              */
             string restHandling = pendingOptions != null
                 ? RestHandlingModes.Normalize(pendingOptions.RestHandling)
-                : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+                : RestHandlingModes.Normalize(snapshot?.Options.RestHandling
+                    ?? Settings.RestHandlingAfterVerify);
 
             SourceHandlingMode sourceHandling = pendingOptions?.SourceHandling
+                ?? snapshot?.Options.SourceHandling
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
             /*
@@ -492,7 +495,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 正文那两行也换成**覆盖后**的值：只加一条红字、却让"源包：留在原地"那一行照旧显示
              * 设置里的值，等于让用户在同一个框里读到两句互相矛盾的话。
              */
-            bool spaceTight = _vm.SpaceTightMode;
+            bool spaceTight = snapshot?.SpaceTightMode ?? _vm.SpaceTightMode;
 
             /*
              * 安全档（「不删原包」）：源包那一档要按"一个字节都不动"说，
@@ -500,7 +503,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 2026-10-15：空间不足模式（非安全档）的真实动作 = **定稿 + 校验通过后当场就地删源包**
              * ⇒ 那一档的措辞对应 `DeleteInPlace`（原来是 `MoveToRest`，已随用户口径删除）。
              */
-            bool spaceTightKeepSource = spaceTight && _vm.SpaceTightKeepSource;
+            bool spaceTightKeepSource = spaceTight && (snapshot?.SpaceTightKeepSource ?? _vm.SpaceTightKeepSource);
 
             if (spaceTight)
             {
@@ -548,7 +551,7 @@ namespace ArchiveFixer.ViewModels
                         ? StatusText.SpaceTightKeepSourceConfirmText
                         : StatusText.SpaceTightConfirmText
                     : string.Empty,
-                SpecificExtractionEcho = Settings.UseSpecificExtraction
+                SpecificExtractionEcho = (snapshot?.UseSpecificExtraction ?? Settings.UseSpecificExtraction)
                     ? "特定解压：独立整理模式（只改内容物落点，源包/其余物按本页设置）"
                     : string.Empty,
                 NoticeEcho = BuildConfirmNotice(reminders, spaceRiskEcho)

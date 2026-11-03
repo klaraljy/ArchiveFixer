@@ -295,6 +295,7 @@ namespace ArchiveFixer.Tests
                 harness.Vm.Tasks.ToList(),
                 pendingOptions: null,
                 reminders: null,
+                snapshot: null,
                 CancellationToken.None);
 
             Assert.Contains("多层解压可能中途空间不足", facts.NoticeEcho, StringComparison.Ordinal);
