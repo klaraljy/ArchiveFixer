@@ -39,12 +39,9 @@ namespace ArchiveFixer.Extraction
 
             /// <summary>
             /// 候选建议，不是最终结论；⛔ 第二大步的完整性/缺片/规范名只认
-            /// <see cref="VolumeGroupService"/> + 族算法。保留 <see cref="Verdict"/> 只做旧调用兼容。
+            /// <see cref="VolumeGroupService"/> + 族算法。
             /// </summary>
             public PreparedGroupState SuggestedVerdict { get; init; }
-
-            /// <summary>兼容旧调用：等价于 <see cref="SuggestedVerdict"/>；⛔ 不许当最终判据。</summary>
-            public PreparedGroupState Verdict => SuggestedVerdict;
 
             public string Evidence { get; init; } = string.Empty;
 
