@@ -96,6 +96,33 @@ public class RenameServiceTests
             Directory.Delete(dir, true);
         }
     }
+    [Fact]
+    public void BuildPreview_FixByDetectedFormat_多后缀削完不留尾部连续点()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            string file = Path.Combine(dir, "aaa-W2-2.7z...删除");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(file, "x");
+
+            var options = CreateFixOptions();
+            options.TargetExtension = ".7z";
+
+            var service = new RenameService();
+            var preview = service.BuildPreview(
+                new[] { CreateTask(file, "7Z", ".7z") },
+                options);
+
+            Assert.Single(preview);
+            Assert.Equal(Path.Combine(dir, "aaa-W2-2.7z"), preview[0].NewPath);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
 
     [Fact]
     public void BuildPreview_ExtensionAlreadyCorrect_MarksSkip()

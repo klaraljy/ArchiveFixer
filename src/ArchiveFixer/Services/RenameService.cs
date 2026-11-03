@@ -1256,6 +1256,19 @@ namespace ArchiveFixer.Services
             }
 
             string suggestedExtension = task.SuggestedExtension;
+            /*
+             * 第一大步的单包改名只认内容卡：基名 + 识别格式后缀。
+             * ⛔ 不再用"文件名去掉最后一个 Path.GetExtension 再拼"推基名 ——
+             * `aaa-W2-2.7z...删除` 会在那里被削成 `aaa-W2-2.7z..`。
+             * 分卷/Unknown/内嵌归档已在上面各自的分支返回；这里只接 SingleComplete。
+             */
+            string cardBaseName = TryGetSingleCompleteBaseName(task);
+
+            if (cardBaseName.Length > 0)
+            {
+                return NormalizeResultFileName(cardBaseName + suggestedExtension);
+            }
+
 
             if (string.IsNullOrWhiteSpace(suggestedExtension))
             {
@@ -1301,7 +1314,32 @@ namespace ArchiveFixer.Services
                 return fileName;
             }
 
-            return baseName + suggestedExtension;
+            return NormalizeResultFileName(baseName + suggestedExtension);
+        }
+
+        private static string TryGetSingleCompleteBaseName(ArchiveTask task)
+        {
+            try
+            {
+                string path = string.IsNullOrWhiteSpace(task.CurrentPath) ? task.OriginalPath : task.CurrentPath;
+
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    return string.Empty;
+                }
+
+                FileNatureCard card = FileNature.Inspect(path);
+
+                return card.BodyKind == ArchiveBodyKind.SingleComplete
+                       && !string.IsNullOrWhiteSpace(card.ArchiveBaseName)
+                    ? card.ArchiveBaseName
+                    : string.Empty;
+            }
+            catch
+            {
+                // 读不到内容卡 = 判不出 ⇒ 回落到既有后缀修复路径，不在改名里猜。
+                return string.Empty;
+            }
         }
 
         private static string TryFixMultiExtensionFileName(string fileName, string suggestedExtension)
@@ -1395,7 +1433,36 @@ namespace ArchiveFixer.Services
                 namePart = stem + matchedCanonical;
             }
 
+            namePart = NormalizeResultFileName(namePart);
+
+            if (string.IsNullOrWhiteSpace(namePart))
+            {
+                return string.Empty;
+            }
+
             return namePart;
+        }
+
+        /// <summary>
+        /// 改名结果只允许是合法文件名的形状：去掉尾部点/空格，折叠连续点。
+        /// 现场 `aaa-W2-2.7z...删除` 命中多后缀后被削成 `aaa-W2-2.7z..`，
+        /// 引擎按这个名字找不到文件；这里在返回前统一收口。
+        /// </summary>
+        private static string NormalizeResultFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return string.Empty;
+            }
+
+            name = name.TrimEnd('.', ' ');
+
+            while (name.Contains("..", StringComparison.Ordinal))
+            {
+                name = name.Replace("..", ".", StringComparison.Ordinal);
+            }
+
+            return name;
         }
 
         private static List<string> GetAllExtensions(string fileName)
