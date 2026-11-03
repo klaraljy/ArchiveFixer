@@ -356,6 +356,31 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 腾位临时名：与目标同目录，<c>.af-vacating</c> 后缀；文件保留扩展名，目录不拆扩展名。
+        /// 全项目只允许这一份实现。
+        /// </summary>
+        public static string BuildVacatingPath(string path, bool isDirectory)
+        {
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            string name = isDirectory ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
+            string extension = isDirectory ? string.Empty : Path.GetExtension(path);
+
+            for (int i = 0; i < 10000; i++)
+            {
+                string candidate = i == 0
+                    ? Path.Combine(directory, name + ".af-vacating" + extension)
+                    : Path.Combine(directory, $"{name}.af-vacating{i}{extension}");
+
+                if (!File.Exists(candidate) && !Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return Path.Combine(directory, $"{name}.af-vacating-{Guid.NewGuid():N}{extension}");
+        }
+
+        /// <summary>
         /// 判断两个路径是否相同。
         /// Windows 下忽略大小写。
         /// </summary>

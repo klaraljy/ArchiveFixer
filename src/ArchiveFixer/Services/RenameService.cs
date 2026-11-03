@@ -754,7 +754,7 @@ namespace ArchiveFixer.Services
 
                     try
                     {
-                        temporaryPath = BuildVacatingPath(finalPath);
+                        temporaryPath = SafePathHelper.BuildVacatingPath(finalPath, isDirectory: false);
 
                         // 占着这个名字的是外来的文件（要覆盖的目标）：挪成临时名，落位成功后才删。
                         // 先记下它那一刻的 FileIdentity；清场前必须还是同一份，防止这中间被别人替换。
@@ -841,27 +841,6 @@ namespace ArchiveFixer.Services
                 return Path.Combine(directory, $"{fileName}.af-staging-{Guid.NewGuid():N}{extension}");
             }
 
-            /// <summary>腾名字用的临时路径：一定还没被占用（占用就退到带序号的候选）。</summary>
-            private static string BuildVacatingPath(string path)
-            {
-                string directory = Path.GetDirectoryName(path) ?? string.Empty;
-                string fileName = Path.GetFileNameWithoutExtension(path);
-                string extension = Path.GetExtension(path);
-
-                for (int i = 0; i < 10000; i++)
-                {
-                    string candidate = i == 0
-                        ? Path.Combine(directory, fileName + ".af-vacating" + extension)
-                        : Path.Combine(directory, $"{fileName}.af-vacating{i}{extension}");
-
-                    if (!File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-
-                return Path.Combine(directory, $"{fileName}.af-vacating-{Guid.NewGuid():N}{extension}");
-            }
 
             /// <summary>回滚"撤名字"：临时名挪回源路径。挪不动时保留临时文件（名字带 .af-staging，数据不丢）。</summary>
             private static void RollBackStaged(

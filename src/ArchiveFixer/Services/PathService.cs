@@ -821,7 +821,7 @@ namespace ArchiveFixer.Services
                 return false;
             }
 
-            string vacatedPath = BuildVacatingPath(targetPath, targetIsDirectory);
+            string vacatedPath = SafePathHelper.BuildVacatingPath(targetPath, targetIsDirectory);
 
             // ── 阶段 1：把占位者挪到临时名（此时旧数据仍然完整，只是换了个名字）──
             if (!TryMove(targetPath, vacatedPath, targetIsDirectory, out string vacateError))
@@ -859,26 +859,6 @@ namespace ArchiveFixer.Services
         /// 临时（腾位）路径：与目标同目录，命名沿用 <c>RenameService</c> 的 <c>.af-vacating</c> 惯例
         /// （不新造机制，出问题时用户与排障脚本一眼能认出来）。
         /// </summary>
-        private static string BuildVacatingPath(string path, bool isDirectory)
-        {
-            string directory = Path.GetDirectoryName(path) ?? string.Empty;
-            string name = isDirectory ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
-            string extension = isDirectory ? string.Empty : Path.GetExtension(path);
-
-            for (int i = 0; i < 10000; i++)
-            {
-                string candidate = i == 0
-                    ? Path.Combine(directory, name + ".af-vacating" + extension)
-                    : Path.Combine(directory, $"{name}.af-vacating{i}{extension}");
-
-                if (!Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            return Path.Combine(directory, $"{name}.af-vacating-{Guid.NewGuid():N}{extension}");
-        }
 
         private static bool TryMove(string from, string to, bool isDirectory, out string error)
         {
