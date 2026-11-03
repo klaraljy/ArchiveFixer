@@ -270,7 +270,7 @@ namespace ArchiveFixer.Services
              * 排在 `IsExtractFailureStatus` 之后是因为它已从那份失败名单里移除，
              * 落在这里才不会被下面的兜底读成"未处理"。判据用状态常量，⛔ 不比中文文案。
              */
-            if (status == StatusText.VolumeMissing)
+            if (task.Reason == TaskReason.VolumeMissing)
             {
                 return SummaryBucket.OtherFailed;
             }

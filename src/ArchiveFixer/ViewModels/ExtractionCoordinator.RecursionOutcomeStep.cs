@@ -96,6 +96,11 @@ namespace ArchiveFixer.ViewModels
                 out string stoppedStatus,
                 out TaskOutcome stoppedOutcome);
 
+            if (result.StopReason == RecursionStopReason.MissingVolume)
+            {
+                task.Reason = TaskReason.VolumeMissing;
+            }
+
             switch (result.StopReason)
             {
                 case RecursionStopReason.Completed:

@@ -19,11 +19,12 @@ namespace ArchiveFixer.Tests
     /// </summary>
     public class TaskSummaryBucketingTests
     {
-        private static ArchiveTask Make(string status, bool selected = true)
+        private static ArchiveTask Make(string status, bool selected = true, TaskReason reason = TaskReason.None)
         {
             return new ArchiveTask($@"C:\tmp\{status}.7z")
             {
                 Status = status,
+                Reason = reason,
                 IsSelected = selected,
                 IsArchive = true,
                 DetectedFormat = "7Z",
@@ -62,7 +63,7 @@ namespace ArchiveFixer.Tests
                 Make(StatusText.ExtractFailed),
                 Make(StatusText.AccessDenied),
                 Make(StatusText.OutputConflict),
-                Make(StatusText.VolumeMissing),
+                Make(StatusText.VolumeMissing, reason: TaskReason.VolumeMissing),
                 Make(StatusText.PathTooLong),
                 Make(StatusText.SevenZipMissing),
                 Make(StatusText.PasswordAttemptLimitReached),  // 新增状态：算"解压失败"，不算"密码错误"
