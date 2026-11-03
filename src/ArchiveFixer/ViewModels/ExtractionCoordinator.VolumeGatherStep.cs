@@ -183,7 +183,7 @@ namespace ArchiveFixer.ViewModels
                         root,
                         HarvestCandidatePrefix,
                         HarvestBlockerTail,
-                        requireRecognizedCandidates: false,
+                        requireRecognizedCandidates: true,
                         others);
 
                     if (blocker != null)
