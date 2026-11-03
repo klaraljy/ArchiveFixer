@@ -47,45 +47,37 @@ namespace ArchiveFixer.Models
     /// </summary>
     public static class BatchSummarySeverityRules
     {
-        /// <summary>按任务清单算这一批的汇总严重度（判据的唯一出口）。</summary>
-        public static BatchSummarySeverity FromTasks(IEnumerable<ArchiveTask>? tasks)
+        /// <summary>按统一批报告（tally）算严重度；⛔ 不再另起一份状态名单。</summary>
+        public static BatchSummarySeverity FromTally(BatchOutcomeTally? tally)
         {
-            var outcomes = new List<TaskOutcome>();
-            bool verificationFailed = false;
-
-            foreach (ArchiveTask? task in tasks ?? Array.Empty<ArchiveTask>())
+            if (tally == null)
             {
-                if (task == null)
-                {
-                    continue;
-                }
-
-                /*
-                 * ⛔ 同一分卷组的后续卷（跟班）**不代表"这一批有东西没做成"**（用户 2026-10-01 第三报）：
-                 * 它是这一组的一部分、已经由首卷那一单整组负责了，把它算进来会让整批变橙
-                 * 并显示「跳过 4 个」，用户读成"还有 4 个没弄完"。
-                 * 判据只有一位事实（`CountsTowardBatchOutcome`），不在这里另推。
-                 */
-                if (!task.CountsTowardBatchOutcome)
-                {
-                    continue;
-                }
-
-                outcomes.Add(task.Outcome);
-
-                /*
-                 * 校验判否也算"失败"：真机上出现过"终态写着成功、校验却已判否"的那一帧
-                 * （见 OneClickCoordinator.IsSuccessStatus 的说明），两个事实取更坏的那个。
-                 * 这一步不改变正常路径的结论 —— 校验判否时管线本来就会把 Outcome 落成 Failed。
-                 */
-                if (task.OutputVerification == OutputVerificationOutcome.Failed)
-                {
-                    verificationFailed = true;
-                }
+                return BatchSummarySeverity.Success;
             }
 
-            return Evaluate(outcomes, verificationFailed);
+            if (tally.HasVerificationFailure)
+            {
+                return BatchSummarySeverity.Failed;
+            }
+
+            bool hasContent = tally.Succeeded > 0 || tally.PartiallyCompleted > 0;
+
+            if (tally.Failed > 0)
+            {
+                return hasContent ? BatchSummarySeverity.Partial : BatchSummarySeverity.Failed;
+            }
+
+            bool hasPartial = tally.PartiallyCompleted > 0
+                || tally.Skipped > 0
+                || tally.Cancelled > 0
+                || tally.Untouched > 0;
+
+            return hasPartial ? BatchSummarySeverity.Partial : BatchSummarySeverity.Success;
         }
+
+        /// <summary>按任务清单算这一批的汇总严重度（唯一出口；内部走同一份 tally）。</summary>
+        public static BatchSummarySeverity FromTasks(IEnumerable<ArchiveTask>? tasks) =>
+            FromTally(BatchOutcomeTally.Count(tasks));
 
         /// <summary>按机器终态算汇总严重度（纯函数，单独可测）。</summary>
         public static BatchSummarySeverity FromOutcomes(IEnumerable<TaskOutcome>? outcomes) =>

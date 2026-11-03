@@ -46,7 +46,8 @@ namespace ArchiveFixer.ViewModels
              * 跟班卷单独一句、仍占总数一个名额，所以"未处理"那一档要把它们减掉 ——
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底，两处都不许破。
              */
-            BatchOutcomeTally tally = BatchOutcomeTally.Count(tasks);
+            BatchReport report = BatchReport.Create(tasks);
+            BatchOutcomeTally tally = report.Tally;
 
             DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);

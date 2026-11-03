@@ -48,6 +48,9 @@ namespace ArchiveFixer.Models
         /// <summary>用户取消。</summary>
         public int Cancelled { get; private init; }
 
+        /// <summary>至少有一单校验判否；严重度必须按红处理。</summary>
+        public bool HasVerificationFailure { get; private init; }
+
         /// <summary>
         /// 没轮到（终态还是 <see cref="TaskOutcome.Pending"/>）：例如格式未知却没被处理、
         /// 被「停止后续」截断的那几单。
@@ -93,9 +96,15 @@ namespace ArchiveFixer.Models
             int followerSkipped = 0;
             int partiallyCompleted = 0;
             int cancelled = 0;
+            bool hasVerificationFailure = false;
 
             foreach (ArchiveTask task in list)
             {
+                if (task.CountsTowardBatchOutcome
+                    && task.OutputVerification == OutputVerificationOutcome.Failed)
+                {
+                    hasVerificationFailure = true;
+                }
                 /*
                  * 「缺卷待批末判」那一档：**这一批还没到判死的时候**（用户 2026-10-08 口径：
                  * 「没有到最后一步都是先跳过」「要留在最后检查才是真正的分卷缺失」）⇒ 本轮按「跳过」数。
@@ -200,6 +209,7 @@ namespace ArchiveFixer.Models
                 FollowerSkipped = followerSkipped,
                 PartiallyCompleted = partiallyCompleted,
                 Cancelled = cancelled,
+                HasVerificationFailure = hasVerificationFailure,
                 Untouched = list.Count - succeeded - failed - skipped - followerSkipped - partiallyCompleted - cancelled
             };
         }

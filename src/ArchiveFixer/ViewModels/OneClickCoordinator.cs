@@ -3851,7 +3851,8 @@ namespace ArchiveFixer.ViewModels
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
              * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
              */
-            BatchOutcomeTally tally = BatchOutcomeTally.Count(targets);
+            BatchReport report = BatchReport.Create(targets);
+            BatchOutcomeTally tally = report.Tally;
 
             var parts = new List<string>(tally.BuildParts());
 

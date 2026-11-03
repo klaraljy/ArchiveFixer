@@ -204,7 +204,8 @@ namespace ArchiveFixer.Models
         {
             List<ArchiveTask> list = tasks?.Where(task => task != null).ToList() ?? new List<ArchiveTask>();
 
-            BatchSummarySeverity severity = BatchSummarySeverityRules.FromTasks(list);
+            BatchReport report = BatchReport.Create(list);
+            BatchSummarySeverity severity = report.Severity;
 
             int limit = maxNamesPerGroup <= 0 ? 1 : maxNamesPerGroup;
 
