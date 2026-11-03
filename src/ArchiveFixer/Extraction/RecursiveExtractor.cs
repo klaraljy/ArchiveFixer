@@ -1549,7 +1549,7 @@ namespace ArchiveFixer.Extraction
             {
                 Percent = 0,
                 Layer = item.Depth,
-                CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(item.ArchivePath)}"
+                CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(archivePath)}"
             });
 
             /*
@@ -1562,7 +1562,7 @@ namespace ArchiveFixer.Extraction
              * 只取出那一个条目并判这一层成功）。
              */
 
-            IReadOnlyList<string> candidates = BuildPasswordCandidates(item.ArchivePath);
+            IReadOnlyList<string> candidates = BuildPasswordCandidates(archivePath);
 
             PasswordAttemptLedger passwordLedger = new(_limits.MaxPasswordAttemptsPerLayer);
             bool triedAny = false;
@@ -1678,7 +1678,7 @@ namespace ArchiveFixer.Extraction
             string layerLabel = string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 StatusText.RecursionLayerLogPrefixFormat,
-                item.Depth) + Path.GetFileName(item.ArchivePath);
+                item.Depth) + Path.GetFileName(archivePath);
 
             if (VerboseLog)
             {
@@ -1689,7 +1689,7 @@ namespace ArchiveFixer.Extraction
                         StatusText.RecursionLayerAttemptLogFormat,
                         layerLabel,
                         item.Depth,
-                        Path.GetFileName(item.ArchivePath)));
+                        Path.GetFileName(archivePath)));
             }
 
             /*
@@ -2668,7 +2668,7 @@ namespace ArchiveFixer.Extraction
                  */
                 bool looksDoubleFaced = carvedSource == null
                     && string.Equals(result.DetectedErrorType, EngineErrorTypes.UnsupportedFormat, StringComparison.Ordinal)
-                    && IsDoubleFacedEmbeddedArchive(item.ArchivePath);
+                    && IsDoubleFacedEmbeddedArchive(archivePath);
 
                 if (!looksDoubleFaced)
                 {
