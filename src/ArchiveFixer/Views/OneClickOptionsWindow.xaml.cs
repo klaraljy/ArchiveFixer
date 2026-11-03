@@ -381,8 +381,9 @@ namespace ArchiveFixer.Views
 
             // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
             // 要删源包改成"放入其余物 + 删除操作"（语义更清楚、选项少一个）。
-            PanelSourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
-            PanelSourceDeleteOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
+            bool deleteSource = seed.SourceHandling == SourceHandlingMode.DeleteInPlace;
+            PanelSourceKeepInPlaceOption.IsChecked = !deleteSource;
+            PanelSourceDeleteOption.IsChecked = deleteSource;
 
             /*
              * 「删除操作」两档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是

@@ -138,6 +138,9 @@ namespace ArchiveFixer.Packing
         /// <summary>结果 rar 的全路径（默认与 B 同级：<c>&lt;B&gt;.rar</c>）；外层容器是 7z / 不做外层时不参与。</summary>
         public string RarPath { get; init; } = string.Empty;
 
+        /// <summary>外层容器最终路径（校验、执行、报告共用同一属性）。</summary>
+        public string PlannedOuterPath { get; init; } = string.Empty;
+
         /// <summary>外层 7z 容器的全路径（默认与 B 同级：<c>&lt;B&gt;.7z</c>）；外层容器是 rar / 不做外层时不参与。</summary>
         public string SevenZipOuterPath { get; init; } = string.Empty;
 
@@ -494,6 +497,7 @@ namespace ArchiveFixer.Packing
                 VolumeBasePath = volumeBasePath,
                 RarPath = rarPath,
                 SevenZipOuterPath = sevenZipOuterPath,
+                PlannedOuterPath = outerPath,
                 OuterContainer = request.OuterContainer,
                 VolumeSizeBytes = volumeSize,
                 ContentBytes = scan.Bytes,
