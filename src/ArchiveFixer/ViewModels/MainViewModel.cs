@@ -1939,7 +1939,7 @@ namespace ArchiveFixer.ViewModels
                                     break;
                                 }
 
-                                if (VolumeGroupDetector.BelongsToSameGroup(
+                                if (LegacyVolumeNames.BelongsToSameGroup(
                                         Path.GetFileName(file),
                                         Path.GetFileName(task.CurrentPath)))
                                 {
@@ -6502,7 +6502,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 与刚修好的那几卷**同目录、同组**的其它任务（用来在改名之后把它们一起重扫）。
         ///
-        /// <para>判据全用既有的 <c>VolumeGroupDetector.BelongsToSameGroup</c>（族 + 基名）+ 目录相等 ——
+        /// <para>判据全用既有的 <c>LegacyVolumeNames.BelongsToSameGroup</c>（族 + 基名）+ 目录相等 ——
         /// ⛔ 不自己拿字符串前缀去猜"像不像一组"（那正是第 33 条踩过的坑）。</para>
         /// </summary>
         private IEnumerable<ArchiveTask> FindSameGroupTasks(IReadOnlyList<ArchiveTask> repaired)
@@ -6528,7 +6528,7 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    if (ArchiveFixer.Detection.VolumeGroupDetector.BelongsToSameGroup(
+                    if (LegacyVolumeNames.BelongsToSameGroup(
                             System.IO.Path.GetFileName(task.CurrentPath),
                             System.IO.Path.GetFileName(fixedTask.CurrentPath)))
                     {

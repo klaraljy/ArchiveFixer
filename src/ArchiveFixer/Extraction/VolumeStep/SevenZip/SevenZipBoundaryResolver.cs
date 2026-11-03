@@ -637,7 +637,7 @@ namespace ArchiveFixer.Extraction
 
         private static int? ResolveSlot(FirstStepFileLedgerEntry entry, int total)
         {
-            int? byName = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(entry.Path));
+            int? byName = LegacyVolumeNames.TryGetIndex(Path.GetFileName(entry.Path));
 
             if (byName is >= 2 && byName.Value <= total)
             {

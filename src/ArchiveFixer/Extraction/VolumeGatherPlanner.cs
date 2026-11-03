@@ -328,7 +328,7 @@ namespace ArchiveFixer.Extraction
 
             for (int index = 0; index < names.Count; index++)
             {
-                int? number = VolumeGroupDetector.TryGetVolumeIndex(names[index]);
+                int? number = LegacyVolumeNames.TryGetIndex(names[index]);
 
                 if (number is int value && value > bestNumber)
                 {

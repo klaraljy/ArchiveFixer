@@ -221,7 +221,7 @@ namespace ArchiveFixer.Storage
         {
             string name = Path.GetFileName(path);
 
-            if (FileNameHelper.IsVolumePartFileName(name))
+            if (LegacyVolumeNames.IsVolumePart(name))
             {
                 return true;
             }
@@ -518,7 +518,7 @@ namespace ArchiveFixer.Storage
                  * 也不会出现在 `VolumePaths` 里（归组当时没成组）—— 于是它被判成"疑似无用物"，
                  * 提醒框一出现用户就会把它从列表里删掉，只剩第一卷，**整组再也解不开**。
                  *
-                 * 判据用**名字**（`FileNameHelper.IsVolumePartFileName` + 同组），不看内容 ——
+                 * 判据用**名字**（`LegacyVolumeNames.IsVolumePart` + 同组），不看内容 ——
                  * 后续卷本来就没东西可看。
                  */
                 AddSiblingVolumePaths(result, task.CurrentPath);
@@ -581,7 +581,7 @@ namespace ArchiveFixer.Storage
 
                 string selfName = Path.GetFileName(sourcePath);
 
-                if (!FileNameHelper.IsVolumePartFileName(selfName))
+                if (!LegacyVolumeNames.IsVolumePart(selfName))
                 {
                     return;
                 }
@@ -597,8 +597,8 @@ namespace ArchiveFixer.Storage
                         continue;
                     }
 
-                    if (FileNameHelper.IsVolumePartFileName(siblingName) &&
-                        VolumeGroupDetector.BelongsToSameGroup(selfName, siblingName))
+                    if (LegacyVolumeNames.IsVolumePart(siblingName) &&
+                        LegacyVolumeNames.BelongsToSameGroup(selfName, siblingName))
                     {
                         AddProtectedPath(target, sibling);
                     }

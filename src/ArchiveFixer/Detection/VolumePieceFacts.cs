@@ -173,7 +173,7 @@ namespace ArchiveFixer.Detection
             }
 
             string name = FileNameHelper.GetFileName(path);
-            int? byName = VolumeGroupDetector.TryGetVolumeIndex(name);
+            int? byName = LegacyVolumeNames.TryGetIndex(name);
 
             /*
              * ⚠⚠ 2026-10-14 实测两版，**逐字记账，⛔ 别再往回改**：
@@ -273,7 +273,7 @@ namespace ArchiveFixer.Detection
             card.BodyKind == ArchiveBodyKind.VolumePiece
             && card.VolumeNumber is int contentNumber
             && contentNumber >= 2
-            && string.Equals(VolumeGroupDetector.TryGetFirstVolumeName(name), name, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(LegacyVolumeNames.TryGetFirstVolumeName(name), name, StringComparison.OrdinalIgnoreCase)
             && !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
         internal static string ResolveCanonicalName(
@@ -325,7 +325,7 @@ namespace ArchiveFixer.Detection
              * 唯一出口）当样本交给既有命名出口 —— 它按样本的形状定族，`aaa-L2.part1.rar` ⇒ 这一族的
              * 第 N 卷名。（7z 那一族名字里没有卷标记时它给不出，才走下面那两步。）</para>
              */
-            string? firstByName = VolumeGroupDetector.TryGetFirstVolumeName(name);
+            string? firstByName = LegacyVolumeNames.TryGetFirstVolumeName(name);
 
             /*
              * ⚠ 2026-10-16（与上面槽位同一格）：名字自己就是"本族第 1 卷的样子"、而内容说它是第 N≥2 片时，
@@ -411,14 +411,14 @@ namespace ArchiveFixer.Detection
 
             string own = FileNameHelper.GetFileName(path);
 
-            if (own.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(own, own))
+            if (own.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(own, own))
             {
                 return own;
             }
 
             string fromCard = ResolveCanonicalName(path, FileNature.Inspect(path));
 
-            return fromCard.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(fromCard, fromCard)
+            return fromCard.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(fromCard, fromCard)
                 ? fromCard
                 : fallback;
         }

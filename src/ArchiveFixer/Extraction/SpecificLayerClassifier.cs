@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -68,7 +69,7 @@ namespace ArchiveFixer.Extraction
 
             List<string> volumePieces = entries
                 .Where(File.Exists)
-                .Where(path => FileNameHelper.IsVolumePartFileName(
+                .Where(path => LegacyVolumeNames.IsVolumePart(
                     SpecificOutputNaming.RemoveChineseFromExtension(Path.GetFileName(path))))
                 .ToList();
 

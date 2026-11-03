@@ -228,7 +228,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// **这一单"属于哪一组"的引用名**：那把「同一组 = 族 + 基名」的尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/>）
+        /// **这一单"属于哪一组"的引用名**：那把「同一组 = 族 + 基名」的尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）
         /// 要一个**组内成员的名字**当引用，这个成员就是**这一单自己**。
         ///
         /// <para><b>为什么必须改（真机 FFFF 2026-10-10 夜，定案到行）</b>：这里各处原来一律写死
@@ -271,7 +271,7 @@ namespace ArchiveFixer.ViewModels
              * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
              * ⛔ 不新造"能不能解析"的第二把尺子（`Analyze` 是私有的，这里也不该去开它）。
              */
-            if (own.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(own, own))
+            if (own.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(own, own))
             {
                 return own;
             }
@@ -290,7 +290,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string fromCard = VolumeNameOrchestration.ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
 
-                if (fromCard.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(fromCard, fromCard))
+                if (fromCard.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(fromCard, fromCard))
                 {
                     return fromCard;
                 }
@@ -338,7 +338,7 @@ namespace ArchiveFixer.ViewModels
         /// （与落点实现同一个出口）；③ 两条都答不出 ⇒ **空串 = 这一次不决定**。
         /// ⛔ 顺序只决定"什么时候算得出来"，**不决定"算出来是什么"**。</para>
         ///
-        /// <para>⛔ 判据全部转调既有那几把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/> 认"同一组"，
+        /// <para>⛔ 判据全部转调既有那几把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/> 认"同一组"，
         /// 所以脏名 `111.z0删除2` 照样认得出；<see cref="Detection.GroupVolumeDirectory.Resolve"/> 认"入口包在哪儿"），
         /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟。</para>
         /// </summary>
@@ -352,7 +352,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// **这一份算不算"这一组"的成员**（唯一出口）。
         ///
-        /// <para>① 名字那把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/>）说"是" ⇒ 是；
+        /// <para>① 名字那把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）说"是" ⇒ 是；
         /// ② 名字说"不是"时**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说"我是这一组的一片"
         /// （`VolumeFirstPiece` / `VolumePiece`）**而且基名与这一组有关系**（一个是另一个的前缀也算）⇒ 也算。
         /// 现场（官方环台 `10101010`）：入口那一份叫 `pack111-L2.7z`（卷标记被伪装法吃掉 ⇒
@@ -370,7 +370,7 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            if (VolumeGroupDetector.BelongsToSameGroup(name, tailName))
+            if (LegacyVolumeNames.BelongsToSameGroup(name, tailName))
             {
                 return true;
             }
@@ -389,14 +389,14 @@ namespace ArchiveFixer.ViewModels
         {
             /*
              * ⚠ "手上这一片的名字干不干净" = **它自己算出来的规范名就是它自己**（唯一出口
-             * `VolumeGroupResolver.TryGetCanonicalVolumeName`）。
+             * `LegacyVolumeNames.TryGetCanonicalName`）。
              * ⛔ 脏名那一档不许启用新判据：`333.7z.001.txt` 那一档的规范名是 `333.7z.001.001`（错的），
              * 拿它当参照物会牵出一串错名字（实测：`PlacementRulesTests.文件未指定位置…` 多出一个同名目录）。
              * 判不出 ⇒ 当作"不干净" ⇒ 老口径。
              */
             string memberName = FileNameHelper.GetFileName(memberPath ?? string.Empty);
             bool memberNameIsClean = memberName.Length > 0
-                && VolumeGroupResolver.TryGetCanonicalVolumeName(memberName, out string memberCanonical)
+                && LegacyVolumeNames.TryGetCanonicalName(memberName, out string memberCanonical)
                 && string.Equals(memberCanonical, memberName, StringComparison.OrdinalIgnoreCase);
 
             /*
@@ -549,7 +549,7 @@ namespace ArchiveFixer.ViewModels
             string observed = !string.IsNullOrWhiteSpace(memberPath)
                 ? memberPath!
                 : task?.CurrentPath ?? string.Empty;
-            string entryName = VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(observed))
+            string entryName = LegacyVolumeNames.TryGetFirstVolumeName(FileNameHelper.GetFileName(observed))
                 ?? string.Empty;
             string producerName = "判不出";
 
@@ -649,7 +649,7 @@ namespace ArchiveFixer.ViewModels
         /// </param>
         /// <summary>
         /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
-        /// 判据 = 既有宽尺子 `VolumeGroupDetector.BelongsToSameGroup`，参照名 = 手上那一片。
+        /// 判据 = 既有宽尺子 `LegacyVolumeNames.BelongsToSameGroup`，参照名 = 手上那一片。
         /// </summary>
         /// <summary>枚举一个目录里的**所有**文件（读不动 ⇒ 空表，不抛）。</summary>
         private static IEnumerable<string> SafeEnumerateFiles(string? directory)
@@ -1080,7 +1080,7 @@ namespace ArchiveFixer.ViewModels
                         byCard = name;
                     }
 
-                    if (byVolumeName == null && VolumeGroupDetector.TryGetVolumeIndex(name) != null)
+                    if (byVolumeName == null && LegacyVolumeNames.TryGetIndex(name) != null)
                     {
                         byVolumeName = name;
                     }
@@ -1279,7 +1279,7 @@ namespace ArchiveFixer.ViewModels
 
                     dropped.Add(
                         candidateName
-                        + "〔名字同组=" + (VolumeGroupDetector.BelongsToSameGroup(candidateName, reference) ? "是" : "否")
+                        + "〔名字同组=" + (LegacyVolumeNames.BelongsToSameGroup(candidateName, reference) ? "是" : "否")
                         + $"｜分卷身份={droppedCard.Membership}"
                         + $"｜BodyKind={droppedCard.BodyKind}"
                         + $"｜卡上基名={droppedCard.ArchiveBaseName}"

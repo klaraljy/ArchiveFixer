@@ -115,7 +115,7 @@ namespace ArchiveFixer.Extraction
                 {
                     score += Similarity(FileNameHelper.GetFileName(order[i]), i < expectedNames.Count ? expectedNames[i] : string.Empty);
 
-                    int? index = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(order[i]));
+                    int? index = LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(order[i]));
 
                     if (index is int known && known == i + 1)
                     {

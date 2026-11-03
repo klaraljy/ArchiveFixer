@@ -3104,7 +3104,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    if (VolumeGroupDetector.BelongsToSameGroup(name, pieceName)
+                    if (LegacyVolumeNames.BelongsToSameGroup(name, pieceName)
                         || string.Equals(
                             FileNameHelper.GetArchiveBaseName(name),
                             FileNameHelper.GetArchiveBaseName(pieceName),
@@ -3124,7 +3124,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 这一片分卷的**入口包**在不在它旁边（同一个目录里）？
         ///
-        /// <para>判据只认两把既有尺子：<see cref="VolumeGroupDetector.BelongsToSameGroup"/>（同族同基名）
+        /// <para>判据只认两把既有尺子：<see cref="LegacyVolumeNames.BelongsToSameGroup"/>（同族同基名）
         /// + <see cref="FileNameHelper.IsVolumeContinuationPart"/>（是不是后续卷）。
         /// 「同组里有一份**不是后续卷**的」= 入口在 ✓（RAR 新式是 `.part1.rar`、7z 数字族是 `.001`、
         /// 跨盘 ZIP 族是 `.zip` 那一片）。</para>
@@ -3164,7 +3164,7 @@ namespace ArchiveFixer.Extraction
                     string name = FileNameHelper.GetFileName(candidate);
 
                     if (name.Length == 0
-                        || !VolumeGroupDetector.BelongsToSameGroup(name, pieceName))
+                        || !LegacyVolumeNames.BelongsToSameGroup(name, pieceName))
                     {
                         continue;
                     }
@@ -4456,7 +4456,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static bool IsArchiveByMagicWithoutVolumeName(string path)
         {
-            if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(path)))
+            if (LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(path)))
             {
                 return false;
             }
@@ -4585,7 +4585,7 @@ namespace ArchiveFixer.Extraction
                     {
                         found.Add(entry);
                     }
-                    else if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(entry))
+                    else if (LegacyVolumeNames.IsVolumePart(Path.GetFileName(entry))
                              || IsArchiveByMagicWithoutVolumeName(entry))
                     {
                         // 见 renameOnlyPieces 的说明：只让它过「还原」改名，⛔ 不进续解名单。
@@ -5071,7 +5071,7 @@ namespace ArchiveFixer.Extraction
             }
 
             List<string> byVolumeOrder = found
-                .OrderBy(path => Detection.VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(path))
+                .OrderBy(path => Detection.LegacyVolumeNames.TryGetIndex(Path.GetFileName(path))
                                  ?? int.MaxValue)
                 .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToList();

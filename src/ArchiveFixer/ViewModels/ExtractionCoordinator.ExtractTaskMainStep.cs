@@ -109,8 +109,8 @@ namespace ArchiveFixer.ViewModels
                  * 7z 中间片没有魔数，这一档是入口；等通用的"同组首卷已由内容证实"判据接上后再放宽。
                  */
                 int? nameSlotIndex =
-                    ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(entryName)
-                        ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(entryName)
+                    ArchiveFixer.Detection.LegacyVolumeNames.IsVolumePart(entryName)
+                        ? LegacyVolumeNames.TryGetIndex(entryName)
                         : null;
 
                 bool nameSlotVolumeCandidate =

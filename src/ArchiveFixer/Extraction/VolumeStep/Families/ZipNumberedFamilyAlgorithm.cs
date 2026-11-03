@@ -106,7 +106,7 @@ namespace ArchiveFixer.Extraction
 
                 foreach (VolumeFacts piece in unit.Pieces)
                 {
-                    int? index = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
+                    int? index = LegacyVolumeNames.TryGetIndex(Path.GetFileName(piece.Path));
 
                     if (index == null || index.Value < 1 || index.Value > total || byNumber.ContainsKey(index.Value))
                     {

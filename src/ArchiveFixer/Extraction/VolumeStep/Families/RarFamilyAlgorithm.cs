@@ -69,7 +69,7 @@ namespace ArchiveFixer.Extraction
 
                 if (number == null)
                 {
-                    number = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piece.Path));
+                    number = LegacyVolumeNames.TryGetIndex(Path.GetFileName(piece.Path));
                 }
 
                 if (number == null || number.Value < 1)
@@ -232,7 +232,7 @@ namespace ArchiveFixer.Extraction
 
             /*
              * **内容卡已经给出的规范名优先**：每片卡上的 CanonicalVolumeName 是
-             * `VolumeGroupResolver.TryGetCanonicalVolumeName` 的唯一出口算出来的；
+             * `LegacyVolumeNames.TryGetCanonicalName` 的唯一出口算出来的；
              * 8.15 的根因就是这一层没有把卡上的规范名带进 VolumeFacts，族算法只能
              * 拿入口名 `9953.part1.a1` 的 `.a1` 后缀去猜。
              */

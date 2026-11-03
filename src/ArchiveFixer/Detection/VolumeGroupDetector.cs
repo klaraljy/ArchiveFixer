@@ -642,7 +642,7 @@ namespace ArchiveFixer.Detection
             //    老写法把 `last == "rar"` 写死在这一行，于是这种名字掉到 ③b 被当成"本体后缀被塞了垃圾"，
             //    基名算成 `X.part1`、卷序 1 ⇒ 一组 4 卷各自成一组（列表四行、递归四个分支）。
             //    判据转调**唯一出口** `ExtensionHelper.TrySplitPartNumberedVolume` —— 与
-            //    `FileNameHelper.IsVolumePartFileName` 那处**同一份**。
+            //    `LegacyVolumeNames.IsVolumePart` 那处**同一份**。
             if (ExtensionHelper.TrySplitPartNumberedVolume(
                     fileName,
                     out string partBase,

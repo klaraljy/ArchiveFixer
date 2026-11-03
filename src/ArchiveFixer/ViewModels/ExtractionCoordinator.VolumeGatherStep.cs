@@ -53,7 +53,7 @@ namespace ArchiveFixer.ViewModels
         /// <item><description>**接手它的那一单可证完整 + 校验通过**（L4 唯一出口
         /// <see cref="ResultCompletenessClassifier"/>，与 <see cref="PurgePassThroughRestOfSettledProducer"/>
         /// 同一份证据来源）—— 判不出 ⇒ 一个字节都不动；</description></item>
-        /// <item><description>那一片**此刻还在盘上**、名字仍属于这一组（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>
+        /// <item><description>那一片**此刻还在盘上**、名字仍属于这一组（<see cref="LegacyVolumeNames.TryGetIndex"/>
         /// + <see cref="FileNameHelper.GetArchiveBaseName"/> 两把既有尺子）、而且仍在**当时记下的那个落点根**之内；</description></item>
         /// <item><description>没命中「内容物保留关键词」（<see cref="ContentKeepRules"/>，与其余物那一档同一道闸门）。</description></item>
         /// </list>
@@ -98,7 +98,7 @@ namespace ArchiveFixer.ViewModels
                 if (directory.Length > 0
                     && !_volumeGroupEntriesThisBatch.Any(
                         item => string.Equals(item.Directory, directory, StringComparison.OrdinalIgnoreCase)
-                                && VolumeGroupDetector.BelongsToSameGroup(
+                                && LegacyVolumeNames.BelongsToSameGroup(
                                     item.ReferenceName,
                                     FileNameHelper.GetFileName(entryPath))))
                 {
@@ -237,7 +237,7 @@ namespace ArchiveFixer.ViewModels
             foreach (string member in CollectVolumeFilesInDirectory(directory))
             {
                 if (File.Exists(member)
-                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(member), referenceName))
+                    && LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(member), referenceName))
                 {
                     members.Add(member);
                 }
@@ -318,7 +318,7 @@ namespace ArchiveFixer.ViewModels
                  * `members.Count=2`、`consumer != null`、六道门槛全过、求值
                  * `this.IsAnyTaskSourcePath(path)` = **true** ⇒ 两份都被跳过 ⇒ 盘上一个字节没少。
                  */
-                if (!VolumeGroupDetector.BelongsToSameGroup(name, entryName))
+                if (!LegacyVolumeNames.BelongsToSameGroup(name, entryName))
                 {
                     continue;
                 }
@@ -841,7 +841,7 @@ namespace ArchiveFixer.ViewModels
 
                 foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
                 {
-                    if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                    if (LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                     {
                         long size = -1;
 

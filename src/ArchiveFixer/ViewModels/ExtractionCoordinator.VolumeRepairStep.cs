@@ -176,8 +176,8 @@ namespace ArchiveFixer.ViewModels
                 {
                     string fileName = Path.GetFileName(file);
 
-                    if (VolumeGroupDetector.TryGetVolumeIndex(fileName).HasValue ||
-                        VolumeGroupDetector.TryGetFirstVolumeName(fileName) != null)
+                    if (LegacyVolumeNames.TryGetIndex(fileName).HasValue ||
+                        LegacyVolumeNames.TryGetFirstVolumeName(fileName) != null)
                     {
                         found.Add(file);
                     }

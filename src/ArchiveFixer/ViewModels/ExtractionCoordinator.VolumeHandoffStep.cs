@@ -125,7 +125,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                int? nameSlot = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                int? nameSlot = LegacyVolumeNames.TryGetIndex(
                     FileNameHelper.GetFileName(file));
 
                 _firstStepFileLedger.AddOrReplace(
@@ -161,7 +161,7 @@ namespace ArchiveFixer.ViewModels
              * 已发布产物由 RegisterProducedOutputsToLedger 单独登记。
              */
             bool insideWork = IsInsideWorkDirectory(path);
-            int? nameSlot = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+            int? nameSlot = LegacyVolumeNames.TryGetIndex(
                 FileNameHelper.GetFileName(path));
 
             ZipVariant zipVariant = ResolveZipVariant(card);
@@ -230,7 +230,7 @@ namespace ArchiveFixer.ViewModels
 
                 string name = FileNameHelper.GetFileName(sibling);
 
-                if (!FileNameHelper.IsVolumePartFileName(name)
+                if (!LegacyVolumeNames.IsVolumePart(name)
                     || !string.Equals(
                         FileNameHelper.SecondStepBaseName(sibling),
                         baseName,
@@ -481,7 +481,7 @@ namespace ArchiveFixer.ViewModels
         {
             string path = task.CurrentPath ?? string.Empty;
             string baseName = FileNameHelper.SecondStepBaseName(path);
-            int? volumeIndex = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+            int? volumeIndex = LegacyVolumeNames.TryGetIndex(
                 FileNameHelper.GetFileName(path));
             bool userImported = !task.IsContinuationTask;
 
@@ -500,7 +500,7 @@ namespace ArchiveFixer.ViewModels
                  * ⇒ 组分析看到 4 片、快通道判 Incomplete。判据只读真实来源与卷号。
                  */
                 int? existingIndex = existing.NameVolumeIndex
-                    ?? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    ?? LegacyVolumeNames.TryGetIndex(
                         FileNameHelper.GetFileName(existing.Path));
 
                 if (!string.Equals(existing.BaseName, baseName, StringComparison.OrdinalIgnoreCase)
@@ -718,7 +718,7 @@ namespace ArchiveFixer.ViewModels
         /// <b>名字也不像后续卷</b>。老口径把它落成「已跳过 ⇒ 不是压缩包」，于是整组永远凑不齐。</para>
         ///
         /// <para>判据（⛔ 只用既有事实，⛔ 不猜卷号、⛔ 不动盘上任何东西）：<br/>
-        /// ① 同批任务里有另一单的名字读得出"第 1 卷"（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/> = 1）；<br/>
+        /// ① 同批任务里有另一单的名字读得出"第 1 卷"（<see cref="LegacyVolumeNames.TryGetIndex"/> = 1）；<br/>
         /// ② 它的基名（唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>）与这一份**相同或互为前缀**；<br/>
         /// ③ 这一份的体积 **≤** 那一份的体积（"除末卷外等大" ⇒ 任何一片都不会比满片还大）。<br/>
         /// 三条同时成立 ⇒ 判"疑似这一组的一片" ⇒ 结论是**缺卷**，交给批末/跨链那一套去凑。</para>
@@ -803,7 +803,7 @@ namespace ArchiveFixer.ViewModels
                 string otherName = FileNameHelper.GetFileName(other.CurrentPath);
 
                 // ① 那一单的名字必须读得出"第 1 卷"。
-                if (VolumeGroupDetector.TryGetVolumeIndex(otherName) != 1)
+                if (LegacyVolumeNames.TryGetIndex(otherName) != 1)
                 {
                     continue;
                 }

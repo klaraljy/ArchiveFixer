@@ -909,7 +909,7 @@ namespace ArchiveFixer.Helpers
         /// 三处都硬编码了 <c>尾巴 == "rar"</c> ——
         /// <c>VolumeGroupDetector.Analyze</c>（卷序 / 归组）、
         /// 旧的剥卷标记副本（包基名 ⇒ 同组判定与落点）、
-        /// <c>FileNameHelper.IsVolumePartFileName</c>（拦住会破坏分卷链的改名）。
+        /// <c>LegacyVolumeNames.IsVolumePart</c>（拦住会破坏分卷链的改名）。
         /// 尾巴一粘垃圾（网盘给每卷缀「删除」⇒ <c>X.part1.rar删除</c>），**三处同时失效**：
         /// 一组 4 卷被判成"四个基名互不相同的第 1 卷本体" —— 列表里四行、递归里四个分支、
         /// 引擎那边因为名字对不上而拼不起整组（现场见 <c>docs/真机事故复盘.md</c> §51）。</para>

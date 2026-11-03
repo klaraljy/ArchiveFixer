@@ -681,11 +681,11 @@ namespace ArchiveFixer.Extraction
              * 的日志里逐字是：「分卷名不标准，已按标准名改好（1 卷…）：111_.part1.rar → 111_.part1」，
              * 随后引擎报 `Missing volume`。
              *
-             * 判据转调唯一出口 `VolumeGroupResolver.TryGetCanonicalVolumeName`（族 + 卷号 ⇒ 规范名），
+             * 判据转调唯一出口 `LegacyVolumeNames.TryGetCanonicalName`（族 + 卷号 ⇒ 规范名），
              * ⛔ 这里不新造第二套族规则（末段那条留着当第一道粗筛）。判不出来 ⇒ 不算规范
              * ⇒ 整份计划不成立（兜底照旧落在"什么名字都不改"那一档）。
              */
-            return VolumeGroupResolver.TryGetCanonicalVolumeName(fileName, out string canonical)
+            return LegacyVolumeNames.TryGetCanonicalName(fileName, out string canonical)
                    && string.Equals(canonical, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -768,7 +768,7 @@ namespace ArchiveFixer.Extraction
                         "内容可证不是分卷的一员（名字里的卷标记只是伪装尾巴）—— 卷名一个字节都不改");
                 }
 
-                int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+                int? nameIndex = LegacyVolumeNames.TryGetIndex(fileName);
                 FileNatureCard entryCard = natureCard;
                 int? cardIndex = entryCard.VolumeNumber;
 
@@ -862,7 +862,7 @@ namespace ArchiveFixer.Extraction
              * 名字里没有卷号的文件（普通包）改名只会把它弄坏；不是第一卷的（.002 之类）
              * 改名解决不了"缺第一卷"的问题 —— 那种情况该做的是把它放回原组，不是改它的名字。
              */
-            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+            int? index = LegacyVolumeNames.TryGetIndex(fileName);
 
             if (index == null)
             {
@@ -1187,7 +1187,7 @@ namespace ArchiveFixer.Extraction
                          *
                          * 老口径问的是"**手上这一卷**的名字里有没有卷号"：
 
-                         *     if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null) return Cannot(AlreadyStandard);
+                         *     if (LegacyVolumeNames.TryGetIndex(fileName) != null) return Cannot(AlreadyStandard);
                          *
                          * 于是真机那一档当场被拒 —— `111.7z.001`（标准名第 1 卷）+ `111`（名字整个丢了，
                          * 本该叫 `111.7z.002`）+ `111.7z.003`：手上这一卷的名字**本来就是标准的**，
@@ -1206,7 +1206,7 @@ namespace ArchiveFixer.Extraction
                             pool,
                             Detection.VolumeContentInference.ExtensionFor(Detection.VolumeContentFormat.SevenZip));
 
-                        if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null)
+                        if (LegacyVolumeNames.TryGetIndex(fileName) != null)
                         {
                             if (!shape.SelfConsistent || shape.NamelessFillers.Count == 0)
                             {
@@ -3014,8 +3014,8 @@ namespace ArchiveFixer.Extraction
                      * ⛔ 只写程序当场算出来的值（判不出就写「判不出」），⛔ 一处判据都不改。
                      */
                     string candidateName = Path.GetFileName(candidate);
-                    string? firstInFamily = VolumeGroupDetector.TryGetFirstVolumeName(candidateName);
-                    int? volumeIndex = VolumeGroupDetector.TryGetVolumeIndex(candidateName);
+                    string? firstInFamily = LegacyVolumeNames.TryGetFirstVolumeName(candidateName);
+                    int? volumeIndex = LegacyVolumeNames.TryGetIndex(candidateName);
 
                     log?.Invoke(
                         "WARN",
@@ -3113,7 +3113,7 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 这一份候选所属的**一组**（含自己）：同目录 + 卷序认得出 + **包基名逐字相等**
-        /// （判据全在既有出口里：卷序 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>、
+        /// （判据全在既有出口里：卷序 <see cref="LegacyVolumeNames.TryGetIndex"/>、
         /// 基名 = 第二大步那份（<see cref="FileNameHelper.SecondStepBaseName"/>，第一个点之前）。
         ///
         /// <para>为什么必须把兄弟一起收进来：7z / 跨盘 zip 的续卷没有魔数、探测器根本不会把它们当候选，
@@ -3370,7 +3370,7 @@ namespace ArchiveFixer.Extraction
             string directory = Path.GetDirectoryName(candidate) ?? string.Empty;
 
             if (directory.Length == 0 ||
-                VolumeGroupDetector.TryGetVolumeIndex(candidateName) == null ||
+                LegacyVolumeNames.TryGetIndex(candidateName) == null ||
                 !TryResolvePackageBaseName(candidateName, out string candidateBase))
             {
                 return members;
@@ -3391,7 +3391,7 @@ namespace ArchiveFixer.Extraction
             foreach (string entry in entries)
             {
                 if (string.Equals(entry, candidate, StringComparison.OrdinalIgnoreCase) ||
-                    VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(entry)) == null ||
+                    LegacyVolumeNames.TryGetIndex(Path.GetFileName(entry)) == null ||
                     !TryResolvePackageBaseName(Path.GetFileName(entry), out string siblingBase))
                 {
                     continue;
@@ -3419,7 +3419,7 @@ namespace ArchiveFixer.Extraction
         {
             string directory = Path.GetDirectoryName(members[0]) ?? string.Empty;
             string anchor = members
-                .OrderBy(member => VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(member)) ?? int.MaxValue)
+                .OrderBy(member => LegacyVolumeNames.TryGetIndex(Path.GetFileName(member)) ?? int.MaxValue)
                 .First();
 
             TryResolvePackageBaseName(Path.GetFileName(anchor), out string baseName);
@@ -3448,7 +3448,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                if (VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(member)) == 1)
+                if (LegacyVolumeNames.TryGetIndex(Path.GetFileName(member)) == 1)
                 {
                     return format;
                 }
@@ -3847,7 +3847,7 @@ namespace ArchiveFixer.Extraction
                     }
 
                     string name = SafeFileName(full);
-                    int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+                    int? index = LegacyVolumeNames.TryGetIndex(name);
                     long size = LengthOf(full);
 
                     if (size <= 0 || (applySizeFilter && size < NearbyMinimumBytes))
@@ -3855,7 +3855,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    bool byName = index != null && VolumeGroupDetector.BelongsToSameGroup(entryName, name);
+                    bool byName = index != null && LegacyVolumeNames.BelongsToSameGroup(entryName, name);
                     int? resolvedIndex = index;
 
                     if (!byName)
@@ -4496,12 +4496,12 @@ namespace ArchiveFixer.Extraction
 
                 string candidateName = SafeFileName(candidate.Path);
 
-                if (!VolumeGroupDetector.BelongsToSameGroup(entryName, candidateName))
+                if (!LegacyVolumeNames.BelongsToSameGroup(entryName, candidateName))
                 {
                     continue;
                 }
 
-                int? familyIndex = VolumeGroupDetector.TryGetVolumeIndex(candidateName);
+                int? familyIndex = LegacyVolumeNames.TryGetIndex(candidateName);
                 int disk;
 
                 if (familyIndex == null)
@@ -4909,7 +4909,7 @@ namespace ArchiveFixer.Extraction
                         .Select(piece => SafeFileName(piece.Path))
                         .FirstOrDefault(name =>
                             name.StartsWith(entryStem + ".part", StringComparison.OrdinalIgnoreCase)
-                            && VolumeGroupDetector.TryGetVolumeIndex(name) > 1);
+                            && LegacyVolumeNames.TryGetIndex(name) > 1);
 
                 if (partFamilySample != null
                     && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(

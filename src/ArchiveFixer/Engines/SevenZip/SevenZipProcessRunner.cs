@@ -901,7 +901,7 @@ namespace ArchiveFixer.Engines.SevenZip
 
             string fileName = Path.GetFileName(path);
 
-            if (VolumeGroupDetector.TryGetVolumeIndex(fileName) == null)
+            if (LegacyVolumeNames.TryGetIndex(fileName) == null)
             {
                 // 文件名不是分卷 → 原来的分类是对的（纯文本改名成 .7z 走的就是这一支）。
                 return errorType;
@@ -1073,7 +1073,7 @@ namespace ArchiveFixer.Engines.SevenZip
                             SafePathHelper.GetFullPathSafe(archivePath),
                             StringComparison.OrdinalIgnoreCase))
                     {
-                        string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(archiveFileName);
+                        string? firstVolumeName = LegacyVolumeNames.TryGetFirstVolumeName(archiveFileName);
 
                         if (!string.IsNullOrWhiteSpace(firstVolumeName))
                         {

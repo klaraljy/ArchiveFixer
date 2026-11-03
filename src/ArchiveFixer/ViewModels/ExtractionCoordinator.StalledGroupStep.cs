@@ -52,7 +52,7 @@ namespace ArchiveFixer.ViewModels
             foreach (string file in fileNames)
             {
                 if (string.IsNullOrWhiteSpace(file)
-                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
+                    || !LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
                 {
                     return false;
                 }
@@ -81,7 +81,7 @@ namespace ArchiveFixer.ViewModels
         /// 「分卷缺失，未开始解压」。</para>
         ///
         /// <para>⛔ <b>判据必须走项目唯一那把"同一组"的尺子</b>
-        /// （<see cref="VolumeGroupDetector.BelongsToSameGroup"/> = **族 + 基名**），
+        /// （<see cref="LegacyVolumeNames.BelongsToSameGroup"/> = **族 + 基名**），
         /// ⛔ 不许只比基名。2026-10-10 真机 EEEE 就是只比基名翻的车：`111.rar`（**RarOld 族**）与
         /// `111.zip`（**ZipSpanned 族**）基名都是 `111` ⇒ 被登记进名单 ⇒ 批末拿它的名字去问一个
         /// **永不可能凑齐**的老式 RAR 组 ⇒ **同一单**既在列表里写着「这一片随整组解开（由「111.z03」那单解的）」，
@@ -110,7 +110,7 @@ namespace ArchiveFixer.ViewModels
             foreach (string piece in result.UnresolvedVolumePieces)
             {
                 // 唯一尺子：族 + 基名都要对上（`111.zip` 与 `111.z03` 同组；`111.rar` 与 `111.zip` 不同组）。
-                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(piece), ownName))
+                if (LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(piece), ownName))
                 {
                     return true;
                 }
@@ -123,7 +123,7 @@ namespace ArchiveFixer.ViewModels
         /// 这一趟递归**停下来的那一片**（可能属于**别人那一组**）—— 登记进批末名单时要用它当参照物。
         ///
         /// <para>判据只有一条：`UnresolvedVolumePieces` 里第一个**自报是分卷片**的名字
-        /// （唯一出口 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认得出卷号）。
+        /// （唯一出口 <see cref="LegacyVolumeNames.TryGetIndex"/> 认得出卷号）。
         /// 一个都没有 ⇒ 空串 ⇒ 调用方照旧不登记（老口径一个字不改）。</para>
         ///
         /// <para>⛔ 不比中文文案、⛔ 不猜族；工作区里那一份与落点那一份名字相同，拿哪一份当参照物都一样。</para>

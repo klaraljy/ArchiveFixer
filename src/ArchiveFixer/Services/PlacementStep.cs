@@ -117,7 +117,7 @@ namespace ArchiveFixer.Services
              * 拿它当一层就是真机上那个 `…\包名\59768866\真内容`。
              */
             bool processArtifactName = continuation
-                && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(task.CurrentPath));
+                && LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(task.CurrentPath));
 
             /*
              * ⚠ 2026-10-09 第 ④ 种成因（**定稿侧与落点侧判据分家**，缺陷取证定位到行）：

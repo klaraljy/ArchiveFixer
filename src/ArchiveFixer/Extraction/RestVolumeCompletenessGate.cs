@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -349,7 +350,7 @@ namespace ArchiveFixer.Extraction
                  * 就是被这一行拦下的，日志逐字：「逐层回收准备删的「111.rar」是一组分卷的一片，
                  * 而同组的另一片「111.zip」还在成品目录里（两边基名都是「111」）」。
                  * 可 `111.rar` 是 **RarOld 族**（归档本体）、`111.zip` 是 **ZipSpanned 族**（跨盘 ZIP 末片）
-                 * —— 按项目唯一那把"同一组 = 族 + 基名"的尺子（`VolumeGroupDetector.BelongsToSameGroup`，
+                 * —— 按项目唯一那把"同一组 = 族 + 基名"的尺子（`LegacyVolumeNames.BelongsToSameGroup`，
                  * 守门 `StalledGroupRegistrationTests` 逐字钉着这对名字不同族）它们**不是一组**，
                  * 拦下的理由是假的 ⇒ 那 48 MB 白等了一整条链（盘真紧时就是成败之差）。
                  *
@@ -405,7 +406,7 @@ namespace ArchiveFixer.Extraction
             }
 
             bool looksLikeArchivePiece =
-                FileNameHelper.IsVolumePartFileName(fileName)
+                LegacyVolumeNames.IsVolumePart(fileName)
                 || ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(fileName));
 
             if (!looksLikeArchivePiece)

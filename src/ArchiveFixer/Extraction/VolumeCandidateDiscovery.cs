@@ -654,7 +654,7 @@ namespace ArchiveFixer.Extraction
                  * 于是父包 `2.rar` 逃过"没有名字卷槽"这一条、被收进子分卷组。
                  * 这里判的是"名字是不是分卷片"（.part1.rar / .7z.001 / .r00…），不是"能不能读出卷号"。
                  */
-                && !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(entry.Path))
+                && !LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(entry.Path))
                 && !entry.FirstVolumeFlag;
         }
 
@@ -674,7 +674,7 @@ namespace ArchiveFixer.Extraction
             return card != null
                 && card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
                 && card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
-                && !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(path));
+                && !LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(path));
         }
 
         private static bool IsProvablySingleCompleteNonMember(PieceFacts item)
@@ -817,7 +817,7 @@ namespace ArchiveFixer.Extraction
                         if (card.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
                             || card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
                             || IsProvablySingleCompleteNonMember(card, path)
-                            || ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                            || LegacyVolumeNames.TryGetIndex(
                                 FileNameHelper.GetFileName(path)).HasValue)
                         {
                             continue;
@@ -998,7 +998,7 @@ namespace ArchiveFixer.Extraction
                                      && string.Equals(item.Path, entryPath, StringComparison.OrdinalIgnoreCase)
                         ? 0
                         : 1)
-                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    .ThenBy(item => LegacyVolumeNames.TryGetIndex(
                         Path.GetFileName(item.Path)) ?? int.MaxValue)
                     .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
@@ -1073,7 +1073,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    int? nameIndex = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    int? nameIndex = LegacyVolumeNames.TryGetIndex(
                         Path.GetFileName(item.Path));
 
                     if (nameIndex.HasValue)
@@ -1097,7 +1097,7 @@ namespace ArchiveFixer.Extraction
 
             // ② 名字里的卷标记（7z 中间/末片、ZIP 裸切中间片在内容上判不出，名字常常还读得出来）。
             List<int> nameNumbers = items
-                .Select(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                .Select(item => LegacyVolumeNames.TryGetIndex(
                     Path.GetFileName(item.Path)))
                 .Where(number => number.HasValue)
                 .Select(number => number!.Value)
@@ -1285,7 +1285,7 @@ namespace ArchiveFixer.Extraction
             List<PieceFacts> ordered = format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip
                 ? items
                     .OrderBy(item => item.IsFirstPiece ? 0 : 1)
-                    .ThenBy(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    .ThenBy(item => LegacyVolumeNames.TryGetIndex(
                         Path.GetFileName(item.Path)) ?? int.MaxValue)
                     .ThenBy(item => item.VolumeNumber ?? int.MaxValue)
                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
@@ -1325,7 +1325,7 @@ namespace ArchiveFixer.Extraction
             if (entry.Length == 0)
             {
                 entry = items
-                    .FirstOrDefault(item => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    .FirstOrDefault(item => LegacyVolumeNames.TryGetIndex(
                         Path.GetFileName(item.Path)) == 1)
                     ?.Path ?? string.Empty;
             }

@@ -38,7 +38,7 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 从**一个目录里的文件名**里找出所有"缺首卷"的分卷组。
         ///
-        /// <para>按"标准首卷名"分组（<see cref="VolumeGroupDetector.TryGetFirstVolumeName"/>）——
+        /// <para>按"标准首卷名"分组（<see cref="LegacyVolumeNames.TryGetFirstVolumeName"/>）——
         /// 这样老式 zip（<c>x.zip</c> + <c>x.z01</c>）与新式 rar（<c>x.part1.rar</c>）也是同一套口径，
         /// 不必按族各写一遍。首卷文件**存在**的组不算孤儿（那是正常分卷组，交给既有分组逻辑）。</para>
         /// </summary>
@@ -68,14 +68,14 @@ namespace ArchiveFixer.Detection
 
             foreach (string name in names)
             {
-                int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+                int? index = LegacyVolumeNames.TryGetIndex(name);
 
                 if (index == null || index.Value < 2)
                 {
                     continue;
                 }
 
-                string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(name);
+                string? firstVolumeName = LegacyVolumeNames.TryGetFirstVolumeName(name);
 
                 if (string.IsNullOrWhiteSpace(firstVolumeName))
                 {

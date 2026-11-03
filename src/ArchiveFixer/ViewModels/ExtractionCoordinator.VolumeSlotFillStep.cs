@@ -166,11 +166,11 @@ namespace ArchiveFixer.ViewModels
             VolumeNamingFamily? namingFamily = null)
         {
             string? existingPiece = present.Values
-                .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null);
+                .FirstOrDefault(path => LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(path)) != null);
 
             if (!string.IsNullOrEmpty(existingPiece)
                 && TryNameSlotLikeExistingPiece(existingPiece!, slot, out string likeExisting)
-                && VolumeGroupDetector.TryGetVolumeIndex(likeExisting) == slot)
+                && LegacyVolumeNames.TryGetIndex(likeExisting) == slot)
             {
                 return likeExisting;
             }
@@ -189,7 +189,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             if (VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonical)
-                && VolumeGroupDetector.TryGetVolumeIndex(canonical) == slot)
+                && LegacyVolumeNames.TryGetIndex(canonical) == slot)
             {
                 return canonical;
             }
@@ -720,7 +720,7 @@ namespace ArchiveFixer.ViewModels
 
             foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
             {
-                if (!File.Exists(path) || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                if (!File.Exists(path) || !LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                 {
                     continue;
                 }

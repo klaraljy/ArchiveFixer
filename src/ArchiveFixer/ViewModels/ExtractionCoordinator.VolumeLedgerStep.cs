@@ -86,7 +86,7 @@ namespace ArchiveFixer.ViewModels
                 string path = other.CurrentPath ?? string.Empty;
 
                 if (path.Length == 0
-                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                    || !LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                 {
                     continue;
                 }

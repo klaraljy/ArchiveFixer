@@ -242,7 +242,7 @@ namespace ArchiveFixer.Detection
 
             bool hasIdentity = FileIdentity.TryGetIdentity(path, out ulong volumeSerial, out ulong fileIndex);
 
-            VolumeGroupResolver.TryGetCanonicalVolumeName(name, out string canonical);
+            LegacyVolumeNames.TryGetCanonicalName(name, out string canonical);
 
             /*
              * ⚠ 大小**直接问文件**（`reading.Size` 只在部分读取路径上被填 —— 实测 EEE 那几份 200 MB 的包
@@ -470,8 +470,8 @@ namespace ArchiveFixer.Detection
                 HasZipEndRecord = reading.HasZipEndRecord,
                 ZipEndRecordMeansSplit = reading.ZipEndRecordMeansSplit,
                 HasZipLocalHeader = reading.HasZipLocalHeader,
-                VolumeIndexByName = VolumeGroupDetector.TryGetVolumeIndex(name),
-                FirstVolumeNameByName = VolumeGroupDetector.TryGetFirstVolumeName(name),
+                VolumeIndexByName = LegacyVolumeNames.TryGetIndex(name),
+                FirstVolumeNameByName = LegacyVolumeNames.TryGetFirstVolumeName(name),
                 CanonicalVolumeName = canonical ?? string.Empty,
                 ArchiveBaseName = FileNameHelper.GetArchiveBaseName(name),
                 HasIdentity = hasIdentity,

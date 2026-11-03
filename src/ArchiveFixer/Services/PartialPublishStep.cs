@@ -276,7 +276,7 @@ namespace ArchiveFixer.Services
 
             if (VolumePieceFacts.CardSaysItIsPiece(card)
                 || VolumePieceFacts.ResolveSlotIndex(artifact, card) is not null
-                || VolumeGroupDetector.TryGetVolumeIndex(fileName) is not null)
+                || LegacyVolumeNames.TryGetIndex(fileName) is not null)
             {
                 _host.AppendLog(
                     "INFO",

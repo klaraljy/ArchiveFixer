@@ -506,14 +506,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             string fileName = Path.GetFileName(task.CurrentPath);
-            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+            int? index = LegacyVolumeNames.TryGetIndex(fileName);
 
             if (index == null || index.Value < 2)
             {
                 return false;
             }
 
-            string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+            string? firstVolumeName = LegacyVolumeNames.TryGetFirstVolumeName(fileName);
 
             if (string.IsNullOrWhiteSpace(firstVolumeName))
             {

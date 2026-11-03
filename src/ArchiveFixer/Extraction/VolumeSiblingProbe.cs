@@ -26,7 +26,7 @@ namespace ArchiveFixer.Extraction
 
                 string name = FileNameHelper.GetFileName(path);
 
-                if (!FileNameHelper.IsVolumePartFileName(name))
+                if (!LegacyVolumeNames.IsVolumePart(name))
                 {
                     return false;
                 }
@@ -42,8 +42,8 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    if (FileNameHelper.IsVolumePartFileName(siblingName) &&
-                        VolumeGroupDetector.BelongsToSameGroup(name, siblingName))
+                    if (LegacyVolumeNames.IsVolumePart(siblingName) &&
+                        LegacyVolumeNames.BelongsToSameGroup(name, siblingName))
                     {
                         return true;
                     }

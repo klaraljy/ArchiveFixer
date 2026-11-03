@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
@@ -115,7 +116,7 @@ namespace ArchiveFixer.Extraction
 
             string fileName = FileNameHelper.GetFileName(archivePath);
 
-            if (fileName.Length == 0 || FileNameHelper.IsVolumePartFileName(fileName))
+            if (fileName.Length == 0 || LegacyVolumeNames.IsVolumePart(fileName))
             {
                 return string.Empty;
             }

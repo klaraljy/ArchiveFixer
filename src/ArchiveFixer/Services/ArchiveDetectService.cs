@@ -386,13 +386,13 @@ namespace ArchiveFixer.Services
                  * 从**偏移 162** 抠出 26 214 238 字节（逐字：`检测到内嵌归档：已从偏移 162 处取出 …`）
                  * ⇒ 这一片的**原始字节再没被当成这一组的一片** ⇒ 整组凑不齐 ⇒ ①「内容物解出来」红。</para>
                  *
-                 * <para>判据只读**名字**（唯一出口 <see cref="FileNameHelper.IsVolumePartFileName"/>，
+                 * <para>判据只读**名字**（唯一出口 <see cref="LegacyVolumeNames.IsVolumePart"/>，
                  * 与下面"后缀状态"那一处**同一把尺子**）：一片分卷的名字就是它的身份，
                  * 而"尾部有自洽归档 / 尾部有魔数"这两条在它身上是**假证据**（切片里本来就可能出现任何字节）。
                  * ⛔ 这一档只是**不做**内嵌归档判定（= 少做一次抠取），不改任何其它判据：
                  * 头里有魔数（RAR5 各卷、7z 的 `.001`）照旧走头上那条路，一个字节都不受影响。</para>
                  */
-                bool namedVolumePart = FileNameHelper.IsVolumePartFileName(Path.GetFileName(filePath));
+                bool namedVolumePart = LegacyVolumeNames.IsVolumePart(Path.GetFileName(filePath));
 
                 /*
                  * 尾部那 256 KB 里找 ZIP 的 EOCD（最便宜的一条：只读尾部）。
@@ -749,14 +749,14 @@ namespace ArchiveFixer.Services
             try
             {
                 string fileName = Path.GetFileName(path);
-                int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+                int? index = LegacyVolumeNames.TryGetIndex(fileName);
 
                 if (index == null || index.Value < 2)
                 {
                     return string.Empty;
                 }
 
-                string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+                string? firstVolumeName = LegacyVolumeNames.TryGetFirstVolumeName(fileName);
 
                 if (string.IsNullOrWhiteSpace(firstVolumeName))
                 {
@@ -800,7 +800,7 @@ namespace ArchiveFixer.Services
             {
                 string fileName = Path.GetFileName(path);
 
-                if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != 1)
+                if (LegacyVolumeNames.TryGetIndex(fileName) != 1)
                 {
                     return string.Empty;
                 }
@@ -1004,7 +1004,7 @@ namespace ArchiveFixer.Services
              * 没有归档魔数，识别必然说 Unknown —— 可它的**后缀**一点都不神秘，就是分卷标记。
              * 报成"格式未知"会把"缺首卷"这件事藏起来（状态那一列现在会说清，见 ApplyDetectResultAsync）。
              */
-            if (FileNameHelper.IsVolumePartFileName(fileName))
+            if (LegacyVolumeNames.IsVolumePart(fileName))
             {
                 return StatusText.ExtensionVolume;
             }

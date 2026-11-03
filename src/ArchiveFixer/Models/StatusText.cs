@@ -373,7 +373,7 @@ namespace ArchiveFixer.Models
          */
 
         /// <summary>
-        /// 分卷文件**五种改名操作一律不动**（原话口径见 <c>FileNameHelper.IsVolumePartFileName</c>）。
+        /// 分卷文件**五种改名操作一律不动**（原话口径见 <c>LegacyVolumeNames.IsVolumePart</c>）。
         ///
         /// <para>以前这道闸门只长在「智能修正」里，于是「替换后缀」能把 <c>set.7z.001</c> 改成
         /// <c>set.7z.7z</c> —— 用户点一下就把整组弄成"再也解不开"，程序之后只会报「分卷缺失」。</para>

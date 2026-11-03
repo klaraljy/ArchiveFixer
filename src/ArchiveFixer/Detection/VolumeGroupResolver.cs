@@ -733,7 +733,7 @@ namespace ArchiveFixer.Detection
             foreach (VolumeCandidate volume in group.Volumes)
             {
                 string full = SafePathHelper.GetFullPathSafe(volume.Path);
-                int index = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(full)) ?? 0;
+                int index = LegacyVolumeNames.TryGetIndex(Path.GetFileName(full)) ?? 0;
 
                 if (index <= 0 || !locatedPaths.Add(full))
                 {
@@ -1363,7 +1363,7 @@ namespace ArchiveFixer.Detection
         /// `111-L2.7z.001`）定族（2026-10-13 困难批"缺片按字节数补槽位"那一档用）。
         ///
         /// <para>⛔ 族规则**只有一处**（<see cref="CanonicalNameFor"/>），这里只把"从样本名定族"这一步接上，
-        /// ⛔ 不新写第二套命名规则。推出来的名字**自己再验一遍**（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>
+        /// ⛔ 不新写第二套命名规则。推出来的名字**自己再验一遍**（<see cref="LegacyVolumeNames.TryGetIndex"/>
         /// 必须回同一个卷号）。判不出族 / 样本名推不出本族第 1 卷名 / 自验不过 ⇒ <c>false</c>（调用方什么都不做）。</para>
         /// </summary>
         internal static bool TryBuildCanonicalVolumeNameForIndex(
@@ -1415,7 +1415,7 @@ namespace ArchiveFixer.Detection
             }
 
             string baseName = FileNameHelper.SecondStepBaseName(sampleVolumeName);
-            string? first = VolumeGroupDetector.TryGetFirstVolumeName(sampleVolumeName);
+            string? first = LegacyVolumeNames.TryGetFirstVolumeName(sampleVolumeName);
 
             if (baseName.Length == 0 || string.IsNullOrWhiteSpace(first))
             {
@@ -1443,7 +1443,7 @@ namespace ArchiveFixer.Detection
 
             string name = CanonicalNameFor(family, baseName, index);
 
-            if (name.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(name) != index)
+            if (name.Length == 0 || LegacyVolumeNames.TryGetIndex(name) != index)
             {
                 return false;
             }
@@ -1464,8 +1464,8 @@ namespace ArchiveFixer.Detection
         /// ⇒ 整组永远凑不齐 ⇒ 四片各自去解 ⇒ 全批没有一个成功。
         /// 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`。</para>
         ///
-        /// <para>判据 = 既有那几把尺子的组合（<see cref="VolumeGroupDetector.TryGetFirstVolumeName"/> 定族、
-        /// <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 取卷号、<see cref="CanonicalNameFor"/> 写名字），
+        /// <para>判据 = 既有那几把尺子的组合（<see cref="LegacyVolumeNames.TryGetFirstVolumeName"/> 定族、
+        /// <see cref="LegacyVolumeNames.TryGetIndex"/> 取卷号、<see cref="CanonicalNameFor"/> 写名字），
         /// ⛔ 这里不新造第二套族规则。判不出族 / 卷号 ⇒ 返回 <c>false</c>（调用方照旧什么都不做）。</para>
         /// </summary>
         internal static bool TryGetCanonicalVolumeName(string fileName, out string canonical)
@@ -1473,8 +1473,8 @@ namespace ArchiveFixer.Detection
             canonical = string.Empty;
 
             string baseName = FileNameHelper.SecondStepBaseName(fileName);
-            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
-            string? first = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+            int? index = LegacyVolumeNames.TryGetIndex(fileName);
+            string? first = LegacyVolumeNames.TryGetFirstVolumeName(fileName);
 
             if (baseName.Length == 0 || index == null || string.IsNullOrWhiteSpace(first))
             {
@@ -1674,7 +1674,7 @@ namespace ArchiveFixer.Detection
         {
             foreach (VolumeCandidate volume in group.Volumes)
             {
-                string? first = VolumeGroupDetector.TryGetFirstVolumeName(Path.GetFileName(volume.Path));
+                string? first = LegacyVolumeNames.TryGetFirstVolumeName(Path.GetFileName(volume.Path));
 
                 if (string.IsNullOrWhiteSpace(first))
                 {

@@ -34,7 +34,7 @@ namespace ArchiveFixer.ViewModels
         /// 一个字节的行为都不变；而困难批 `11111111` 那一档里**没有任何一单是这一组的片**
         /// （用户导入的只有三条产出方链）⇒ 产出方那一单进名单，那一组才有人收拢、才有人解开。</para>
         ///
-        /// <para>⛔ 判据仍走唯一那把尺子 <see cref="VolumeGroupDetector.BelongsToSameGroup"/>（族 + 基名）。</para>
+        /// <para>⛔ 判据仍走唯一那把尺子 <see cref="LegacyVolumeNames.BelongsToSameGroup"/>（族 + 基名）。</para>
         /// </summary>
         private bool AnyTaskRepresentsGroup(string piecePath)
         {
@@ -49,7 +49,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string name = FileNameHelper.GetFileName(candidate?.CurrentPath ?? string.Empty);
 
-                if (name.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(name, pieceName))
+                if (name.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(name, pieceName))
                 {
                     return true;
                 }
@@ -420,7 +420,7 @@ namespace ArchiveFixer.ViewModels
                 bool sameGroup = inConsumerGroup
                     || (pieceName.Length > 0
                         && consumerGroupName.Length > 0
-                        && VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName));
+                        && LegacyVolumeNames.BelongsToSameGroup(pieceName, consumerGroupName));
 
                 if (!sameGroup)
                 {

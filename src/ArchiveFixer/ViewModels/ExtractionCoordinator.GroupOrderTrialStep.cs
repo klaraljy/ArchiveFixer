@@ -346,7 +346,7 @@ namespace ArchiveFixer.ViewModels
             string? firstVolume = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
                 ? cardEntryPath
                 : pieces.FirstOrDefault(piece => File.Exists(piece)
-                    && VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) == 1);
+                    && LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(piece)) == 1);
 
             if (string.IsNullOrWhiteSpace(firstVolume))
             {
@@ -356,7 +356,7 @@ namespace ArchiveFixer.ViewModels
             var rest = pieces
                 .Where(piece => File.Exists(piece)
                     && !string.Equals(piece, firstVolume, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(piece => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) ?? int.MaxValue)
+                .OrderBy(piece => LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(piece)) ?? int.MaxValue)
                 .Select(piece => new VolumeCandidate { Path = piece, Size = FileSizeOrZero(piece) })
                 .ToList();
 
@@ -536,7 +536,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (!related && referenceName.Length > 0)
                 {
-                    related = VolumeGroupDetector.BelongsToSameGroup(
+                    related = LegacyVolumeNames.BelongsToSameGroup(
                         FileNameHelper.GetFileName(path),
                         referenceName);
                 }
@@ -594,7 +594,7 @@ namespace ArchiveFixer.ViewModels
                     .Select(card => new
                     {
                         card,
-                        number = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(card.Path))
+                        number = LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(card.Path))
                     })
                     .Where(item => item.number != null)
                     .OrderByDescending(item => item.number)

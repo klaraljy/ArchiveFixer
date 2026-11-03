@@ -70,7 +70,7 @@ namespace ArchiveFixer.Extraction
                     string candidateName = Path.GetFileName(candidate.Path);
 
                     if (!File.Exists(candidate.Path)
-                        || !VolumeGroupDetector.BelongsToSameGroup(name, candidateName))
+                        || !LegacyVolumeNames.BelongsToSameGroup(name, candidateName))
                     {
                         continue;
                     }
@@ -84,7 +84,7 @@ namespace ArchiveFixer.Extraction
                 /*
                  * ③ 名字兜底（底层做不到的那一档：7z 中间卷内容里没有卷号，只能靠名字排）。
                  */
-                if (VolumeGroupDetector.TryGetVolumeIndex(name) == 1)
+                if (LegacyVolumeNames.TryGetIndex(name) == 1)
                 {
                     return current;
                 }
@@ -93,8 +93,8 @@ namespace ArchiveFixer.Extraction
                 {
                     string candidateName = Path.GetFileName(candidate.Path);
 
-                    if (VolumeGroupDetector.TryGetVolumeIndex(candidateName) == 1
-                        && VolumeGroupDetector.BelongsToSameGroup(name, candidateName)
+                    if (LegacyVolumeNames.TryGetIndex(candidateName) == 1
+                        && LegacyVolumeNames.BelongsToSameGroup(name, candidateName)
                         && File.Exists(candidate.Path))
                     {
                         return candidate.Path;
@@ -203,7 +203,7 @@ namespace ArchiveFixer.Extraction
             }
 
             /* ⑤ 名字兜底。 */
-            return VolumeGroupDetector.BelongsToSameGroup(candidateName, reference);
+            return LegacyVolumeNames.BelongsToSameGroup(candidateName, reference);
         }
 
         /// <summary>

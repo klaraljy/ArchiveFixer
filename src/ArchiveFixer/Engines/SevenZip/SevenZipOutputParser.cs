@@ -101,12 +101,12 @@ namespace ArchiveFixer.Engines.SevenZip
 
         /// <summary>
         /// 文件名自称的卷号（1 起）；不是分卷 / 名字没带卷号 ⇒ null。
-        /// 判据只有既有出口 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>（⛔ 不另写一套名字规则）。
+        /// 判据只有既有出口 <see cref="LegacyVolumeNames.TryGetIndex"/>（⛔ 不另写一套名字规则）。
         /// </summary>
         private static int? TryGetVolumeIndex(string? archivePath) =>
             string.IsNullOrWhiteSpace(archivePath)
                 ? null
-                : VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(archivePath));
+                : LegacyVolumeNames.TryGetIndex(Path.GetFileName(archivePath));
 
         /// <summary>
         /// 归档**打不开**、而名字是分卷时统一落的那一档（不变量 7：报"分卷缺失"，⛔ 不编缺卷清单）。

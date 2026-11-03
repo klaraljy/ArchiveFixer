@@ -52,7 +52,7 @@ namespace ArchiveFixer.Detection
         /// （测试里直接建的任务、或从别的入口进来的任务）时不能因此漏判。</para>
         ///
         /// <para><b>2026-09-28 放宽的那一处（红检暴露的假成功）</b>：原来第 ④ 条写的是
-        /// "名字得能被 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认出卷号"，而那只认
+        /// "名字得能被 <see cref="LegacyVolumeNames.TryGetIndex"/> 认出卷号"，而那只认
         /// <c>.001</c>/<c>partN</c>/<c>.z01</c>/<c>.r00</c> —— 真机那种被改烂的
         /// <c>amb909.7.01</c>（两段数字）认不出来，于是这道闸门**放行**，
         /// 7-Zip 把这一卷当通用分片解出 1 MiB 垃圾、退出码 0，管线报「解压成功」。
@@ -225,7 +225,7 @@ namespace ArchiveFixer.Detection
                     continue;
                 }
 
-                int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+                int? index = LegacyVolumeNames.TryGetIndex(name);
 
                 if (index == null || index < 2)
                 {
@@ -255,7 +255,7 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 给用户的**改名建议**：这一组本该叫什么（例如 <c>Code Complete-BZ.7z.001</c>）。
         ///
-        /// 只用同目录里那些"像后续卷"的文件名推（<see cref="VolumeGroupDetector.TryGetFirstVolumeName"/> 是
+        /// 只用同目录里那些"像后续卷"的文件名推（<see cref="LegacyVolumeNames.TryGetFirstVolumeName"/> 是
         /// 既有实现：从 <c>X.7z.002</c> 推出 <c>X.7z.001</c>）；推不出来返回空串 ——
         /// **宁可不说，也不给一个错的建议**（改错名字比不改更糟）。
         /// </summary>
@@ -268,7 +268,7 @@ namespace ArchiveFixer.Detection
 
             foreach (string? sibling in siblingVolumes)
             {
-                string? firstName = VolumeGroupDetector.TryGetFirstVolumeName(sibling ?? string.Empty);
+                string? firstName = LegacyVolumeNames.TryGetFirstVolumeName(sibling ?? string.Empty);
 
                 if (!string.IsNullOrWhiteSpace(firstName))
                 {

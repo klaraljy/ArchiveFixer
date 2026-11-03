@@ -292,7 +292,7 @@ namespace ArchiveFixer.Detection
         /// 「判断一个文件，**绝对不能只看基名和后缀**，绝对还有其他的办法」。
         ///
         /// <para>为什么需要它：按**名字**判"像不像分卷片"有一处结构性缺陷 —— **一个归档本体自己就是它那一族的第 1 卷**
-        /// （`VolumeGroupDetector.TryGetVolumeIndex("111.rar")` = 1）⇒ 用户那份普普通通的单卷 `111.rar`
+        /// （`LegacyVolumeNames.TryGetIndex("111.rar")` = 1）⇒ 用户那份普普通通的单卷 `111.rar`
         /// 也会被判成"像分卷片"（第 125 轮那个真凶就是这么把它接进别组的）。而**归档自己写的头**能一句话说清：
         /// RAR5 主头的 <c>0x0001 Volume</c> 位、RAR4 的 <c>MHD_FIRSTVOLUME</c>、跨盘 ZIP 的 EOCD 盘号。</para>
         ///
@@ -1503,7 +1503,7 @@ namespace ArchiveFixer.Detection
 
             foreach (VolumeNumberReading segment in segments)
             {
-                int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(
+                int? nameIndex = LegacyVolumeNames.TryGetIndex(
                     System.IO.Path.GetFileName(segment.Path));
 
                 if (nameIndex == null)

@@ -30,7 +30,7 @@ namespace ArchiveFixer.Detection
     /// 这件事由调用方（<c>ExtractionCoordinator.ResolveOwnerChainDirectory</c>）回答，⛔ 不在这里猜。</description></item>
     /// </list>
     ///
-    /// <para>三族只用一个判据：<see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 返回 <c>1</c> 的那一份
+    /// <para>三族只用一个判据：<see cref="LegacyVolumeNames.TryGetIndex"/> 返回 <c>1</c> 的那一份
     /// —— 这个函数本来就是"族专属"的（<c>VolumeGroupDetector.VolumeFamily</c>）。⛔ 这里不自己写一遍
     /// 按族的规则（AGENTS.md §9.5：同一件事的真值只允许有一个出口）。</para>
     ///
@@ -48,8 +48,8 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 在 <paramref name="memberPaths"/>（调用方保证**同一组**的成员）里找出入口包**在盘上的那一份**。
         ///
-        /// <para>判据：卷序 = 1（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>），而且它与组里**另一个成员**
-        /// 同族同基名（<see cref="VolumeGroupDetector.BelongsToSameGroup"/>）—— 后者把"孤零零一个文件自己算出来是 1"
+        /// <para>判据：卷序 = 1（<see cref="LegacyVolumeNames.TryGetIndex"/>），而且它与组里**另一个成员**
+        /// 同族同基名（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）—— 后者把"孤零零一个文件自己算出来是 1"
         /// 那一档挡在外面（那一档没有"组"这回事）。</para>
         /// </summary>
         /// <returns>找得到 ⇒ 入口包与它所在目录；不在盘上 / 没有卷成员 / 路径没目录部分 ⇒ 两个空串。</returns>
@@ -109,7 +109,7 @@ namespace ArchiveFixer.Detection
             {
                 string name = FileNameHelper.GetFileName(path);
 
-                if (name.Length > 0 && VolumeGroupDetector.TryGetVolumeIndex(name) != null)
+                if (name.Length > 0 && LegacyVolumeNames.TryGetIndex(name) != null)
                 {
                     names.Add(name);
                     paths.Add(path);
@@ -118,7 +118,7 @@ namespace ArchiveFixer.Detection
 
             for (int i = 0; i < names.Count; i++)
             {
-                if (VolumeGroupDetector.TryGetVolumeIndex(names[i]) != 1)
+                if (LegacyVolumeNames.TryGetIndex(names[i]) != 1)
                 {
                     continue;
                 }
@@ -132,7 +132,7 @@ namespace ArchiveFixer.Detection
 
                 for (int j = 0; j < names.Count; j++)
                 {
-                    if (j != i && VolumeGroupDetector.BelongsToSameGroup(names[j], names[i]))
+                    if (j != i && LegacyVolumeNames.BelongsToSameGroup(names[j], names[i]))
                     {
                         return new Entry(paths[i], directory!);
                     }

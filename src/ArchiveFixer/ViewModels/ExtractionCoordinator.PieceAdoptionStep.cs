@@ -712,8 +712,8 @@ namespace ArchiveFixer.ViewModels
         {
             string name = FileNameHelper.GetFileName(piecePath);
             string baseName = FileNameHelper.GetArchiveBaseName(piecePath);
-            string? first = VolumeGroupDetector.TryGetFirstVolumeName(name);
-            int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+            string? first = LegacyVolumeNames.TryGetFirstVolumeName(name);
+            int? index = LegacyVolumeNames.TryGetIndex(name);
 
             /*
              * ⚠ **同名位上到底是什么**：必须写出来（2026-10-11 环台实测逮到的假拒绝）——
@@ -776,7 +776,7 @@ namespace ArchiveFixer.ViewModels
                     string name = FileNameHelper.GetFileName(file);
 
                     if (string.Equals(name, startName, StringComparison.OrdinalIgnoreCase)
-                        || !VolumeGroupDetector.BelongsToSameGroup(name, startName)
+                        || !LegacyVolumeNames.BelongsToSameGroup(name, startName)
                         || !string.Equals(
                             FileNameHelper.GetArchiveBaseName(name),
                             originalBaseName,

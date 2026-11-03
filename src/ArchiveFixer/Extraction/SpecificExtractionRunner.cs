@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -160,7 +161,7 @@ namespace ArchiveFixer.Extraction
                      * 同目录的其余卷由引擎按标准卷名自己找。⛔ 不再直接报“暂未接入”失败。
                      */
                     string? firstVolume = decision.VolumePaths
-                        .OrderBy(path => ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        .OrderBy(path => LegacyVolumeNames.TryGetIndex(
                             Path.GetFileName(path)) ?? int.MaxValue)
                         .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
                         .FirstOrDefault();

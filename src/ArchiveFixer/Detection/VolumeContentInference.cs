@@ -13,7 +13,7 @@ namespace ArchiveFixer.Detection
     /// <para><b>为什么要有这份读数</b>：一串文件里"有数字"从来不是证据（<c>风景01</c> 里也有 <c>01</c>）。
     /// 只有当同目录真能配出一组**形状自洽**的兄弟卷时，后缀段里的数字才允许参与"谁是首卷 / 怎么排"的判断；
     /// ⛔ 基名正文里的数字**永远不构成任何证据**（本类只看卷标记段，而卷标记段是
-    /// <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认出来的，基名里的 <c>01</c> 根本进不了那个判据）。</para>
+    /// <see cref="LegacyVolumeNames.TryGetIndex"/> 认出来的，基名里的 <c>01</c> 根本进不了那个判据）。</para>
     ///
     /// <para>⛔ <see cref="SelfConsistent"/> 只是**闸门**：它证明"这组名字自洽"，⛔ 不证明"这几片就是一组"——
     /// 成不成立仍然只由硬链接试开回答（<see cref="Extraction.VolumeProbeVerifier"/>）。</para>
@@ -372,7 +372,7 @@ namespace ArchiveFixer.Detection
 
             foreach (VolumeCandidate member in members)
             {
-                int? marker = VolumeGroupDetector.TryGetVolumeIndex(SafeFileName(member.Path));
+                int? marker = LegacyVolumeNames.TryGetIndex(SafeFileName(member.Path));
 
                 if (marker is int number)
                 {

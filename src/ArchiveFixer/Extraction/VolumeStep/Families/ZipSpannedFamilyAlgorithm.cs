@@ -14,7 +14,7 @@ namespace ArchiveFixer.Extraction
     /// 名字 `X.z01 … X.z(B-1)` + 末片 `X.zip`（⛔ `.zip` 是末片，不是第 1 片）。</para>
     ///
     /// <para>判定：B 必须由末片内容给出（判不出 ⇒ Unknown，⛔ 不拿名字硬凑）；中间片先按名字卷标记
-    /// （容忍垃圾尾巴，`VolumeGroupDetector.TryGetVolumeIndex`）；名字读不出的中间片**只允许在
+    /// （容忍垃圾尾巴，`LegacyVolumeNames.TryGetIndex`）；名字读不出的中间片**只允许在
     /// “剩余片数 == 剩余槽位数”时用消去法补位**（B 已知、一份对一个），否则 Unknown。
     /// 规范名 = `stem.z01…stem.zip`，入口是末片 `.zip`（引擎只认它）。</para>
     /// </summary>
@@ -24,7 +24,7 @@ namespace ArchiveFixer.Extraction
 
         /*
          * 跨盘 ZIP 的名字序号**就是磁盘序号**：`.z01`→1、`.z02`→2（`.zip` 是末片 = B）。
-         * ⛔ 不用 `VolumeGroupDetector.TryGetVolumeIndex`：它按“单卷本体 = 第 1 卷”的口径，
+         * ⛔ 不用 `LegacyVolumeNames.TryGetIndex`：它按“单卷本体 = 第 1 卷”的口径，
          * 会把 `.zip` 算成 1、`.z01` 算成 2 —— 那一套与跨盘族相反，混用会造出假缺卷。
          * 这里容忍垃圾尾巴（`.i_$z01` 也算 1），只认“末尾 z+两位数字”。
          */

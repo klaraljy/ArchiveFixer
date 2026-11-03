@@ -695,7 +695,7 @@ namespace ArchiveFixer.ViewModels
                          * ⇒ 那一组永远没人收拢、也永远不解开 ⇒ ①红。</para>
                          *
                          * <para>⛔ 安全性没放宽：登记的仍然是**这一单真的产出过的那一片**（`UnresolvedVolumePieces`
-                         * 里自报是分卷片的那一个，唯一出口 `VolumeGroupDetector.TryGetVolumeIndex`），
+                         * 里自报是分卷片的那一个，唯一出口 `LegacyVolumeNames.TryGetIndex`），
                          * 批末只是拿**它**去问对的那个组；仍然"补齐才跑、仍然缺就如实报缺卷"。</para>
                          */
                         /*

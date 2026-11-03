@@ -182,7 +182,7 @@ namespace ArchiveFixer.Engines.WinRar
 
         /// <summary>
         /// 从 <c>RAR 5, volume 1</c> 里取卷号。
-        /// 分卷在 RAR 里是 1 基（volume 1 = 第一卷），与 <c>VolumeGroupDetector.TryGetVolumeIndex</c>
+        /// 分卷在 RAR 里是 1 基（volume 1 = 第一卷），与 <c>LegacyVolumeNames.TryGetIndex</c>
         /// 的 0 基口径**不同**，所以这里返回的是**原始卷号**，调用方要比较时用 <c>&gt; 1</c> 判"不是首卷"。
         /// </summary>
         internal static int TryParseVolumeIndex(string? details)

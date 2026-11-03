@@ -90,7 +90,7 @@ namespace ArchiveFixer.Services
                      * 于是如实标「将跳过」并说清原因（2026-09-26 审计：以前这条闸门只长在智能修正里，
                      * 「替换后缀」能把 set.7z.001 改成 set.7z.7z，整组就废了）。
                      */
-                    if (FileNameHelper.IsVolumePartFileName(item.OriginalFileName) &&
+                    if (LegacyVolumeNames.IsVolumePart(item.OriginalFileName) &&
                         SafePathHelper.PathEquals(oldPath, newPath))
                     {
                         item.NewPath = oldPath;
@@ -328,7 +328,7 @@ namespace ArchiveFixer.Services
              * 7z / WinRAR 只认 .001 这一套命名，改一下整组就再也解不开
              * （以前这道闸门只长在 FixByDetectedFormat 里，2026-09-26 审计补全）。
              */
-            bool isVolumePart = FileNameHelper.IsVolumePartFileName(fileName);
+            bool isVolumePart = LegacyVolumeNames.IsVolumePart(fileName);
             bool isFormatFix = string.Equals(options.OperationType, "FixByDetectedFormat", StringComparison.OrdinalIgnoreCase);
             bool isTextReplace = string.Equals(options.OperationType, "ReplaceFileNameText", StringComparison.OrdinalIgnoreCase);
 
@@ -1160,7 +1160,7 @@ namespace ArchiveFixer.Services
              * 另一颗按钮（而且那颗按钮要先跑一次失败的解压才亮）—— 用户看到的就是"两颗按钮意义一样，
              * 可第一颗从来没亮过"。
              */
-            if (FileNameHelper.IsVolumePartFileName(fileName))
+            if (LegacyVolumeNames.IsVolumePart(fileName))
             {
                 VolumeNameRepairPlan volumeRepair = VolumeNameRepair.Plan(
                     oldPath,
@@ -1247,7 +1247,7 @@ namespace ArchiveFixer.Services
             FileNatureCard firstVolumeCard = FileNature.Inspect(task.CurrentPath);
 
             if (VolumePieceFacts.IsRarFirstVolumePiece(firstVolumeCard)
-                && string.IsNullOrWhiteSpace(VolumeGroupDetector.TryGetFirstVolumeName(fileName)))
+                && string.IsNullOrWhiteSpace(LegacyVolumeNames.TryGetFirstVolumeName(fileName)))
             {
                 string rarStem = FileNameHelper.GetArchiveBaseName(task.CurrentPath);
 

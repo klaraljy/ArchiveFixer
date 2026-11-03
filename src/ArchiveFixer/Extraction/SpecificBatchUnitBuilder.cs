@@ -34,7 +34,7 @@ namespace ArchiveFixer.Extraction
                 }
 
                 string name = Path.GetFileName(task.CurrentPath);
-                string? firstVolume = VolumeGroupDetector.TryGetFirstVolumeName(name);
+                string? firstVolume = LegacyVolumeNames.TryGetFirstVolumeName(name);
                 string key = firstVolume == null
                     ? task.CurrentPath
                     : Path.Combine(Path.GetDirectoryName(task.CurrentPath) ?? string.Empty, firstVolume);
@@ -52,7 +52,7 @@ namespace ArchiveFixer.Extraction
 
             foreach ((string key, List<ArchiveTask> group) in groups)
             {
-                string firstName = VolumeGroupDetector.TryGetFirstVolumeName(
+                string firstName = LegacyVolumeNames.TryGetFirstVolumeName(
                     Path.GetFileName(group[0].CurrentPath)) ?? string.Empty;
 
                 ArchiveTask entry = group.FirstOrDefault(task => string.Equals(
@@ -60,7 +60,7 @@ namespace ArchiveFixer.Extraction
                                           firstName,
                                           StringComparison.OrdinalIgnoreCase))
                                       ?? group
-                                          .OrderBy(task => VolumeGroupDetector.TryGetVolumeIndex(
+                                          .OrderBy(task => LegacyVolumeNames.TryGetIndex(
                                               Path.GetFileName(task.CurrentPath)) ?? int.MaxValue)
                                           .ThenBy(task => task.CurrentPath, StringComparer.OrdinalIgnoreCase)
                                           .First();

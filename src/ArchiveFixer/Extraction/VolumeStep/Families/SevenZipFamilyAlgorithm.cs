@@ -311,7 +311,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static int? ResolveTolerantIndex(string fileName, int total)
         {
-            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+            int? index = LegacyVolumeNames.TryGetIndex(fileName);
 
             if (index is >= 2 && index.Value <= total)
             {

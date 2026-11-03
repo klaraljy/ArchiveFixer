@@ -34,7 +34,7 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="Detection.GroupVolumeDirectory.Resolve"/> 如实回空 ⇒ 落点退回"源包自己那一层 + 包名"
         /// ⇒ 产物与"其余物"全挂到 `111(4)` 上（而它们该在 `CCCC\111\111`）。</para>
         ///
-        /// <para><b>怎么预判</b>：① 这一组那几片里任意一份 → `VolumeGroupDetector.TryGetFirstVolumeName`
+        /// <para><b>怎么预判</b>：① 这一组那几片里任意一份 → `LegacyVolumeNames.TryGetFirstVolumeName`
         /// 直接给出**入口包的标准名**（跨盘 ZIP 族：`111.z0删除2` ⇒ `111.zip`；7z 族 ⇒ `X.7z.001`；
         /// RAR 族 ⇒ 第 1 卷）—— ⛔ 不靠后缀猜、不另写按族的规则；② 在**任务表**里找"同包基名、又不是本组成员、
         /// 自己也不是在等入口包的那一单"（真机 = `111.rar`）；③ 它的落点就是这个包的落点 ⇒
@@ -54,7 +54,7 @@ namespace ArchiveFixer.ViewModels
                 return string.Empty;
             }
 
-            string entryName = VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(archivePath))
+            string entryName = LegacyVolumeNames.TryGetFirstVolumeName(FileNameHelper.GetFileName(archivePath))
                 ?? string.Empty;
 
             if (entryName.Length == 0)
@@ -166,7 +166,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>这一份的**入口包名字**（跨盘 ZIP = 末片 `X.zip`、7z = `X.7z.001`、ZIP 通用分片 = `X.zip.001`、RAR = 第 1 卷）；判不出 ⇒ 空串。</summary>
         private static string TryGetEntryPackageName(string packagePath) =>
-            VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(packagePath)) ?? string.Empty;
+            LegacyVolumeNames.TryGetFirstVolumeName(FileNameHelper.GetFileName(packagePath)) ?? string.Empty;
 
         /// <summary>
         /// **产出方那一单**：同一个包基名、又不是本组成员、自己也不是"在等入口包"的那一单（真机 = `111.rar`）。
@@ -198,7 +198,7 @@ namespace ArchiveFixer.ViewModels
                 string candidateName = FileNameHelper.GetFileName(candidatePath);
 
                 // 本组成员（收在同一组里的那几片）跳过 —— 它们自己就在等入口包。
-                if (VolumeGroupDetector.BelongsToSameGroup(candidateName, entryName))
+                if (LegacyVolumeNames.BelongsToSameGroup(candidateName, entryName))
                 {
                     continue;
                 }

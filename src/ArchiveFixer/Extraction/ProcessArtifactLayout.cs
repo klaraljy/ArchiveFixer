@@ -1757,7 +1757,7 @@ namespace ArchiveFixer.Extraction
              * 只比基名时，同一目录里同时有 `X.rar` 与 `X.zip` 就会认到**另一个包** ——
              * 而这里返回的路径喂给 `SourcePackageMover.Plan`（把这一组源包搬进其余物）
              * ⇒ 会把**别人的包**搬进其余物、在删除档下还会被永久删掉（不可逆）。
-             * 唯一尺子 = `VolumeGroupDetector.BelongsToSameGroup`（"同一组 = 族 + 基名"）：
+             * 唯一尺子 = `LegacyVolumeNames.BelongsToSameGroup`（"同一组 = 族 + 基名"）：
              * 同族改名（`111.z0删除2` → `111.z02`）照样认得出，
              * 而跨族同基名（`111.rar` vs `111.zip`）**认不出 ⇒ 空串 ⇒ 什么都不做**（红线那一档）。
              */
@@ -1765,7 +1765,7 @@ namespace ArchiveFixer.Extraction
             {
                 foreach (string file in Directory.EnumerateFiles(directory))
                 {
-                    if (VolumeGroupDetector.BelongsToSameGroup(
+                    if (LegacyVolumeNames.BelongsToSameGroup(
                             FileNameHelper.GetFileName(file),
                             FileNameHelper.GetFileName(original)))
                     {

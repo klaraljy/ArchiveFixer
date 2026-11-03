@@ -2472,9 +2472,9 @@ namespace ArchiveFixer.ViewModels
                  * 于是父包 `2.rar` 被记成"用户源片 slot 1"，把真正的 `2.part1.rar` 当成重复副本跳过
                  * ⇒ 入口任务补建 0 个、链停住。只有**名字是分卷片**的才参与这个去重。
                  */
-                int? index = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(
+                int? index = ArchiveFixer.Detection.LegacyVolumeNames.IsVolumePart(
                         FileNameHelper.GetFileName(existing.CurrentPath))
-                    ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                    ? LegacyVolumeNames.TryGetIndex(
                         FileNameHelper.GetFileName(existing.CurrentPath))
                     : null;
 
@@ -2494,9 +2494,9 @@ namespace ArchiveFixer.ViewModels
                         return false;
                     }
 
-                    int? index = ArchiveFixer.Helpers.FileNameHelper.IsVolumePartFileName(
+                    int? index = ArchiveFixer.Detection.LegacyVolumeNames.IsVolumePart(
                             FileNameHelper.GetFileName(candidate.Path))
-                        ? ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                        ? LegacyVolumeNames.TryGetIndex(
                             FileNameHelper.GetFileName(candidate.Path))
                         : null;
 
@@ -2707,7 +2707,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             // 标准卷名的续卷（`.001` / `.z01` / `.part2`）也要重算。
-            if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath)))
+            if (LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(currentPath)))
             {
                 return true;
             }
@@ -3035,7 +3035,7 @@ namespace ArchiveFixer.ViewModels
         {
             string name = FileNameHelper.GetFileName(file);
 
-            if (ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(name) != 1)
+            if (LegacyVolumeNames.TryGetIndex(name) != 1)
             {
                 return false;
             }
@@ -3052,7 +3052,7 @@ namespace ArchiveFixer.ViewModels
                 foreach (string other in Directory.EnumerateFiles(directory))
                 {
                     if (!string.Equals(other, file, StringComparison.OrdinalIgnoreCase)
-                        && ArchiveFixer.Detection.VolumeGroupDetector.BelongsToSameGroup(
+                        && LegacyVolumeNames.BelongsToSameGroup(
                             FileNameHelper.GetFileName(other),
                             name))
                     {
@@ -3730,7 +3730,7 @@ namespace ArchiveFixer.ViewModels
                     return true;
                 }
 
-                int? index = ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(
+                int? index = LegacyVolumeNames.TryGetIndex(
                     Path.GetFileName(filePath));
 
                 if (index is >= 2)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Engines.SevenZip
@@ -96,7 +97,7 @@ namespace ArchiveFixer.Engines.SevenZip
             // 名字本身就是分卷（xxx.7z.001）时，即使 7z 没报 Volume Index 也算分卷
             if (!multiVolume)
             {
-                multiVolume = FileNameHelper.IsVolumePartFileName(Path.GetFileName(archivePath));
+                multiVolume = LegacyVolumeNames.IsVolumePart(Path.GetFileName(archivePath));
             }
 
             return new ArchiveListResult

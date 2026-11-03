@@ -77,7 +77,7 @@ namespace ArchiveFixer.ViewModels
             List<ArchiveTask> volumePieces = tasks
                 .Where(task => task != null
                                && !string.IsNullOrWhiteSpace(task.CurrentPath)
-                               && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(task.CurrentPath))
+                               && LegacyVolumeNames.IsVolumePart(FileNameHelper.GetFileName(task.CurrentPath))
                                && task.VolumePaths.Count > 1)
                 .ToList();
 

@@ -780,7 +780,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>
         /// 判据全部只读盘上的事实：组的成员从**父层产物那一层**（<paramref name="consumedSourcePath"/> 所在目录）
-        /// 按"同目录 + 同族 + 同基名"收（判据唯一出口 <see cref="VolumeGroupDetector.BelongsToSameGroup"/>，
+        /// 按"同目录 + 同族 + 同基名"收（判据唯一出口 <see cref="LegacyVolumeNames.BelongsToSameGroup"/>，
         /// ⛔ 不另写一套名字规则）；别的文件（真内容物、别的组）一个都不碰。
         /// </para>
         ///
@@ -816,7 +816,7 @@ namespace ArchiveFixer.Extraction
         {
             string name = Path.GetFileName(consumedPublishedPath);
 
-            if (name.Length == 0 || !FileNameHelper.IsVolumePartFileName(name))
+            if (name.Length == 0 || !LegacyVolumeNames.IsVolumePart(name))
             {
                 // 不是分卷组：它自己删掉就是整组删掉（⛔ 绝不按"名字像"去连坐别的文件）。
                 return true;
@@ -942,8 +942,8 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 这一份是不是**跟被消费的那一份同目录、同族、同基名**的分卷（组的成员判据）。
         ///
-        /// <para>判据只有 <see cref="FileNameHelper.IsVolumePartFileName"/> +
-        /// <see cref="VolumeGroupDetector.BelongsToSameGroup"/> 两个既有出口
+        /// <para>判据只有 <see cref="LegacyVolumeNames.IsVolumePart"/> +
+        /// <see cref="LegacyVolumeNames.BelongsToSameGroup"/> 两个既有出口
         /// （⛔ 不在这里另写一套名字/分族规则）；目录用规范化全路径比。</para>
         ///
         /// <para><b>为什么是 internal</b>（2026-10-05）：<c>VolumeGroupRulerParityTests</c> 要把这一把尺子与
@@ -973,8 +973,8 @@ namespace ArchiveFixer.Extraction
 
             string fileName = Path.GetFileName(full);
 
-            return FileNameHelper.IsVolumePartFileName(fileName)
-                   && VolumeGroupDetector.BelongsToSameGroup(consumedSourceName, fileName);
+            return LegacyVolumeNames.IsVolumePart(fileName)
+                   && LegacyVolumeNames.BelongsToSameGroup(consumedSourceName, fileName);
         }
 
         /// <summary>

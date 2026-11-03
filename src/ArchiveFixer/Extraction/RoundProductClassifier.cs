@@ -28,7 +28,7 @@ namespace ArchiveFixer.Extraction
     /// ⇒ 每到轮边界**必须按盘上事实重新分类一次**，⛔ 不许把上一轮的角色当继承属性带过去。</para>
     ///
     /// <para><b>判据只转调既有那几把尺子</b>（⛔ 本类不新造）：
-    /// "是不是分卷的一片" = <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>；
+    /// "是不是分卷的一片" = <see cref="LegacyVolumeNames.TryGetIndex"/>；
     /// "这一组入口包是哪一份" = <see cref="GroupVolumeDirectory.Resolve"/>；
     /// "是不是归档" = 魔数 <see cref="VolumeContentInference.SniffFormat"/>（⛔ 不看后缀；
     /// 认不出 ⇒ 当**内容物**，绝不当归档 —— 「判不出 ⇒ 什么都不做」）。</para>
@@ -171,7 +171,7 @@ namespace ArchiveFixer.Extraction
             // 脏名跟"尺子算出来的规范名"永远不相等，实测踩到过）。判不出 ⇒ null。
             foreach (string member in members)
             {
-                if (VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(member)) == 1)
+                if (LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(member)) == 1)
                 {
                     return member;
                 }

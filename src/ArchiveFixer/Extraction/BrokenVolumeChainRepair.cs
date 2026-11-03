@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
@@ -52,7 +53,7 @@ namespace ArchiveFixer.Extraction
         /// <list type="number">
         /// <item><description>手里这个文件的名字里带**卷号 1**（<c>.001</c> / <c>.part1.rar</c> / <c>.z01</c>…）；</description></item>
         /// <item><description>同目录里存在"像这一组后续卷"的文件，且卷号从 **2 开始连续**（2、3、4…不许跳号）；</description></item>
-        /// <item><description>标准基名推得出来（用既有实现 <c>VolumeGroupDetector.TryGetFirstVolumeName</c>）。</description></item>
+        /// <item><description>标准基名推得出来（用既有实现 <c>LegacyVolumeNames.TryGetFirstVolumeName</c>）。</description></item>
         /// </list>
         ///
         /// <para>⚠ 名字只是**线索**：改完之后管线会拿引擎**列一次目录**来验证 ——
@@ -66,7 +67,7 @@ namespace ArchiveFixer.Extraction
             }
 
             string fileName = Path.GetFileName(archivePath);
-            int? selfIndex = Detection.VolumeGroupDetector.TryGetVolumeIndex(fileName);
+            int? selfIndex = Detection.LegacyVolumeNames.TryGetIndex(fileName);
 
             // 只有"第一卷"才有修复的余地（`.002` 单独跑没有意义）。
             if (selfIndex != 1)
@@ -84,7 +85,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                int? index = Detection.VolumeGroupDetector.TryGetVolumeIndex(name);
+                int? index = Detection.LegacyVolumeNames.TryGetIndex(name);
 
                 if (index is null or < 2)
                 {
@@ -114,7 +115,7 @@ namespace ArchiveFixer.Extraction
              * 后续卷的名字是"正常"的那一半 —— 用它们推标准基名（既有实现：`X.7z.002` → `X.7z.001`）。
              * 推不出来就说明这一组本来就不标准，别乱改（宁可照实报错）。
              */
-            string? standardFirst = Detection.VolumeGroupDetector.TryGetFirstVolumeName(ordered[0].Name);
+            string? standardFirst = Detection.LegacyVolumeNames.TryGetFirstVolumeName(ordered[0].Name);
 
             if (string.IsNullOrWhiteSpace(standardFirst))
             {
