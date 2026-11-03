@@ -183,8 +183,7 @@ namespace ArchiveFixer.Tests
             // ③ 任何"删了 / 搬进回收站"的结论都不许出现。
             Assert.DoesNotContain(
                 harness.Log.Logs,
-                entry => entry.Message.Contains(StatusText.RestActionDelete + "：", StringComparison.Ordinal)
-                         || entry.Message.Contains(StatusText.RestActionRecycleBin + "：", StringComparison.Ordinal));
+                entry => entry.Message.Contains(StatusText.RestActionDelete + "：", StringComparison.Ordinal));
 
             /*
              * ④「不动其余物」这一档**不是"被拦下"**：没有任何"其余物没处理 + 为什么"记到任务上

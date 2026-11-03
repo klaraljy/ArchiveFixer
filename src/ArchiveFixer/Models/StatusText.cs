@@ -2635,9 +2635,6 @@ namespace ArchiveFixer.Models
         /// <summary>其余物动作：彻底删除（逐任务一行里的动作名）。</summary>
         public const string RestActionDelete = "彻底删除";
 
-        /// <summary>其余物动作：移入回收站（逐任务一行里的动作名）。</summary>
-        public const string RestActionRecycleBin = "移入回收站";
-
         /// <summary>
         /// 「其余物保留」的**逐任务一行**：<c>{0}</c> = 任务名，<c>{1}</c> = 短路径，<c>{2}</c> = 条目数。
         ///

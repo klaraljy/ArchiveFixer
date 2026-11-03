@@ -99,7 +99,7 @@ namespace ArchiveFixer.Tests
             string shellLine = ExtractionCoordinator.DescribeRestPurgedLine(shell);
 
             Assert.Contains("没有进回收站", shellLine, StringComparison.Ordinal);
-            Assert.DoesNotContain(StatusText.RestActionRecycleBin, shellLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("移入回收站", shellLine, StringComparison.Ordinal);
 
             // 对照：普通档照旧是“档名 + 条目数”那句。
             var normal = new RestPurgeOutcome
