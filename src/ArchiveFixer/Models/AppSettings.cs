@@ -1100,6 +1100,28 @@ namespace ArchiveFixer.Models
             };
         }
 
+        /// <summary>
+        /// 只有“本地盘还在、文件确实不存在”才清空工具路径。
+        /// 外接盘/网络盘拔掉时 <see cref="System.IO.File.Exists(string)"/> 也是 false，
+        /// 但那是暂时离线，不能把用户填的路径永久清掉。
+        /// </summary>
+        private static bool ShouldClearToolPath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || System.IO.File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                string? root = System.IO.Path.GetPathRoot(path);
+                return !string.IsNullOrEmpty(root) && System.IO.Directory.Exists(root);
+            }
+            catch
+            {
+                return true;
+            }
+        }
         public void Normalize()
         {
             if (string.IsNullOrWhiteSpace(ScanMode))
@@ -1355,7 +1377,7 @@ namespace ArchiveFixer.Models
             MaxExtractionRatio = NormalizeExtractionRatioCap(MaxExtractionRatio);
 
             // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
-            if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && !System.IO.File.Exists(CustomSevenZipExePath))
+            if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && ShouldClearToolPath(CustomSevenZipExePath))
             {
                 CustomSevenZipExePath = string.Empty;
             }
@@ -1364,7 +1386,7 @@ namespace ArchiveFixer.Models
              * 自定义 UnRAR 路径同理；但**兜底方向不同**：UnRAR 还有"已装 WinRAR 目录"与"内置"两档，
              * 所以清空它只是回到"自动解析"，不会让引擎不可用（ToolLocator 里两级回落）。
              */
-            if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && !System.IO.File.Exists(CustomUnRarExePath))
+            if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && ShouldClearToolPath(CustomUnRarExePath))
             {
                 CustomUnRarExePath = string.Empty;
             }
@@ -1376,7 +1398,7 @@ namespace ArchiveFixer.Models
              * ⚠ 这里**不做任何"帮用户找一份 Rar.exe 塞进来"的事**：那是分发共享软件的第一步
              * （AGENTS.md §3.1）。这一格永远是用户自己填的。
              */
-            if (!string.IsNullOrWhiteSpace(CustomRarExePath) && !System.IO.File.Exists(CustomRarExePath))
+            if (!string.IsNullOrWhiteSpace(CustomRarExePath) && ShouldClearToolPath(CustomRarExePath))
             {
                 CustomRarExePath = string.Empty;
             }

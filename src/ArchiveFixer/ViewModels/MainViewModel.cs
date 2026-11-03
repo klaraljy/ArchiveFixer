@@ -2633,10 +2633,10 @@ namespace ArchiveFixer.ViewModels
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
             /*
-             * 工作区清理：只在"确实有残留"时可点（CanExecute 读扫描出来的那个布尔）。
-             * 扫描发生在启动与每次批末（LogLeftoverWorkspaces），所以按钮的可用性跟着真实情况走。
+             * 工作区清理：只在"确实有残留"且当前没有跑批时可点。
+             * 跑批中清理会在 UI 线程同步递归删目录，既卡界面又可能删到正在用的工作区。
              */
-            ClearWorkspaceLeftoversCommand = new RelayCommand(ClearWorkspaceLeftovers, () => HasWorkspaceLeftovers);
+            ClearWorkspaceLeftoversCommand = new RelayCommand(ClearWorkspaceLeftovers, () => HasWorkspaceLeftovers && !IsBusy);
 
             // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
             // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
