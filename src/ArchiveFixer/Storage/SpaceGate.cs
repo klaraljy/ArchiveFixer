@@ -3,9 +3,23 @@ using System.Collections.Generic;
 
 namespace ArchiveFixer.Storage
 {
+    /// <summary>空间判断的机器三态；Unknown 绝不等于够。</summary>
+    public enum SpaceDecisionState
+    {
+        Unknown = 0,
+        Enough = 1,
+        NotEnough = 2
+    }
+
     /// <summary>空间门（<see cref="SpaceGate"/>）的结论。</summary>
     public sealed class SpaceGateDecision
     {
+        /// <summary>空间判断的机器三态；调用方不得把 Unknown 当 Enough。</summary>
+        public SpaceDecisionState State =>
+            ProbeFailed ? SpaceDecisionState.Unknown
+            : Allowed ? SpaceDecisionState.Enough
+            : SpaceDecisionState.NotEnough;
+
         /// <summary>放不放行。false = **不启动**这个任务（用户 2026-09-22 需求：空间不足时不启动）。</summary>
         public bool Allowed { get; init; }
 
