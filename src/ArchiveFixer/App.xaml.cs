@@ -22,7 +22,7 @@ namespace ArchiveFixer
         /// 用户数据目录：固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>。
         ///
         /// <para>⛔ 不再跟程序安装目录走：升级、换安装位置、卸载都从同一个地方读设置与密码。
-        /// 旧位置（程序目录 data、旧 %AppData%）只由 <see cref="DataRootMigrator"/> 一次性迁入。</para>
+        /// 旧位置不再迁移。</para>
         /// </summary>
         public static string DataRootDirectory => PathService.DefaultDataRootDirectory;
 
@@ -300,7 +300,7 @@ namespace ArchiveFixer
         /// </summary>
         private static void MigrateLegacyData()
         {
-            DataRootMigrator.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
+
         }
 
         private static void SafeCreateDirectory(string path)

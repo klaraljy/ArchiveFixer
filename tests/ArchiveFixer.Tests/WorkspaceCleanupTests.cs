@@ -214,7 +214,7 @@ namespace ArchiveFixer.Tests
         public async Task 界面_有残留就显示一行_确认后清掉()
         {
             string dataRoot = Path.Combine(_root, "data");
-            string workRoot = Path.Combine(dataRoot, "work");
+            string workRoot = Path.Combine(dataRoot, ".ArchiveFixer.work");
 
             Directory.CreateDirectory(workRoot);
 
@@ -250,7 +250,7 @@ namespace ArchiveFixer.Tests
         public void 界面_不确认就不删()
         {
             string dataRoot = Path.Combine(_root, "data2");
-            string workRoot = Path.Combine(dataRoot, "work");
+            string workRoot = Path.Combine(dataRoot, ".ArchiveFixer.work");
 
             Directory.CreateDirectory(workRoot);
 
@@ -275,7 +275,7 @@ namespace ArchiveFixer.Tests
         public void 界面_没有残留时只提示一句()
         {
             string dataRoot = Path.Combine(_root, "data3");
-            Directory.CreateDirectory(Path.Combine(dataRoot, "work"));
+            Directory.CreateDirectory(Path.Combine(dataRoot, ".ArchiveFixer.work"));
 
             VmHarness harness = CreateViewModel(dataRoot, new DialogService());
             MainViewModel vm = harness.Vm;
@@ -321,7 +321,7 @@ namespace ArchiveFixer.Tests
         {
             Directory.CreateDirectory(dataRoot);
 
-            var pathService = new PathService { DataRootDirectory = dataRoot };
+            var pathService = new PathService { DataRootDirectory = dataRoot, WorkDirectory = Path.Combine(dataRoot, ".ArchiveFixer.work") };
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();

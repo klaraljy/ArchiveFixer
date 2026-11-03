@@ -317,20 +317,6 @@ namespace ArchiveFixer.Models
         public string RestHandlingAfterVerify { get; set; } = RestHandlingModes.Keep;
 
         /// <summary>
-        /// ⛔ **已退役**（2026-09-25 用户第 32 条：「危险模式……全部删掉」）：
-        /// 原来这是那套"红色按钮 + 自测凭证 + 风险四条 + 红横幅"的总开关。
-        ///
-        /// <para>现在保留这个属性只有两个用途：①读得懂旧 <c>appsettings.json</c>（不然那一行会被当成未知字段丢掉，
-        /// 我们也就无从迁移）；②<see cref="Normalize"/> 里把它一次性迁移成
-        /// <see cref="RestHandlingAfterVerify"/> = <see cref="RestHandlingModes.Delete"/>，
-        /// 随后一律写回 <c>false</c>。程序里**没有任何地方**再读它做决策。</para>
-        /// </summary>
-        public bool DangerousSpaceModeEnabled { get; set; } = false;
-
-        /// <summary>⛔ **已退役**（见 <see cref="DangerousSpaceModeEnabled"/>）：旧的自测凭证，读取时一律清空。</summary>
-        public string DangerModeSelfTestStamp { get; set; } = string.Empty;
-
-        /// <summary>
         /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条，**默认关**）。
         ///
         /// <para>他遇到的形状：一个文件（例如 <c>封面.jpg</c>）里装着的正是 <c>set.7z.001</c>，
@@ -567,18 +553,6 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public bool KeepBrokenFiles { get; set; } = false;
-
-        /// <summary>
-        /// ⛔ **已退役**（2026-09-25 用户第 32 条）：原来这一格是"手动「只解压」成功后删源包"的独立开关。
-        ///
-        /// <para>用户原话：「其实手动档和我们这个一键操作可以看成是同一批，只不过，一键处理不会有那么多的操作，
-        /// 手动档的操作就和选项卡里面的一致」—— 所以手动档不再有自己的删除开关，
-        /// 统一读 <see cref="SourceHandling"/>(源包操作) + <see cref="RestHandlingAfterVerify"/>(删除操作)。
-        /// 这个属性只为**读得懂旧配置文件**而保留：旧值 <c>true</c> 在
-        /// <see cref="Normalize"/> 里被迁移成"源包移入其余物 + 其余物移入回收站"（可还原的那一档），
-        /// 之后一律写回 <c>false</c>。</para>
-        /// </summary>
-        public bool DeleteSourceAfterExtract { get; set; } = false;
 
         /// <summary>把多个包的产物归集（移动）到一个目标目录（AGENTS.md §9.5）。</summary>
         public bool CollectResultsToDirectory { get; set; } = false;
@@ -1045,7 +1019,6 @@ namespace ArchiveFixer.Models
                 // 用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
                 EnginePriority = new List<string>(EngineIds.DefaultPriority),
                 KeepBrokenFiles = false,
-                DeleteSourceAfterExtract = false,
                 RestHandlingAfterVerify = RestHandlingModes.Keep,
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
@@ -1179,57 +1152,9 @@ namespace ArchiveFixer.Models
             }
 
             /*
-             * 危险模式退役（2026-09-25 第 32 条）：旧配置里那个开关与自测凭证**一次性迁移**成新的
-             * 「删除操作」档位，然后两个旧字段一律写回关闭/空 —— 从此它们只是"读得懂旧 json"的占位。
-             *
-             * 迁移方向（保守优先）：开过危险模式的用户，意图就是"成功后彻底删掉其余物" →
-             * 迁移成 <see cref="RestHandlingModes.Delete"/>；没开过的保持默认 Keep。
-             * 旧的手动删源开关 <see cref="DeleteSourceAfterExtract"/>=true → "源包移入其余物 + 移入回收站"
-             * （**可还原的那一档**：它原来管的是不可逆删除，但我们不能替用户把不可逆的选择重新做一遍）。
+             * 源包处理档：只认当前枚举值；认不出回落默认档。
              */
-            if (DangerousSpaceModeEnabled)
-            {
-                RestHandlingAfterVerify = RestHandlingModes.Delete;
-            }
-
-            if (DeleteSourceAfterExtract)
-            {
-                /*
-                 * ⚠ 2026-10-15：这里原来迁成 `MoveToRest`（"移入其余物 + 移入回收站"）。
-                 * 现在源包那一档只剩「留下 / 彻底删除（就地）」两种，而这条迁移的**老规矩**是
-                 * 「**不替用户把不可逆的选择重新做一遍**」⇒ 落点只能是 **KeepInPlace（原包一个字节都不动）**，
-                 * ⛔ 绝不迁成 DeleteInPlace（那是不可恢复的删除，用户当年那个开关管的是另一件事）。
-                 */
-                SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-
-                if (!string.Equals(RestHandlingAfterVerify, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
-                {
-                    // ⚠ 2026-10-15：这里原来是 RecycleBin（当年那个"可还原"的缓冲垫）。
-                    // 回收站整条下线之后，唯一保守的落点就是 Keep（留下）——
-                    // ⛔ 绝不迁成 Delete（不替用户把不可逆的选择重新做一遍）。
-                    RestHandlingAfterVerify = RestHandlingModes.Keep;
-                }
-            }
-
-            DangerousSpaceModeEnabled = false;
-            DangerModeSelfTestStamp = string.Empty;
-            DeleteSourceAfterExtract = false;
-
-            /*
-             * 源包处理档：旧值 DeleteAfterVerify（第三档，2026-09-25 已删）/
-             * MoveToRest（2026-10-15 已删）—— 一律**不迁成删除**（同上一条老规矩）。
-             */
-            if (string.Equals(SourceHandling?.Trim(), "DeleteAfterVerify", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(SourceHandling?.Trim(), "MoveToRest", StringComparison.OrdinalIgnoreCase))
-            {
-                SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-
-                if (string.Equals(RestHandlingAfterVerify, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
-                {
-                    // ⚠ 2026-10-15：原来是 RecycleBin（回收站已整条下线）⇒ 留在 Keep 不动。
-                    RestHandlingAfterVerify = RestHandlingModes.Keep;
-                }
-            }
+            SourceHandling = ParseSourceHandling(SourceHandling).ToString();
 
             /*
              * 「删除操作」两档：空 / 非法一律回落 **Keep（留下）** —— 保守方向是"宁可不动，绝不误删"。
@@ -1302,16 +1227,6 @@ namespace ArchiveFixer.Models
              */
             EnginePriority = EngineIds.Normalize(EnginePriority);
 
-
-            /*
-             * 源包处理档（决策 D-9）：空 / 非法一律回落默认档 MoveToRest，**旧配置不报错**。
-             *
-             * 这里刻意**不**把旧的 DeleteSourceAfterExtract=true 迁移成 DeleteAfterVerify：
-             * 那个布尔管的是"手动只解压"这条地基路径的清理，与一键处理的整理档是两件事；
-             * 迁移它会让升级后的一键处理从"移动"变成"不可逆删除"，方向正好反了。
-             * （一键处理的新默认值是"移动"——比删除保守，用户随时可以在设置里改成删除。）
-             */
-            SourceHandling = ParseSourceHandling(SourceHandling).ToString();
 
 
             /*

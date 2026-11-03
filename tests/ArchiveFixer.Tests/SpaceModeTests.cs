@@ -855,44 +855,6 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RestHandlingModes.Delete, reloaded.RestHandlingAfterVerify);
         }
 
-        /// <summary>
-        /// 退役迁移（第 32 条）：旧配置里开过危险模式 → 一次性迁移成「彻底删除」，并把旧字段清干净；
-        /// 旧的手动删源开关 / 旧的「校验通过后删除」档 → "源包移入其余物 + 其余物**留下**"
-        /// （⛔ 不替用户重做不可逆选择：当年那个"可还原的回收站缓冲垫"已经不存在，
-        /// 所以落点是 Keep，绝不是 Delete）。
-        /// </summary>
-        [Fact]
-        public void 旧危险模式与旧删源档_一次性迁移成新的两档()
-        {
-            AppSettings danger = AppSettings.CreateDefault();
-            danger.DangerousSpaceModeEnabled = true;
-            danger.DangerModeSelfTestStamp = "自测通过|2026-09-22 21:30:00|并发=2|样本=4";
-            danger.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-
-            danger.Normalize();
-
-            Assert.Equal(RestHandlingModes.Delete, danger.RestHandlingAfterVerify);
-            Assert.False(danger.DangerousSpaceModeEnabled);
-            Assert.Equal(string.Empty, danger.DangerModeSelfTestStamp);
-
-            AppSettings manualDelete = AppSettings.CreateDefault();
-            manualDelete.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            manualDelete.DeleteSourceAfterExtract = true;
-
-            manualDelete.Normalize();
-
-            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), manualDelete.SourceHandling);
-            Assert.Equal(RestHandlingModes.Keep, manualDelete.RestHandlingAfterVerify);
-            Assert.False(manualDelete.DeleteSourceAfterExtract);
-
-            AppSettings legacySource = AppSettings.CreateDefault();
-            legacySource.SourceHandling = "DeleteAfterVerify";
-
-            legacySource.Normalize();
-
-            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), legacySource.SourceHandling);
-            Assert.Equal(RestHandlingModes.Keep, legacySource.RestHandlingAfterVerify);
-        }
 
 
         // ================================================================ ⑨ 状态三处同改

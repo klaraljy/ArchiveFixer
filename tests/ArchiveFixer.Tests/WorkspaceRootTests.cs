@@ -1095,7 +1095,7 @@ namespace ArchiveFixer.Tests
         /// 否则同一个目录会被数两遍。</para>
         /// </summary>
         [Fact]
-        public void 扫描根_没解过东西时只剩老位置那一个根()
+        public void 扫描根_没解过东西且没有会话根时为空()
         {
             // 账本是**本次会话**的静态状态：前面几条用例跑过管线，得先清干净才谈得上"没解过东西"。
             WorkspaceRootIndex.ResetForTests();
@@ -1105,7 +1105,7 @@ namespace ArchiveFixer.Tests
                 Harness harness = CreateHarness(customOutput: true);
                 VmHarness vm = harness.CreateViewModel(new DialogService());
 
-                Assert.Equal(new[] { Path.Combine(harness.CacheRoot, "work") }, vm.Vm.WorkspaceScanRoots);
+                Assert.Empty(vm.Vm.WorkspaceScanRoots);
             }
             finally
             {
@@ -1122,13 +1122,14 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(customOutput: true);
 
-            string effectiveRoot = Path.Combine(harness.CacheRoot, "work");
+            string effectiveRoot = Path.Combine(_root, "effective-drive", ".ArchiveFixer.work");
             string otherDriveRoot = Path.Combine(_root, "other-drive", ".ArchiveFixer.work");
 
             string inEffectiveRoot = CreateLeftover(effectiveRoot, "0001_pack.7z-aaaaaaaa", 2048);
             string inOtherRoot = CreateLeftover(otherDriveRoot, "0002_pack.7z-bbbbbbbb", 4096);
 
             // 本次会话里用过"另一个盘上那个根"（= 上一批跟着目标目录派生出来的根）。
+            WorkspaceRootIndex.Remember(effectiveRoot);
             WorkspaceRootIndex.Remember(otherDriveRoot);
 
             var dialog = new CapturingDialogService { Answer = true };
@@ -1456,54 +1457,6 @@ namespace ArchiveFixer.Tests
                 {
                     Environment.SetEnvironmentVariable(name, value);
                 }
-            }
-        }
-
-        /// <summary>
-        /// ⛔ **点「打开工作区目录」不许凭空造出一个工作区**（用户 2026-09-30："用户没有定工作区的权力"、
-        /// "甚至危险操作固定到了 C 盘"）。
-        ///
-        /// <para>现场：本趟还没解过任何东西时，当前生效的根是**升级前的老位置** <c>&lt;数据根&gt;\work</c>
-        /// （它只是"③ 页要扫哪些根"的一项）。老实现先 <c>EnsureDirectoryExists</c> 再打开 ——
-        /// 于是"点一下按钮"就在程序所在那块盘上造出一个工作区目录，正是用户点名不要的那件事。</para>
-        ///
-        /// <para>现在：目录不在就什么都不建，只如实说清"为什么不在"。</para>
-        /// </summary>
-        [Fact]
-        public void 打开工作区目录_目录不在时不建任何目录()
-        {
-            WorkspaceRootIndex.ResetForTests();
-
-            try
-            {
-                Harness harness = CreateHarness(customOutput: true);
-                var dialog = new CapturingDialogService();
-
-                VmHarness vm = harness.CreateViewModel(dialog);
-
-                string legacyRoot = Path.Combine(harness.CacheRoot, "work");
-
-                Assert.Equal(legacyRoot, vm.Vm.CurrentWorkspaceRoot);
-                Assert.False(Directory.Exists(legacyRoot), "前提：这一趟还没解过东西，老位置本来不存在");
-
-                vm.Vm.OpenWorkDirectoryCommand.Execute(null);
-
-                Assert.False(
-                    Directory.Exists(legacyRoot),
-                    "点一下按钮就在程序那块盘上造出工作区目录 —— 用户明确否掉过这件事");
-
-                Assert.Contains(
-                    vm.LogTexts,
-                    line => line.Contains("工作区目录现在不存在", StringComparison.Ordinal) &&
-                            line.Contains(legacyRoot, StringComparison.OrdinalIgnoreCase));
-
-                // 提示框要**如实说清为什么不在**（不是"出错了"，也不是"这里就是工作区"）。
-                Assert.Contains("工作区只跟目标目录走", dialog.LastInfo, StringComparison.Ordinal);
-                Assert.Contains(".ArchiveFixer.work", dialog.LastInfo, StringComparison.Ordinal);
-            }
-            finally
-            {
-                WorkspaceRootIndex.ResetForTests();
             }
         }
 

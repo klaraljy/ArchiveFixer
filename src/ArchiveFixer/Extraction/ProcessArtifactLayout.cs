@@ -219,8 +219,6 @@ namespace ArchiveFixer.Extraction
     /// 三条硬要求，本类之外不许再出现：
     /// ① 其余物目录名固定叫 <see cref="ArtifactDirectoryName"/>（"其余物"），字面量只在这里写一次；
     /// ② 其余物的落点只有 <c>D\其余物\…</c> 一处（不变量 3：不得东放西放、不得和内容物混在同一层）；
-    /// ③ 旧名 <see cref="LegacyArtifactDirectoryName"/>（"过程物"）**只用于识别**，绝不用于新建 ——
-    ///    老版本已经在用户目录里留下了 <c>过程物\</c>，删除功能必须还能清掉它们（决策 D-8）。
     ///
     /// <para>
     /// 2026-09-22 用户拍板：这层目录由「过程物」改名「其余物」，**并且源包也移进来**。
@@ -243,13 +241,6 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public const string ArtifactDirectoryName = "其余物";
 
-        /// <summary>
-        /// 旧目录名（2026-09-22 之前叫「过程物」）。**只用于识别**：新建一律用
-        /// <see cref="ArtifactDirectoryName"/>；<see cref="FindExistingArtifactDirectories"/> 与
-        /// <see cref="IsArtifactDirectoryName"/> 靠它清掉/认出老版本留下的目录（决策 D-8）。
-        /// </summary>
-        public const string LegacyArtifactDirectoryName = "过程物";
-
         /// <summary>加序号时的最大尝试次数（与 SafePathHelper 里的自动改名同一量级）。</summary>
         private const int MaxRenameAttempts = 10000;
 
@@ -266,7 +257,7 @@ namespace ArchiveFixer.Extraction
             string path = fullPath ?? string.Empty;
 
             return path.Contains(ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
-                || path.Contains(LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+
                 || path.Contains(Detection.VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -278,8 +269,7 @@ namespace ArchiveFixer.Extraction
         {
             string name = LastSegment(nameOrPath);
 
-            return string.Equals(name, ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(name, LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(name, ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -320,7 +310,7 @@ namespace ArchiveFixer.Extraction
                 for (int index = segments.Length - 1; index >= 0; index--)
                 {
                     if (!string.Equals(segments[index], ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(segments[index], LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+
                         && !string.Equals(segments[index], Detection.VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
@@ -487,45 +477,6 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 给定一个其余物目录，返回**旧名对应的那一个**（决策 D-8：老版本留下的 <c>过程物\</c>）。
-        ///
-        /// 只换最后一段里出现的 <c>其余物</c>（共享根模式下是 <c>…\其余物\222</c> 的中间那一段，
-        /// 所以按"最后一段等于其余物的那一段"去找）。认不出来时返回空串。
-        /// </summary>
-        public static string ResolveLegacyArtifactDirectory(string? artifactDirectory)
-        {
-            if (string.IsNullOrWhiteSpace(artifactDirectory))
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                string full = SafePathHelper.GetFullPathSafe(artifactDirectory)
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-                string[] segments = full.Split(
-                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                    StringSplitOptions.None);
-
-                for (int i = segments.Length - 1; i >= 0; i--)
-                {
-                    if (string.Equals(segments[i], ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        segments[i] = LegacyArtifactDirectoryName;
-                        return string.Join(Path.DirectorySeparatorChar, segments);
-                    }
-                }
-
-                return string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        /// <summary>
         /// 目标目录下**已经存在**的其余物目录（新名优先，其次旧名）；一个都没有时返回空列表。
         ///
         /// 用途是删除功能（决策 D-8）：老版本在用户目录里留下了 <c>过程物\</c>，
@@ -540,7 +491,7 @@ namespace ArchiveFixer.Extraction
                 return found;
             }
 
-            foreach (string name in new[] { ArtifactDirectoryName, LegacyArtifactDirectoryName })
+            foreach (string name in new[] { ArtifactDirectoryName })
             {
                 try
                 {
@@ -907,7 +858,7 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            foreach (string name in new[] { ArtifactDirectoryName, LegacyArtifactDirectoryName })
+            foreach (string name in new[] { ArtifactDirectoryName })
             {
                 try
                 {
@@ -1584,8 +1535,7 @@ namespace ArchiveFixer.Extraction
         /// 判据有三条，缺一不可：
         /// ① 在其余物目录**之内或就是它**（共享根模式下源包会落在 <c>其余物\包名\</c>，
         ///    而这里传进来的就是那一层）；
-        /// ② 在"同一个位置的旧名目录"里（<c>其余物</c> ↔ <c>过程物</c>）；
-        /// ③ 在其余物目录下的 <c>过程物\</c> 子目录里（老版本把过程物又套了一层的情况）。
+        /// ② 在其余物目录下的工作区子目录里。
         /// </summary>
         /// <param name="restDirectory">命中的那个其余物目录（写日志用）。</param>
         private static bool IsAlreadyInsideRest(string source, string artifactRoot, out string restDirectory)
@@ -1598,14 +1548,6 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
-            string legacy = ProcessArtifactLayout.ResolveLegacyArtifactDirectory(artifactRoot);
-
-            if (legacy.Length > 0 && IsInside(legacy))
-            {
-                restDirectory = legacy;
-                return true;
-            }
-
             if (ProcessArtifactLayout.IsInsideArtifactDirectory(source, artifactRoot))
             {
                 restDirectory = artifactRoot;
@@ -1614,12 +1556,6 @@ namespace ArchiveFixer.Extraction
 
             restDirectory = string.Empty;
             return false;
-
-            bool IsInside(string directory)
-            {
-                return source.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                       source.StartsWith(directory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-            }
         }
 
         /// <summary>目标被临时占用时的兜底改名（<c>名字(1).ext</c>，绝不覆盖）。</summary>

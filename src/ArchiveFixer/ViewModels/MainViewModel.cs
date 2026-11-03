@@ -471,9 +471,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            return Path.Combine(
-                _pathService.DataRootDirectory,
-                WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName);
+            return _pathService.WorkDirectory;
         }
 
         /// <summary>
@@ -487,10 +485,6 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// ③「清理与删除」页 / 启动日志要扫的**所有**工作区根（去重、当前生效的排最前）。
-        ///
-        /// <para>两部分：① 当前生效的根（本次会话用过的那个，没有就是老位置）；② 老位置
-        /// <c>&lt;数据根&gt;\work</c>（2026-09-30 之前的工作区，升级前那批残留还在那儿，
-        /// 用户实测攒过 5.7 GB）。只扫其中一个是**不够**的 —— 那正是"东西明明在，界面却说没有"的来源。</para>
         ///
         /// <para>⛔ 这里**不读任何历史清单**（用户 2026-09-30 收口）：账本只记本次会话用过的根
         /// （<see cref="WorkspaceRootIndex.SessionRoots"/>），重启之后不会再去猜"上次在哪开过工"。</para>
@@ -509,10 +503,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             TryAdd(_pathService.WorkDirectory);
-
-            TryAdd(Path.Combine(
-                _pathService.DataRootDirectory,
-                WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName));
 
             foreach (string remembered in WorkspaceRootIndex.SessionRoots)
             {

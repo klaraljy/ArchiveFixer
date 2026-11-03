@@ -127,16 +127,6 @@ namespace ArchiveFixer.Storage
         public const string DefaultWorkspaceDirectoryName = ".ArchiveFixer.work";
 
         /// <summary>
-        /// **升级前**那个工作区子目录名（<c>&lt;数据根&gt;\work</c>）。
-        ///
-        /// <para>2026-09-30 之前，工作区要么跟着"用户设过的缓存根目录"（<c>&lt;它&gt;\work</c>），
-        /// 要么干脆就在 <c>&lt;程序目录&gt;\data\work</c>。设置项删掉之后这两个位置都不再产生**新**目录，
-        /// 但老版本留下的残留还在那儿 —— 这个常量只服务于"③ 页与启动日志还得扫得到、清得掉"，
-        /// ⛔ 绝不许拿它去拼**新**的工作区路径。</para>
-        /// </summary>
-        public const string LegacyWorkspaceSubDirectoryName = "work";
-
-        /// <summary>
         /// 解析本批的工作区根（**唯一入口**，无从外部指定任何位置）。
         /// </summary>
         /// <param name="batchDestinationDirectories">

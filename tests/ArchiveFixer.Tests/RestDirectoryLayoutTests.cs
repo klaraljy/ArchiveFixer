@@ -64,22 +64,10 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 旧目录名_过程物只用于识别不用于新建()
-        {
-            Assert.Equal("过程物", ProcessArtifactLayout.LegacyArtifactDirectoryName);
-
-            // 新建一律用新名：解析出来的永远是「其余物」。
-            Assert.Equal("其余物", ProcessArtifactLayout.ResolveArtifactDirectoryName("666"));
-            Assert.Equal("其余物", Path.GetFileName(ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\111\222")));
-        }
-
-        [Fact]
-        public void 名字判定_新旧两个名字都算其余物()
+        public void 名字判定_只认其余物()
         {
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("其余物"));
-            Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("过程物"));
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName(@"C:\111\其余物"));
-            Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName(@"C:\111\222\过程物\"));
             Assert.True(ProcessArtifactLayout.IsArtifactDirectoryName("其余物".ToUpperInvariant()));
 
             Assert.False(ProcessArtifactLayout.IsArtifactDirectoryName("666"));
@@ -89,22 +77,10 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 找已存在的其余物目录_新旧名都算_一个都没有时为空()
+        public void 找已存在的其余物目录_一个都没有时为空()
         {
-            Directory.CreateDirectory(Path.Combine(_root, "both", "其余物"));
-            Directory.CreateDirectory(Path.Combine(_root, "both", "过程物"));
-            Directory.CreateDirectory(Path.Combine(_root, "old", "过程物"));
             Directory.CreateDirectory(Path.Combine(_root, "new", "其余物"));
             Directory.CreateDirectory(Path.Combine(_root, "none"));
-
-            // 新名与旧名同时存在 → 两个都要能清（决策 D-8）。
-            Assert.Equal(
-                new[] { Path.Combine(_root, "both", "其余物"), Path.Combine(_root, "both", "过程物") },
-                ProcessArtifactLayout.FindExistingArtifactDirectories(Path.Combine(_root, "both")));
-
-            Assert.Equal(
-                new[] { Path.Combine(_root, "old", "过程物") },
-                ProcessArtifactLayout.FindExistingArtifactDirectories(Path.Combine(_root, "old")));
 
             Assert.Equal(
                 new[] { Path.Combine(_root, "new", "其余物") },
@@ -118,7 +94,6 @@ namespace ArchiveFixer.Tests
         public void 重名兜底_内容物那层也叫其余物时改用其余物1()
         {
             Assert.Equal("其余物(1)", ProcessArtifactLayout.ResolveArtifactDirectoryName("其余物"));
-            Assert.Equal("其余物(1)", ProcessArtifactLayout.ResolveArtifactDirectoryName("过程物"));
 
             // 内容物目录自己就叫「其余物」时，其余物落在它里面的 其余物(1)（不再叠一个同名的进去）。
             Assert.Equal(
@@ -280,9 +255,9 @@ namespace ArchiveFixer.Tests
         /// 不再搬一次（决策 D-8，老版本留下的目录还在用户的盘上）。
         /// </summary>
         [Fact]
-        public void 规划_源已经在旧名过程物里时跳过()
+        public void 规划_源已经在其余物里时跳过()
         {
-            string oldDirectory = Path.Combine(_root, "过程物");
+            string oldDirectory = Path.Combine(_root, "其余物");
             Directory.CreateDirectory(oldDirectory);
 
             string source = Path.Combine(oldDirectory, "inner.7z");

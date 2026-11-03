@@ -425,7 +425,6 @@ namespace ArchiveFixer.Tests
 
             // 与危险模式那组同一档：这一组要断言"源包到底动没动"，所以固定"留在原地"。
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.DeleteSourceAfterExtract = false;
 
             settingsService.Save(settings);
 

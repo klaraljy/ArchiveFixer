@@ -471,8 +471,7 @@ namespace ArchiveFixer.Services
 
             foreach (string name in new[]
                      {
-                         ProcessArtifactLayout.ArtifactDirectoryName,
-                         ProcessArtifactLayout.LegacyArtifactDirectoryName
+                         ProcessArtifactLayout.ArtifactDirectoryName
                      })
             {
                 string candidate = ProcessArtifactLayout.ResolveArtifactDirectoryWithName(

@@ -299,7 +299,6 @@ namespace ArchiveFixer.Tests
         private static string ArtifactName => ProcessArtifactLayout.ArtifactDirectoryName;
 
         /// <summary>老版本留下的目录名：显式测"老名字也认"时用它。</summary>
-        private static string LegacyArtifactName => ProcessArtifactLayout.LegacyArtifactDirectoryName;
 
         [Fact]
         public void 其余物预览_报顶层项数与总大小且不删任何东西()
@@ -499,57 +498,6 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 老版本留下的 <c>过程物</c> 目录必须也能被删掉（不能变成清不掉的历史垃圾）；
-        /// 新版 <c>其余物</c> 与老版 <c>过程物</c> 同时存在时，两份都属于本任务，一起删。
-        /// </summary>
-        [Fact]
-        public void 老名字过程物也要能被删_与新名字同时存在时一起删()
-        {
-            string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"{LegacyArtifactName}\222");
-            WriteFile($@"{LegacyArtifactName}\222\legacy.7z.001", "legacy");
-            MakeDirectory($@"{ArtifactName}\222");
-            WriteFile($@"{ArtifactName}\222\current.7z.001", "current");
-
-            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
-
-            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
-            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
-
-            Assert.True(preview.HasTarget);
-            Assert.Equal(2, preview.ResolvedScope!.ArtifactDirectories.Count);
-
-            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
-
-            Assert.True(outcome.Attempted);
-            Assert.Equal(2, outcome.SuccessCount);
-            Assert.False(Directory.Exists(PathOf($@"{LegacyArtifactName}\222")));
-            Assert.False(Directory.Exists(PathOf($@"{ArtifactName}\222")));
-            Assert.Equal(2, executor.RecycleCalls.Count);
-        }
-
-        /// <summary>只有老名字存在时（升级上来的用户目录）照样能删干净。</summary>
-        [Fact]
-        public void 只有老名字过程物时也能删掉()
-        {
-            string sourceArchive = WriteFile(@"111\222.rar", "rar");
-            MakeDirectory($@"{LegacyArtifactName}\222");
-            WriteFile($@"{LegacyArtifactName}\222\legacy.7z.001", "legacy");
-
-            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
-
-            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
-            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
-
-            Assert.True(preview.HasTarget);
-            Assert.Equal(PathOf($@"{LegacyArtifactName}\222"), preview.ScopePath);
-
-            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
-
-            Assert.True(outcome.Attempted);
-            Assert.Equal(1, outcome.SuccessCount);
-            Assert.False(Directory.Exists(PathOf($@"{LegacyArtifactName}\222")));
-        }
 
         /// <summary>
         /// 另一个包（333）自己那条删除路径必须只删 333：对称地证明收窄不是"碰巧只删了一个"。
@@ -774,7 +722,6 @@ namespace ArchiveFixer.Tests
 
             // 布局层给的规范名 + 历史名，两个都要认（老目录不能清不掉）。
             Assert.Equal("其余物", ProcessArtifactLayout.ArtifactDirectoryName);
-            Assert.Equal("过程物", ProcessArtifactLayout.LegacyArtifactDirectoryName);
             Assert.Equal("其余物", MaintenanceCleanupService.ArtifactDirectoryName);
 
             Assert.Equal(string.Empty, MaintenanceCleanupService.ResolveProcessArtifactScope(null));
