@@ -5522,54 +5522,22 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static string? ConfiguredWorkspaceRoot { get; set; }
 
-        /// <summary>
-        /// **要不要允许"没人配过根时回落到系统临时目录（<c>%TEMP%</c>，通常是 C 盘）"** ——
-        /// 显式开关，**默认 false**。
-        ///
-        /// <para><b>为什么默认必须关着</b>：不变量 12 的字面口径是"⛔ 绝不回落程序目录 / C 盘 /
-        /// 源卷根 / <c>%TEMP%</c>"，而这一支兜底默认开着就等于**默认违反红线** ——
-        /// 谁新写一条"没经过批首就解压"的路，它就会把几百 MB 的递归工作区写到系统盘上
-        /// （用户 2026-09-24 第 23 条点名的正是这件事）。</para>
-        ///
-        /// <para><b>为什么不干脆删掉</b>：正式流程确实走不到它（批首解析不出来就整批不开工），
-        /// 但 20 多个直接 <c>new RecursiveExtractor(...)</c> 的老用例没配根，删掉会让它们全变成异常。
-        /// 折中就是这一位：**回落必须是调用方显式要的** —— 测试宿主在 <c>TestAssemblyInitialize</c>
-        /// 里统一打开，生产代码一个字都不开。判断与遗留记录见 <c>docs\检验等级.md</c> 缺口 ⑨。</para>
-        /// </summary>
-        public static bool AllowSystemTempWorkspaceFallback { get; set; }
-
         private static string WorkspaceRootDirectory =>
-            ResolveWorkspaceRootDirectory(ConfiguredWorkspaceRoot, AllowSystemTempWorkspaceFallback);
+            ResolveWorkspaceRootDirectory(ConfiguredWorkspaceRoot);
 
         /// <summary>
         /// **没人配过根时怎么走** —— 唯一出口（<see cref="WorkspaceRootDirectory"/> 转调它）。
-        ///
-        /// <para>单独抽出来是为了让守门用例直接钉判据，不必真跑一次递归（跑一次要备样本、要引擎，
-        /// 而这条判据与递归本身无关）。</para>
-        ///
-        /// <para>拿不到根 ⇒ **什么都不做**（不变量 12 的"报错指路，绝不回落"那一档）：抛异常而不是
-        /// 返回空串 —— 空串会被调用方拼成相对路径，那比写到 <c>%TEMP%</c> 更难查。</para>
+        /// 拿不到根 ⇒ 抛异常，⛔ 不回落程序目录 / C 盘 / <c>%TEMP%</c>。
         /// </summary>
-        internal static string ResolveWorkspaceRootDirectory(string? configuredRoot, bool allowSystemTempFallback)
+        internal static string ResolveWorkspaceRootDirectory(string? configuredRoot)
         {
             if (string.IsNullOrWhiteSpace(configuredRoot))
             {
-                if (!allowSystemTempFallback)
-                {
-                    throw new InvalidOperationException(
-                        "递归工作区根目录没有配置：批首会把这一批的工作区定在「本次目标目录里的 "
-                        + ".ArchiveFixer.work」，手动路径由 MainViewModel 构造时设。按不变量 12，"
-                        + "拿不到根时「不回落程序目录 / C 盘 / %TEMP%」—— 这一单不解，"
-                        + "请确认目标目录可用后重试。（单元测试若确实不想配根，显式打开 "
-                        + nameof(AllowSystemTempWorkspaceFallback) + "。）");
-                }
-
-                string fallbackRoot = Path.Combine(Path.GetTempPath(), "ArchiveFixer", "recursive");
-
-                // 工作区那棵树一律带隐藏属性（用户 2026-09-30 诉求③：单看着看不出来）。
-                WorkspaceTree.EnsureHiddenDirectory(fallbackRoot);
-
-                return fallbackRoot;
+                throw new InvalidOperationException(
+                    "递归工作区根目录没有配置：批首会把这一批的工作区定在「本次目标目录里的 "
+                    + ".ArchiveFixer.work」，手动路径由 MainViewModel 构造时设。按不变量 12，"
+                    + "拿不到根时「不回落程序目录 / C 盘 / %TEMP%」—— 这一单不解，"
+                    + "请确认目标目录可用后重试。");
             }
 
             string root = Path.Combine(configuredRoot, "recursive");

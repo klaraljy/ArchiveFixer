@@ -297,13 +297,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 空间门_取不到可用空间时放行但明说_这不代表空间充足()
+        public void 空间门_取不到可用空间时按未知拦下_不谎报够()
         {
             SpaceGateDecision decision = SpaceGate.Check(2 * Gib, null, 0);
 
-            Assert.True(decision.Allowed);
+            Assert.False(decision.Allowed);
             Assert.True(decision.ProbeFailed);
-            Assert.Contains("这不代表空间充足", decision.Reason, StringComparison.Ordinal);
+            Assert.Equal(SpaceDecisionState.Unknown, decision.State);
+            Assert.Contains("空间未知不算够", decision.Reason, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -373,14 +374,15 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 账本_取不到可用空间时不记账也不谎报够()
+        public void 账本_取不到可用空间时不记账也不放行()
         {
             var ledger = new SpaceReservationLedger(null, reserveBytes: 0);
 
             SpaceGateDecision decision = ledger.TryReserve(5 * Gib);
 
-            Assert.True(decision.Allowed);
+            Assert.False(decision.Allowed);
             Assert.True(decision.ProbeFailed);
+            Assert.Equal(SpaceDecisionState.Unknown, decision.State);
             Assert.Equal(0, ledger.ReservedBytes);
             Assert.Equal(SpaceReservationLedger.UnknownAvailable, ledger.RemainingBytes);
         }

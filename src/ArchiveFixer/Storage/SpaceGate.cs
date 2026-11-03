@@ -133,13 +133,13 @@ namespace ArchiveFixer.Storage
             {
                 return new SpaceGateDecision
                 {
-                    Allowed = true,
+                    Allowed = false,
                     RequiredBytes = total,
                     AvailableBytes = -1,
                     ReserveBytes = reserve,
-                    ShortfallBytes = 0,
+                    ShortfallBytes = total,
                     Reason = $"没能取到目标盘可用空间（需要 {TaskSpaceEstimate.FormatSize(total)}），"
-                             + "本次不做空间门判断 —— 这不代表空间充足",
+                             + "空间未知不算够：本次不启动这个任务",
                     Suggestions = new[] { "确认目标盘已就绪（外接盘 / 网络盘拔掉时取不到可用空间）" }
                 };
             }

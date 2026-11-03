@@ -30,16 +30,9 @@ namespace ArchiveFixer.Tests
             "ArchiveFixerTestDataRoot",
             Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        private static bool _previousFallback;
-
         [ModuleInitializer]
         internal static void Initialize()
         {
-            _previousFallback = RecursiveExtractor.AllowSystemTempWorkspaceFallback;
-            ProductDefault = _previousFallback;
-
-            RecursiveExtractor.AllowSystemTempWorkspaceFallback = true;
-
             try
             {
                 Directory.CreateDirectory(TestDataRoot);
