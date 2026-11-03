@@ -156,6 +156,11 @@ namespace ArchiveFixer.Services
 
             Plan plan = Classify(target, values);
 
+            if (plan.EncodingFailure.Length > 0)
+            {
+                return PasswordBookWriteBackResult.Failure(target, plan.EncodingFailure);
+            }
+
             if (plan.Pending.Count == 0)
             {
                 // 一条都不用写：不备份、不打开、一个字节都不碰。
@@ -262,6 +267,9 @@ namespace ArchiveFixer.Services
             /// <summary>追加时用的编码（文本 + BOM 策略与原文件一致）。</summary>
             public Encoding Encoding { get; set; } = new UTF8Encoding(false);
 
+            /// <summary>编码判不出时的明确失败原因；非空 ⇒ 这次一个字节都不写。</summary>
+            public string EncodingFailure { get; set; } = string.Empty;
+
             /// <summary>追加时用的行尾。</summary>
             public string Newline { get; set; } = Environment.NewLine;
 
@@ -295,12 +303,20 @@ namespace ArchiveFixer.Services
             }
             else
             {
-                existing = BuildExistingValueSet(content, out Encoding encoding, out string newline);
+                try
+                {
+                    existing = BuildExistingValueSet(content, out Encoding encoding, out string newline);
 
-                plan.OriginalContent = content;
-                plan.Encoding = encoding;
-                plan.Newline = newline;
-                plan.EndsWithNewline = EndsWithNewline(content);
+                    plan.OriginalContent = content;
+                    plan.Encoding = encoding;
+                    plan.Newline = newline;
+                    plan.EndsWithNewline = EndsWithNewline(content);
+                }
+                catch (InvalidDataException ex)
+                {
+                    existing = new HashSet<string>(StringComparer.Ordinal);
+                    plan.EncodingFailure = ex.Message;
+                }
             }
 
             if (values == null)
@@ -408,23 +424,33 @@ namespace ArchiveFixer.Services
                 return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             }
 
-            // 代码页编码在 .NET Core 上必须先注册（幂等），否则这里会**静默降级**成 UTF-8，
-            // 于是 GBK 密码本被追加一段乱码 —— 与解析器那边同一个坑，同一处兜底。
+            // 代码页编码在 .NET Core 上必须先注册（幂等）。判不出就**明确失败**：
+            // ⛔ 绝不静默回退 UTF-8，否则一次追加就会把 GBK 密码本重新编成乱码。
             CodePageEncodingBootstrap.EnsureRegistered();
 
-            if (CodePageEncodingBootstrap.IsRegistered)
+            if (!CodePageEncodingBootstrap.IsRegistered)
             {
-                try
-                {
-                    return Encoding.GetEncoding(Gb18030CodePageName);
-                }
-                catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
-                {
-                    // 落到下面的 UTF-8。
-                }
+                throw new InvalidDataException(
+                    "密码本不是有效 UTF-8，且本机 GB18030 编码不可用；为不改写原编码，本次拒绝写入。");
             }
 
-            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            try
+            {
+                Encoding gb = Encoding.GetEncoding(
+                    Gb18030CodePageName,
+                    EncoderFallback.ExceptionFallback,
+                    DecoderFallback.ExceptionFallback);
+
+                // 严格解一遍：字节连 GB18030 都解不出 ⇒ 编码判不出，明确失败。
+                _ = gb.GetString(content);
+                return gb;
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or DecoderFallbackException)
+            {
+                throw new InvalidDataException(
+                    "密码本不是有效 UTF-8，也无法按 GB18030 解码；为不改写原编码，本次拒绝写入。",
+                    ex);
+            }
         }
 
         /// <summary>严格试一遍 UTF-8：能完整解出来才算。</summary>

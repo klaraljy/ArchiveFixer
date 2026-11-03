@@ -837,6 +837,23 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 编码判不出时_明确失败且原文件字节不变()
+        {
+            using var dir = new TempDir();
+
+            // 既不是合法 UTF-8，也不是合法 GB18030 的字节序列。
+            byte[] invalid = { 0xFF, 0xFF, 0xFF, 0xFF };
+            string book = dir.WriteBytes("book-invalid.txt", invalid);
+
+            var writer = new PasswordBookWriter();
+            PasswordBookWriteBackResult result = writer.WriteBack(book, new[] { "<示例密码X>" });
+
+            Assert.False(result.Success);
+            Assert.Contains("拒绝写入", result.FailureReason, StringComparison.Ordinal);
+            Assert.Equal(invalid, File.ReadAllBytes(book));
+        }
+
         /// <summary>每个用例自建临时目录，Dispose 时整目录删掉（只读属性先摘掉，否则删不掉）。</summary>
         private sealed class TempDir : IDisposable
         {
