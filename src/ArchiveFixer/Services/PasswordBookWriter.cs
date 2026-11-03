@@ -305,6 +305,8 @@ namespace ArchiveFixer.Services
             if (content == null)
             {
                 existing = new HashSet<string>(StringComparer.Ordinal);
+                plan.EncodingFailure =
+                    "密码本读取失败（文件存在但读不出来）；为免重复/覆盖，本次拒绝写入，原文件一个字节都没有改动。";
             }
             else
             {

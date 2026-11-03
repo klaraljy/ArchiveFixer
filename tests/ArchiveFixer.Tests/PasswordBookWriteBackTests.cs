@@ -838,6 +838,26 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 密码本读不出来时_拒绝写入而不是当空集追加()
+        {
+            using var dir = new TempDir();
+            string book = dir.WriteBytes("book-locked.txt", Encoding.UTF8.GetBytes("<示例密码1>\n"));
+            byte[] before = File.ReadAllBytes(book);
+
+            PasswordBookWriteBackResult result;
+
+            using (new FileStream(book, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var writer = new PasswordBookWriter();
+                result = writer.WriteBack(book, new[] { "<示例密码2>" });
+            }
+
+            Assert.False(result.Success);
+            Assert.Contains("密码本读取失败", result.FailureReason, StringComparison.Ordinal);
+            Assert.Equal(before, File.ReadAllBytes(book));
+        }
+
+        [Fact]
         public void 编码判不出时_明确失败且原文件字节不变()
         {
             using var dir = new TempDir();
