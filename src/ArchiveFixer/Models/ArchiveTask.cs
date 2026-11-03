@@ -2125,6 +2125,7 @@ namespace ArchiveFixer.Models
         {
             Operation = StatusText.OpCancel;
             Status = StatusText.Cancelled;
+            Reason = TaskReason.Cancelled;
             ProgressText = StatusText.Cancelled;
             ErrorMessage = reason;
             EndTime = DateTime.Now;
