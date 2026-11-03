@@ -75,7 +75,7 @@ namespace ArchiveFixer.ViewModels
         /// 本批允许同时跑几个任务（**自适应并发**）。
         ///
         /// <para>用户 2026-11-01：并发数不再让用户选，由程序按设备与吞吐自己判断。
-        /// 初始值来自 <see cref="AutoConcurrencyController"/>（SSD 4/硬顶 6，HDD 2/3，未知按 HDD），
+        /// 初始值来自设备画像（SSD 4/硬顶 6，HDD 2/3，未知按 HDD），
         /// 批内再按窗口吞吐/延迟做 AIMD 调整。</para>
         /// </summary>
         /// <summary>

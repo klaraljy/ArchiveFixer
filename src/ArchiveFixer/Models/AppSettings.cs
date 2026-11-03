@@ -289,7 +289,7 @@ namespace ArchiveFixer.Models
         /// **内部/测试专用**的并发覆盖（0 = 自动算法）。
         ///
         /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发完全由
-        /// <c>AutoConcurrencyController</c> 决定。它只留着给无头夹具/排障在需要"固定串行"
+        /// 自动并发决定。它只留着给无头夹具/排障在需要"固定串行"
         /// 时用（旧守门用例大量依赖"同时只跑 1 个"）。</para>
         /// </summary>
         public int ConcurrencyOverride { get; set; }
