@@ -25,6 +25,7 @@ namespace ArchiveFixer.Extraction
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
             task.OutputManifestCrossChecked = false;
             task.Outcome = TaskOutcome.Cancelled;
+            task.Reason = TaskReason.Cancelled;
             task.LastUpdatedTime = DateTime.Now;
 
             log?.Invoke(

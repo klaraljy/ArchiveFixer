@@ -56,7 +56,8 @@ namespace ArchiveFixer.Models
         UnsafePath = 5,
         SourceChanged = 6,
         Skipped = 7,
-        Other = 8
+        Cancelled = 8,
+        Other = 9
     }
 
     /// <summary>
