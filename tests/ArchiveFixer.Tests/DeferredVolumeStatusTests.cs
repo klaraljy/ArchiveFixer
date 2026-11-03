@@ -353,8 +353,8 @@ namespace ArchiveFixer.Tests
 
             coordinator.SettleParentOfSucceededVolumeGroupForTests();
 
-            Assert.Equal(TaskOutcome.Succeeded, parent.Outcome);
-            Assert.Equal(StatusText.ExtractSuccess, parent.Status);
+            Assert.Equal(TaskOutcome.PartiallyCompleted, parent.Outcome);
+            Assert.Equal(StatusText.VolumeMissing, parent.Status);
             Assert.False(parent.IsVolumeDeficitDeferred);
         }
 
