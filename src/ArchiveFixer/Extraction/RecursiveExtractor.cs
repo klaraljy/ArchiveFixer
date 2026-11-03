@@ -1564,7 +1564,7 @@ namespace ArchiveFixer.Extraction
 
             IReadOnlyList<string> candidates = BuildPasswordCandidates(item.ArchivePath);
 
-            int attempts = 0;
+            PasswordAttemptLedger passwordLedger = new(_limits.MaxPasswordAttemptsPerLayer);
             bool triedAny = false;
             ArchiveOperationResult? lastFailure = null;
             ArchiveOperationResult? informativeFailure = null;
@@ -1791,7 +1791,7 @@ namespace ArchiveFixer.Extraction
 
             foreach (string candidate in candidates)
             {
-                if (attempts >= _limits.MaxPasswordAttemptsPerLayer)
+                if (!passwordLedger.CanTry)
                 {
                     break;
                 }
@@ -1807,13 +1807,13 @@ namespace ArchiveFixer.Extraction
                  * 于是用户点了「停止后续」，这一层剩下的候选照样一个一个试完（大包就是几十分钟）。
                  *
                  * 位置刻意在 `attempts` 递增**之前**、与单层路径同一个落点（候选之间）：
-                 * 已经试过至少一个候选（`attempts > 0`）才看信号 —— 一个都没试就停会让收场落到
+                 * 已经试过至少一个候选（`passwordLedger.Tried > 0`）才看信号 —— 一个都没试就停会让收场落到
                  * `triedAny == false`（"没有可用密码"），那是对用户的误报。
                  *
-                 * ⛔ 停下之后按"候选还有、只是不再试"收尾（`attempts < candidates.Count` ⇒
+                 * ⛔ 停下之后按"候选还有、只是不再试"收尾（`passwordLedger.Tried < candidates.Count` ⇒
                  * 「达到密码尝试上限」那一档），**不许报成密码错误** —— 候选根本没试完。
                  */
-                if (attempts > 0 && StopRequested?.Invoke() == true)
+                if (passwordLedger.Tried > 0 && StopRequested?.Invoke() == true)
                 {
                     Log(
                         "WARN",
@@ -1821,14 +1821,13 @@ namespace ArchiveFixer.Extraction
                             System.Globalization.CultureInfo.CurrentCulture,
                             StatusText.RecursionStoppedByStopRequestLogFormat,
                             layerLabel,
-                            Math.Max(0, layerCandidateLimit - attempts)));
+                            Math.Max(0, layerCandidateLimit - passwordLedger.Tried)));
 
                     break;
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                attempts++;
                 triedAny = true;
 
                 /*
@@ -1990,8 +1989,8 @@ namespace ArchiveFixer.Extraction
                     && usableCandidates > 0
                     && PasswordProbe.ShouldSkipEmptyPassword(listedThisCandidate))
                 {
-                    attempts--;
-                    triedAny = attempts > 0;
+                    passwordLedger.Skip("空密码按规则跳过");
+                    triedAny = passwordLedger.Tried > 0;
                     layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
                     skippedCandidates++;
 
@@ -2033,8 +2032,8 @@ namespace ArchiveFixer.Extraction
                         EngineErrorTypes.EncryptedHeaders,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    attempts--;
-                    triedAny = attempts > 0;
+                    passwordLedger.Skip("空密码按规则跳过");
+                    triedAny = passwordLedger.Tried > 0;
                     layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
                     skippedCandidates++;
 
@@ -2103,6 +2102,8 @@ namespace ArchiveFixer.Extraction
                  * ⇒ 记进"这一层真正试过的候选"：换引擎兜底要拿**同一批**再试一遍，
                  * ⛔ 不能把被跳过的空密码也算进去（加密包拿空密码去问 WinRAR 必然是白跑一次）。
                  */
+                passwordLedger.Try();
+
                 triedCandidates.Add(candidate);
 
                 // 试过几个候选是**事实**：失败/撞上限那几条路也要带上（协调器据此把"已试 N 个候选"写进结论）。
@@ -2164,7 +2165,7 @@ namespace ArchiveFixer.Extraction
                  * ⇒ 日志宣告了一件**根本没做**的事（用户 2026-09-27 那条要的是真事）。
                  * 两个跳过支都 `continue` ⇒ 放在这里等于"只有真去解才写这一行"。
                  */
-                int ordinal = attempts;
+                int ordinal = passwordLedger.Tried;
                 string described = DescribeCandidate?.Invoke(candidate, ordinal)
                     ?? $"尝试密码候选第 {ordinal} 项：******";
 
@@ -2339,7 +2340,7 @@ namespace ArchiveFixer.Extraction
                         // `假引擎成功但产物全是0字节_不是成功_不续解_不搬其余物_源包不动` 当场逮住
                         // （逐字 `Expected: "解压失败" / Actual: "密码错误"`）。
                         || lastConsumedCandidateIndex >= candidates.Count - 1
-                        || attempts >= _limits.MaxPasswordAttemptsPerLayer;
+                        || !passwordLedger.CanTry;
 
                     if (sameVerifiedResultAsPrevious)
                     {
@@ -2800,7 +2801,7 @@ namespace ArchiveFixer.Extraction
 
                 RecursionStopReason reason = ResolvePasswordStopReason(
                     candidates.Count - skippedCandidates,
-                    attempts,
+                    passwordLedger.Tried,
                     conclusion,
                     triedAny);
 
