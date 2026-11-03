@@ -924,7 +924,7 @@ namespace ArchiveFixer.ViewModels
              * （`…\EEEE\111(4)\111`）挑走。
              *
              * ⇒ 这就是"上游没做完的事，别在下游补"：把归组补在**它该在的位置**（定锚点之前），
-             * 而不是放宽那道守卫的判据。唯一出口仍是 `ApplyVolumeGroupingFromDirectory`
+             * 而不是放宽那道守卫的判据。唯一出口仍是 `ResolveVolumeGroupFromDirectory`
              * （它自己再转调 `VolumeGroupDetector.Group` + `VolumeGroupingService.ApplyGroupInfo`，
              * 与扫描期、手动档完全同一条路）；归不上组 ⇒ 什么都不动（与以前一样）。
              */
@@ -933,7 +933,7 @@ namespace ArchiveFixer.ViewModels
             /*
              * ===== 分卷批首归组 / 点名：已整段搬到 `SecondStepResidue`（用户 2026-10-24 拍板）=====
              *
-             * 原来这里先 `ApplyVolumeGroupingFromDirectory`（按目录归组）再
+             * 原来这里先 `ResolveVolumeGroupFromDirectory`（按目录归组）再
              * `MarkVolumeStepEntriesForBatch`（组分析 + 点名第二大步入口 + 搬/链接片）。
              * 第一大步不再做任何分卷操作；实现仍在
              * `src/ArchiveFixer/SecondStepResidue/ExtractionCoordinator.BatchVolumeEntryStep.cs`，

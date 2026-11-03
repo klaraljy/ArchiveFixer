@@ -54,7 +54,7 @@ namespace ArchiveFixer.ViewModels
         /// **这一单是不是"同一分卷组的后续卷"** —— 是就跳过，不重复解一遍（一组只解一次）。
         ///
         /// <para>判据只读事实，两步：① 先按**当前真实文件名**重新归组
-        /// （<see cref="OneClickCoordinator.ApplyVolumeGroupingFromDirectory"/>，与扫描期、
+        /// （<see cref="OneClickCoordinator.ResolveVolumeGroupFromDirectory"/>，与扫描期、
         /// 与手动档补救走的是同一条路 —— 扫描期那一份是按改名**前**的名字算的，已经过期）；
         /// ② 再看这一组的**第一卷**是不是任务表里**另一个任务**在负责。</para>
         ///

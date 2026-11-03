@@ -2559,7 +2559,7 @@ namespace ArchiveFixer.ViewModels
 
                     /*
                      * 按目录补跑一次分卷归组：已停用（用户 2026-10-24）。
-                     * 实现 `ApplyVolumeGroupingFromDirectory` 仍在原处（第二大步重建时可能要用），
+                     * 实现 `ResolveVolumeGroupFromDirectory` 仍在原处（第二大步重建时可能要用），
                      * 但第一大步不再把同组卷并成一个任务。
                      */
 
@@ -2601,33 +2601,6 @@ namespace ArchiveFixer.ViewModels
             catch
             {
                 return path;
-            }
-        }
-
-        /// <summary>
-        /// 把一个任务按**它所在目录里的真实文件**归组（分卷组挂上 VolumePaths / IsVolumeGroup）。
-        ///
-        /// <para>为什么要单独做（2026-09-28 真机最后一环）：续解层的内层任务是走
-        /// AddPathsAsync(..., suppressAutoScan: true) 加进来的，那条路**不跑扫描期的分卷归组**，
-        /// 于是内层分卷组的任务 IsVolumeGroup = false —— 链尾"把内层包收进其余物"的安全闸门
-        /// （"名字像分卷、同目录还有同组的卷，却没有整组清单 → 宁可不搬"）就把它挡住了，
-        /// 用户看到的就是 amb.7z.001..004 一直赖在成品目录里。</para>
-        ///
-        /// <para>判据只此一份：VolumeGroupDetector.Group + VolumeGroupingService.ApplyGroupInfo
-        /// （与扫描期、与手动档完全同一条路）。归不上组时什么都不动（行为与以前一样，不会更糟）。</para>
-        /// </summary>
-        internal static void ApplyVolumeGroupingFromDirectory(ArchiveTask? task)
-        {
-            if (task == null)
-            {
-                return;
-            }
-
-            ArchiveFixer.Detection.VolumeGroup? group = ResolveVolumeGroupFromDirectory(task);
-
-            if (group != null)
-            {
-                new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
             }
         }
 
