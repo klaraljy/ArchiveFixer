@@ -584,11 +584,11 @@ namespace ArchiveFixer.Tests
                 OuterContainer = PackOuterContainer.None
             });
 
-            Assert.True(result.Success, result.Describe());
+            Assert.False(result.Success, result.Describe());
             Assert.Contains(
                 result.LogLines,
-                line => line.Contains("取不到", StringComparison.Ordinal)
-                        || line.Contains("没有做空间门判断", StringComparison.Ordinal));
+                line => line.Contains("空间未知不算够", StringComparison.Ordinal)
+                        || line.Contains("取不到", StringComparison.Ordinal));
         }
 
         // ══════════════════════════ ⑥ 真 7z 端到端 ══════════════════════════

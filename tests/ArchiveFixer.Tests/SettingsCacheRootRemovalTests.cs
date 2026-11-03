@@ -114,15 +114,9 @@ namespace ArchiveFixer.Tests
                 Directory.GetFileSystemEntries(_root, "*", SearchOption.AllDirectories),
                 entry => entry.StartsWith(legacyCacheRoot, StringComparison.OrdinalIgnoreCase));
 
-            // 未解析时的工作区根是老位置（<数据根>\work），⛔ 不是旧键指的那个目录。
-            Assert.Equal(
-                Path.Combine(_root, WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName),
-                pathService.WorkDirectory);
-
-            Assert.DoesNotContain(
-                pathService.WorkDirectory,
-                legacyCacheRoot,
-                StringComparison.OrdinalIgnoreCase);
+            // 未解析时的工作区根是空串：不回旧缓存根，也不回 <数据根>\work。
+            Assert.Equal(string.Empty, pathService.WorkDirectory);
+            Assert.False(pathService.WorkspaceRootResolved);
         }
 
         /// <summary>写一份"旧版本留下的" appsettings.json（含已删除的 <c>CacheRootDirectory</c> 键）。</summary>

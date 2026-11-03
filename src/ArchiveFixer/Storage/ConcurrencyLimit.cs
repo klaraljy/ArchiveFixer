@@ -15,9 +15,11 @@ namespace ArchiveFixer.Storage
         {
             get
             {
-                int requested = Math.Clamp(Requested, Minimum, Maximum);
-                int recommended = Recommended <= 0 ? requested : Recommended;
-                return Math.Clamp(Math.Min(requested, recommended), Minimum, Maximum);
+                /*
+                 * 用户档是硬上限；空间建议只作为 plan.Recommended 供调度/日志使用，
+                 * 不能在这里把普通批悄悄降成 1（那会让空间门排队测试与真实并发都变样）。
+                 */
+                return Math.Clamp(Requested, Minimum, Maximum);
             }
         }
 

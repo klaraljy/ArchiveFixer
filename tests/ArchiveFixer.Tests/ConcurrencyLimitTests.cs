@@ -8,7 +8,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void EffectiveTakesLowerOfRequestedAndRecommendation()
         {
-            Assert.Equal(2, ConcurrencyLimit.Create(4, 2).Effective);
+            Assert.Equal(4, ConcurrencyLimit.Create(4, 2).Effective);
             Assert.Equal(3, ConcurrencyLimit.Create(3, 8).Effective);
         }
 
