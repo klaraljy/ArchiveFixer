@@ -468,6 +468,27 @@ namespace ArchiveFixer.Models
                 return BatchProblemKind.MissingVolume;
             }
 
+            // 机器事实优先：终态/机器原因能判的，不再靠中文 StatusText 才能归类。
+            if (task.Outcome == TaskOutcome.Cancelled)
+            {
+                return BatchProblemKind.Cancelled;
+            }
+
+            if (task.Outcome == TaskOutcome.Skipped)
+            {
+                return BatchProblemKind.Skipped;
+            }
+
+            if (task.Reason == TaskReason.PasswordExhausted)
+            {
+                return BatchProblemKind.Password;
+            }
+
+            if (task.Reason == TaskReason.SourceChanged)
+            {
+                return BatchProblemKind.SourceChanged;
+            }
+
             switch (task.Status)
             {
                 case StatusText.DiskSpaceInsufficient:
