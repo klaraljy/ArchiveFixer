@@ -156,9 +156,16 @@ namespace ArchiveFixer.ViewModels
                 : minimumInitial;
         }
 
+        private ConcurrencyLimit? _runConcurrencyLimit;
+
         /// <summary>本批实际可用的自适应并发 = 所有卷控制器的**最小值**（慢盘不会拖垮快盘，也不会让快盘把慢盘压垮）。</summary>
         private int CurrentAutoLimit()
         {
+            if (_runConcurrencyLimit != null)
+            {
+                return _runConcurrencyLimit.Effective;
+            }
+
             if (_autoControllers.Count == 0)
             {
                 return 1;

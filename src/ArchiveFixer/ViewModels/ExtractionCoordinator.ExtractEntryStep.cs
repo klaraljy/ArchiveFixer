@@ -394,6 +394,7 @@ namespace ArchiveFixer.ViewModels
                  * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
                  */
                 ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel, _spaceTightThisBatch);
+                _runConcurrencyLimit = plan.Limit;
 
                 if (!_spaceTightThisBatch && plan.Limit != null)
                 {
