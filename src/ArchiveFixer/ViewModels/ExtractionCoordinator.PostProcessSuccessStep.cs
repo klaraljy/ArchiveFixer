@@ -667,8 +667,7 @@ namespace ArchiveFixer.ViewModels
             try
             {
                 if (work.Verification.Verified &&
-                    !cancellationToken.IsCancellationRequested &&
-                    task.Status == StatusText.ExtractSuccess)
+                    !cancellationToken.IsCancellationRequested)
                 {
                     TryOpenOutputFolderOnce(task);
                 }
