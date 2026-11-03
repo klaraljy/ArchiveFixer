@@ -326,15 +326,10 @@ namespace ArchiveFixer.Extraction
 
                 attempted++;
 
-                if (request.ResetTarget != null)
-                {
-                    /*
-                     * 与主引擎的候选循环同一个道理（用户 2026-09-25 铁证）：每换一个候选都从**空目录**开始，
-                     * 否则上一个候选留下的桩文件 / 半截产物会混进这一次的结果里。
-                     * ⛔ 清法不在这里：调用方给的就是它自己那一份实现。
-                     */
-                    await request.ResetTarget(cancellationToken).ConfigureAwait(false);
-                }
+                /*
+                 * WinRAR 现在自己写隔离目录，成功才搬进目标；失败只清隔离目录。
+                 * 因此这里**不再清主暂存**：主暂存上已有的证据不能被换引擎兜底抹掉。
+                 */
 
                 string described = request.DescribeCandidate?.Invoke(candidate, attempted)
                     ?? $"尝试密码候选第 {attempted} 项：******";

@@ -281,7 +281,7 @@ namespace ArchiveFixer.Tests
             List<string> args = runner.BuildExtractArguments(@"C:\tmp\pack.zip", @"C:\tmp\out", "pw123");
 
             Assert.Equal(
-                new[] { "x", "-cfg-", "-ibck", "-o+", "-y", "-ppw123", @"C:\tmp\pack.zip", @"C:\tmp\out\" },
+                new[] { "x", "-cfg-", "-ibck", "-inul", "-ppw123", @"C:\tmp\pack.zip", @"C:\tmp\out\" },
                 args);
         }
 

@@ -105,8 +105,7 @@ namespace ArchiveFixer.Engines.WinRar
                 "x",
                 "-cfg-",
                 "-ibck",
-                "-o+",
-                "-y",
+                "-inul",
                 BuildPasswordArgument(password),
                 archivePath,
                 EnsureTrailingSeparator(outputDirectory)
@@ -213,7 +212,31 @@ namespace ArchiveFixer.Engines.WinRar
                     .StampEngine(EngineIds.WinRarFallback, DisplayName, Version);
             }
 
-            List<string> arguments = BuildExtractArguments(archivePath, outputDirectory, password);
+            string isolatedDirectory = Path.Combine(
+                outputDirectory,
+                ".af-winrar-" + Guid.NewGuid().ToString("N")[..8]);
+
+            try
+            {
+                Directory.CreateDirectory(isolatedDirectory);
+            }
+            catch (Exception ex)
+            {
+                string safeMessage = PasswordMasker.Sanitize(ex.Message);
+
+                return ArchiveOperationResult.CreateFailure(
+                        -1,
+                        string.Empty,
+                        safeMessage,
+                        StatusText.AccessDenied,
+                        "无法创建隔离解压目录：" + safeMessage,
+                        EngineErrorTypes.AccessDenied,
+                        TimeSpan.Zero,
+                        PasswordMasker.Mask(password))
+                    .StampEngine(EngineIds.WinRarFallback, DisplayName, Version);
+            }
+
+            List<string> arguments = BuildExtractArguments(archivePath, isolatedDirectory, password);
 
             using IDisposable throttleLease = await GlobalExtractionThrottle
                 .AcquireAsync(cancellationToken)
@@ -349,7 +372,32 @@ namespace ArchiveFixer.Engines.WinRar
                     exitCode = -1;
                 }
 
-                return BuildResult(exitCode, outputBuilder.ToString(), errorBuilder.ToString(), password, stopwatch.Elapsed);
+                ArchiveOperationResult result = BuildResult(exitCode, outputBuilder.ToString(), errorBuilder.ToString(), password, stopwatch.Elapsed);
+
+                if (result.Success)
+                {
+                    try
+                    {
+                        PublishIsolatedOutput(isolatedDirectory, outputDirectory);
+                    }
+                    catch (Exception ex)
+                    {
+                        string safeMessage = PasswordMasker.Sanitize(ex.Message);
+
+                        return ArchiveOperationResult.CreateFailure(
+                                -1,
+                                PasswordMasker.Sanitize(outputBuilder.ToString()),
+                                safeMessage,
+                                StatusText.ExtractFailed,
+                                "隔离产物搬到暂存失败：" + safeMessage,
+                                EngineErrorTypes.UnknownError,
+                                stopwatch.Elapsed,
+                                PasswordMasker.Mask(password))
+                            .StampEngine(EngineIds.WinRarFallback, DisplayName, Version);
+                    }
+                }
+
+                return result;
             }
             catch (Exception ex)
             {
@@ -409,6 +457,66 @@ namespace ArchiveFixer.Engines.WinRar
                     {
                     }
                 }
+
+                TryDeleteDirectory(isolatedDirectory);
+            }
+        }
+
+        private static void PublishIsolatedOutput(string isolatedDirectory, string outputDirectory)
+        {
+            if (!Directory.Exists(isolatedDirectory))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(outputDirectory);
+
+            foreach (string entry in Directory.EnumerateFileSystemEntries(isolatedDirectory))
+            {
+                string name = Path.GetFileName(entry);
+                string target = Path.Combine(outputDirectory, name);
+
+                if (File.Exists(entry))
+                {
+                    if (File.Exists(target) || Directory.Exists(target))
+                    {
+                        throw new IOException("目标已存在同名条目：" + name);
+                    }
+
+                    File.Move(entry, target);
+                    continue;
+                }
+
+                if (Directory.Exists(entry))
+                {
+                    if (File.Exists(target))
+                    {
+                        throw new IOException("目标已存在同名文件：" + name);
+                    }
+
+                    if (!Directory.Exists(target))
+                    {
+                        Directory.Move(entry, target);
+                    }
+                    else
+                    {
+                        PublishIsolatedOutput(entry, target);
+                    }
+                }
+            }
+        }
+
+        private static void TryDeleteDirectory(string directory)
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch
+            {
             }
         }
 
