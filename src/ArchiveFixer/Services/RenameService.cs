@@ -740,7 +740,7 @@ namespace ArchiveFixer.Services
                 }
 
                 // ── 阶段 2：腾位 ────────────────────────────────────────────────
-                var vacated = new List<(string OccupiedPath, string TemporaryPath)>();
+                var vacated = new List<(string OccupiedPath, string TemporaryPath, bool HasIdentity, ulong VolumeSerial, ulong FileIndex)>();
 
                 foreach ((string _, string _, string finalPath) in staged)
                 {
@@ -750,12 +750,14 @@ namespace ArchiveFixer.Services
                     }
 
                     string temporaryPath;
+                    bool hasIdentity = FileIdentity.TryGetIdentity(finalPath, out ulong volumeSerial, out ulong fileIndex);
 
                     try
                     {
                         temporaryPath = BuildVacatingPath(finalPath);
 
                         // 占着这个名字的是外来的文件（要覆盖的目标）：挪成临时名，落位成功后才删。
+                        // 先记下它那一刻的 FileIdentity；清场前必须还是同一份，防止这中间被别人替换。
                         File.Move(finalPath, temporaryPath);
                     }
                     catch (Exception ex)
@@ -768,7 +770,7 @@ namespace ArchiveFixer.Services
                             sources);
                     }
 
-                    vacated.Add((finalPath, temporaryPath));
+                    vacated.Add((finalPath, temporaryPath, hasIdentity, volumeSerial, fileIndex));
                 }
 
                 // ── 阶段 3：一起落位 ────────────────────────────────────────────
@@ -795,8 +797,17 @@ namespace ArchiveFixer.Services
                 }
 
                 // ── 阶段 4：清场 ────────────────────────────────────────────────
-                foreach ((string _, string temporaryPath) in vacated)
+                foreach ((string _, string temporaryPath, bool hasIdentity, ulong volumeSerial, ulong fileIndex) in vacated)
                 {
+                    if (!hasIdentity
+                        || !FileIdentity.TryGetIdentity(temporaryPath, out ulong currentVolume, out ulong currentIndex)
+                        || currentVolume != volumeSerial
+                        || currentIndex != fileIndex)
+                    {
+                        // 身份变了 / 取不到：绝不删；留给用户那个 .af-vacating 名字，比删错安全。
+                        continue;
+                    }
+
                     TryDelete(temporaryPath);
                 }
 
@@ -863,7 +874,8 @@ namespace ArchiveFixer.Services
             }
 
             /// <summary>回滚"腾位"：临时名挪回它占着的那个名字。</summary>
-            private static void RollBackVacated(List<(string OccupiedPath, string TemporaryPath)> vacated)
+            private static void RollBackVacated(
+                List<(string OccupiedPath, string TemporaryPath, bool HasIdentity, ulong VolumeSerial, ulong FileIndex)> vacated)
             {
                 for (int i = vacated.Count - 1; i >= 0; i--)
                 {

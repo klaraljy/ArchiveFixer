@@ -571,11 +571,24 @@ namespace ArchiveFixer.Storage
             ArchiveTask? task,
             bool cancelled,
             ResultCompletenessVerdict? completenessEvidence = null,
-            string? allowedRootEvidence = null)
+            string? allowedRootEvidence = null,
+            ArchiveTask? completenessEvidenceTask = null)
         {
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
+            }
+
+            if (completenessEvidenceTask != null
+                && !string.Equals(
+                    completenessEvidenceTask.ChainRootIdentity,
+                    task.ChainRootIdentity,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return Skip(
+                    $"{task.FileName}：完整性证据来自另一条链"
+                    + $"（证据链根 {completenessEvidenceTask.ChainRootIdentity}，本任务链根 {task.ChainRootIdentity}）"
+                    + "—— 其余物一个字节都不删");
             }
 
             string name = string.IsNullOrWhiteSpace(task.FileName)
@@ -774,7 +787,8 @@ namespace ArchiveFixer.Storage
         public RestPurgeOutcome Purge(
             ArchiveTask? task,
             DeletionPlan plan,
-            ResultCompletenessVerdict? completenessEvidence = null)
+            ResultCompletenessVerdict? completenessEvidence = null,
+            ArchiveTask? completenessEvidenceTask = null)
         {
             if (task == null || plan == null)
             {
@@ -799,7 +813,8 @@ namespace ArchiveFixer.Storage
                 task,
                 plan.Cancelled,
                 completenessEvidence: completenessEvidence,
-                allowedRootEvidence: plan.AllowedRoot);
+                allowedRootEvidence: plan.AllowedRoot,
+                completenessEvidenceTask: completenessEvidenceTask);
         }
 
         /// <summary>

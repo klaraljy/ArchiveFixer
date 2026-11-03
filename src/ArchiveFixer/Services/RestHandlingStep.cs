@@ -1600,7 +1600,7 @@ namespace ArchiveFixer.Services
                             _host.RestDeleteExecutor,
                             null,
                             ContentKeepRules.FromSettings(_host.Settings))
-                        .Purge(producer, p, evidence));
+                        .Purge(producer, p, evidence, completenessEvidenceTask: consumer));
             }
             catch (Exception ex)
             {
