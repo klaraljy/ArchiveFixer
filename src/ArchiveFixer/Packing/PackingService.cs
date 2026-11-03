@@ -341,6 +341,14 @@ namespace ArchiveFixer.Packing
             // ⚠ 用**实际生效的**容器（第 46 条：没装 WinRAR 时 rar 已在上面的检查里降级成 7z）。
             bool outerIsRar = effectiveContainer == PackOuterContainer.Rar;
             string outerPath = outerIsRar ? plan.RarPath : plan.SevenZipOuterPath;
+
+            // 没有降级时，执行路径必须与校验时那一份逐字一致；降级（rar→7z）才换到实际容器。
+            if (effectiveContainer == plan.OuterContainer
+                && !string.IsNullOrWhiteSpace(plan.PlannedOuterPath))
+            {
+                outerPath = plan.PlannedOuterPath;
+            }
+
             string outerName = outerIsRar ? "外层 rar" : "外层 7z";
             string outerTool = outerIsRar ? "Rar.exe" : "7-Zip";
             PackToolKind outerToolKind = outerIsRar ? PackToolKind.Rar : PackToolKind.SevenZip;

@@ -654,9 +654,6 @@ namespace ArchiveFixer.Models
         /// <summary>其余物这一档：删除操作=彻底删除 → 失败/部分完成后彻底删掉（不可恢复）。</summary>
         public const string OneClickConfirmRestAutoDelete = "彻底删除（不可恢复）";
 
-        /// <summary>其余物这一档：删除操作=移入回收站 → 解压成功后自动移入回收站（可还原）。</summary>
-        public const string OneClickConfirmRestRecycle = "解压成功后自动移入回收站（可还原；空间要等清空回收站才释放）";
-
         /// <summary>其余物这一档：删除操作=留下（默认）。</summary>
         public const string OneClickConfirmRestKeep = "留下（默认）";
 

@@ -54,6 +54,15 @@ namespace ArchiveFixer.Services
                 }
 
                 settings.Normalize();
+
+                if (!string.IsNullOrWhiteSpace(_pathService.DataRootDirectory))
+                {
+                    LegacySettingsMigration.EnsureMigrated(
+                        settings,
+                        SettingsFilePath,
+                        _pathService.DataRootDirectory);
+                }
+
                 return settings;
             }
             catch
