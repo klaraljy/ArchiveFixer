@@ -395,6 +395,11 @@ namespace ArchiveFixer.ViewModels
                  */
                 ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel, _spaceTightThisBatch);
 
+                if (!_spaceTightThisBatch && plan.Limit != null)
+                {
+                    maxParallel = plan.Limit.Effective;
+                }
+
                 if (_spaceTightThisBatch)
                 {
                     /*

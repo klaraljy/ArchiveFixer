@@ -36,6 +36,9 @@ namespace ArchiveFixer.Tests
             try
             {
                 Directory.CreateDirectory(TestDataRoot);
+                string recursiveRoot = Path.Combine(TestDataRoot, "recursive-workspace");
+                Directory.CreateDirectory(recursiveRoot);
+                RecursiveExtractor.ConfiguredWorkspaceRoot = recursiveRoot;
             }
             catch
             {

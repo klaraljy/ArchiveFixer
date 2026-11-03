@@ -76,6 +76,9 @@ namespace ArchiveFixer.Storage
         /// <summary>用户选的（或设置里的）并行档。</summary>
         public int RequestedParallelCount { get; init; }
 
+        /// <summary>用户档与空间建议合成后的唯一并发结论。</summary>
+        public ConcurrencyLimit? Limit { get; init; }
+
         /// <summary>排计划时的可用字节数（-1 = 取不到）。</summary>
         public long AvailableBytes { get; init; }
 
@@ -354,6 +357,9 @@ namespace ArchiveFixer.Storage
                 BlockedAtPlanTime = blocked,
                 RecommendedParallelCount = RecommendParallelCount(sorted, available),
                 RequestedParallelCount = Math.Clamp(requestedParallelCount, 1, ParallelCeiling),
+                Limit = ConcurrencyLimit.Create(
+                    requested: Math.Clamp(requestedParallelCount, 1, ParallelCeiling),
+                    recommended: RecommendParallelCount(sorted, available)),
                 AvailableBytes = available,
                 ReserveBytes = reserve,
                 Basis = BuildBasis(sorted, reserve, available),
