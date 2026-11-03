@@ -52,6 +52,7 @@ namespace ArchiveFixer.Tests
 
         public WorkspaceRootTests()
         {
+            WorkspaceRootIndex.ResetForTests();
             _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerWorkspaceRoot", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
         }
