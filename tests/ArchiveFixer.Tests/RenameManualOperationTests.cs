@@ -506,7 +506,7 @@ namespace ArchiveFixer.Tests
             failed.Status = StatusText.ExtractFailed;
             failed.ErrorMessage = "密码错误：候选密码都不对";
 
-            bool renamed = await harness.Rename.AutoFixExtensionsAsync();
+            bool renamed = await harness.Rename.AutoFixSingleAsync(renameTarget);
 
             Assert.True(renamed, "后缀被改坏的那个包应当被自动改名");
             Assert.True(File.Exists(Path.Combine(harness.SourceDirectory, "伪装.7z")));

@@ -382,7 +382,7 @@ namespace ArchiveFixer.Tests
             Assert.Empty(Directory.GetFiles(_root, "2222.jpg", SearchOption.AllDirectories));
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("自动修正后缀", StringComparison.Ordinal));
+                line => line.Contains("SingleComplete 改名", StringComparison.Ordinal));
         }
 
         // ================================================================ ④ 其余物会怎么处理，当场说清

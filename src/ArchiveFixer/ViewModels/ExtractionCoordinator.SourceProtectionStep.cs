@@ -69,7 +69,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             var sources = (tasks ?? Array.Empty<ArchiveTask>())
-                .Where(task => task != null)
+                .Where(task => task != null && !IsSingleCompleteArchive(task!))
                 .SelectMany(task => new[] { task!.OriginalPath, task.CurrentPath }
                     .Concat(task.VolumePaths))
                 .Where(path => !string.IsNullOrWhiteSpace(path)
@@ -128,6 +128,37 @@ namespace ArchiveFixer.ViewModels
             {
                 _keepSourceSnapshots.Clear();
                 _keepSourceSnapshotDirectory = string.Empty;
+            }
+        }
+        private static bool IsSingleCompleteArchive(ArchiveTask task)
+        {
+            try
+            {
+                string path = string.IsNullOrWhiteSpace(task.CurrentPath) ? task.OriginalPath : task.CurrentPath;
+
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    return false;
+                }
+
+                FileNatureCard card = FileNature.Inspect(path);
+
+                if (card.BodyKind == ArchiveBodyKind.SingleComplete)
+                {
+                    return true;
+                }
+
+                // 与 ProcessExtractTaskAsync 的闸门后改名条件同一份口径：
+                // 内容卡判不出、但任务已被识别成归档且后缀需要修，也会在第一大步改名。
+                return card.BodyKind == ArchiveBodyKind.Unknown
+                    && task.IsArchive
+                    && (task.ExtensionStatus == StatusText.ExtensionMismatch
+                        || task.ExtensionStatus == StatusText.ExtensionMissing
+                        || task.ExtensionStatus == StatusText.ExtensionMultiFake);
+            }
+            catch
+            {
+                return false;
             }
         }
 

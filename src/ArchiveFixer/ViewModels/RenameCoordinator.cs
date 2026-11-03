@@ -114,9 +114,19 @@ namespace ArchiveFixer.ViewModels
         /// 是同一条兜底（<see cref="RenameService.ApplyConflictChoice"/>），不另写一套判定。</para>
         /// </summary>
         /// <returns>真的执行了改名返回 true；没有可改的项（或参数被挡下）返回 false。</returns>
-        internal async Task<bool> AutoFixExtensionsAsync()
+        /// 第一大步闸门放行后的单任务改名：只处理这一份 SingleComplete，
+        /// 不碰其它任务、不碰分卷，也不改全局 IsBusy（调用方正在批处理中）。
+        /// </summary>
+        internal async Task<bool> AutoFixSingleAsync(ArchiveTask task)
         {
-            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(BuildFixByDetectedFormatOptions());
+            if (task == null)
+            {
+                return false;
+            }
+
+            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(
+                BuildFixByDetectedFormatOptions(),
+                new[] { task }).ConfigureAwait(true);
 
             if (previewItems == null)
             {
@@ -132,17 +142,13 @@ namespace ArchiveFixer.ViewModels
 
             if (selected.Count == 0)
             {
-                AppendLog("INFO", "一键处理：自动改名这一步没有可执行的项，跳过。");
+                AppendLog("INFO", "第一大步：这个 SingleComplete 不需要改名。");
                 return false;
             }
 
-            IsBusy = true;
-
             try
             {
-                AppendLog(
-                    "INFO",
-                    $"一键处理：自动修正后缀 {selected.Count} 项（一键档不弹预览窗口，逐条写日志）。");
+                AppendLog("INFO", $"第一大步：SingleComplete 改名 {selected.Count} 项（不弹预览）。");
 
                 List<ArchiveTask> renamedTasks = MatchTasks(selected);
 
@@ -173,14 +179,11 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", "自动改名失败：" + ex.Message);
+                AppendLog("ERROR", "第一大步改名失败：" + ex.Message);
                 return false;
             }
-            finally
-            {
-                IsBusy = false;
-            }
         }
+
 
         /// <summary>「按识别结果修正后缀」的参数（手动档与一键档共用同一份，绝不分叉）。</summary>
         private RenameOptions BuildFixByDetectedFormatOptions() => new RenameOptions

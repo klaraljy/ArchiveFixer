@@ -206,6 +206,8 @@ namespace ArchiveFixer.ViewModels
 
         private readonly ScanCoordinator _scanCoordinator;
         private readonly RenameCoordinator _renameCoordinator;
+
+        internal Task<bool> AutoFixSingleTaskAsync(ArchiveTask task) => _renameCoordinator.AutoFixSingleAsync(task);
         private readonly ExtractionCoordinator _extractionCoordinator;
 
         /// <summary>

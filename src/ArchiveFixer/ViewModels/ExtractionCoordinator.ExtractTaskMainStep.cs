@@ -84,7 +84,6 @@ namespace ArchiveFixer.ViewModels
                  * 共用骨架：第一大步**每一份闸门通过的文件**都进账本，包括内容 Unknown 的中间片。
                  * 这一步只登记事实，⛔ 不判分卷、不碰盘、不改变任何既有分支。
                  */
-                RegisterFirstStepLedgerEntry(task, entryCard);
 
                 /*
                  * 第二大步入口（2026-10-23）：内容卡证明这一份就是分卷组的**入口卷** ⇒ 这一单就是
@@ -164,6 +163,7 @@ namespace ArchiveFixer.ViewModels
                 if (!isSecondStepEntry
                     && (contentVolumeCandidate || nameSlotVolumeCandidate || rarNameSlotCandidate))
                 {
+                    RegisterFirstStepLedgerEntry(task, entryCard);
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
                     task.Status = StatusText.Skipped;
@@ -195,6 +195,22 @@ namespace ArchiveFixer.ViewModels
                         $"{task.LogName}：第二大步入口任务（只解一层）—— 闸门放行，不按分卷成员跳过"
                         + $"（族={entryCard.Format}，内容身份={entryCard.BodyKind}）。");
                 }
+
+                bool renameAfterGate = oneClickRun
+                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
+                        || (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                            && task.IsArchive
+                            && (task.ExtensionStatus == StatusText.ExtensionMismatch
+                                || task.ExtensionStatus == StatusText.ExtensionMissing
+                                || task.ExtensionStatus == StatusText.ExtensionMultiFake)));
+
+                if (renameAfterGate)
+                {
+                    await _vm.AutoFixSingleTaskAsync(task).ConfigureAwait(true);
+                    entryCard = ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath ?? string.Empty);
+                }
+
+                RegisterFirstStepLedgerEntry(task, entryCard);
 
                 /*
                  * 放行的这一档也把内容卡事实写一行（用户 2026-10-24「文件的信息有没有记录」）：

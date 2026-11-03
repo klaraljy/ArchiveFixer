@@ -1070,9 +1070,7 @@ namespace ArchiveFixer.ViewModels
              * `2222.jpg` 改名成 `2222.7z` 后旧名又出现，验收判据 ② 当场红）。
              * 保护快照只登记那些不会被自动改名的源包。
              */
-            _extractionCoordinator.BeginKeepInPlaceSourceProtection(
-                rootTargets.Where(task => task != null && !NeedsRename(task)).ToList());
-
+            _extractionCoordinator.BeginKeepInPlaceSourceProtection(rootTargets.ToList());
             List<ArchiveTask> roundTargets = rootTargets.ToList();
 
             int round = 0;
@@ -1145,17 +1143,6 @@ namespace ArchiveFixer.ViewModels
                      * 为什么遇到这种改名的压缩包还要我两次确认……那种情况只有手动档才会有"。
                      * 每个改名照旧逐条写进日志与任务列表；手动档（②页/右键那几条命令）**照旧先出预览**。
                      */
-                    int needRename = Tasks.Count(t => t.IsSelected && NeedsRename(t));
-
-                    if (needRename > 0)
-                    {
-                        AppendLog("INFO", $"一键处理：{needRename} 个任务需要修正后缀，自动执行（不弹预览）。");
-                        await _renameCoordinator.AutoFixExtensionsAsync();
-                    }
-                    else if (round == 1)
-                    {
-                        AppendLog("INFO", "一键处理：没有需要修正的后缀，跳过改名。");
-                    }
 
                     /*
                      * 解压**之前**先记下候选目录里已有的文件。
@@ -2849,25 +2836,6 @@ namespace ArchiveFixer.ViewModels
         /// 需要改名的三种后缀状态：缺失、不匹配、多重伪装。
         /// "后缀正常"不用动，"分卷后缀"**绝对不能动**（改了会切断分卷链），"格式未知"交给设置里的策略。
         /// </summary>
-        private static bool NeedsRename(ArchiveTask task)
-        {
-            /*
-             * 内嵌归档（文件尾部藏着 ZIP 的双面文件）**不改名**。
-             *
-             * 它看起来最像"该改名"的那一类（`xxx.mp4` 里明明有 ZIP），但改名是纯粹的误导：
-             * ZIP 的内部偏移相对它自己，而前置数据远超 7-Zip 的容忍上限（实测 8 MiB），
-             * 所以 `xxx.zip` 交到 7z 手里仍然打不开。
-             * 该做的事是解压管线里按偏移把尾部那段取出来，不是动后缀。
-             */
-            if (task.ExtensionStatus == StatusText.ExtensionEmbedded)
-            {
-                return false;
-            }
-
-            return task.ExtensionStatus == StatusText.ExtensionMissing ||
-                task.ExtensionStatus == StatusText.ExtensionMismatch ||
-                task.ExtensionStatus == StatusText.ExtensionMultiFake;
-        }
 
         /// <summary>源文件路径集合（当前路径 + 最初路径 + 该分卷组的每一卷）。</summary>
         private static HashSet<string> BuildSourcePathSet(IEnumerable<ArchiveTask> tasks)
