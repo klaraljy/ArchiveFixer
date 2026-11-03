@@ -212,21 +212,16 @@ namespace ArchiveFixer.Services
         /// <para>⚠ 目标位置不可用时批首会直接停手（<c>WorkspaceRootResolution.Resolved</c> 为 false），
         /// 所以生产路径上不会有人拿着"没解析过"的值去拼暂存目录。</para>
         ///
-        /// <para>没有解析过时的取值 = <c>&lt;数据根&gt;\work</c>，也就是**2026-09-30 之前的老位置**：
-        /// 它现在只服务于启动时"③ 页要扫哪些根"那一档（老位置里可能还留着升级前的残留）。</para>
+        /// <para>没有解析过时为空串：⛔ 不再回落到 <c>&lt;数据根&gt;\work</c>，也不回 CWD/程序目录。
+        /// 旧 work 只允许只读清理。</para>
         /// </summary>
         public string WorkDirectory
         {
-            get => string.IsNullOrWhiteSpace(_workspaceRootOverride)
-                ? Path.Combine(DataRootDirectory, WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName)
-                : _workspaceRootOverride;
+            get => _workspaceRootOverride;
             set => _workspaceRootOverride = value ?? string.Empty;
         }
 
-        /// <summary>
-        /// 本批工作区根是否已经被解析过（解析发生在每批开工前；为 false 时 <see cref="WorkDirectory"/>
-        /// 取的是老位置 <c>&lt;数据根&gt;\work</c>）。
-        /// </summary>
+        /// <summary>本批工作区根是否已经被解析过；false 时 <see cref="WorkDirectory"/> 为空，调用方必须停手。</summary>
         public bool WorkspaceRootResolved => !string.IsNullOrWhiteSpace(_workspaceRootOverride);
 
         private string _workspaceRootOverride = string.Empty;
@@ -512,7 +507,7 @@ namespace ArchiveFixer.Services
         /// </summary>
         public string BuildTaskWorkDirectory(ArchiveTask task)
         {
-            if (task == null)
+            if (task == null || string.IsNullOrWhiteSpace(WorkDirectory))
             {
                 return string.Empty;
             }
