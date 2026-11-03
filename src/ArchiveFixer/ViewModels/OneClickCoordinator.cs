@@ -1046,7 +1046,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (CurrentRunSnapshot.UseSpecificExtraction)
             {
-                return await RunSpecificBatchAsync(rootTargets, snapshotOptions).ConfigureAwait(true);
+                return await RunSpecificBatchAsync(rootTargets, snapshotOptions, CurrentRunSnapshot).ConfigureAwait(true);
             }
 
             // 处理过的任务按轮累加：汇总要算"本次一共处理了多少个"，只算第一轮会和实际不符。

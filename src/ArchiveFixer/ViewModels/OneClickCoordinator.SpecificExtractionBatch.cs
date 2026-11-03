@@ -20,16 +20,17 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private async Task<OneClickOutcome> RunSpecificBatchAsync(
             IReadOnlyList<ArchiveTask> targets,
-            OneClickRunOptions? runOptions)
+            OneClickRunOptions? runOptions,
+            RunSnapshot snapshot)
         {
-            runOptions ??= OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
+            runOptions ??= snapshot.Options;
 
             var runner = new SpecificExtractionRunner(
                 _extractionCoordinator.SpecificExtractionEngine,
                 message => AppendLog("INFO", message));
             _extractionCoordinator.BeginSpecificPasswordBatch();
             // 空间不足模式：按源包体积从大到小；源包按用户接受风险处理（失败/预检不足也删）。
-            bool spaceTight = _vm.SpaceTightMode;
+            bool spaceTight = snapshot.SpaceTightMode;
             IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets);
 
             if (spaceTight)
@@ -57,7 +58,7 @@ namespace ArchiveFixer.ViewModels
              */
             while (pending.Count > 0 || running.Count > 0)
             {
-                if (_vm.IsStopping)
+                if (snapshot.StopToken.IsStopRequested)
                 {
                     // 不再启动新任务；已经在跑的收完再结束，不能留下没统计的尾巴。
                     foreach ((SpecificBatchUnit unit, Task<bool> work) in running)
