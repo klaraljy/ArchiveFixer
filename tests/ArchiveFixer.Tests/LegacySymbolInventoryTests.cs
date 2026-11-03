@@ -108,8 +108,13 @@ namespace ArchiveFixer.Tests
                 }
 
                 string text = File.ReadAllText(file);
-                if (!text.Contains("File.Delete", StringComparison.Ordinal)
-                    && !text.Contains("File.Move", StringComparison.Ordinal))
+                string code = string.Join(
+                    "\n",
+                    text.Split('\n')
+                        .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+                if (!code.Contains("File.Delete", StringComparison.Ordinal)
+                    && !code.Contains("File.Move", StringComparison.Ordinal))
                 {
                     continue;
                 }
