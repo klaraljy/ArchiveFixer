@@ -492,32 +492,7 @@ namespace ArchiveFixer.Security
         }
 
         /// <summary>把字节数说成人话（"20 GiB"）。换算只用展示，判断一律用原始字节数。</summary>
-        internal static string FormatSize(long bytes)
-        {
-            long value = bytes > 0 ? bytes : 0L;
-            double gib = value / 1024d / 1024d / 1024d;
-
-            if (gib >= 1d)
-            {
-                return gib.ToString("0.##", CultureInfo.InvariantCulture) + " GiB";
-            }
-
-            double mib = value / 1024d / 1024d;
-
-            if (mib >= 1d)
-            {
-                return mib.ToString("0.##", CultureInfo.InvariantCulture) + " MiB";
-            }
-
-            double kib = value / 1024d;
-
-            if (kib >= 1d)
-            {
-                return kib.ToString("0.##", CultureInfo.InvariantCulture) + " KiB";
-            }
-
-            return value.ToString(CultureInfo.InvariantCulture) + " 字节";
-        }
+        internal static string FormatSize(long bytes) => TaskSpaceEstimate.FormatSize(bytes);
 
         /// <summary>展开比说成人话（<c>1000</c>）。与 <see cref="FormatSize"/> 一样只用于展示。</summary>
         internal static string FormatRatio(double ratio)
@@ -594,31 +569,6 @@ namespace ArchiveFixer.Security
         }
 
         /// <summary>与 <see cref="ResourceBudget"/> 用同一套换算，避免两处显示口径不一致。</summary>
-        private static string FormatSize(long bytes)
-        {
-            long value = bytes > 0 ? bytes : 0L;
-            double gib = value / 1024d / 1024d / 1024d;
-
-            if (gib >= 1d)
-            {
-                return gib.ToString("0.##", CultureInfo.InvariantCulture) + " GiB";
-            }
-
-            double mib = value / 1024d / 1024d;
-
-            if (mib >= 1d)
-            {
-                return mib.ToString("0.##", CultureInfo.InvariantCulture) + " MiB";
-            }
-
-            double kib = value / 1024d;
-
-            if (kib >= 1d)
-            {
-                return kib.ToString("0.##", CultureInfo.InvariantCulture) + " KiB";
-            }
-
-            return value.ToString(CultureInfo.InvariantCulture) + " 字节";
-        }
+        private static string FormatSize(long bytes) => TaskSpaceEstimate.FormatSize(bytes);
     }
 }
