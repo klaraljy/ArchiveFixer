@@ -56,6 +56,8 @@ namespace ArchiveFixer.Models
             return new SettingsSnapshot(clone);
         }
 
+        internal AppSettings ToSettings() => _values;
+
         /// <summary>与当前 working copy 是否存在影响跑批的差异。</summary>
         public bool DiffersFrom(AppSettings? settings)
         {

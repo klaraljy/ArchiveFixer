@@ -320,6 +320,8 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
+                _runSettings = SettingsSnapshot.Capture(_vm.Settings).ToSettings();
+
                 try
                 {
                     _operationCts?.Dispose();
@@ -789,6 +791,8 @@ namespace ArchiveFixer.ViewModels
             }
             finally
             {
+                _runSettings = null;
+
                 try
                 {
                     _operationCts?.Dispose();

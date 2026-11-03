@@ -316,7 +316,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>源包搬运用的文件系统（真实实现或测试注入的假实现）。</summary>
         private ISourceMoveFileSystem SourceMoveFileSystem => _sourceMoveFileSystem;
 
-        private AppSettings Settings => _vm.Settings;
+        private AppSettings? _runSettings;
+
+        private AppSettings Settings => _runSettings ?? _vm.Settings;
 
 
         private string GlobalPassword => _vm.GlobalPassword;
