@@ -394,7 +394,8 @@
 
                             <DataGridTextColumn Header="文件名"
                                                 Binding="{Binding DisplayFileName}"
-                                                Width="180"
+                                                Width="*"
+                                                MinWidth="220"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
@@ -437,17 +438,17 @@
 
                             <DataGridTextColumn Header="当前后缀"
                                                 Binding="{Binding DisplayExtension}"
-                                                Width="100"
+                                                Width="80"
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="检测格式"
                                                 Binding="{Binding DetectedFormatDisplay}"
-                                                Width="90"
+                                                Width="75"
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="后缀状态"
                                                 Binding="{Binding ExtensionStatus}"
-                                                Width="190"
+                                                Width="90"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
@@ -475,7 +476,7 @@
                             -->
                             <DataGridTextColumn Header="分卷"
                                                 Binding="{Binding DisplayVolumeInfoText}"
-                                                Width="200"
+                                                Width="70"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
@@ -487,7 +488,7 @@
 
                             <DataGridTextColumn Header="密码状态"
                                                 Binding="{Binding PasswordStatus}"
-                                                Width="110"
+                                                Width="80"
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="输出目录"
@@ -496,7 +497,7 @@
                                                 Visibility="Collapsed"
                                                 IsReadOnly="True" />
 
-                            <DataGridTemplateColumn Header="状态" Width="150">
+                            <DataGridTemplateColumn Header="状态" Width="200">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel VerticalAlignment="Center"

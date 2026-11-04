@@ -61,127 +61,161 @@ namespace ArchiveFixer.ViewModels
             int lastTarget = -1;
             string lastBasis = string.Empty;
 
-            /*
-             * 常驻调度池：完成一个就立刻补一个，不等整浪结束。
-             * 每次补位都重新探空间、按当前 pending 重新算目标并发；pending 从大包变成小包时，
-             * 目标会从 3 自动升到 5 / 6 / 8。
-             */
-            while (pending.Count > 0 || running.Count > 0)
+            // 特定解压分支不经过 RunPipelineAsync 后半段，必须在这里自己接停止令牌。
+            void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
             {
-                if (snapshot.StopToken.IsStopRequested)
+                if (e.PropertyName == nameof(MainViewModel.IsStopping) && _vm.IsStopping)
                 {
-                    // 不再启动新任务；已经在跑的收完再结束，不能留下没统计的尾巴。
-                    foreach ((SpecificBatchUnit unit, Task<bool> work) in running)
-                    {
-                        bool stoppedSuccess = await work.ConfigureAwait(true);
-                        skippedFollowers += unit.Followers.Count;
+                    snapshot.StopToken.RequestStop();
+                }
+            }
 
-                        if (stoppedSuccess)
+            _vm.PropertyChanged += OnViewModelPropertyChanged;
+
+            bool startupProbe = !spaceTight
+                                && orderedUnits.Count >= 2
+                                && preparedTarget <= 1;
+
+            try
+            {
+
+                /*
+                 * 常驻调度池：完成一个就立刻补一个，不等整浪结束。
+                 * 每次补位都重新探空间、按当前 pending 重新算目标并发；pending 从大包变成小包时，
+                 * 目标会从 3 自动升到 5 / 6 / 8。
+                 */
+                while (pending.Count > 0 || running.Count > 0)
+                {
+                    if (snapshot.StopToken.IsStopRequested)
+                    {
+                        // 不再启动新任务；已经在跑的收完再结束，不能留下没统计的尾巴。
+                        foreach ((SpecificBatchUnit unit, Task<bool> work) in running)
                         {
-                            succeeded++;
+                            bool stoppedSuccess = await work.ConfigureAwait(true);
+                            skippedFollowers += unit.Followers.Count;
+
+                            if (stoppedSuccess)
+                            {
+                                succeeded++;
+                            }
+                            else
+                            {
+                                failed++;
+                            }
                         }
-                        else
-                        {
-                            failed++;
-                        }
+
+                        running.Clear();
+                        break;
                     }
 
-                    running.Clear();
-                    break;
-                }
-
-                string spaceBasis = string.Empty;
-                int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
-                if (largeProbePending)
-                {
-                    ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-                    bool headroom = resources.CpuBusyPercent < 80
-                                    && (resources.AvailablePhysicalBytes <= 0
-                                        || resources.AvailablePhysicalBytes >= 1536L * 1024 * 1024);
-                    if (headroom)
+                    string spaceBasis = string.Empty;
+                    int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
+                    if (startupProbe && pending.Count + running.Count >= 2)
                     {
-                        autoTarget = Math.Max(autoTarget, preparedTarget);
+                        ConcurrencyResourceSnapshot probeResources = SystemResourceProbe.Snapshot();
+                        if (probeResources.CpuBusyPercent < 80
+                            && (probeResources.AvailablePhysicalBytes <= 0
+                                || probeResources.AvailablePhysicalBytes >= 1536L * 1024 * 1024))
+                        {
+                            autoTarget = Math.Max(autoTarget, 2);
+                        }
+                    }
+                    if (largeProbePending)
+                    {
+                        ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
+                        bool headroom = resources.CpuBusyPercent < 80
+                                        && (resources.AvailablePhysicalBytes <= 0
+                                            || resources.AvailablePhysicalBytes >= 1536L * 1024 * 1024);
+                        if (headroom)
+                        {
+                            autoTarget = Math.Max(autoTarget, preparedTarget);
+                        }
+                    }
+                    int target = spaceTight
+                        ? Math.Min(
+                            ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
+                            Math.Max(autoTarget, running.Count))
+                        : autoTarget;
+
+                    target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
+
+                    if (pending.Concat(running.Select(item => item.Unit))
+                        .Any(unit => unit.SourceBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes))
+                    {
+                        target = 1;
+                    }
+
+                    if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
+                    {
+                        lastTarget = target;
+                        lastBasis = spaceBasis;
+                        AppendLog(
+                            "INFO",
+                            (spaceTight
+                                ? $"特定解压并发（空间不足 + 自动）：当前目标 {target} 个"
+                                : $"特定解压并发（自动）：当前目标 {target} 个")
+                            + $"（正在跑 {running.Count} 个，待处理 {pending.Count} 个）"
+                            + (spaceTight ? $"；{spaceBasis}" : "。"));
+                    }
+
+                    while (running.Count < target && pending.Count > 0)
+                    {
+                        SpecificBatchUnit unit = pending[0];
+                        pending.RemoveAt(0);
+                        unit.Entry.StartTime = DateTime.Now;
+                        Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
+                        running.Add((unit, work));
+                    }
+
+                    if (running.Count == 0)
+                    {
+                        break;
+                    }
+
+                    Task delay = Task.Delay(TimeSpan.FromSeconds(1));
+                    Task finished = await Task.WhenAny(
+                            running.Select(item => item.Work).Append(delay))
+                        .ConfigureAwait(true);
+
+                    if (ReferenceEquals(finished, delay))
+                    {
+                        // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
+                        // ⛔ 不要重置 lastTarget：目标没变就不该再写日志，否则会每秒刷一行。
+                        continue;
+                    }
+
+                    Task<bool> finishedWork = (Task<bool>)finished;
+                    int index = running.FindIndex(item => ReferenceEquals(item.Work, finishedWork));
+
+                    if (index < 0)
+                    {
+                        continue;
+                    }
+
+                    (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
+                    running.RemoveAt(index);
+
+                    bool success = await completedWork.ConfigureAwait(true);
+                    skippedFollowers += completedUnit.Followers.Count;
+                    largeProbePending = false;
+                    startupProbe = false;
+                    _extractionCoordinator.ObserveSpecificCompleted(
+                        completedUnit.Entry,
+                        Math.Max(1, running.Count));
+
+                    if (success)
+                    {
+                        succeeded++;
+                    }
+                    else
+                    {
+                        failed++;
                     }
                 }
-                int target = spaceTight
-                    ? Math.Min(
-                        ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
-                        Math.Max(autoTarget, running.Count))
-                    : autoTarget;
-
-                target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
-
-                if (pending.Concat(running.Select(item => item.Unit))
-                    .Any(unit => unit.SourceBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes))
-                {
-                    target = 1;
-                }
-
-                if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
-                {
-                    lastTarget = target;
-                    lastBasis = spaceBasis;
-                    AppendLog(
-                        "INFO",
-                        (spaceTight
-                            ? $"特定解压并发（空间不足 + 自动）：当前目标 {target} 个"
-                            : $"特定解压并发（自动）：当前目标 {target} 个")
-                        + $"（正在跑 {running.Count} 个，待处理 {pending.Count} 个）"
-                        + (spaceTight ? $"；{spaceBasis}" : "。"));
-                }
-
-                while (running.Count < target && pending.Count > 0)
-                {
-                    SpecificBatchUnit unit = pending[0];
-                    pending.RemoveAt(0);
-                    unit.Entry.StartTime = DateTime.Now;
-                    Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
-                    running.Add((unit, work));
-                }
-
-                if (running.Count == 0)
-                {
-                    break;
-                }
-
-                Task delay = Task.Delay(TimeSpan.FromSeconds(1));
-                Task finished = await Task.WhenAny(
-                        running.Select(item => item.Work).Append(delay))
-                    .ConfigureAwait(true);
-
-                if (ReferenceEquals(finished, delay))
-                {
-                    // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
-                    // ⛔ 不要重置 lastTarget：目标没变就不该再写日志，否则会每秒刷一行。
-                    continue;
-                }
-
-                Task<bool> finishedWork = (Task<bool>)finished;
-                int index = running.FindIndex(item => ReferenceEquals(item.Work, finishedWork));
-
-                if (index < 0)
-                {
-                    continue;
-                }
-
-                (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
-                running.RemoveAt(index);
-
-                bool success = await completedWork.ConfigureAwait(true);
-                skippedFollowers += completedUnit.Followers.Count;
-                largeProbePending = false;
-                _extractionCoordinator.ObserveSpecificCompleted(
-                    completedUnit.Entry,
-                    Math.Max(1, running.Count));
-
-                if (success)
-                {
-                    succeeded++;
-                }
-                else
-                {
-                    failed++;
-                }
+            }
+            finally
+            {
+                _vm.PropertyChanged -= OnViewModelPropertyChanged;
             }
 
             string summary = $"特定解压完成：成功 {succeeded} / 失败 {failed}"
@@ -468,7 +502,7 @@ namespace ArchiveFixer.ViewModels
             if (cancelled)
             {
                 MarkSpecificTaskCancelled(task);
-                AppendLog("WARN", $"{task.LogName}：已按「停止当前任务」停下。");
+                AppendLog("WARN", $"{task.LogName}：已按「{task.ErrorMessage}」停下。");
                 return false;
             }
 
@@ -597,7 +631,10 @@ namespace ArchiveFixer.ViewModels
         {
             task.Status = StatusText.Cancelled;
             task.ProgressText = StatusText.Cancelled;
-            task.ErrorMessage = "用户停止当前任务";
+            if (string.IsNullOrWhiteSpace(task.ErrorMessage))
+            {
+                task.ErrorMessage = "用户停止当前任务";
+            }
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Cancelled;
             task.Reason = TaskReason.Cancelled;

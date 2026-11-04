@@ -371,7 +371,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        public void CancelCurrentTask()
+        public void CancelCurrentTask(string operation = "停止当前任务")
         {
             try
             {
@@ -380,7 +380,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (running.Count == 0)
                 {
-                    AppendLog("WARN", "当前没有正在执行的任务可取消。");
+                    AppendLog("WARN", $"当前没有正在执行的任务可{operation}。");
                     return;
                 }
 
@@ -401,6 +401,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         owner.Outcome = TaskOutcome.Cancelled;
                         owner.Reason = TaskReason.Cancelled;
+                        owner.ErrorMessage = $"用户{operation}";
                     }
 
                     try
@@ -412,11 +413,11 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
-                AppendLog("WARN", "已请求取消当前正在执行的任务，正在结束 7-Zip 进程。");
+                AppendLog("WARN", $"已请求{operation}，正在结束当前任务进程。");
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", "取消当前任务失败：" + ex.Message);
+                AppendLog("ERROR", $"{operation}失败：" + ex.Message);
             }
         }
 

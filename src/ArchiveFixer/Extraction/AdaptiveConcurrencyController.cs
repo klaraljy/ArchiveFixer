@@ -235,6 +235,7 @@ namespace ArchiveFixer.Extraction
 
             // 加档要连续两个窗口同向，避免单窗口噪声。
             _upVotes++;
+            LastDecisionReason = $"等待加档投票 {_upVotes}/{UpVotesRequired}";
 
             if (_upVotes < UpVotesRequired)
             {
@@ -242,6 +243,7 @@ namespace ArchiveFixer.Extraction
             }
 
             _upVotes = 0;
+            LastDecisionReason = "延迟未恶化，试探加档";
 
             return ChangeTo(Math.Min(CurrentLimit + 1, target), "延迟未恶化，试探加档");
         }
