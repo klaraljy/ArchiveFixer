@@ -98,6 +98,12 @@ namespace ArchiveFixer.ViewModels
 
                 target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
 
+                if (pending.Concat(running.Select(item => item.Unit))
+                    .Any(unit => unit.SourceBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes))
+                {
+                    target = 1;
+                }
+
                 if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
                 {
                     lastTarget = target;

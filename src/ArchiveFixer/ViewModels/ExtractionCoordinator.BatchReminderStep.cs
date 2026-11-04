@@ -177,6 +177,15 @@ namespace ArchiveFixer.ViewModels
                 minimumInitial = Math.Min(minimumInitial, controller.InitialLimit);
             }
 
+            /*
+             * 10 GiB 级别的超大任务不靠“先开 4 个再降”：一开始就只许 1 个。
+             * 这比事中降档更安全，也避免 SSD 上 4 个 10 GiB 任务同时冲击内存/磁盘。
+             */
+            if (tasks?.Any(task => task.SourceSizeBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes) == true)
+            {
+                return 1;
+            }
+
             return minimumInitial == AdaptiveConcurrencyController.DefaultMaxLimit
                 ? 1
                 : minimumInitial;
@@ -215,6 +224,11 @@ namespace ArchiveFixer.ViewModels
              * 系统压力是“下一单能不能开”的即时闸门：用户打开游戏 / 浏览器时，
              * CPU 或内存压力会先于任务完成出现；先压住新任务，已在跑的收完不杀。
              */
+            if (Settings.ConcurrencyOverride > 0)
+            {
+                return auto;
+            }
+
             ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
 
             if (resources.CpuBusyPercent >= 90
