@@ -16,8 +16,12 @@ namespace ArchiveFixer.Models
         /// <para>⛔ 邮箱是**唯一**要改的地方：About 那一块也引用 <see cref="FeedbackEmail"/>，
         /// 不许在别处再写一遍字面量。</para>
         /// </summary>
+        /// <summary>最新版本下载页（标题与「关于」共用一份）。</summary>
+        public const string ReleaseDownloadUrl = "https://github.com/klaraljy/ArchiveFixer/releases";
+
         public const string AppWindowTitle =
-            "ArchiveFixer - 批量压缩包识别与解压工具　｜　遇到问题请反馈给作者（发邮件 klaraljy0617@outlook.com）";
+            "ArchiveFixer - 批量压缩包识别与解压工具　｜　遇到问题请反馈给作者（发邮件 klaraljy0617@outlook.com）"
+            + "　｜　最新版本下载：" + ReleaseDownloadUrl;
 
         /// <summary>作者的反馈邮箱（标题与「关于」共用一份）。</summary>
         public const string FeedbackEmail = "klaraljy0617@outlook.com";

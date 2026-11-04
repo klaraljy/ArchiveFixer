@@ -363,6 +363,7 @@ namespace ArchiveFixer.ViewModels
 
                 // 反馈方式也写在「关于」里（用户 2026-09-26 要求写进标题，这里同步 —— 邮箱只有一处字面量）。
                 builder.AppendLine("遇到问题请反馈给作者：发邮件 " + StatusText.FeedbackEmail);
+                builder.AppendLine("最新版本下载：" + StatusText.ReleaseDownloadUrl);
                 builder.AppendLine();
 
                 if (SettingsEditor.Engines.Count == 0)

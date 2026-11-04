@@ -268,7 +268,7 @@ New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 # 不许进包的东西：日志 / 工作区 / 用户设置 / 密码本 / 样本 / 测试文件。
 # （appsettings.json 是程序自带的**默认配置模板**，不是用户设置，必须留下。）
 $forbiddenDirNames  = @('data', 'logs', 'temp', 'work', 'samples', '.git', '.vs')
-$forbiddenFileNames = @('password-book.path')
+$forbiddenFileNames = @('password-book.path', '密码本2.txt')
 $forbiddenExtensions = @('.log')
 if (-not $IncludeSymbols) { $forbiddenExtensions += '.pdb' }
 
@@ -347,6 +347,7 @@ foreach ($userDoc in $userDocs) {
 
 # 开发期文档不进发行包（用户 2026-09-27："旧AGENTS.md + 大量『用户第 N 条』式历史……不发，这个只是我们的开发痕迹"）：
 # 发布输出里带着 csproj 复制的四份面向用户的文档，其中《人工测试清单》是给作者照着点的测试清单，属于开发材料。
+# 2026-11-04 收紧：发行包 docs\ 只允许下面三份用户文档，其余（测试 / 计划 / 复盘 / 设计）一律不出现。
 $devOnlyDocs = @('人工测试清单.md')
 foreach ($devDoc in $devOnlyDocs) {
     $devPath = Join-Path $distDocs $devDoc
@@ -354,6 +355,14 @@ foreach ($devDoc in $devOnlyDocs) {
     if (Test-Path -LiteralPath $devPath) {
         Remove-Item -LiteralPath $devPath -Force
         Write-Detail "已从发行包里剔除开发期文档：docs\$devDoc"
+    }
+}
+
+$allowedUserDocs = @('使用说明.md', '功能一览.md', '设置项.md')
+foreach ($doc in Get-ChildItem -LiteralPath $distDocs -File -Force) {
+    if ($allowedUserDocs -notcontains $doc.Name) {
+        Remove-Item -LiteralPath $doc.FullName -Force
+        Write-Detail "已从发行包里剔除开发期文档：docs\$($doc.Name)"
     }
 }
 
