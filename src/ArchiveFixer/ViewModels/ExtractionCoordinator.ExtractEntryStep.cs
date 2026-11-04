@@ -536,7 +536,15 @@ namespace ArchiveFixer.ViewModels
                          * 「全速」档已退役（用户 2026-11-01：并发全部交给算法）。
                          * 这里只保留"每跑完一个任务就重新看一窗口吞吐"的自适应调整。
                          */
-                        Task finished = await Task.WhenAny(runningTasks);
+                        Task delay = Task.Delay(TimeSpan.FromSeconds(1));
+                        Task finished = await Task.WhenAny(runningTasks.Append(delay));
+
+                        if (ReferenceEquals(finished, delay))
+                        {
+                            // 长任务不结束也能重新读系统压力；只压后续启动，不杀在跑的任务。
+                            maxParallel = CurrentAutoLimit();
+                            continue;
+                        }
 
                         if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedAutoTask))
                         {

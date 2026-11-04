@@ -43,10 +43,12 @@ namespace ArchiveFixer.ViewModels
                     .ToList();
             }
 
-            _extractionCoordinator.PrepareAutoConcurrencyForSpecificBatch(targets);
+            int preparedTarget = _extractionCoordinator.PrepareAutoConcurrencyForSpecificBatch(targets);
+            bool largeProbePending = preparedTarget > _extractionCoordinator.CurrentAutoConcurrencyLimit;
             AppendLog(
                 "INFO",
                 $"特定解压：自动并发起点 {_extractionCoordinator.CurrentAutoConcurrencyLimit} 个"
+                + (largeProbePending ? $"；大包受控探测 {preparedTarget} 个" : string.Empty)
                 + (spaceTight ? "；空间不足另按空间上限收紧。" : "。"));
 
             int succeeded = 0;
@@ -90,6 +92,17 @@ namespace ArchiveFixer.ViewModels
 
                 string spaceBasis = string.Empty;
                 int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
+                if (largeProbePending)
+                {
+                    ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
+                    bool headroom = resources.CpuBusyPercent < 80
+                                    && (resources.AvailablePhysicalBytes <= 0
+                                        || resources.AvailablePhysicalBytes >= 1536L * 1024 * 1024);
+                    if (headroom)
+                    {
+                        autoTarget = Math.Max(autoTarget, preparedTarget);
+                    }
+                }
                 int target = spaceTight
                     ? Math.Min(
                         ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
@@ -131,8 +144,19 @@ namespace ArchiveFixer.ViewModels
                     break;
                 }
 
-                Task<bool> finished = await Task.WhenAny(running.Select(item => item.Work)).ConfigureAwait(true);
-                int index = running.FindIndex(item => ReferenceEquals(item.Work, finished));
+                Task delay = Task.Delay(TimeSpan.FromSeconds(1));
+                Task finished = await Task.WhenAny(
+                        running.Select(item => item.Work).Append(delay))
+                    .ConfigureAwait(true);
+                Task<bool> finishedWork = (Task<bool>)finished;
+                if (ReferenceEquals(finished, delay))
+                {
+                    // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
+                    lastTarget = -1;
+                    continue;
+                }
+
+                int index = running.FindIndex(item => ReferenceEquals(item.Work, finishedWork));
 
                 if (index < 0)
                 {
@@ -144,6 +168,7 @@ namespace ArchiveFixer.ViewModels
 
                 bool success = await completedWork.ConfigureAwait(true);
                 skippedFollowers += completedUnit.Followers.Count;
+                largeProbePending = false;
                 _extractionCoordinator.ObserveSpecificCompleted(
                     completedUnit.Entry,
                     Math.Max(1, running.Count));

@@ -186,6 +186,16 @@ namespace ArchiveFixer.ViewModels
                 return 1;
             }
 
+            int largeQueued = tasks?.Count(task =>
+                task.SourceSizeBytes >= AdaptiveConcurrencyController.LargeTaskThresholdBytes
+                && task.SourceSizeBytes < AdaptiveConcurrencyController.HugeTaskThresholdBytes) ?? 0;
+
+            if (largeQueued >= 2 && minimumInitial == 1)
+            {
+                AppendLog("INFO", "并发：检测到多个 2–8 GiB 大包，允许一次 2 并发受控探测。");
+                return 2;
+            }
+
             return minimumInitial == AdaptiveConcurrencyController.DefaultMaxLimit
                 ? 1
                 : minimumInitial;
@@ -251,10 +261,10 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 特定解压独立批也要建同一套设备画像/控制器；否则它永远按 1 跑。
         /// </summary>
-        internal void PrepareAutoConcurrencyForSpecificBatch(IReadOnlyList<ArchiveTask> tasks)
+        internal int PrepareAutoConcurrencyForSpecificBatch(IReadOnlyList<ArchiveTask> tasks)
         {
             _spaceTightThisBatch = false;
-            _ = ResolveMaxParallel(tasks, out _);
+            return ResolveMaxParallel(tasks, out _);
         }
 
         /// <summary>特定解压调度每次补位时读取的自动并发值。</summary>
