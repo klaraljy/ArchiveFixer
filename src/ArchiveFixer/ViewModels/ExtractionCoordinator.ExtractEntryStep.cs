@@ -1052,6 +1052,7 @@ namespace ArchiveFixer.ViewModels
             int stalls = UiActivity.TakeUiStallCount();
             int failures = finished.Outcome == TaskOutcome.Succeeded ? 0 : 1;
             int before = controller.CurrentLimit;
+            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
 
             controller.Observe(new ConcurrencyWindowSample(
                 latency,
@@ -1061,7 +1062,9 @@ namespace ArchiveFixer.ViewModels
                 DiskSpaceLow: false,
                 failures)
             {
-                TaskBytes = finished.SourceSizeBytes
+                TaskBytes = finished.SourceSizeBytes,
+                SystemCpuBusyPercent = resources.CpuBusyPercent,
+                AvailablePhysicalBytes = resources.AvailablePhysicalBytes
             });
 
             int autoLimit = CurrentAutoLimit();
@@ -1074,6 +1077,7 @@ namespace ArchiveFixer.ViewModels
                     $"并发调整（卷 {root}）{before} → {controller.CurrentLimit}："
                     + $"归一化延迟 {latency:F2} s/GB，基线 {controller.MinLatencySecondsPerGb:F2} s/GB，"
                     + $"本任务吞吐 {perTaskMbps:F1} MB/s，活跃 {activeTasks} 个，UI 停顿 {stalls} 次；"
+                    + $"系统 CPU {resources.CpuBusyPercent:F0}%，可用内存 {resources.AvailablePhysicalBytes / (1024 * 1024)} MiB；"
                     + $"全局自适应 {autoLimit} 个"
                     + (_spaceTightThisBatch ? $"，空间上限 {_spaceLimit} 个" : string.Empty)
                     + $" ⇒ 实际 {combined} 个");

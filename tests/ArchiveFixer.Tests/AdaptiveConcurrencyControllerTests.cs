@@ -39,8 +39,14 @@ namespace ArchiveFixer.Tests
             int active = 4,
             int stalls = 0,
             bool spaceLow = false,
-            int failures = 0) =>
-            new(latency, throughput, active, stalls, spaceLow, failures);
+            int failures = 0,
+            double cpu = 0,
+            long memory = 0) =>
+            new(latency, throughput, active, stalls, spaceLow, failures)
+            {
+                SystemCpuBusyPercent = cpu,
+                AvailablePhysicalBytes = memory
+            };
 
         [Fact]
         public void 延迟没有恶化_按梯度逐步加档()
@@ -88,15 +94,54 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 大任务单活跃_不凭单包延迟加档()
+        public void 十GB超大任务单活跃_不探测并发()
         {
             var controller = new AdaptiveConcurrencyController(initialLimit: 1);
             for (int i = 0; i < 4; i++)
             {
-                controller.Observe(Sample(1.0, active: 1) with { TaskBytes = 600L * 1024 * 1024 });
+                controller.Observe(Sample(1.0, active: 1) with
+                {
+                    TaskBytes = 10L * 1024 * 1024 * 1024
+                });
             }
 
             Assert.Equal(1, controller.CurrentLimit);
+        }
+
+        [Fact]
+        public void 两GB大任务单活跃_允许一次受控加档()
+        {
+            var controller = new AdaptiveConcurrencyController(initialLimit: 1);
+            for (int i = 0; i < 3; i++)
+            {
+                controller.Observe(Sample(1.0, active: 1) with
+                {
+                    TaskBytes = 2L * 1024 * 1024 * 1024
+                });
+            }
+
+            Assert.True(controller.CurrentLimit > 1, $"2 GiB 大包应允许试探，实际 {controller.CurrentLimit}");
+        }
+
+        [Fact]
+        public void 系统CPU过高_不加档()
+        {
+            var controller = new AdaptiveConcurrencyController(initialLimit: 4);
+            for (int i = 0; i < 3; i++)
+            {
+                controller.Observe(Sample(1.0, cpu: 85));
+            }
+
+            Assert.Equal(4, controller.CurrentLimit);
+        }
+
+        [Fact]
+        public void 可用内存临界_降到1()
+        {
+            var controller = new AdaptiveConcurrencyController(initialLimit: 6);
+            int after = controller.Observe(Sample(1.0, memory: 512L * 1024 * 1024));
+
+            Assert.Equal(1, after);
         }
 
         [Fact]

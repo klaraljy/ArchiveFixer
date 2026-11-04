@@ -39,13 +39,13 @@ namespace ArchiveFixer.Services
     /// <summary>
     /// UI 响应心跳：DispatcherTimer 每 250ms 走一次。两次心跳之间超过 1.5 秒
     /// 就说明 UI 线程没有处理消息 —— 在日志里写 WARN，并带上最后活动标记。
-    ///
-    /// <para>它不会“防止”UI 卡住；防卡住靠把同步磁盘/CPU 活挪出 UI 线程。
+    /// UI 响应心跳：DispatcherTimer 每 250ms 走一次。两次心跳之间超过 500 毫秒
+    /// 就说明 UI 线程明显卡顿 —— 在日志里写 WARN，并带上最后活动标记。
     /// 这个探针只负责让用户日志能定位到卡在哪一段，不用每次开调试器。</para>
     /// </summary>
     internal sealed class UiResponsivenessMonitor : IDisposable
     {
-        private static readonly TimeSpan StallThreshold = TimeSpan.FromSeconds(1.5);
+        private static readonly TimeSpan StallThreshold = TimeSpan.FromMilliseconds(500);
 
         private readonly DispatcherTimer _timer;
         private readonly Action<string> _warn;

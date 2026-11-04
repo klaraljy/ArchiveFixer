@@ -207,9 +207,31 @@ namespace ArchiveFixer.ViewModels
              * 于是控制器日志里从 1 一路调到 8，调度却始终按 1 跑 —— 自动并发只写日志不生效。
              * 有控制器时必须以控制器当前值为准；只有控制器还没建出来时才回落到计划值。
              */
-            return ResolveAutoLimitForBatch(
+            int auto = ResolveAutoLimitForBatch(
                 _autoControllers.Values.Select(controller => controller.CurrentLimit),
                 _runConcurrencyLimit?.Effective);
+
+            /*
+             * 系统压力是“下一单能不能开”的即时闸门：用户打开游戏 / 浏览器时，
+             * CPU 或内存压力会先于任务完成出现；先压住新任务，已在跑的收完不杀。
+             */
+            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
+
+            if (resources.CpuBusyPercent >= 90
+                || (resources.AvailablePhysicalBytes > 0
+                    && resources.AvailablePhysicalBytes < 1024L * 1024 * 1024))
+            {
+                return 1;
+            }
+
+            if (resources.CpuBusyPercent >= 80
+                || (resources.AvailablePhysicalBytes > 0
+                    && resources.AvailablePhysicalBytes < 1536L * 1024 * 1024))
+            {
+                return Math.Min(auto, 2);
+            }
+
+            return auto;
         }
 
         /// <summary>

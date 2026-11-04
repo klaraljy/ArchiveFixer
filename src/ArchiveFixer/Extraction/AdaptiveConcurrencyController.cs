@@ -19,6 +19,12 @@ namespace ArchiveFixer.Extraction
     {
         /// <summary>完成任务的源包字节数；0 = 旧调用方/测试，按小任务处理。</summary>
         public long TaskBytes { get; init; }
+
+        /// <summary>系统 CPU 忙的百分比（0–100；&lt;=0 表示没有采到，按有余量处理）。</summary>
+        public double SystemCpuBusyPercent { get; init; }
+
+        /// <summary>可用物理内存字节；0 = 没有采到，按未知处理（不据此降档）。</summary>
+        public long AvailablePhysicalBytes { get; init; }
     }
 
     /// <summary>
@@ -35,8 +41,20 @@ namespace ArchiveFixer.Extraction
     {
         public const int DefaultMaxLimit = 8;
 
-        /// <summary>大任务阈值：HDD/未知设备上，单独跑大包时不凭单包延迟加并发。</summary>
-        public const long LargeTaskThresholdBytes = 256L * 1024 * 1024;
+        /// <summary>大任务阈值（用户 2026-11-04 口径：2 GiB 以上才算大包）。</summary>
+        public const long LargeTaskThresholdBytes = 2L * 1024 * 1024 * 1024;
+
+        /// <summary>超大任务阈值：只串行，不拿单包探测并发。</summary>
+        public const long HugeTaskThresholdBytes = 8L * 1024 * 1024 * 1024;
+
+        /// <summary>系统 CPU 压力线：超过它不再加档；更高时降档。</summary>
+        private const double CpuHighPercent = 80;
+        private const double CpuCriticalPercent = 90;
+
+        /// <summary>可用内存安全线。</summary>
+        private const long MemoryLowBytes = 1536L * 1024 * 1024;
+        private const long MemoryCriticalBytes = 1024L * 1024 * 1024;
+
         private const int MaxChangesPerBatch = 8;
         private const int CooldownWindows = 2;
         private const int UpVotesRequired = 2;
@@ -130,14 +148,35 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * HDD/未知盘上单独跑大包时，固定 1 往往最快；单包延迟不能证明加并发有收益。
-             * 大任务、且完成时只有 1 个活跃任务 ⇒ 不给加档投票，保留当前值。
-             * 小任务/已有多任务并发仍走原梯度算法。
+             * 超大任务（>=8 GiB）单活跃：只串行，不拿单包延迟做并发探测。
+             * 2–8 GiB 不再在这里压死：允许控制器按真实吞吐试探，失败自然回退。
              */
-            if (sample.TaskBytes >= LargeTaskThresholdBytes && sample.ActiveTasks <= 1)
+            if (sample.TaskBytes >= HugeTaskThresholdBytes && sample.ActiveTasks <= 1)
             {
                 _upVotes = 0;
                 _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
+                return CurrentLimit;
+            }
+
+            if (sample.SystemCpuBusyPercent >= CpuCriticalPercent)
+            {
+                return Decrease("系统 CPU 过高");
+            }
+
+            if (sample.AvailablePhysicalBytes > 0
+                && sample.AvailablePhysicalBytes < MemoryCriticalBytes)
+            {
+                return ChangeTo(1, "可用内存临界");
+            }
+
+            bool cpuTight = sample.SystemCpuBusyPercent >= CpuHighPercent;
+            bool memoryTight = sample.AvailablePhysicalBytes > 0
+                               && sample.AvailablePhysicalBytes < MemoryLowBytes;
+
+            if (cpuTight || memoryTight)
+            {
+                _upVotes = 0;
+                _cooldown = Math.Max(_cooldown, 1);
                 return CurrentLimit;
             }
 
