@@ -60,15 +60,9 @@
                     </Grid>
 
                     <!--
-                        第 42 条的全自动拼装（用户 2026-09-25 选的方案 A：做，默认关）。
-                        说明必须把代价写清：它会读源目录、并在工作区里造名字 / 复制卷；
-                        判不准的场合一律不动，源文件一个字节不改。
-                        ⚠ 完整说明已按用户 2026-10-04 的口径挪进本组最下面的折叠区。
+                        容器里装的是分卷第 1 卷时自动接后续卷：按用户 2026-11-04 口径不再给界面开关，
+                        行为由程序自动判断；判不准的场合仍然不动并如实报缺卷。
                     -->
-                    <CheckBox Content="容器里装的是分卷第 1 卷时，自动接上同目录的后续卷"
-                              Margin="0,12,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.AssembleSplitVolumesFromContainer, Mode=TwoWay}"
-                              ToolTip="{x:Static models:StatusText.NestedVolumeAssemblyShortHint}" />
 
                     <!--
                         本组的长说明统一收在这里（用户 2026-10-04：「你这个嵌套与覆盖你的文字这么多」）——

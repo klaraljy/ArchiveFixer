@@ -45,7 +45,9 @@ namespace ArchiveFixer.Tests
 
                 if (Directory.Exists(candidate))
                 {
-                    return Directory.GetFiles(candidate, "*.xaml").OrderBy(path => path, StringComparer.Ordinal);
+                    return Directory.GetFiles(candidate, "*.xaml")
+                        .Concat(new[] { Path.Combine(directory.FullName, "src", "ArchiveFixer", "Views", "ManualOperationWindow.xaml") })
+                        .OrderBy(path => path, StringComparer.Ordinal);
                 }
 
                 directory = directory.Parent;

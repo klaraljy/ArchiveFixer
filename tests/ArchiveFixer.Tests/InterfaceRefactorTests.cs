@@ -450,12 +450,8 @@ namespace ArchiveFixer.Tests
                  */
                 ["MaxRecursionDepth"] = "ExtractionTab",
 
-                // 2026-10-25：「解压前与完成后」整组从②页搬到「提醒」页（用户口径）
-                ["TestBeforeExtract"] = "ReminderTab",
-                ["OpenOutputFolderWhenDone"] = "ReminderTab",
-                ["ReportDangerousEntries"] = "ReminderTab",
-                ["CollectResultsToDirectory"] = "ReminderTab",
-                ["CollectTargetDirectory"] = "ReminderTab",
+                // 2026-11-04：解压前测试 / 完成后打开目录 / 可疑条目 / 归集整组从界面移除；
+                // 设置属性仍保留给旧配置与内部路径，但不再有界面入口。
                 ["CustomSevenZipExePath"] = "EngineTab",
 
                 // ② 的第 17 条那一格：一键处理的确认框可以关掉（现在也在「提醒」页）
@@ -500,10 +496,7 @@ namespace ArchiveFixer.Tests
                 ["MaxSingleExtractedFileGiB"] = "SettingsTab",
                 ["MaxExtractedTotalGiB"] = "SettingsTab",
                 ["MaxExtractedFileCount"] = "SettingsTab",
-                ["MaxExtractionRatio"] = "SettingsTab",
-
-                // ② 的第 42 条那一格（"容器里装的是分卷第 1 卷时，自动接上同目录的后续卷"，默认关）。
-                ["AssembleSplitVolumesFromContainer"] = "ExtractionTab"
+                ["MaxExtractionRatio"] = "SettingsTab"
             };
 
             var tabFiles = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -785,6 +778,9 @@ namespace ArchiveFixer.Tests
 
             // 独立日志窗口也是界面的一部分（第 18 条的入口）。
             builder.AppendLine(Read("Views", "LogWindow.xaml"));
+
+            // 手工清理入口 2026-11-04 搬到「手动操作」窗口，命令仍须在界面里找得到。
+            builder.AppendLine(Read("Views", "ManualOperationWindow.xaml"));
 
             return builder.ToString();
         }

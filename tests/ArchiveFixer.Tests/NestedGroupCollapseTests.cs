@@ -87,7 +87,7 @@ namespace ArchiveFixer.Tests
              * 所以这里只剩分卷拼装那一格的短提示要钉。
              */
             Assert.DoesNotContain("StatusText.NestedMiddleLayerShortHint", xaml, StringComparison.Ordinal);
-            Assert.Contains("StatusText.NestedVolumeAssemblyShortHint", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("StatusText.NestedVolumeAssemblyShortHint", xaml, StringComparison.Ordinal);
 
             // ③ 长的那两份**不再整段挂在 ToolTip 上**、覆盖策略那段也不再摊在页面上
             //    （判据 = 旧的字面开头一个都不许留在 XAML 里）。

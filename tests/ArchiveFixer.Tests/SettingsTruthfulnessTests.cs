@@ -297,8 +297,7 @@ namespace ArchiveFixer.Tests
                  * · IncludeHiddenFiles / IncludeSystemFiles / MaxFileSizeLimit
                  * · LowProcessPriority / RememberLastOutputDirectory
                  */
-                "TestBeforeExtract", "OpenOutputFolderWhenDone", "ReportDangerousEntries",
-                "CollectResultsToDirectory", "CollectTargetDirectory", "MaxRecursionDepth",
+                "MaxRecursionDepth",
 
                 /*
                  * ⚠ 2026-09-25 第 32 条删掉了两格，所以这里也少了两条：
@@ -370,16 +369,7 @@ namespace ArchiveFixer.Tests
                  * ExtractionCoordinator.VerboseTaskLogEnabled 就是唯一出口
                  * （与那个测试口子合成同一个行为，⛔ 不许各写一份判断）。
                  */
-                "VerboseLog",
-
-                /*
-                 * 2026-09-25 第 42 条方案 A（他选的"做，默认关"）：②页的
-                 * 「容器里装的是分卷第 1 卷时，自动接上同目录的后续卷」。
-                 *
-                 * 它必须真的被管线读到 —— ExtractionCoordinator 里那句
-                 * "引擎刚说过分卷缺失 + 开关打开 + 容器里抠出过东西"就是唯一入口。
-                 */
-                "AssembleSplitVolumesFromContainer"
+                "VerboseLog"
             };
 
             foreach (string name in appSettingsBound)

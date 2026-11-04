@@ -317,7 +317,7 @@ namespace ArchiveFixer.Models
         public string RestHandlingAfterVerify { get; set; } = RestHandlingModes.Keep;
 
         /// <summary>
-        /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条，**默认关**）。
+        /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条；2026-11-04 起默认自动，不再给界面开关）。
         ///
         /// <para>他遇到的形状：一个文件（例如 <c>封面.jpg</c>）里装着的正是 <c>set.7z.001</c>，
         /// 而 <c>set.7z.002/.003</c> 就躺在**同一个目录**里。引擎按**文件名**在**同一个目录**里找同组的其他卷，
@@ -331,7 +331,7 @@ namespace ArchiveFixer.Models
         /// 判不准的场合（同族两组以上缺首卷、族认不出来且不止一组）**一律不动**，
         /// 照旧如实报"分卷缺失"并给出改名建议。</para>
         /// </summary>
-        public bool AssembleSplitVolumesFromContainer { get; set; } = false;
+        public bool AssembleSplitVolumesFromContainer { get; set; } = true;
 
         // ==================== 打包（用户 2026-09-26 第 46 条：与解压那套**完全独立**）====================
 
@@ -1000,7 +1000,7 @@ namespace ArchiveFixer.Models
                 RemindBeforeExtract = true,
 
                 // 第 42 条的全自动拼装：出厂**关**（它会读源目录、并在盘上造名字 / 复制卷）。
-                AssembleSplitVolumesFromContainer = false,
+                AssembleSplitVolumesFromContainer = true,
 
                 // 打包（第 46 条）：落点默认本地、原包不动、其余物（装分卷的文件夹）默认彻底删除。
                 PackTargetMode = "Local",
