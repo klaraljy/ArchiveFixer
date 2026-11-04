@@ -11,7 +11,7 @@ namespace ArchiveFixer.Tests
         {
             var entry = new ArchiveTask(@"H:\samples\group.7z.001", 3) { SourceSizeBytes = 1L * 1024 * 1024 * 1024 };
             double single = TaskDurationEstimator.EstimateSeconds(entry.SourceSizeBytes, entry);
-            double group = TaskDurationEstimator.EstimateSeconds(3L * 1024 * 1024 * 1024, entry, volumeCount: 3);
+            double group = TaskDurationEstimator.EstimateSeconds(3L * 1024 * 1024 * 1024, entry, volumeCount: 3, isVolumeGroup: true);
 
             Assert.True(group > single);
         }

@@ -26,10 +26,10 @@ namespace ArchiveFixer.Extraction
         /// 按**一个调度单位**的总字节估算：单一完整包用自身大小；完整分卷组用组内各卷求和。
         /// 不能用组里第一卷的大小代替整组。
         ///
-        /// <paramref name="volumeCount"/> 只加少量组内开销（每多一卷多一次打开/定位），
-        /// 主体仍是总字节 / 吞吐；它不是按包大小分档。
+        /// <param name="volumeCount">组内实际卷数；单卷为 1。</param>
+        /// <param name="isVolumeGroup">是否为一组完整分卷（第二大步单位）。</param>
         /// </summary>
-        public static double EstimateSeconds(long sourceBytes, ArchiveTask? context, int volumeCount = 1)
+        public static double EstimateSeconds(long sourceBytes, ArchiveTask? context, int volumeCount = 1, bool isVolumeGroup = false)
         {
             double megabytes = Math.Max(0, sourceBytes) / (1024d * 1024d);
 
@@ -40,8 +40,7 @@ namespace ArchiveFixer.Extraction
 
             double throughput = EstimateThroughputMegabytesPerSecond(context);
             double seconds = megabytes / Math.Max(1, throughput);
-            double volumeOverhead = 0.2 * Math.Max(0, volumeCount - 1);
-
+            double volumeOverhead = 0.2 * Math.Max(0, volumeCount - 1) + (isVolumeGroup ? 0.5 : 0);
             // 打开包、列目录、密码候选、收尾都有固定开销；小包不能估成 0 秒。
             return Math.Max(1, seconds + 1.5 + volumeOverhead);
         }
