@@ -54,6 +54,28 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 每层开始都回调_列表能显示正在解哪一层()
+        {
+            string source = Path.Combine(_root, "outer.7z");
+            File.WriteAllText(source, "x");
+
+            var engine = new ScriptedEngine();
+            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+            var starts = new List<(int Depth, string Archive)>();
+            var runner = new SpecificExtractionRunner(engine);
+            await runner.RunAsync(
+                source,
+                Path.Combine(_root, "out"),
+                Path.Combine(_root, "work"),
+                new string?[] { "pwd" },
+                onLayerStarted: (depth, archive) => starts.Add((depth, archive)));
+
+            Assert.Equal(new[] { (0, "outer.7z"), (1, "inner.rar") }, starts);
+        }
+
+        [Fact]
         public async Task 最后一层只有一个文件夹_用文件夹名()
         {
             string source = Path.Combine(_root, "outer.7z");

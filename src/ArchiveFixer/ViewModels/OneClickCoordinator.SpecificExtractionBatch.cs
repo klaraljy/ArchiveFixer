@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
@@ -167,7 +168,97 @@ namespace ArchiveFixer.ViewModels
                 MarkSpecificFollower(follower, unit.Entry, success, runOptions, spaceTight);
             }
 
+            if (success)
+            {
+                ApplySpecificSourceHandling(unit, runOptions, spaceTight);
+            }
+
             return success;
+        }
+
+        /// <summary>
+        /// 特定解压的收尾只做“按当前档处理源包/过程物”，不进入第一/第二大步；
+        /// 这里复用唯一的删源执行体，失败只记 WARN，不把内容物任务改成失败。
+        /// </summary>
+        private void ApplySpecificSourceHandling(
+            SpecificBatchUnit unit,
+            OneClickRunOptions runOptions,
+            bool spaceTight)
+        {
+            bool deleteSource = spaceTight || runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace;
+            if (!deleteSource)
+            {
+                return;
+            }
+
+            CleanupSpecificSource(unit.Entry, includeRestAliases: true);
+            foreach (ArchiveTask follower in unit.Followers)
+            {
+                CleanupSpecificSource(follower, includeRestAliases: false);
+            }
+        }
+
+        private void CleanupSpecificSource(ArchiveTask task, bool includeRestAliases)
+        {
+            SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
+                task,
+                new SourceCleanupDecision
+                {
+                    Enabled = true,
+                    Evidence = SourceCleanupEvidence.LayerCompleteness,
+                    Note = "特定解压内容物已落地",
+                    IncludeRestAliases = includeRestAliases
+                });
+
+            AppendLog(
+                cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                $"{task.LogName}：特定解压后源包处理 —— {cleanup.Message}");
+
+            if (cleanup.Attempted && cleanup.FailedFiles.Count == 0)
+            {
+                task.SourcePackageMove = SourcePackageMoveState.Done;
+            }
+        }
+
+        private void ApplySpecificRestHandling(
+            ArchiveTask task,
+            SpecificExtractionRunResult result,
+            OneClickRunOptions runOptions,
+            bool spaceTight)
+        {
+            if (string.IsNullOrWhiteSpace(result.RestDirectory))
+            {
+                return;
+            }
+
+            bool deleteRest = spaceTight
+                              || string.Equals(
+                                  runOptions.RestHandling,
+                                  RestHandlingModes.Delete,
+                                  StringComparison.OrdinalIgnoreCase);
+            if (!deleteRest)
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(result.RestDirectory))
+                {
+                    Directory.Delete(result.RestDirectory, recursive: true);
+                }
+
+                task.RestDirectoryPath = string.Empty;
+                AppendLog(
+                    "INFO",
+                    spaceTight
+                        ? $"{task.LogName}：空间不足模式，最后一层过程物在成功后彻底删除"
+                        : $"{task.LogName}：特定解压其余物按删除档清理完毕");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.LogName}：特定解压其余物删除失败：{ex.Message}");
+            }
         }
 
         private void MarkSpecificFollower(
@@ -238,6 +329,28 @@ namespace ArchiveFixer.ViewModels
                 ".ArchiveFixer.work",
                 "specific-" + Guid.NewGuid().ToString("N"));
 
+            /*
+             * 特定解压也要让列表看得见“正在做哪一层”：runner 每层开始时回调，
+             * 属性更新投递回 UI 线程；这里不伪造百分比，只把层/入口写进状态文本。
+             */
+            SynchronizationContext? uiContext = SynchronizationContext.Current;
+
+            void ApplyProgress(Action action)
+            {
+                if (uiContext != null)
+                {
+                    uiContext.Post(_ => action(), null);
+                }
+                else
+                {
+                    action();
+                }
+            }
+
+            task.Status = StatusText.Extracting;
+            task.ProgressText = "特定解压：准备";
+            task.ApplyProgress(0, null);
+
             SpecificExtractionRunResult result;
 
             try
@@ -250,7 +363,13 @@ namespace ArchiveFixer.ViewModels
                         _extractionCoordinator.SpecificExtractionPasswords,
                         passwordProvider: () => _extractionCoordinator.SpecificExtractionPasswords,
                         onPasswordSuccess: password =>
-                            _extractionCoordinator.RecordSpecificPasswordSuccess(source, password))
+                            _extractionCoordinator.RecordSpecificPasswordSuccess(source, password),
+                        onLayerStarted: (depth, archive) => ApplyProgress(() =>
+                        {
+                            task.Status = StatusText.Extracting;
+                            task.ProgressText = $"特定解压：第 {depth + 1} 层";
+                            task.ApplyProgress(0, $"第 {depth + 1} 层：{archive}", depth + 1);
+                        }))
                     .ConfigureAwait(true);
             }
             catch (Exception ex)
@@ -292,10 +411,10 @@ namespace ArchiveFixer.ViewModels
                 task.ApplyProgress(100, null);
 
                 /*
-                 * A 方案：特定解压只改内容物落点/命名。
-                 * 源包永远不在这里删；最后一层过程物也不在这里直接删，只把位置留在任务上，
-                 * 交给统一框架按证据和删除档处理；没有证据 ⇒ 一个字节都不动。
+                 * 特定解压只改内容物落点/命名；源包由 unit 成功后统一处理，
+                 * 最后一层过程物按当前删除档处理，不进入第一/第二大步。
                  */
+                ApplySpecificRestHandling(task, result, runOptions, spaceTight);
 
                 AppendLog(
                     "INFO",
@@ -317,6 +436,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             task.RestDirectoryPath = result.RestDirectory;
+            ApplySpecificRestHandling(task, result, runOptions, spaceTight);
             MarkSpecificTaskFailed(task, result.Message);
             AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
 

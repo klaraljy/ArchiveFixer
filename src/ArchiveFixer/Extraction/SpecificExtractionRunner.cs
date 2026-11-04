@@ -51,7 +51,8 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<string?> passwordCandidates,
             CancellationToken cancellationToken = default,
             Func<IReadOnlyList<string?>>? passwordProvider = null,
-            Action<string?>? onPasswordSuccess = null)
+            Action<string?>? onPasswordSuccess = null,
+            Action<int, string>? onLayerStarted = null)
         {
             if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
             {
@@ -67,6 +68,7 @@ namespace ArchiveFixer.Extraction
                 string layerRoot = Path.Combine(workRoot, "layer-" + depth.ToString("D2"));
                 Directory.CreateDirectory(layerRoot);
 
+                onLayerStarted?.Invoke(depth, Path.GetFileName(currentArchive));
                 _log?.Invoke(
                     $"第 {depth + 1} 层：解压「{Path.GetFileName(currentArchive)}」");
 

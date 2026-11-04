@@ -214,6 +214,52 @@ namespace ArchiveFixer.Tests
         // ================================================================ 人工抽查：普通/特定解压的成功后源包与过程物
 
         [SevenZipFact]
+        public async Task 特定解压_源包按KeepInPlace时保留()
+        {
+            string root = Path.Combine(_root, "specific-keep");
+            string build = Path.Combine(_root, "specific-keep-build");
+            WriteText(Path.Combine(build, "111", "a.txt"), "keep\n");
+            string package = Path.Combine(root, "111.7z");
+            Directory.CreateDirectory(root);
+            Run7z(build, "a", "-t7z", package, @"111\a.txt");
+
+            Harness harness = CreateHarness("specific-keep", settings =>
+            {
+                settings.UseSpecificExtraction = true;
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+            await harness.AddPathsAsync(root);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(File.Exists(package), "特定解压：KeepInPlace 必须保留源包");
+            Assert.True(File.Exists(Path.Combine(root, "111", "a.txt")), "特定解压：内容物仍要落位");
+        }
+
+        [SevenZipFact]
+        public async Task 特定解压_后缀夹多个中文_全部删掉后仍能认出并输出()
+        {
+            string root = Path.Combine(_root, "specific-suffix");
+            string build = Path.Combine(_root, "specific-suffix-build");
+            WriteText(Path.Combine(build, "111", "a.txt"), "suffix\n");
+            string package = Path.Combine(root, "111.删7z除中");
+            Directory.CreateDirectory(root);
+            Run7z(build, "a", "-t7z", package, @"111\a.txt");
+
+            Harness harness = CreateHarness("specific-suffix", settings =>
+            {
+                settings.UseSpecificExtraction = true;
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+            await harness.AddPathsAsync(root);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.True(File.Exists(package), "特定解压：KeepInPlace 必须保留源包");
+            Assert.True(File.Exists(Path.Combine(root, "111", "a.txt")), "后缀里的中文字符必须全部清掉");
+        }
+
+        [SevenZipFact]
         public async Task 人工抽查_普通与特定解压_成功后源包与最后一层过程物()
         {
             string normalRoot = Path.Combine(_root, "manual-normal");
@@ -288,7 +334,7 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(deleteRoot, "222", "a.txt")), "普通解压：删源后内容物仍在");
             Assert.True(File.Exists(nestedPackage), "普通解压：内层包成功后源包仍按 KeepInPlace 保留");
             Assert.True(File.Exists(Path.Combine(nestedRoot, "outer", "inner", "content", "b.txt")), "普通解压：内层内容物应落位");
-            Assert.True(File.Exists(specificPackage), "特定解压：源包永远不删，即使设置是 DeleteInPlace");
+            Assert.False(File.Exists(specificPackage), "特定解压：源包按 DeleteInPlace 成功后必须删");
             Assert.True(File.Exists(Path.Combine(specificRoot, "111", "a.txt")), "特定解压：内容物应落在 合集\\111\\a.txt");
         }
 
