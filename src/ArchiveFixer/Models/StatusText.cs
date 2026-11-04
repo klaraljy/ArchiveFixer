@@ -2872,11 +2872,11 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 「停止后续」在递归候选循环里的落点（<c>{0}</c> = 层标签，<c>{1}</c> = 还剩几个候选没试）。
         ///
-        /// <para>措辞与单层路径同一句（<c>ExtractionCoordinator</c> 的"已按「停止后续」中断 ——
+        /// <para>措辞与单层路径同一句（<c>ExtractionCoordinator</c> 的"已按「暂停所有操作」中断 ——
         /// 剩余 N 个候选密码不再尝试"）：正在解的那一次不打断，下一个密码一个都不再试。</para>
         /// </summary>
         public const string RecursionStoppedByStopRequestLogFormat =
-            "{0}：已按「停止后续」中断 —— 剩余 {1} 个候选密码不再尝试。";
+            "{0}：已按「暂停所有操作」中断 —— 剩余 {1} 个候选密码不再尝试。";
 
         /// <summary>
         /// 递归层的**单文件大小上限**停因（<c>DescribeStopReason</c> 用；与

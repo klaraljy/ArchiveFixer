@@ -2285,7 +2285,7 @@ namespace ArchiveFixer.ViewModels
 
                         AppendLog(
                             "WARN",
-                            $"{task.LogName}：已按「停止后续」中断 —— 剩余 "
+                            $"{task.LogName}：已按「暂停所有操作」中断 —— 剩余 "
                             + $"{maxPasswordAttempts - attemptedCandidates} 个候选密码不再尝试。");
 
                         break;
@@ -2504,7 +2504,7 @@ namespace ArchiveFixer.ViewModels
                             string? stopReason = !hasMoreCandidates
                                 ? "没有更多候选可试，按失败收场"
                                 : stoppedByStopRequest
-                                    ? "已按「停止后续」中断，剩余候选不再尝试"
+                                    ? "已按「暂停所有操作」中断，剩余候选不再尝试"
                                     : listSaysNoEncryption
                                         ? $"这个包没有加密（清单里没有加密条目），换密码不会改变结果，"
                                           + $"剩余 {maxPasswordAttempts - attemptedCandidates} 个候选不再尝试"
@@ -2811,7 +2811,7 @@ namespace ArchiveFixer.ViewModels
                         string verdictTail = passwordIrrelevant
                             ? $"（已试 {attemptedCandidates} 个候选，产物始终不完整；{passwordIrrelevantReason}，问题不在密码上）"
                             : stoppedByStopRequest
-                                ? $"（已试 {attemptedCandidates} 个候选，产物始终不完整；已按「停止后续」中断，剩余候选未尝试）"
+                                ? $"（已试 {attemptedCandidates} 个候选，产物始终不完整；已按「暂停所有操作」中断，剩余候选未尝试）"
                                 : $"（已试 {attemptedCandidates} 个候选，产物始终不完整）";
 
                         task.ErrorMessage = $"{failedVerification.FailureMessage}{verdictTail}";
@@ -2971,7 +2971,7 @@ namespace ArchiveFixer.ViewModels
                  *
                  * ⚠ 只在**真被每层上限截断**时才说（`candidatesTruncated`）：用户点了「停止后续」时
                  * 剩余候选同样是"没试到"，但那不是上限卡住的 —— 说成"上限卡住的"会指错方向
-                 * （那一条的现场已经在候选循环里写过「已按「停止后续」中断」）。
+                 * （那一条的现场已经在候选循环里写过「已按「暂停所有操作」中断」）。
                  */
                 if (!extractSuccess && candidatesTruncated && !stoppedByStopRequest)
                 {

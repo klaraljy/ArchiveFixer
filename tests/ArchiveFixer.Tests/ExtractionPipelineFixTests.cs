@@ -1642,7 +1642,7 @@ namespace ArchiveFixer.Tests
              * · 任务级那条说清"在第几个候选上停下、还剩几个没试"。
              */
             Assert.Equal(1, logs.Count(text => text.Contains("重新按「一键处理」", StringComparison.Ordinal)));
-            Assert.Contains(logs, text => text.Contains("已按「停止后续」中断", StringComparison.Ordinal)
+            Assert.Contains(logs, text => text.Contains("已按「暂停所有操作」中断", StringComparison.Ordinal)
                                           && text.Contains("不再尝试", StringComparison.Ordinal));
         }
 
