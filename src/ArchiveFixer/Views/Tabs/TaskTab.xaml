@@ -499,12 +499,19 @@
                             <DataGridTemplateColumn Header="状态" Width="150">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding StatusDisplayText}"
-                                                   Foreground="{Binding StatusColorKey, Converter={StaticResource StatusToBrushConverter}}"
-                                                   FontWeight="SemiBold"
-                                                   VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding StatusDisplayText}" />
+                                        <StackPanel VerticalAlignment="Center"
+                                                    ToolTip="{Binding StatusDisplayText}">
+                                            <TextBlock Text="{Binding StatusDisplayText}"
+                                                       Foreground="{Binding StatusColorKey, Converter={StaticResource StatusToBrushConverter}}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <ProgressBar Height="4"
+                                                         Margin="0,3,0,0"
+                                                         Minimum="0"
+                                                         Maximum="100"
+                                                         Value="{Binding ProgressPercent}"
+                                                         Visibility="{Binding HasLiveProgress, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

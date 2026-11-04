@@ -401,14 +401,8 @@ namespace ArchiveFixer.ViewModels
             task.ProgressText = "特定解压：准备";
             task.ApplyProgress(0, null);
 
-            var taskProgress = new Progress<ArchiveProgress>(value => ApplyProgress(() =>
-            {
-                task.Status = StatusText.Extracting;
-                task.ApplyProgress(
-                    value.Percent >= 0 ? value.Percent : 0,
-                    value.CurrentEntry,
-                    value.Layer);
-            }));
+            // 与普通挡位共用同一个 Sink：任务进度、10% 档位日志、30 秒心跳只维护一份实现。
+            IProgress<ArchiveProgress> taskProgress = _extractionCoordinator.CreateProgressSink(task);
 
             SpecificExtractionRunResult result;
             CancellationTokenSource specificCts = _extractionCoordinator.BeginSpecificTask(task);

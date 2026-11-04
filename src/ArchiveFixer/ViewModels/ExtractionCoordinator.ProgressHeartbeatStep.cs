@@ -1,3 +1,5 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 
 namespace ArchiveFixer.ViewModels
@@ -9,6 +11,10 @@ namespace ArchiveFixer.ViewModels
     internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost
     {
         private readonly ProgressHeartbeatStep _progressHeartbeat;
+
+        /// <summary>特定解压也复用同一个进度接收端：任务状态、10% 档位日志、30 秒心跳同源。</summary>
+        internal IProgress<ArchiveProgress> CreateProgressSink(ArchiveTask task) =>
+            _progressHeartbeat.CreateSink(task);
 
         /// <summary>心跳：绕开"成功就丢"缓冲直接写出去 —— 它要回答的正是"此刻还在动吗"。</summary>
         private void AppendHeartbeat(string message) => _vm.AppendLog("INFO", message);

@@ -99,6 +99,15 @@ namespace ArchiveFixer.Extraction
 
         public bool IsFrozen => _frozen;
 
+        /// <summary>最近一次采样为什么保持/降档；给“并发没变”的日志用。</summary>
+        public string LastDecisionReason { get; private set; } = "尚未采样";
+
+        private int Hold(string reason)
+        {
+            LastDecisionReason = reason;
+            return CurrentLimit;
+        }
+
         /// <summary>
         /// 喂一个窗口，返回调整后的并发上限；调用方按窗口（建议 5 秒）调用。
         /// </summary>
@@ -106,21 +115,23 @@ namespace ArchiveFixer.Extraction
         {
             if (IsFixed)
             {
-                return CurrentLimit;
+                return Hold("固定并发覆盖");
             }
 
             if (_frozen)
             {
-                return CurrentLimit;
+                return Hold("本批调整次数已到上限");
             }
 
             if (sample.DiskSpaceLow)
             {
+                LastDecisionReason = "空间见底";
                 return ChangeTo(1, "空间见底");
             }
 
             if (sample.UiStalls > 0)
             {
+                LastDecisionReason = "UI 线程停顿";
                 return Decrease("UI 线程停顿");
             }
 
@@ -129,13 +140,13 @@ namespace ArchiveFixer.Extraction
                 // 失败可能来自密码/盘/权限；不据此加并发，保持当前值观察。
                 _upVotes = 0;
                 _cooldown = Math.Max(_cooldown, 1);
-                return CurrentLimit;
+                return Hold("本窗口有失败");
             }
 
             if (!double.IsFinite(sample.NormalizedLatencySecondsPerGb)
                 || sample.NormalizedLatencySecondsPerGb <= 0)
             {
-                return CurrentLimit;
+                return Hold("延迟样本无效");
             }
 
             if (_minLatencySecondsPerGb <= 0)
@@ -155,17 +166,19 @@ namespace ArchiveFixer.Extraction
             {
                 _upVotes = 0;
                 _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
-                return CurrentLimit;
+                return Hold("超大任务单活跃只串行");
             }
 
             if (sample.SystemCpuBusyPercent >= CpuCriticalPercent)
             {
+                LastDecisionReason = "系统 CPU 过高";
                 return Decrease("系统 CPU 过高");
             }
 
             if (sample.AvailablePhysicalBytes > 0
                 && sample.AvailablePhysicalBytes < MemoryCriticalBytes)
             {
+                LastDecisionReason = "可用内存临界";
                 return ChangeTo(1, "可用内存临界");
             }
 
@@ -177,14 +190,14 @@ namespace ArchiveFixer.Extraction
             {
                 _upVotes = 0;
                 _cooldown = Math.Max(_cooldown, 1);
-                return CurrentLimit;
+                return Hold("CPU/内存余量不足");
             }
 
             if (_cooldown > 0)
             {
                 _cooldown--;
                 _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
-                return CurrentLimit;
+                return Hold("冷却窗口");
             }
 
             double baseline = _minLatencySecondsPerGb * (1 + _bufferRatio);
@@ -197,12 +210,13 @@ namespace ArchiveFixer.Extraction
             {
                 _upVotes = 0;
                 _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
-                return CurrentLimit;
+                return Hold("梯度目标等于当前值");
             }
 
             if (target < CurrentLimit)
             {
                 _upVotes = 0;
+                LastDecisionReason = "延迟相对基线变差";
                 _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
                 return Decrease("延迟相对基线变差");
             }
@@ -216,7 +230,7 @@ namespace ArchiveFixer.Extraction
             {
                 _upVotes = 0;
                 _cooldown = Math.Max(_cooldown, CooldownWindows);
-                return CurrentLimit;
+                return Hold("聚合吞吐下降");
             }
 
             // 加档要连续两个窗口同向，避免单窗口噪声。

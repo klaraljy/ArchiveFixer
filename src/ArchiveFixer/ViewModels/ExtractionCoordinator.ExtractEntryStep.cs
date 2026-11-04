@@ -1088,7 +1088,17 @@ namespace ArchiveFixer.ViewModels
                     + $"系统 CPU {resources.CpuBusyPercent:F0}%，可用内存 {resources.AvailablePhysicalBytes / (1024 * 1024)} MiB；"
                     + $"全局自适应 {autoLimit} 个"
                     + (_spaceTightThisBatch ? $"，空间上限 {_spaceLimit} 个" : string.Empty)
-                    + $" ⇒ 实际 {combined} 个");
+                    + $" ⇒ 实际 {combined} 个；原因：{controller.LastDecisionReason}");
+            }
+            else
+            {
+                AppendLog(
+                    "INFO",
+                    $"并发采样（卷 {root}）：任务 {finished.SourceSizeBytes / (1024 * 1024)} MiB，"
+                    + $"活跃 {activeTasks} 个，CPU {resources.CpuBusyPercent:F0}%，"
+                    + $"可用内存 {resources.AvailablePhysicalBytes / (1024 * 1024)} MiB，"
+                    + $"本任务吞吐 {perTaskMbps:F1} MB/s；保持 {controller.CurrentLimit} 个"
+                    + $"（{controller.LastDecisionReason}）");
             }
 
             maxParallel = combined;
