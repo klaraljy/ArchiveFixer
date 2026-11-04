@@ -33,22 +33,16 @@ namespace ArchiveFixer.ViewModels
             _extractionCoordinator.BeginSpecificPasswordBatch();
             // 空间不足模式：按源包体积从大到小；源包按用户接受风险处理（失败/预检不足也删）。
             bool spaceTight = snapshot.SpaceTightMode;
-            IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets);
-
-            if (spaceTight)
-            {
-                orderedUnits = orderedUnits
-                    .OrderByDescending(unit => unit.SourceBytes)
-                    .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-            }
+            // 预计耗时从大到小：长任务先占槽位，小任务随后补空；不再按包大小分档。
+            IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets)
+                .OrderByDescending(unit => TaskDurationEstimator.EstimateSeconds(unit.Entry))
+                .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             int preparedTarget = _extractionCoordinator.PrepareAutoConcurrencyForSpecificBatch(targets);
-            bool largeProbePending = preparedTarget > _extractionCoordinator.CurrentAutoConcurrencyLimit;
             AppendLog(
                 "INFO",
-                $"特定解压：自动并发起点 {_extractionCoordinator.CurrentAutoConcurrencyLimit} 个"
-                + (largeProbePending ? $"；大包受控探测 {preparedTarget} 个" : string.Empty)
+                $"特定解压：预计耗时排序完成，自动容量 {preparedTarget} 个"
                 + (spaceTight ? "；空间不足另按空间上限收紧。" : "。"));
 
             int succeeded = 0;
@@ -120,17 +114,6 @@ namespace ArchiveFixer.ViewModels
                             autoTarget = Math.Max(autoTarget, 2);
                         }
                     }
-                    if (largeProbePending)
-                    {
-                        ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-                        bool headroom = resources.CpuBusyPercent < 80
-                                        && (resources.AvailablePhysicalBytes <= 0
-                                            || resources.AvailablePhysicalBytes >= 1536L * 1024 * 1024);
-                        if (headroom)
-                        {
-                            autoTarget = Math.Max(autoTarget, preparedTarget);
-                        }
-                    }
                     int target = spaceTight
                         ? Math.Min(
                             ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
@@ -138,12 +121,6 @@ namespace ArchiveFixer.ViewModels
                         : autoTarget;
 
                     target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
-
-                    if (pending.Concat(running.Select(item => item.Unit))
-                        .Any(unit => unit.SourceBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes))
-                    {
-                        target = 1;
-                    }
 
                     if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
                     {
@@ -197,7 +174,6 @@ namespace ArchiveFixer.ViewModels
 
                     bool success = await completedWork.ConfigureAwait(true);
                     skippedFollowers += completedUnit.Followers.Count;
-                    largeProbePending = false;
                     startupProbe = false;
                     _extractionCoordinator.ObserveSpecificCompleted(
                         completedUnit.Entry,

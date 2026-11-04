@@ -177,25 +177,6 @@ namespace ArchiveFixer.ViewModels
                 minimumInitial = Math.Min(minimumInitial, controller.InitialLimit);
             }
 
-            /*
-             * 10 GiB 级别的超大任务不靠“先开 4 个再降”：一开始就只许 1 个。
-             * 这比事中降档更安全，也避免 SSD 上 4 个 10 GiB 任务同时冲击内存/磁盘。
-             */
-            if (tasks?.Any(task => task.SourceSizeBytes >= AdaptiveConcurrencyController.HugeTaskThresholdBytes) == true)
-            {
-                return 1;
-            }
-
-            int largeQueued = tasks?.Count(task =>
-                task.SourceSizeBytes >= AdaptiveConcurrencyController.LargeTaskThresholdBytes
-                && task.SourceSizeBytes < AdaptiveConcurrencyController.HugeTaskThresholdBytes) ?? 0;
-
-            if (largeQueued >= 2 && minimumInitial == 1)
-            {
-                AppendLog("INFO", "并发：检测到多个 2–8 GiB 大包，允许一次 2 并发受控探测。");
-                return 2;
-            }
-
             return minimumInitial == AdaptiveConcurrencyController.DefaultMaxLimit
                 ? 1
                 : minimumInitial;

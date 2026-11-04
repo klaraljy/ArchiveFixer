@@ -274,7 +274,7 @@ namespace ArchiveFixer.ViewModels
              */
             Func<ScheduledExtractionItem, long>? sortKey = spaceTightOrdering
                 ? item => -item.Estimate.SourceBytes
-                : null;
+                : item => -(long)Math.Round(TaskDurationEstimator.EstimateSeconds(item.Task) * 1000);
 
             return ExtractionScheduler.Build(
                 tasks,
@@ -284,8 +284,10 @@ namespace ArchiveFixer.ViewModels
                 ReserveSpaceBytes,
                 requestedParallel,
                 sortKey,
-                spaceTightOrdering ? ExtractionSchedulePlan.SourceSizeDescendingOrderBasis : null);
+                spaceTightOrdering ? ExtractionSchedulePlan.SourceSizeDescendingOrderBasis : ExtractionSchedulePlan.DurationDescendingOrderBasis
+            );
         }
+
 
         /// <summary>
         /// 空间不足模式的动态并发：按当前可用空间与**剩余队列的源包体积**算还能跑几个；

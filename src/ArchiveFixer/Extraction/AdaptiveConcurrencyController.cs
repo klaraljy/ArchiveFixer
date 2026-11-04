@@ -158,17 +158,6 @@ namespace ArchiveFixer.Extraction
                 _minLatencySecondsPerGb = sample.NormalizedLatencySecondsPerGb;
             }
 
-            /*
-             * 超大任务（>=8 GiB）单活跃：只串行，不拿单包延迟做并发探测。
-             * 2–8 GiB 不再在这里压死：允许控制器按真实吞吐试探，失败自然回退。
-             */
-            if (sample.TaskBytes >= HugeTaskThresholdBytes && sample.ActiveTasks <= 1)
-            {
-                _upVotes = 0;
-                _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
-                return Hold("超大任务单活跃只串行");
-            }
-
             if (sample.SystemCpuBusyPercent >= CpuCriticalPercent)
             {
                 LastDecisionReason = "系统 CPU 过高";

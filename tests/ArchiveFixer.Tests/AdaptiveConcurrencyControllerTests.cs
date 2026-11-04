@@ -94,7 +94,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 十GB超大任务单活跃_不探测并发()
+        public void 十GB任务也按耗时而非大小处理_允许加档()
         {
             var controller = new AdaptiveConcurrencyController(initialLimit: 1);
             for (int i = 0; i < 4; i++)
@@ -105,7 +105,7 @@ namespace ArchiveFixer.Tests
                 });
             }
 
-            Assert.Equal(1, controller.CurrentLimit);
+            Assert.True(controller.CurrentLimit > 1, $"10 GiB 不应再按大小锁 1，实际 {controller.CurrentLimit}");
         }
 
         [Fact]

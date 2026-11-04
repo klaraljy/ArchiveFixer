@@ -116,6 +116,7 @@ namespace ArchiveFixer.Storage
 
         /// <summary>空间不足模式（2026-10-25 新口径）：按源包总体积从大到小。</summary>
         internal const string SourceSizeDescendingOrderBasis = "按源包总体积从大到小（空间不足模式：大包先解）";
+        internal const string DurationDescendingOrderBasis = "按预计耗时从大到小（长任务先占槽位，小任务补空）";
 
         /// <summary>给用户看的一句话："当前可用 10 GB，建议并行 2 个"。</summary>
         public string ParallelAdviceText()
