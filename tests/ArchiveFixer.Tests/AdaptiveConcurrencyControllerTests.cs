@@ -88,6 +88,18 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 大任务单活跃_不凭单包延迟加档()
+        {
+            var controller = new AdaptiveConcurrencyController(initialLimit: 1);
+            for (int i = 0; i < 4; i++)
+            {
+                controller.Observe(Sample(1.0, active: 1) with { TaskBytes = 600L * 1024 * 1024 });
+            }
+
+            Assert.Equal(1, controller.CurrentLimit);
+        }
+
+        [Fact]
         public void 有失败_保持当前值不冒进()
         {
             var controller = new AdaptiveConcurrencyController(initialLimit: 4);

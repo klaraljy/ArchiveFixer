@@ -86,6 +86,27 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private const int ThrottleNoticeThresholdSeconds = 30;
 
+        /// <summary>小包批次的判定阈值：全部任务都不超过它时，HDD/未知盘允许从 4 档起步。</summary>
+        internal const long SmallBatchTaskThresholdBytes = 64L * 1024 * 1024;
+
+        /// <summary>按设备与任务规模决定自动并发的起点；固定并发覆盖不在这里处理。</summary>
+        internal static int ResolveInitialLimitForBatch(
+            StorageDeviceKind device,
+            bool allTasksSmall,
+            int profileLimit,
+            int logicalCoreCount)
+        {
+            if (device == StorageDeviceKind.Ssd)
+            {
+                return profileLimit > 0
+                    ? Math.Clamp(profileLimit, 1, 8)
+                    : Math.Clamp(logicalCoreCount / 2, 2, 4);
+            }
+
+            // HDD/未知：大包从 1 起，避免写放大；全是小包时从 4 起，减少排队空转。
+            return allTasksSmall ? 4 : 1;
+        }
+
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
         {
             // 全速档已退役（用户 2026-11-01：全部交给算法）。
@@ -124,12 +145,17 @@ namespace ArchiveFixer.ViewModels
                         root,
                         device);
 
+                    IReadOnlyList<ArchiveTask> batchTasks = tasks ?? Array.Empty<ArchiveTask>();
+                    bool allTasksSmall = batchTasks.Count(t => t != null && ResolveConcurrencyRoot(t) == root) > 0
+                        && batchTasks.Where(t => t != null && ResolveConcurrencyRoot(t) == root)
+                            .All(t => t!.SourceSizeBytes > 0 && t.SourceSizeBytes <= SmallBatchTaskThresholdBytes);
                     int prior = Settings.ConcurrencyOverride > 0
                         ? Settings.ConcurrencyOverride
-                        : profile?.LastGoodLimit
-                          ?? (device == StorageDeviceKind.Ssd
-                              ? Math.Clamp(Environment.ProcessorCount / 2, 2, 4)
-                              : 1);
+                        : ResolveInitialLimitForBatch(
+                            device,
+                            allTasksSmall,
+                            profile?.LastGoodLimit ?? 0,
+                            Environment.ProcessorCount);
 
                     controller = new AdaptiveConcurrencyController(
                         prior,

@@ -1059,7 +1059,10 @@ namespace ArchiveFixer.ViewModels
                 activeTasks,
                 stalls,
                 DiskSpaceLow: false,
-                failures));
+                failures)
+            {
+                TaskBytes = finished.SourceSizeBytes
+            });
 
             int autoLimit = CurrentAutoLimit();
             int combined = _spaceTightThisBatch ? Math.Min(_spaceLimit, autoLimit) : autoLimit;

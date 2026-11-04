@@ -15,7 +15,11 @@ namespace ArchiveFixer.Extraction
         int ActiveTasks,
         int UiStalls,
         bool DiskSpaceLow,
-        int Failures);
+        int Failures)
+    {
+        /// <summary>完成任务的源包字节数；0 = 旧调用方/测试，按小任务处理。</summary>
+        public long TaskBytes { get; init; }
+    }
 
     /// <summary>
     /// **延迟梯度 + AIMD** 控制器（Envoy / Netflix concurrency-limits 同族）。
@@ -30,6 +34,9 @@ namespace ArchiveFixer.Extraction
     public sealed class AdaptiveConcurrencyController
     {
         public const int DefaultMaxLimit = 8;
+
+        /// <summary>大任务阈值：HDD/未知设备上，单独跑大包时不凭单包延迟加并发。</summary>
+        public const long LargeTaskThresholdBytes = 256L * 1024 * 1024;
         private const int MaxChangesPerBatch = 8;
         private const int CooldownWindows = 2;
         private const int UpVotesRequired = 2;
@@ -120,6 +127,18 @@ namespace ArchiveFixer.Extraction
             else if (sample.NormalizedLatencySecondsPerGb < _minLatencySecondsPerGb)
             {
                 _minLatencySecondsPerGb = sample.NormalizedLatencySecondsPerGb;
+            }
+
+            /*
+             * HDD/未知盘上单独跑大包时，固定 1 往往最快；单包延迟不能证明加并发有收益。
+             * 大任务、且完成时只有 1 个活跃任务 ⇒ 不给加档投票，保留当前值。
+             * 小任务/已有多任务并发仍走原梯度算法。
+             */
+            if (sample.TaskBytes >= LargeTaskThresholdBytes && sample.ActiveTasks <= 1)
+            {
+                _upVotes = 0;
+                _lastAggregateMbps = sample.AggregateMegabytesPerSecond;
+                return CurrentLimit;
             }
 
             if (_cooldown > 0)

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ArchiveFixer.Models;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
 using ArchiveFixer.ViewModels;
@@ -115,6 +116,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal(2, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 4, 2 }, planLimit: 1));
             Assert.Equal(2, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 2 }, planLimit: 8));
             Assert.Equal(1, ExtractionCoordinator.ResolveAutoLimitForBatch(Array.Empty<int>(), planLimit: 1));
+        }
+
+        [Fact]
+        public void 自动并发_HDD大包从1起_全小包从4起()
+        {
+            Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
+                StorageDeviceKind.Hdd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));
+            Assert.Equal(1, ExtractionCoordinator.ResolveInitialLimitForBatch(
+                StorageDeviceKind.Hdd, allTasksSmall: false, profileLimit: 8, logicalCoreCount: 8));
+            Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
+                StorageDeviceKind.Ssd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));
         }
 
         [Fact]
