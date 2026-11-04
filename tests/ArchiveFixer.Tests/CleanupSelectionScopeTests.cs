@@ -651,6 +651,55 @@ namespace ArchiveFixer.Tests
             Assert.Contains("先解压一次", text, StringComparison.Ordinal);
         }
 
+        // ================================================================ 手动操作窗口的三个当前任务入口
+
+        [Fact]
+        public async Task 手动清理当前任务_只作用当前行_不碰另一个勾选任务()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask current = AddOwnOutputTask(harness, "222", isSelected: true);
+            ArchiveTask other = AddOwnOutputTask(harness, "333", isSelected: true);
+            harness.Vm.SelectedTask = current;
+
+            int before = CountFallbackEntries("ShowDestructiveConfirmWithOption");
+            await RunCleanupAsync(harness, harness.Vm.CleanCurrentTaskArtifactsCommand);
+            Assert.Equal(before + 1, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
+            string confirm = LastFallbackEntry("ShowDestructiveConfirmWithOption");
+            // 确认框正文只点名当前任务；具体口径由 DescribeCleanupTargets 的独立用例钉住。
+            Assert.Contains(@"\222\", confirm, StringComparison.Ordinal);
+            Assert.DoesNotContain(@"\333\", confirm, StringComparison.Ordinal);
+            Assert.Empty(harness.Executor.PermanentCalls);
+            Assert.Empty(harness.Executor.RecycleCalls);
+        }
+
+        [Fact]
+        public async Task 手动清理空文件夹_当前任务入口也先预览再确认()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask current = AddOwnOutputTask(harness, "222", isSelected: true);
+            MakeEmptyShell(current);
+            harness.Vm.SelectedTask = current;
+
+            await RunCleanupAsync(harness, harness.Vm.CleanCurrentTaskEmptyFoldersCommand);
+
+            string confirm = LastFallbackEntry("ShowDestructiveConfirmWithOption");
+            Assert.Contains("空文件夹", confirm, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("222", confirm, StringComparison.Ordinal);
+            Assert.Empty(harness.Executor.PermanentCalls);
+            Assert.Empty(harness.Executor.RecycleCalls);
+        }
+
+        [Fact]
+        public void 手动清理当前任务_没有当前行时三个命令都不可点()
+        {
+            Harness harness = CreateHarness();
+            harness.Vm.SelectedTask = null;
+
+            Assert.False(harness.Vm.CleanCurrentTaskArtifactsCommand.CanExecute(null));
+            Assert.False(harness.Vm.CleanCurrentTaskEmptyFoldersCommand.CanExecute(null));
+            Assert.False(harness.Vm.RecycleCurrentTaskArtifactsCommand.CanExecute(null));
+        }
+
         // ================================================================ 装配
 
         private sealed class Harness
