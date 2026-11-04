@@ -1042,10 +1042,10 @@ namespace ArchiveFixer.Tests
             //
             // ⚠ 2026-09-27 起这条日志的措辞统一成一句（StatusText.StopRequestedNotice）：
             // 原来是"已请求停止后续任务，不再启动新的解压任务。"，现在是
-            // "已按「停止后续」停下：不再启动新任务；…在下一个安全点停下…"。
+            // "已按「暂停所有操作」停下：…"
             await WaitAsync(
                 () => harness.Engine.ExtractCalls.Any(p => string.Equals(p, third.CurrentPath, StringComparison.OrdinalIgnoreCase)) ||
-                      harness.Log.Logs.Any(x => x.Message.Contains("已按「停止后续」停下", StringComparison.Ordinal)),
+                      harness.Log.Logs.Any(x => x.Message.Contains("已按「暂停所有操作」停下", StringComparison.Ordinal)),
                 TimeSpan.FromSeconds(10),
                 "停止后续没有被处理");
 
@@ -1641,7 +1641,7 @@ namespace ArchiveFixer.Tests
              * · 批级通知**只写一次**（"…在下一个安全点停下…"）—— 他连点两次也只出现一条；
              * · 任务级那条说清"在第几个候选上停下、还剩几个没试"。
              */
-            Assert.Equal(1, logs.Count(text => text.Contains("下一个安全点停下", StringComparison.Ordinal)));
+            Assert.Equal(1, logs.Count(text => text.Contains("重新按「一键处理」", StringComparison.Ordinal)));
             Assert.Contains(logs, text => text.Contains("已按「停止后续」中断", StringComparison.Ordinal)
                                           && text.Contains("不再尝试", StringComparison.Ordinal));
         }
