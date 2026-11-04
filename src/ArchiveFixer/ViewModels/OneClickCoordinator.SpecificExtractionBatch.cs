@@ -65,11 +65,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             _vm.PropertyChanged += OnViewModelPropertyChanged;
-
-            bool startupProbe = !spaceTight
-                                && orderedUnits.Count >= 2
-                                && preparedTarget <= 1;
-
             try
             {
 
@@ -104,16 +99,6 @@ namespace ArchiveFixer.ViewModels
 
                     string spaceBasis = string.Empty;
                     int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
-                    if (startupProbe && pending.Count + running.Count >= 2)
-                    {
-                        ConcurrencyResourceSnapshot probeResources = SystemResourceProbe.Snapshot();
-                        if (probeResources.CpuBusyPercent < 80
-                            && (probeResources.AvailablePhysicalBytes <= 0
-                                || probeResources.AvailablePhysicalBytes >= 1536L * 1024 * 1024))
-                        {
-                            autoTarget = Math.Max(autoTarget, 2);
-                        }
-                    }
                     int target = spaceTight
                         ? Math.Min(
                             ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
@@ -174,7 +159,6 @@ namespace ArchiveFixer.ViewModels
 
                     bool success = await completedWork.ConfigureAwait(true);
                     skippedFollowers += completedUnit.Followers.Count;
-                    startupProbe = false;
                     _extractionCoordinator.ObserveSpecificCompleted(
                         completedUnit.Entry,
                         Math.Max(1, running.Count));

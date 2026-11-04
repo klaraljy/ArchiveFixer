@@ -119,11 +119,11 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 自动并发_HDD大包从1起_全小包从4起()
+        public void 自动并发_HDD大包从2起_全小包从4起()
         {
             Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
                 StorageDeviceKind.Hdd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));
-            Assert.Equal(1, ExtractionCoordinator.ResolveInitialLimitForBatch(
+            Assert.Equal(2, ExtractionCoordinator.ResolveInitialLimitForBatch(
                 StorageDeviceKind.Hdd, allTasksSmall: false, profileLimit: 8, logicalCoreCount: 8));
             Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
                 StorageDeviceKind.Ssd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));

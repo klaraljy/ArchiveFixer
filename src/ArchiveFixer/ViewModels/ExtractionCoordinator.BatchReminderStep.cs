@@ -103,8 +103,8 @@ namespace ArchiveFixer.ViewModels
                     : Math.Clamp(logicalCoreCount / 2, 2, 4);
             }
 
-            // HDD/未知：大包从 1 起，避免写放大；全是小包时从 4 起，减少排队空转。
-            return allTasksSmall ? 4 : 1;
+            // HDD/未知：至少从 2 起，先让补位有机会发生；实际并发由实时吞吐/压力回退。
+            return allTasksSmall ? 4 : 2;
         }
 
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
