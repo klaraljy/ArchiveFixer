@@ -274,7 +274,8 @@ namespace ArchiveFixer.ViewModels
              */
             Func<ScheduledExtractionItem, long>? sortKey = spaceTightOrdering
                 ? item => -item.Estimate.SourceBytes
-                : item => -(long)Math.Round(TaskDurationEstimator.EstimateSeconds(item.Task) * 1000);
+                : item => -(long)Math.Round(
+                    TaskDurationEstimator.EstimateSeconds(item.Estimate.SourceBytes, item.Task) * 1000);
 
             return ExtractionScheduler.Build(
                 tasks,

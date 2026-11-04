@@ -103,8 +103,8 @@ namespace ArchiveFixer.ViewModels
                     : Math.Clamp(logicalCoreCount / 2, 2, 4);
             }
 
-            // HDD/未知：至少从 2 起，先让补位有机会发生；实际并发由实时吞吐/压力回退。
-            return allTasksSmall ? 4 : 2;
+            // HDD/未知：最小从 3 起，先给补位留出余量；实际增长/回退由实时吞吐与压力决定。
+            return allTasksSmall ? 4 : 3;
         }
 
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)

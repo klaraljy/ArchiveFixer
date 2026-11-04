@@ -327,7 +327,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RecursionStopReason.PasswordAttemptsExceeded, result.StopReason);
             Assert.NotEqual(RecursionStopReason.WrongPassword, result.StopReason);
 
-            Assert.Contains(logs, line => line.Contains("停止后续", StringComparison.Ordinal));
+            Assert.Contains(logs, line => line.Contains("暂停所有操作", StringComparison.Ordinal));
         }
 
         /// <summary>

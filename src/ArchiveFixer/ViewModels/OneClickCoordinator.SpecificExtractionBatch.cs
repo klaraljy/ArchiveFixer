@@ -35,7 +35,7 @@ namespace ArchiveFixer.ViewModels
             bool spaceTight = snapshot.SpaceTightMode;
             // 预计耗时从大到小：长任务先占槽位，小任务随后补空；不再按包大小分档。
             IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets)
-                .OrderByDescending(unit => TaskDurationEstimator.EstimateSeconds(unit.Entry))
+                .OrderByDescending(unit => TaskDurationEstimator.EstimateSeconds(unit.SourceBytes, unit.Entry))
                 .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 

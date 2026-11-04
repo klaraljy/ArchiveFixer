@@ -17,20 +17,25 @@ namespace ArchiveFixer.Extraction
 
         public static double EstimateSeconds(ArchiveTask task)
         {
-            if (task == null)
-            {
-                return 1;
-            }
+            return task == null
+                ? 1
+                : EstimateSeconds(task.SourceSizeBytes, task);
+        }
 
-            long bytes = Math.Max(0, task.SourceSizeBytes);
-            double megabytes = bytes / (1024d * 1024d);
+        /// <summary>
+        /// 按**一个调度单位**的总字节估算：单一完整包用自身大小；完整分卷组用组内各卷求和。
+        /// 不能用组里第一卷的大小代替整组。
+        /// </summary>
+        public static double EstimateSeconds(long sourceBytes, ArchiveTask? context)
+        {
+            double megabytes = Math.Max(0, sourceBytes) / (1024d * 1024d);
 
             if (megabytes <= 0)
             {
                 return 1;
             }
 
-            double throughput = EstimateThroughputMegabytesPerSecond(task);
+            double throughput = EstimateThroughputMegabytesPerSecond(context);
             double seconds = megabytes / Math.Max(1, throughput);
 
             // 打开包、列目录、密码候选、收尾都有固定开销；小包不能估成 0 秒。
@@ -45,9 +50,14 @@ namespace ArchiveFixer.Extraction
                 : $"{seconds:F1} 秒";
         }
 
-        private static double EstimateThroughputMegabytesPerSecond(ArchiveTask task)
+        private static double EstimateThroughputMegabytesPerSecond(ArchiveTask? task)
         {
             double throughput = DefaultMegabytesPerSecond;
+
+            if (task is null)
+            {
+                return throughput;
+            }
 
             string path = !string.IsNullOrWhiteSpace(task.CurrentPath)
                 ? task.CurrentPath
