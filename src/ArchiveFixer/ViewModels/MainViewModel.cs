@@ -2077,6 +2077,7 @@ namespace ArchiveFixer.ViewModels
 
         public ICommand StopCommand { get; }
         public ICommand CancelCurrentCommand { get; }
+        public ICommand PauseAllOperationsCommand { get; }
 
         public ICommand OpenSettingsCommand { get; }
         public ICommand OpenPasswordListCommand { get; }
@@ -2524,6 +2525,14 @@ namespace ArchiveFixer.ViewModels
                 CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
             CancelCurrentCommand = new RelayCommand(_extractionCoordinator.CancelCurrentTask, () => IsBusy);
+            PauseAllOperationsCommand = new RelayCommand(
+                () =>
+                {
+                    // 暂停 = 同一秒内掐断当前所有任务 + 不再启动后续；恢复只能重新按一键处理。
+                    _extractionCoordinator.StopAfterCurrent();
+                    _extractionCoordinator.CancelCurrentTask();
+                },
+                () => IsBusy);
 
             OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
@@ -7203,6 +7212,7 @@ namespace ArchiveFixer.ViewModels
                  ExtractIntoSourceFolderCommand,
                  StopCommand,
                  CancelCurrentCommand,
+                 PauseAllOperationsCommand,
 
                  SelectAllTasksCommand,
                  SelectNoneTasksCommand,

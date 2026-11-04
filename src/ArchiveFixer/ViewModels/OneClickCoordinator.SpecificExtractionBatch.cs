@@ -152,7 +152,7 @@ namespace ArchiveFixer.ViewModels
                 if (ReferenceEquals(finished, delay))
                 {
                     // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
-                    lastTarget = -1;
+                    // ⛔ 不要重置 lastTarget：目标没变就不该再写日志，否则会每秒刷一行。
                     continue;
                 }
 
@@ -411,6 +411,8 @@ namespace ArchiveFixer.ViewModels
             }));
 
             SpecificExtractionRunResult result;
+            CancellationTokenSource specificCts = _extractionCoordinator.BeginSpecificTask(task);
+            bool cancelled = false;
 
             try
             {
@@ -420,6 +422,7 @@ namespace ArchiveFixer.ViewModels
                         outputRoot,
                         workRoot,
                         _extractionCoordinator.SpecificExtractionPasswords,
+                        cancellationToken: specificCts.Token,
                         passwordProvider: () => _extractionCoordinator.SpecificExtractionPasswords,
                         onPasswordSuccess: password =>
                             _extractionCoordinator.RecordSpecificPasswordSuccess(source, password),
@@ -431,6 +434,11 @@ namespace ArchiveFixer.ViewModels
                         }),
                         progress: taskProgress)
                     .ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+                result = new SpecificExtractionRunResult { Message = "用户停止当前任务" };
             }
             catch (Exception ex)
             {
@@ -456,6 +464,18 @@ namespace ArchiveFixer.ViewModels
                 catch
                 {
                 }
+                finally
+                {
+                    cancelled = cancelled || specificCts.IsCancellationRequested;
+                    _extractionCoordinator.EndSpecificTask(specificCts);
+                }
+            }
+
+            if (cancelled)
+            {
+                MarkSpecificTaskCancelled(task);
+                AppendLog("WARN", $"{task.LogName}：已按「停止当前任务」停下。");
+                return false;
             }
 
             if (result.Success)
@@ -577,6 +597,18 @@ namespace ArchiveFixer.ViewModels
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Failed;
             task.EndTime = DateTime.Now;
+        }
+
+        private static void MarkSpecificTaskCancelled(ArchiveTask task)
+        {
+            task.Status = StatusText.Cancelled;
+            task.ProgressText = StatusText.Cancelled;
+            task.ErrorMessage = "用户停止当前任务";
+            task.IsOutputVerified = false;
+            task.Outcome = TaskOutcome.Cancelled;
+            task.Reason = TaskReason.Cancelled;
+            task.EndTime = DateTime.Now;
+            task.ClearProgress();
         }
 
         private static long GetSourceSize(ArchiveTask task)

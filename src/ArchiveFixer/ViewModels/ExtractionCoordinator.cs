@@ -158,6 +158,20 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>特定解压的 unit 也注册进同一张运行任务表，取消当前才能找到它。</summary>
+        internal CancellationTokenSource BeginSpecificTask(ArchiveTask task)
+        {
+            var cts = new CancellationTokenSource();
+            TrackRunningTask(cts, task);
+            return cts;
+        }
+
+        internal void EndSpecificTask(CancellationTokenSource cts)
+        {
+            UntrackRunningTask(cts);
+            cts.Dispose();
+        }
+
         private bool _isExtracting;
 
         /*

@@ -145,12 +145,12 @@ namespace ArchiveFixer.Tests
                 Assert.DoesNotContain(forbidden, taskTab, StringComparison.Ordinal);
             }
 
-            // 主线必须还在：添加 → 一键处理 / 只解压 / 停止后续 / 取消当前 → 汇总。
+            // 主线必须还在：添加 → 一键处理 / 只解压 / 暂停所有操作 / 停止当前任务 → 汇总。
             Assert.Contains("AddFilesCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("AddFolderCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("OneClickProcessCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("OpenManualOperationButton_Click", taskTab, StringComparison.Ordinal);
-            Assert.Contains("StopCommand", taskTab, StringComparison.Ordinal);
+            Assert.Contains("PauseAllOperationsCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("CancelCurrentCommand", taskTab, StringComparison.Ordinal);
             Assert.Contains("Summary.", taskTab, StringComparison.Ordinal);
         }

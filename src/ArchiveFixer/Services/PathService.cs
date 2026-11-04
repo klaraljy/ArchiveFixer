@@ -189,9 +189,37 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 日志目录。
+        /// 日志目录：生产环境放在程序安装目录下（用户 2026-11-04 明确要求），
+        /// 测试/夹具使用临时数据根时仍放在数据根里，避免污染仓库。
         /// </summary>
-        public string LogsDirectory => Path.Combine(DataRootDirectory, "logs");
+        public string LogsDirectory
+        {
+            get
+            {
+                string defaultRoot = DefaultDataRootDirectoryCore;
+
+                if (!string.Equals(
+                        Path.GetFullPath(DataRootDirectory),
+                        Path.GetFullPath(defaultRoot),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.Combine(DataRootDirectory, "logs");
+                }
+
+                string appLogs = Path.Combine(AppBaseDirectory, "logs");
+
+                try
+                {
+                    Directory.CreateDirectory(appLogs);
+                    return appLogs;
+                }
+                catch
+                {
+                    // 安装到 Program Files 等不可写位置时，退回用户数据根，日志不能因此丢失。
+                    return Path.Combine(DataRootDirectory, "logs");
+                }
+            }
+        }
 
         /// <summary>
         /// 临时目录。
