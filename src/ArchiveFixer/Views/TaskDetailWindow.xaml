@@ -321,7 +321,7 @@
 
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="0,8,0,0"
-                                   Text="完整日志在主界面底部日志区，以及 程序目录\data\logs 下的日志文件里；这里是这个任务的摘要，可直接 Ctrl+A / Ctrl+C。" />
+                                   Text="完整日志在主界面底部日志区，以及 程序安装目录\logs 下的日志文件里；这里是这个任务的摘要，可直接 Ctrl+A / Ctrl+C。" />
                     </StackPanel>
                 </GroupBox>
 

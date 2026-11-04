@@ -129,19 +129,24 @@ namespace ArchiveFixer.Services
         public string AppBaseDirectory => AppContext.BaseDirectory;
 
         /// <summary>
-        /// 用户数据目录：程序安装目录下的 <c>data</c>（用户 2026-11-04 明确要求，不再写 C 盘）。
-        /// 测试/夹具可通过 <c>ARCHIVEFIXER_DATA_ROOT</c> 覆盖到临时目录。
+        /// 用户数据目录（固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>）。
         /// </summary>
         public string DataRootDirectory { get; set; } = DefaultDataRootDirectory;
 
         /// <summary>固定数据目录名（安装/卸载/升级都必须认同一个名字）。</summary>
-        public const string DataFolderName = "data";
+        public const string DataFolderName = "ArchiveFixer";
 
         /// <summary>
-        /// 默认数据根目录：<c>&lt;程序目录&gt;\data</c>。
+        /// 默认数据根目录：<c>%LOCALAPPDATA%\ArchiveFixer</c>。
         ///
-        /// <para>用户 2026-11-04 明确要求日志、设置、密码本都放在程序安装位置；不再使用
-        /// <c>%LOCALAPPDATA%\ArchiveFixer</c>。测试通过 <c>ARCHIVEFIXER_DATA_ROOT</c> 隔离。</para>
+        /// <para>⛔ 这是用户设置 / 密码本 / 元数据的唯一固定位置：
+        /// 它不再跟程序安装目录走，覆盖升级、换安装位置、卸载都不会把它带走。
+        /// 以后任何版本都不许改这个路径；旧位置不再迁移。</para>
+        ///
+        /// <para>⚠ 仅供**测试 / 夹具**的进程内覆盖：环境变量 <c>ARCHIVEFIXER_DATA_ROOT</c> 非空时优先用它。
+        /// 生产入口不设这个变量 ⇒ 永远还是上面的固定路径；设置它是为了让 WPF 探针这类
+        /// "必须走真实启动路径"的用例也有自己的临时数据根（真机 2026-11-01：全量单测把用户真实
+        /// <c>password-list.dat</c> 写成了 1 条测试密码）。</para>
         /// </summary>
         public static string DefaultDataRootDirectory
         {
@@ -159,15 +164,62 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 生产默认值（**不含**测试覆盖）：程序目录下的 <c>data</c>。
+        /// 生产默认值（**不含**测试覆盖）：守门用例要断言"固定路径不跟程序目录走"时读这一个，
+        /// 否则测试进程为了让夹具隔离而设置的 <c>ARCHIVEFIXER_DATA_ROOT</c> 会把断言带偏。
         /// </summary>
         internal static string DefaultDataRootDirectoryCore =>
-            Path.Combine(AppContext.BaseDirectory, DataFolderName);
+            Path.Combine(ResolveLocalAppDataRoot(), DataFolderName);
+
+        private static string ResolveLocalAppDataRoot()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            if (!string.IsNullOrWhiteSpace(localAppData))
+            {
+                return localAppData;
+            }
+
+            // 极端环境（用户配置目录被禁用）才走这里：仍然落在用户目录下，
+            // ⛔ 不回落程序目录（那会把用户数据重新绑回安装位置）。
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            return string.IsNullOrWhiteSpace(profile)
+                ? Path.Combine(AppContext.BaseDirectory, "user-data")
+                : Path.Combine(profile, "AppData", "Local");
+        }
 
         /// <summary>
-        /// 日志目录：数据根下的 <c>logs</c>；生产数据根就是程序安装目录下的 <c>data</c>。
+        /// 日志目录：生产环境放在程序安装目录下（用户 2026-11-04 明确要求），
+        /// 测试/夹具使用临时数据根时仍放在数据根里，避免污染仓库。
         /// </summary>
-        public string LogsDirectory => Path.Combine(DataRootDirectory, "logs");
+        public string LogsDirectory
+        {
+            get
+            {
+                string defaultRoot = DefaultDataRootDirectoryCore;
+
+                if (!string.Equals(
+                        Path.GetFullPath(DataRootDirectory),
+                        Path.GetFullPath(defaultRoot),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.Combine(DataRootDirectory, "logs");
+                }
+
+                string appLogs = Path.Combine(AppBaseDirectory, "logs");
+
+                try
+                {
+                    Directory.CreateDirectory(appLogs);
+                    return appLogs;
+                }
+                catch
+                {
+                    // 安装到 Program Files 等不可写位置时，退回用户数据根，日志不能因此丢失。
+                    return Path.Combine(DataRootDirectory, "logs");
+                }
+            }
+        }
 
         /// <summary>
         /// 临时目录。

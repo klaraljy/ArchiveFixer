@@ -31,7 +31,8 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("password-list.dat —— 密码本", text, StringComparison.Ordinal);
 
             // 固定用户数据目录必须与 PathService.DefaultDataRootDirectory 一致；
-            Assert.Contains("!define USER_DATA_DIR \"$INSTDIR\\data\"", text, StringComparison.Ordinal);
+            // 升级页要同时写旧版本和新安装包版本，卸载页要指向固定目录。
+            Assert.Contains("!define USER_DATA_DIR \"$LOCALAPPDATA\\ArchiveFixer\"", text, StringComparison.Ordinal);
             Assert.Contains("当前安装包版本", text, StringComparison.Ordinal);
             Assert.Contains("旧版本", text, StringComparison.Ordinal);
             Assert.Contains("WriteRegStr HKCU \"${APP_KEY}\" \"DataDir\"", text, StringComparison.Ordinal);

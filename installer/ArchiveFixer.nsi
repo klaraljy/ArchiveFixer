@@ -5,7 +5,7 @@
 ;      第二个固定盘时才退到 %LOCALAPPDATA%\Programs\ArchiveFixer，并且欢迎页会明说。
 ;      ⛔ 不许写死某个盘符（D: 不是人人都有）；⛔ 也绝不用 C:\Program Files\。
 ;      ⚠ 程序文件与用户数据分开：设置 / 密码 / 日志固定放在
-;      $INSTDIR\data（PathService.DefaultDataRootDirectory），
+;      %LOCALAPPDATA%\ArchiveFixer（PathService.DefaultDataRootDirectory），
 ;      不再放在 <程序目录>\data\；升级、换安装目录、卸载都不会把它带走。
 ;   2. RequestExecutionLevel user：免 UAC，朋友双击就能装完（每用户安装，注册表只写 HKCU）。
 ;   3. 静默安装 /S 时不建快捷方式（自动化验收用；正常双击安装照建）；静默档也**不问**
@@ -15,7 +15,7 @@
 ;      升级页同时显示旧版本与新安装包版本；⛔ 绝不静默删用户数据；
 ;      ⛔ 卸载旧版那一路走 `Uninstall.exe /S`（静默卸载 = 保留用户数据）。
 ;   5. 卸载：有 Uninstall.exe + 控制面板「应用和功能」一项 + 开始菜单一项；
-;      卸载时**问一次**（自带一页，默认 = 保留）：保留设置与密码（$INSTDIR\data）
+;      卸载时**问一次**（自带一页，默认 = 保留）：保留设置与密码（%LOCALAPPDATA%\ArchiveFixer）
 ;      还是全部删除，并在界面上写清"保留了什么、在哪个目录"，最后再说一遍路径。
 ;   6. 只删自己装的东西：根目录按后缀删程序文件、已知程序子目录整个删；
 ;      用户数据目录跳过；最后 RMDir "$INSTDIR"（非递归）——目录里还有别的东西就留着，不硬删。
@@ -57,8 +57,9 @@ SetCompressorDictSize 64
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArchiveFixer"
 !define APP_KEY "Software\ArchiveFixer"
 !define FALLBACK_DIR "$LOCALAPPDATA\Programs\${APP_NAME}"
-; ⛔ 固定用户数据目录：与 PathService.DefaultDataRootDirectory 必须逐字一致（程序目录\data）。
-!define USER_DATA_DIR "$INSTDIR\data"
+; ⛔ 固定用户数据目录：与 PathService.DefaultDataRootDirectory 必须逐字一致。
+;    升级、换安装目录、卸载都读这一个位置；不要把它改回 $INSTDIR\data。
+!define USER_DATA_DIR "$LOCALAPPDATA\ArchiveFixer"
 
 Name "${APP_NAME} ${APPVERSION}"
 OutFile "${OUTFILE}"
@@ -117,7 +118,7 @@ Var UnDataRadioDelete
 !define MUI_UNICON "${ICONFILE}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "${APP_NAME} ${APPVERSION} 安装向导"
-!define MUI_WELCOMEPAGE_TEXT "这一版把「批量识别 + 解压 + 整理」这套工具装到你指定的目录。$\r$\n$\r$\n· 程序自带 .NET 运行时，目标机器什么都不用装；$\r$\n· 设置、密码列表、日志写在程序安装目录下的 data 子目录（${USER_DATA_DIR}），不写 C 盘用户目录；$\r$\n· 卸载时会问你一次「保留用户数据还是全部删除」，默认保留。$\r$\n$\r$\n点「下一步」继续。"
+!define MUI_WELCOMEPAGE_TEXT "这一版把「批量识别 + 解压 + 整理」这套工具装到你指定的目录。$\r$\n$\r$\n· 程序自带 .NET 运行时，目标机器什么都不用装；$\r$\n· 设置与密码列表固定写在 $\r$\n  ${USER_DATA_DIR}（C 盘用户目录）；日志写在程序安装目录下的 logs 子目录；升级或换安装目录都不会丢；$\r$\n· 卸载时会问你一次「保留用户数据还是全部删除」，默认保留。$\r$\n$\r$\n点「下一步」继续。"
 
 ; ⚠ 页面回调（WelcomePagePre / WelcomePageCustom / UpgradePage*）的函数体一律写在文件末尾：
 ;   `$mui.WelcomePage.*` 这些变量由 MUI_PAGE_WELCOME 展开时才 Var 出来，
@@ -167,7 +168,7 @@ Page custom UpgradePage UpgradePageLeave
         Pop $UnDataDialog
         StrCmp $UnDataDialog "error" un_data_show_done
 
-        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个固定目录里放的是你长期要留着的东西，不是程序：$\r$\n${USER_DATA_DIR}$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯$\r$\n· logs\ —— 历史日志"
+        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个固定目录里放的是你长期要留着的东西，不是程序：$\r$\n${USER_DATA_DIR}$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯"
         Pop $UnDataLabel
 
         ${NSD_CreateRadioButton} 0 56u 100% 24u "保留设置与密码（推荐）：只删程序，${USER_DATA_DIR} 原样留着；以后重装能接着用"
@@ -375,7 +376,7 @@ Section "Uninstall"
         DetailPrint "按你的选择：保留固定用户数据目录 ${USER_DATA_DIR}（设置与密码）"
 
     uninst_files:
-    ; 2) 程序文件：根目录按后缀删（用户数据在 $INSTDIR\data，不在这个根目录的其它位置）
+    ; 2) 程序文件：根目录按后缀删（用户数据在 %LOCALAPPDATA%，不在这个目录）
     Delete "$INSTDIR\*.exe"
     Delete "$INSTDIR\*.dll"
     Delete "$INSTDIR\*.json"
