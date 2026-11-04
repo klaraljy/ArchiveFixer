@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
@@ -41,6 +42,12 @@ namespace ArchiveFixer.ViewModels
                     .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
                     .ToList();
             }
+
+            _extractionCoordinator.PrepareAutoConcurrencyForSpecificBatch(targets);
+            AppendLog(
+                "INFO",
+                $"特定解压：自动并发起点 {_extractionCoordinator.CurrentAutoConcurrencyLimit} 个"
+                + (spaceTight ? "；空间不足另按空间上限收紧。" : "。"));
 
             int succeeded = 0;
             int failed = 0;
@@ -82,25 +89,33 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 string spaceBasis = string.Empty;
+                int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
                 int target = spaceTight
-                    ? ResolveSpecificParallel(pending, running, runOptions, out spaceBasis)
-                    : 1;
+                    ? Math.Min(
+                        ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
+                        Math.Max(autoTarget, running.Count))
+                    : autoTarget;
 
                 target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
 
-                if (spaceTight && (target != lastTarget || !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
+                if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
                 {
                     lastTarget = target;
                     lastBasis = spaceBasis;
                     AppendLog(
                         "INFO",
-                        $"特定解压由空间不足接管并发：当前目标 {target} 个（正在跑 {running.Count} 个，待处理 {pending.Count} 个）。{spaceBasis}。");
+                        (spaceTight
+                            ? $"特定解压并发（空间不足 + 自动）：当前目标 {target} 个"
+                            : $"特定解压并发（自动）：当前目标 {target} 个")
+                        + $"（正在跑 {running.Count} 个，待处理 {pending.Count} 个）"
+                        + (spaceTight ? $"；{spaceBasis}" : "。"));
                 }
 
                 while (running.Count < target && pending.Count > 0)
                 {
                     SpecificBatchUnit unit = pending[0];
                     pending.RemoveAt(0);
+                    unit.Entry.StartTime = DateTime.Now;
                     Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
                     running.Add((unit, work));
                 }
@@ -123,6 +138,9 @@ namespace ArchiveFixer.ViewModels
 
                 bool success = await completedWork.ConfigureAwait(true);
                 skippedFollowers += completedUnit.Followers.Count;
+                _extractionCoordinator.ObserveSpecificCompleted(
+                    completedUnit.Entry,
+                    Math.Max(1, running.Count));
 
                 if (success)
                 {
@@ -351,6 +369,15 @@ namespace ArchiveFixer.ViewModels
             task.ProgressText = "特定解压：准备";
             task.ApplyProgress(0, null);
 
+            var taskProgress = new Progress<ArchiveProgress>(value => ApplyProgress(() =>
+            {
+                task.Status = StatusText.Extracting;
+                task.ApplyProgress(
+                    value.Percent >= 0 ? value.Percent : 0,
+                    value.CurrentEntry,
+                    value.Layer);
+            }));
+
             SpecificExtractionRunResult result;
 
             try
@@ -369,7 +396,8 @@ namespace ArchiveFixer.ViewModels
                             task.Status = StatusText.Extracting;
                             task.ProgressText = $"特定解压：第 {depth + 1} 层";
                             task.ApplyProgress(0, $"第 {depth + 1} 层：{archive}", depth + 1);
-                        }))
+                        }),
+                        progress: taskProgress)
                     .ConfigureAwait(true);
             }
             catch (Exception ex)

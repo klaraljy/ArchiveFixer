@@ -52,7 +52,8 @@ namespace ArchiveFixer.Extraction
             CancellationToken cancellationToken = default,
             Func<IReadOnlyList<string?>>? passwordProvider = null,
             Action<string?>? onPasswordSuccess = null,
-            Action<int, string>? onLayerStarted = null)
+            Action<int, string>? onLayerStarted = null,
+            IProgress<ArchiveProgress>? progress = null)
         {
             if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
             {
@@ -72,6 +73,10 @@ namespace ArchiveFixer.Extraction
                 _log?.Invoke(
                     $"第 {depth + 1} 层：解压「{Path.GetFileName(currentArchive)}」");
 
+                IProgress<ArchiveProgress>? layerProgress = progress == null
+                    ? null
+                    : new LayerProgress(progress, depth + 1);
+
                 bool extracted = false;
                 string lastError = string.Empty;
                 IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
@@ -82,7 +87,8 @@ namespace ArchiveFixer.Extraction
                     {
                         ArchivePath = currentArchive,
                         Password = password,
-                        OutputPath = layerRoot
+                        OutputPath = layerRoot,
+                        Progress = layerProgress
                     };
 
                     var options = new ExtractOptions
@@ -269,6 +275,32 @@ namespace ArchiveFixer.Extraction
             }
 
             return rest;
+        }
+
+        /// <summary>把引擎进度补上“这是第几层”，UI 不需要自己猜。</summary>
+        private sealed class LayerProgress : IProgress<ArchiveProgress>
+        {
+            private readonly IProgress<ArchiveProgress> _inner;
+            private readonly int _layer;
+
+            public LayerProgress(IProgress<ArchiveProgress> inner, int layer)
+            {
+                _inner = inner;
+                _layer = layer;
+            }
+
+            public void Report(ArchiveProgress value)
+            {
+                _inner.Report(new ArchiveProgress
+                {
+                    Percent = value.Percent,
+                    CurrentEntry = value.CurrentEntry,
+                    Layer = _layer,
+                    ProcessedBytes = value.ProcessedBytes,
+                    TotalBytes = value.TotalBytes,
+                    ProcessedEntries = value.ProcessedEntries
+                });
+            }
         }
     }
 }

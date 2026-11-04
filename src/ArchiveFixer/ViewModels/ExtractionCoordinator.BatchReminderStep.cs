@@ -212,6 +212,25 @@ namespace ArchiveFixer.ViewModels
                 _runConcurrencyLimit?.Effective);
         }
 
+        /// <summary>
+        /// 特定解压独立批也要建同一套设备画像/控制器；否则它永远按 1 跑。
+        /// </summary>
+        internal void PrepareAutoConcurrencyForSpecificBatch(IReadOnlyList<ArchiveTask> tasks)
+        {
+            _spaceTightThisBatch = false;
+            _ = ResolveMaxParallel(tasks, out _);
+        }
+
+        /// <summary>特定解压调度每次补位时读取的自动并发值。</summary>
+        internal int CurrentAutoConcurrencyLimit => CurrentAutoLimit();
+
+        /// <summary>完成一个特定解压 unit 后喂给所属卷的控制器。</summary>
+        internal void ObserveSpecificCompleted(ArchiveTask task, int activeTasks)
+        {
+            int ignored = CurrentAutoConcurrencyLimit;
+            ObserveCompletedTask(task, activeTasks, ref ignored);
+        }
+
         private string ResolveConcurrencyRoot(ArchiveTask task)
         {
             string candidate = !string.IsNullOrWhiteSpace(task.OutputPath)
