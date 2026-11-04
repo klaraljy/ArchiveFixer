@@ -211,7 +211,78 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 多分支：不塌 + WARN
 
 
+        // ================================================================ 小体积：暂停后不再补位
+
+        [SevenZipFact]
+        public async Task 特定解压_小包暂停所有操作_不继续启动后续()
+        {
+            string collection = Path.Combine(_root, "specific-pause-small");
+            Directory.CreateDirectory(collection);
+
+            for (int i = 1; i <= 20; i++)
+            {
+                string build = Path.Combine(_root, "build-pause-" + i.ToString("D2"));
+                WriteText(Path.Combine(build, "a.txt"), new string('x', 1024 * 1024));
+                Run7z(build, "a", "-t7z", Path.Combine(collection, "p" + i.ToString("D2") + ".7z"), "a.txt");
+            }
+
+            Harness harness = CreateHarness("specific-pause-small", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            });
+
+            await harness.AddPathsAsync(collection);
+            Assert.Equal(20, harness.Vm.Tasks.Count);
+
+            Task<OneClickOutcome> run = harness.RunOneClickAsync();
+            await Task.Delay(100);
+
+            harness.Vm.PauseAllOperationsCommand.Execute(null);
+
+            await run.WaitAsync(TimeSpan.FromSeconds(120));
+
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("暂停所有操作", StringComparison.Ordinal));
+            Assert.True(
+                harness.Vm.Tasks.Count(task => task.Outcome == TaskOutcome.Succeeded) < 20,
+                "暂停后仍有任务被启动完成");
+        }
+
         // ================================================================ 人工抽查：普通/特定解压的成功后源包与过程物
+        [SevenZipFact]
+        public async Task 特定解压_预计耗时大的先占槽位()
+        {
+            string collection = Path.Combine(_root, "specific-duration-order");
+            Directory.CreateDirectory(collection);
+
+            for (int i = 1; i <= 4; i++)
+            {
+                string build = Path.Combine(_root, "build-order-" + i.ToString("D2"));
+                WriteText(Path.Combine(build, "a.txt"), new string('x', i * 1024 * 1024));
+                Run7z(build, "a", "-t7z", Path.Combine(collection, "p" + i.ToString("D2") + ".7z"), "a.txt");
+            }
+
+            Harness harness = CreateHarness("specific-duration-order", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.ConcurrencyOverride = 2;
+            });
+
+            await harness.AddPathsAsync(collection);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            List<string> starts = harness.LogTexts
+                .Where(text => text.Contains("第 1 层：解压「p", StringComparison.Ordinal))
+                .ToList();
+
+            Assert.True(starts.Count >= 2, string.Join(" ｜ ", harness.LogTexts));
+            Assert.Contains("p04.7z", starts[0], StringComparison.Ordinal);
+            Assert.Contains("p03.7z", starts[1], StringComparison.Ordinal);
+        }
+
 
         [SevenZipFact]
         public async Task 特定解压_源包按KeepInPlace时保留()
