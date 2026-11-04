@@ -23,7 +23,7 @@
                 <StackPanel>
                     <CheckBox Content="启用日志文件"
                               IsChecked="{Binding SettingsEditor.Settings.EnableLog, Mode=TwoWay}"
-                              ToolTip="关掉之后不再往 %LOCALAPPDATA%\ArchiveFixer\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
+                              ToolTip="关掉之后不再往 程序目录\data\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
 
                     <!--
                         详细日志（排查用，用户 2026-09-25 第 44 条追加拍板；2026-09-27 补"到底多出什么"）：
