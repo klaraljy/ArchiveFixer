@@ -158,20 +158,32 @@ namespace ArchiveFixer.ViewModels
 
         private ConcurrencyLimit? _runConcurrencyLimit;
 
+        /// <summary>
+        /// 自动并发的唯一取值口：有控制器时取所有卷控制器当前值的最小值；
+        /// 控制器还没建出来时才回落到批首计划值。
+        /// </summary>
+        internal static int ResolveAutoLimitForBatch(IEnumerable<int> controllerLimits, int? planLimit)
+        {
+            int? min = null;
+            foreach (int limit in controllerLimits)
+            {
+                min = min.HasValue ? Math.Min(min.Value, limit) : limit;
+            }
+
+            return min.HasValue ? Math.Max(1, min.Value) : Math.Max(1, planLimit ?? 1);
+        }
+
         /// <summary>本批实际可用的自适应并发 = 所有卷控制器的**最小值**（慢盘不会拖垮快盘，也不会让快盘把慢盘压垮）。</summary>
         private int CurrentAutoLimit()
         {
-            if (_runConcurrencyLimit != null)
-            {
-                return _runConcurrencyLimit.Effective;
-            }
-
-            if (_autoControllers.Count == 0)
-            {
-                return 1;
-            }
-
-            return Math.Max(1, _autoControllers.Values.Min(controller => controller.CurrentLimit));
+            /*
+             * 2026-11-04 性能测试逮到：这里原来先返回 _runConcurrencyLimit.Effective（批首计划值），
+             * 于是控制器日志里从 1 一路调到 8，调度却始终按 1 跑 —— 自动并发只写日志不生效。
+             * 有控制器时必须以控制器当前值为准；只有控制器还没建出来时才回落到计划值。
+             */
+            return ResolveAutoLimitForBatch(
+                _autoControllers.Values.Select(controller => controller.CurrentLimit),
+                _runConcurrencyLimit?.Effective);
         }
 
         private string ResolveConcurrencyRoot(ArchiveTask task)
