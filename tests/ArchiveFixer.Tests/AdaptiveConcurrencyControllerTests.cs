@@ -124,6 +124,16 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 等待加档投票也有可读原因()
+        {
+            var controller = new AdaptiveConcurrencyController(initialLimit: 1);
+            controller.Observe(Sample(1.0, active: 1));
+
+            Assert.False(string.IsNullOrWhiteSpace(controller.LastDecisionReason));
+            Assert.DoesNotContain("尚未采样", controller.LastDecisionReason, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void 系统CPU过高_不加档()
         {
             var controller = new AdaptiveConcurrencyController(initialLimit: 4);
