@@ -148,7 +148,7 @@ namespace ArchiveFixer.ViewModels
                 Task finished = await Task.WhenAny(
                         running.Select(item => item.Work).Append(delay))
                     .ConfigureAwait(true);
-                Task<bool> finishedWork = (Task<bool>)finished;
+
                 if (ReferenceEquals(finished, delay))
                 {
                     // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
@@ -156,6 +156,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                Task<bool> finishedWork = (Task<bool>)finished;
                 int index = running.FindIndex(item => ReferenceEquals(item.Work, finishedWork));
 
                 if (index < 0)
