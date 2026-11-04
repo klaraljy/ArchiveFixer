@@ -10,9 +10,8 @@ namespace ArchiveFixer.Tests
         public void 分卷组按整组字节估计_不是只算第一卷()
         {
             var entry = new ArchiveTask(@"H:\samples\group.7z.001", 3) { SourceSizeBytes = 1L * 1024 * 1024 * 1024 };
-
             double single = TaskDurationEstimator.EstimateSeconds(entry.SourceSizeBytes, entry);
-            double group = TaskDurationEstimator.EstimateSeconds(3L * 1024 * 1024 * 1024, entry);
+            double group = TaskDurationEstimator.EstimateSeconds(3L * 1024 * 1024 * 1024, entry, volumeCount: 3);
 
             Assert.True(group > single);
         }
