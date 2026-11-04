@@ -196,35 +196,52 @@ namespace ArchiveFixer.Services
         {
             get
             {
-                string defaultRoot = DefaultDataRootDirectoryCore;
-
-                if (!string.Equals(
-                        Path.GetFullPath(DataRootDirectory),
-                        Path.GetFullPath(defaultRoot),
-                        StringComparison.OrdinalIgnoreCase))
+                if (!UsesProductionDataRoot)
                 {
                     return Path.Combine(DataRootDirectory, "logs");
                 }
 
-                string appLogs = Path.Combine(AppBaseDirectory, "logs");
-
-                try
-                {
-                    Directory.CreateDirectory(appLogs);
-                    return appLogs;
-                }
-                catch
-                {
-                    // 安装到 Program Files 等不可写位置时，退回用户数据根，日志不能因此丢失。
-                    return Path.Combine(DataRootDirectory, "logs");
-                }
+                return ResolveAppSideDirectory("logs");
             }
         }
 
         /// <summary>
-        /// 临时目录。
+        /// 临时目录：生产环境也放在程序目录下，测试/夹具落在临时数据根。
         /// </summary>
-        public string TempDirectory => Path.Combine(DataRootDirectory, "temp");
+        public string TempDirectory
+        {
+            get
+            {
+                if (!UsesProductionDataRoot)
+                {
+                    return Path.Combine(DataRootDirectory, "temp");
+                }
+
+                return ResolveAppSideDirectory("temp");
+            }
+        }
+
+        private bool UsesProductionDataRoot =>
+            string.Equals(
+                Path.GetFullPath(DataRootDirectory),
+                Path.GetFullPath(DefaultDataRootDirectoryCore),
+                StringComparison.OrdinalIgnoreCase);
+
+        private string ResolveAppSideDirectory(string name)
+        {
+            string appDirectory = Path.Combine(AppBaseDirectory, name);
+
+            try
+            {
+                Directory.CreateDirectory(appDirectory);
+                return appDirectory;
+            }
+            catch
+            {
+                // 安装到 Program Files 等不可写位置时，退回用户数据根，不能因此丢日志/临时目录。
+                return Path.Combine(DataRootDirectory, name);
+            }
+        }
 
         /// <summary>
         /// 递归解压的工作区根目录（**当前生效的那一个**）。
