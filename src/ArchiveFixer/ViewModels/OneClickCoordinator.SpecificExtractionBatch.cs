@@ -59,12 +59,15 @@ namespace ArchiveFixer.ViewModels
                     unit => unit,
                     unit => ScheduledWorkUnit.FromSpecificUnit(unit, SpecificDeviceRoot(unit)));
             var scheduler = new DevicePoolScheduler<ScheduledWorkUnit>();
+            Func<string, int> maximumByDevice = root =>
+                StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4;
             scheduler.Reset(
                 workUnits.Values.Select(work => (work, work.DeviceRoot)),
-                Math.Max(1, preparedTarget),
-                8,
+                _ => Math.Max(1, preparedTarget),
+                maximumByDevice,
                 work => work.EstimatedSeconds);
             var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
+
 
 
             int lastTarget = -1;
@@ -184,6 +187,21 @@ namespace ArchiveFixer.ViewModels
                             elapsed,
                             completedUnit.Followers.Count + 1,
                             completedUnit.Followers.Count > 0);
+
+                        double gigabytes = Math.Max(1L, completedUnit.SourceBytes)
+                                           / (1024.0 * 1024 * 1024);
+                        if (elapsed > 0 && gigabytes > 0)
+                        {
+                            ConcurrencyResourceSnapshot pressure = SystemResourceProbe.Snapshot();
+                            scheduler.ObserveCompletion(
+                                workUnits[completedUnit],
+                                completedUnit.SourceBytes,
+                                elapsed / gigabytes,
+                                new CapacitySample(
+                                    pressure.CpuBusyPercent,
+                                    pressure.AvailablePhysicalBytes,
+                                    false));
+                        }
                     }
 
                     foreach (ScheduledWorkUnit pendingWork in scheduler.PendingUnits)

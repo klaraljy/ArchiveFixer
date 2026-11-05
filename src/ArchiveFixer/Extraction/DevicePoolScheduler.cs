@@ -23,6 +23,10 @@ namespace ArchiveFixer.Extraction
             public string Root { get; }
             public CapacityPolicy Capacity { get; }
             public SlotScheduler<T> Slots { get; }
+            public DateTime WindowStartedUtc { get; set; } = DateTime.UtcNow;
+            public long WindowBytes { get; set; }
+            public int WindowTasks { get; set; }
+            public double WindowLatency { get; set; }
         }
 
         private readonly Dictionary<string, DevicePool> _pools = new(StringComparer.OrdinalIgnoreCase);
@@ -82,18 +86,20 @@ namespace ArchiveFixer.Extraction
             }
         }
 
-        public bool TryTakeNext(int? capacityPerDevice, out T? unit, out string? root)
+        public bool TryTakeNext(int? ignoredGlobalCapacity, out T? unit, out string? root)
         {
             unit = null;
             root = null;
 
+            if (ActiveCount >= 8)
+            {
+                return false;
+            }
+
             foreach (string key in _order)
             {
                 DevicePool pool = _pools[key];
-                if (capacityPerDevice.HasValue)
-                {
-                    pool.Slots.SetCapacity(capacityPerDevice.Value);
-                }
+                pool.Slots.SetCapacity(pool.Capacity.Current);
 
                 if (pool.Slots.TryTakeNext(out unit))
                 {
@@ -103,6 +109,48 @@ namespace ArchiveFixer.Extraction
             }
 
             return false;
+        }
+
+        /// <summary>完成任务时累计该池聚合窗口；窗口够长才推进一次容量探测。</summary>
+        public void ObserveCompletion(
+            T unit,
+            long sourceBytes,
+            double latencySecondsPerGb,
+            CapacitySample sample)
+        {
+            if (unit is null || !_unitRoot.TryGetValue(unit, out string? root))
+            {
+                return;
+            }
+
+            if (!_pools.TryGetValue(root, out DevicePool? pool))
+            {
+                return;
+            }
+
+            pool.WindowBytes += Math.Max(0, sourceBytes);
+            pool.WindowTasks++;
+            pool.WindowLatency += Math.Max(0, latencySecondsPerGb);
+
+            double elapsed = (DateTime.UtcNow - pool.WindowStartedUtc).TotalSeconds;
+            if (elapsed < 3 && pool.WindowTasks < 2)
+            {
+                return;
+            }
+
+            double aggregateMbps = elapsed > 0
+                ? pool.WindowBytes / (1024d * 1024d) / elapsed
+                : 0;
+            double averageLatency = pool.WindowTasks > 0
+                ? pool.WindowLatency / pool.WindowTasks
+                : 0;
+
+            pool.Capacity.ObserveCompletion(aggregateMbps, averageLatency, sample);
+            pool.Slots.SetCapacity(pool.Capacity.Current);
+            pool.WindowStartedUtc = DateTime.UtcNow;
+            pool.WindowBytes = 0;
+            pool.WindowTasks = 0;
+            pool.WindowLatency = 0;
         }
 
         public bool MarkCompleted(T unit)

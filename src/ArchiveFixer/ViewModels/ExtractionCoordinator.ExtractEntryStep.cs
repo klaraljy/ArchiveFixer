@@ -495,17 +495,6 @@ namespace ArchiveFixer.ViewModels
                     root => StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4,
                     work => work.EstimatedSeconds);
                 var slotWorkByTask = new Dictionary<ArchiveTask, ScheduledWorkUnit>();
-                void ApplyDeviceCapacity()
-                {
-                    foreach (string root in scheduler.Roots)
-                    {
-                        int cap = StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd
-                            ? Math.Min(8, maxParallel)
-                            : Math.Min(4, maxParallel);
-                        scheduler.SetCapacity(root, cap);
-                    }
-                }
-
                 while (scheduler.PendingCount > 0 || scheduler.ActiveCount > 0)
                 {
                     if (IsStopping || _operationCts.IsCancellationRequested)
@@ -518,7 +507,6 @@ namespace ArchiveFixer.ViewModels
                     bool queuedLogged = false;
                     DateTime queuedSince = DateTime.Now;
 
-                    ApplyDeviceCapacity();
 
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
                     while (runningTasks.Count >= maxParallel)
@@ -577,6 +565,26 @@ namespace ArchiveFixer.ViewModels
                             if (slotWorkByTask.Remove(finishedAutoTask, out ScheduledWorkUnit? completedSlotWork))
                             {
                                 scheduler.MarkCompleted(completedSlotWork);
+                                if (finishedAutoTask.StartTime.HasValue
+                                    && finishedAutoTask.EndTime.HasValue)
+                                {
+                                    double seconds = (finishedAutoTask.EndTime.Value - finishedAutoTask.StartTime.Value)
+                                        .TotalSeconds;
+                                    double gigabytes = Math.Max(1L, finishedAutoTask.SourceSizeBytes)
+                                                       / (1024.0 * 1024 * 1024);
+                                    if (seconds > 0 && gigabytes > 0)
+                                    {
+                                        ConcurrencyResourceSnapshot pressure = SystemResourceProbe.Snapshot();
+                                        scheduler.ObserveCompletion(
+                                            completedSlotWork,
+                                            finishedAutoTask.SourceSizeBytes,
+                                            seconds / gigabytes,
+                                            new CapacitySample(
+                                                pressure.CpuBusyPercent,
+                                                pressure.AvailablePhysicalBytes,
+                                                false));
+                                    }
+                                }
                             }
                         }
 
@@ -616,7 +624,6 @@ namespace ArchiveFixer.ViewModels
                             break;
                         }
                     }
-                    ApplyDeviceCapacity();
                     if (!scheduler.TryTakeNext(null, out ScheduledWorkUnit? scheduledWork, out string? deviceRootTaken))
                     {
                         break;
@@ -1127,11 +1134,6 @@ namespace ArchiveFixer.ViewModels
                 SystemCpuBusyPercent = resources.CpuBusyPercent,
                 AvailablePhysicalBytes = resources.AvailablePhysicalBytes
             });
-
-            if (finished.Outcome == TaskOutcome.Succeeded)
-            {
-                ObserveCapacityWindow(perTaskMbps, latency);
-            }
 
             int autoLimit = CurrentAutoLimit();
             int combined = _spaceTightThisBatch ? Math.Min(_spaceLimit, autoLimit) : autoLimit;
