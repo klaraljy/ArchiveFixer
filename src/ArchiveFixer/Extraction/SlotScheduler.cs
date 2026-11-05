@@ -87,27 +87,38 @@ namespace ArchiveFixer.Extraction
             }
 
             var starts = new List<Start>();
-
-            // 容量下降时，活跃数可能暂时高于容量；先不再启动，等在跑的收尾。
-            while (_pending.Count > 0 && _active.Count < Capacity)
+            while (TryTakeNext(out T? unit))
             {
-                int slotIndex = FindLeastLoadedFreeSlot();
-                if (slotIndex < 0)
-                {
-                    break;
-                }
-
-                PendingItem next = _pending[0];
-                _pending.RemoveAt(0);
-
-                SlotState slot = _slots[slotIndex];
-                slot.Active = next.Unit;
-                slot.PredictedLoadSeconds += Math.Max(1, next.Seconds);
-                _active[next.Unit] = slotIndex;
-                starts.Add(new Start(next.Unit, slotIndex));
+                starts.Add(new Start(unit!, _active[unit!]));
             }
 
             return starts;
+        }
+
+        /// <summary>尝试占用一个槽位并取出下一个任务；没有空槽或没有 pending 时返回 false。</summary>
+        public bool TryTakeNext(out T? unit)
+        {
+            unit = null;
+            if (_pending.Count == 0 || _active.Count >= Capacity)
+            {
+                return false;
+            }
+
+            int slotIndex = FindLeastLoadedFreeSlot();
+            if (slotIndex < 0)
+            {
+                return false;
+            }
+
+            PendingItem next = _pending[0];
+            _pending.RemoveAt(0);
+
+            SlotState slot = _slots[slotIndex];
+            slot.Active = next.Unit;
+            slot.PredictedLoadSeconds += Math.Max(1, next.Seconds);
+            _active[next.Unit] = slotIndex;
+            unit = next.Unit;
+            return true;
         }
 
         public bool MarkCompleted(T unit)

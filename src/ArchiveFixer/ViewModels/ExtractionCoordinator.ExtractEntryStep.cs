@@ -480,18 +480,15 @@ namespace ArchiveFixer.ViewModels
                  * ② 真正开跑前仍然要过账本（`TryReserve`），**放行判据一个字没放宽**。
                  */
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
+                var scheduler = new SlotScheduler<ScheduledWorkUnit>();
+                scheduler.Reset(
+                    plan.Ordered.Select(ScheduledWorkUnit.FromPlanItem),
+                    maxParallel,
+                    work => work.EstimatedSeconds);
+                var slotWorkByTask = new Dictionary<ArchiveTask, ScheduledWorkUnit>();
 
-                IReadOnlyList<ScheduledWorkUnit> scheduledOrder =
-                    SlotScheduler<ScheduledWorkUnit>.SimulateStartOrder(
-                        plan.Ordered.Select(ScheduledWorkUnit.FromPlanItem),
-                        maxParallel,
-                        work => work.EstimatedSeconds);
-
-                foreach (ScheduledWorkUnit work in scheduledOrder)
+                while (scheduler.PendingCount > 0 || scheduler.ActiveCount > 0)
                 {
-                    ScheduledExtractionItem item = work.PayloadAs<ScheduledExtractionItem>();
-                    ArchiveTask task = item.Task;
-
                     if (IsStopping || _operationCts.IsCancellationRequested)
                     {
                         LogStopRequestOnce();
@@ -501,6 +498,8 @@ namespace ArchiveFixer.ViewModels
                     // 每个任务各自的"已经在队列里等过"标记与开始等的时间（只有等得久才补一句，见下）。
                     bool queuedLogged = false;
                     DateTime queuedSince = DateTime.Now;
+
+                    scheduler.SetCapacity(maxParallel);
 
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
                     while (runningTasks.Count >= maxParallel)
@@ -556,6 +555,10 @@ namespace ArchiveFixer.ViewModels
                         if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedAutoTask))
                         {
                             ObserveCompletedTask(finishedAutoTask, runningTasks.Count, ref maxParallel);
+                            if (slotWorkByTask.Remove(finishedAutoTask, out ScheduledWorkUnit? completedSlotWork))
+                            {
+                                scheduler.MarkCompleted(completedSlotWork);
+                            }
                         }
 
                         runningTasks.Remove(finished);
@@ -589,6 +592,14 @@ namespace ArchiveFixer.ViewModels
                             break;
                         }
                     }
+                    scheduler.SetCapacity(maxParallel);
+                    if (!scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork))
+                    {
+                        break;
+                    }
+
+                    ScheduledExtractionItem item = scheduledWork!.PayloadAs<ScheduledExtractionItem>();
+                    ArchiveTask task = item.Task;
 
                     /*
                      * 关键修复（实测复现）：上面的 break 只跳出了"等并发位"的 while，
@@ -642,6 +653,7 @@ namespace ArchiveFixer.ViewModels
                          * 只写一行 INFO 说清"它在等什么"，用户才不会以为这个包已经被判死刑了。
                          */
                         spaceWaiting.Add((task, item, gate));
+                        scheduler.MarkCompleted(scheduledWork);
 
                         AppendLog(
                             "INFO",
@@ -675,6 +687,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     runningTasks.Add(runningTask);
+                    slotWorkByTask[task] = scheduledWork;
                 }
 
                 await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
