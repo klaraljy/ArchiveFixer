@@ -58,7 +58,7 @@ namespace ArchiveFixer.ViewModels
                 .ToDictionary(
                     unit => unit,
                     unit => ScheduledWorkUnit.FromSpecificUnit(unit, SpecificDeviceRoot(unit)));
-            var scheduler = new DevicePoolScheduler<ScheduledWorkUnit>();
+            var scheduler = new SlotSchedulerRunner<ScheduledWorkUnit>();
             Func<string, int> maximumByDevice = root =>
                 StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4;
             scheduler.Reset(
@@ -140,7 +140,7 @@ namespace ArchiveFixer.ViewModels
                             + (spaceTight ? $"；{spaceBasis}" : "。"));
                     }
 
-                    while (scheduler.TryTakeNext(target, out ScheduledWorkUnit? scheduledWork, out string? deviceRoot))
+                    while (scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork, out string? deviceRoot))
                     {
                         SpecificBatchUnit unit = scheduledWork!.PayloadAs<SpecificBatchUnit>();
                         Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
@@ -174,7 +174,7 @@ namespace ArchiveFixer.ViewModels
                     (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
                     running.RemoveAt(index);
                     bool success = await completedWork.ConfigureAwait(true);
-                    scheduler.MarkCompleted(workUnits[completedUnit]);
+                    scheduler.Complete(workUnits[completedUnit]);
                     if (success
                         && completedUnit.Entry.StartTime.HasValue
                         && completedUnit.Entry.EndTime.HasValue)

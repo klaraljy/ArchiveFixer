@@ -480,7 +480,7 @@ namespace ArchiveFixer.ViewModels
                  * ② 真正开跑前仍然要过账本（`TryReserve`），**放行判据一个字没放宽**。
                  */
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
-                var scheduler = new DevicePoolScheduler<ScheduledWorkUnit>();
+                var scheduler = new SlotSchedulerRunner<ScheduledWorkUnit>();
                 scheduler.Reset(
                     plan.Ordered.Select(item =>
                     {
@@ -564,7 +564,7 @@ namespace ArchiveFixer.ViewModels
                             ObserveCompletedTask(finishedAutoTask, runningTasks.Count, ref maxParallel);
                             if (slotWorkByTask.Remove(finishedAutoTask, out ScheduledWorkUnit? completedSlotWork))
                             {
-                                scheduler.MarkCompleted(completedSlotWork);
+                                scheduler.Complete(completedSlotWork);
                                 if (finishedAutoTask.StartTime.HasValue
                                     && finishedAutoTask.EndTime.HasValue)
                                 {
@@ -632,7 +632,7 @@ namespace ArchiveFixer.ViewModels
                             break;
                         }
                     }
-                    if (!scheduler.TryTakeNext(null, out ScheduledWorkUnit? scheduledWork, out string? deviceRootTaken))
+                    if (!scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork, out string? deviceRootTaken))
                     {
                         break;
                     }
@@ -691,7 +691,7 @@ namespace ArchiveFixer.ViewModels
                          * 只写一行 INFO 说清"它在等什么"，用户才不会以为这个包已经被判死刑了。
                          */
                         spaceWaiting.Add((task, item, gate));
-                        scheduler.MarkCompleted(scheduledWork);
+                        scheduler.Complete(scheduledWork);
 
                         AppendLog(
                             "INFO",
