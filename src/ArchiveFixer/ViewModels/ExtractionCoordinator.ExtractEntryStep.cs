@@ -482,7 +482,7 @@ namespace ArchiveFixer.ViewModels
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
                 var scheduler = new SlotScheduler<ScheduledWorkUnit>();
                 scheduler.Reset(
-                    plan.Ordered.Select(ScheduledWorkUnit.FromPlanItem),
+                    plan.Ordered.Select(item => ScheduledWorkUnit.FromPlanItem(item)),
                     maxParallel,
                     work => work.EstimatedSeconds);
                 var slotWorkByTask = new Dictionary<ArchiveTask, ScheduledWorkUnit>();

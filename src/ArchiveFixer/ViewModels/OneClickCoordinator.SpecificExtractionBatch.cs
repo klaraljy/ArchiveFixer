@@ -50,7 +50,7 @@ namespace ArchiveFixer.ViewModels
             int skippedFollowers = 0;
 
             Dictionary<SpecificBatchUnit, ScheduledWorkUnit> workUnits = orderedUnits
-                .ToDictionary(unit => unit, ScheduledWorkUnit.FromSpecificUnit);
+                .ToDictionary(unit => unit, unit => ScheduledWorkUnit.FromSpecificUnit(unit));
             var scheduler = new SlotScheduler<ScheduledWorkUnit>();
             scheduler.Reset(
                 workUnits.Values,

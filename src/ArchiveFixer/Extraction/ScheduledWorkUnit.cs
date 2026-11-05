@@ -14,10 +14,12 @@ namespace ArchiveFixer.Extraction
             long sourceBytes,
             int volumeCount,
             bool isVolumeGroup,
-            double estimatedSeconds)
+            double estimatedSeconds,
+            string deviceRoot)
         {
             Payload = payload;
             SourceBytes = sourceBytes;
+            DeviceRoot = deviceRoot ?? string.Empty;
             VolumeCount = Math.Max(1, volumeCount);
             IsVolumeGroup = isVolumeGroup;
             EstimatedSeconds = Math.Max(1, estimatedSeconds);
@@ -25,6 +27,7 @@ namespace ArchiveFixer.Extraction
 
         public object Payload { get; }
         public long SourceBytes { get; }
+        public string DeviceRoot { get; }
         public int VolumeCount { get; }
         public bool IsVolumeGroup { get; }
         public double EstimatedSeconds { get; }
@@ -58,7 +61,7 @@ namespace ArchiveFixer.Extraction
             return Payload as T ?? throw new InvalidOperationException("调度单位载荷类型不匹配。");
         }
 
-        public static ScheduledWorkUnit FromPlanItem(ScheduledExtractionItem item)
+        public static ScheduledWorkUnit FromPlanItem(ScheduledExtractionItem item, string deviceRoot = "")
         {
             return new ScheduledWorkUnit(
                 item,
@@ -69,10 +72,11 @@ namespace ArchiveFixer.Extraction
                     item.Estimate.SourceBytes,
                     item.Task,
                     item.Task.VolumeCount,
-                    item.Task.IsVolumeGroup || item.Task.VolumeCount > 1));
+                    item.Task.IsVolumeGroup || item.Task.VolumeCount > 1),
+                deviceRoot);
         }
 
-        public static ScheduledWorkUnit FromSpecificUnit(SpecificBatchUnit unit)
+        public static ScheduledWorkUnit FromSpecificUnit(SpecificBatchUnit unit, string deviceRoot = "")
         {
             int volumeCount = unit.Followers.Count + 1;
             bool isGroup = unit.Followers.Count > 0;
@@ -85,7 +89,8 @@ namespace ArchiveFixer.Extraction
                     unit.SourceBytes,
                     unit.Entry,
                     volumeCount,
-                    isGroup));
+                    isGroup),
+                deviceRoot);
         }
     }
 }
