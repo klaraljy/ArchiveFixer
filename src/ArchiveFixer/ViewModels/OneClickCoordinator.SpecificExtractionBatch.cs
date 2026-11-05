@@ -27,9 +27,6 @@ namespace ArchiveFixer.ViewModels
         {
             runOptions ??= snapshot.Options;
 
-            var runner = new SpecificExtractionRunner(
-                _extractionCoordinator.SpecificExtractionEngine,
-                message => AppendLog("INFO", message));
             _extractionCoordinator.BeginSpecificPasswordBatch();
             // 空间不足模式：按源包体积从大到小；源包按用户接受风险处理（失败/预检不足也删）。
             bool spaceTight = snapshot.SpaceTightMode;
@@ -136,7 +133,7 @@ namespace ArchiveFixer.ViewModels
                     while (running.Count < target && scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork))
                     {
                         SpecificBatchUnit unit = scheduledWork!.PayloadAs<SpecificBatchUnit>();
-                        Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
+                        Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight);
                         running.Add((unit, work));
                     }
 
@@ -193,28 +190,34 @@ namespace ArchiveFixer.ViewModels
         private async Task<bool> ProcessSpecificUnitAsync(
             SpecificBatchUnit unit,
             OneClickRunOptions runOptions,
-            bool spaceTight,
-            SpecificExtractionRunner runner)
+            bool spaceTight)
         {
-            bool success = await ProcessSpecificTaskAsync(
-                    unit.Entry,
-                    runOptions,
-                    spaceTight,
-                    runner,
-                    requiredSourceBytes: unit.SourceBytes)
-                .ConfigureAwait(true);
-
-            foreach (ArchiveTask follower in unit.Followers)
+            _extractionCoordinator.BeginTaskLogCapture(unit.Entry);
+            try
             {
-                MarkSpecificFollower(follower, unit.Entry, success, runOptions, spaceTight);
-            }
+                bool success = await ProcessSpecificTaskAsync(
+                        unit.Entry,
+                        runOptions,
+                        spaceTight,
+                        requiredSourceBytes: unit.SourceBytes)
+                    .ConfigureAwait(true);
 
-            if (success)
+                foreach (ArchiveTask follower in unit.Followers)
+                {
+                    MarkSpecificFollower(follower, unit.Entry, success, runOptions, spaceTight);
+                }
+
+                if (success)
+                {
+                    ApplySpecificSourceHandling(unit, runOptions, spaceTight);
+                }
+
+                return success;
+            }
+            finally
             {
-                ApplySpecificSourceHandling(unit, runOptions, spaceTight);
+                _extractionCoordinator.EndTaskLogCapture(unit.Entry);
             }
-
-            return success;
         }
 
         /// <summary>
@@ -251,9 +254,10 @@ namespace ArchiveFixer.ViewModels
                     IncludeRestAliases = includeRestAliases
                 });
 
-            AppendLog(
+            _extractionCoordinator.AppendTaskLog(
+                task,
                 cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                $"{task.LogName}：特定解压后源包处理 —— {cleanup.Message}");
+                $"特定解压后源包处理 —— {cleanup.Message}");
 
             if (cleanup.Attempted && cleanup.FailedFiles.Count == 0)
             {
@@ -290,15 +294,15 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 task.RestDirectoryPath = string.Empty;
-                AppendLog(
-                    "INFO",
+                _extractionCoordinator.AppendTaskLog(
+                    task,
                     spaceTight
-                        ? $"{task.LogName}：空间不足模式，最后一层过程物在成功后彻底删除"
-                        : $"{task.LogName}：特定解压其余物按删除档清理完毕");
+                        ? "空间不足模式，最后一层过程物在成功后彻底删除"
+                        : "特定解压其余物按删除档清理完毕");
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{task.LogName}：特定解压其余物删除失败：{ex.Message}");
+                _extractionCoordinator.AppendTaskLog(task, "WARN", $"特定解压其余物删除失败：{ex.Message}");
             }
         }
 
@@ -332,10 +336,13 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask task,
             OneClickRunOptions runOptions,
             bool spaceTight,
-            SpecificExtractionRunner runner,
             long requiredSourceBytes = 0)
         {
             string source = task.CurrentPath;
+
+            var runner = new SpecificExtractionRunner(
+                _extractionCoordinator.SpecificExtractionEngine,
+                message => _extractionCoordinator.AppendTaskLog(task, message));
 
             if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
             {
@@ -476,7 +483,7 @@ namespace ArchiveFixer.ViewModels
             if (cancelled)
             {
                 MarkSpecificTaskCancelled(task);
-                AppendLog("WARN", $"{task.LogName}：已按「{task.ErrorMessage}」停下。");
+                _extractionCoordinator.AppendTaskLog(task, "WARN", $"已按「{task.ErrorMessage}」停下。");
                 return false;
             }
 
@@ -503,9 +510,9 @@ namespace ArchiveFixer.ViewModels
                  */
                 ApplySpecificRestHandling(task, result, runOptions, spaceTight);
 
-                AppendLog(
-                    "INFO",
-                    $"{task.LogName}：特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）"
+                _extractionCoordinator.AppendTaskLog(
+                    task,
+                    $"特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）"
                     + (spaceTight ? $"；空间不足剩余 {TryGetFreeBytes(outputRoot)}" : string.Empty));
 
                 _vm.Logger.Event(
@@ -525,7 +532,7 @@ namespace ArchiveFixer.ViewModels
             task.RestDirectoryPath = result.RestDirectory;
             ApplySpecificRestHandling(task, result, runOptions, spaceTight);
             MarkSpecificTaskFailed(task, result.Message);
-            AppendLog("WARN", $"{task.LogName}：特定解压失败 —— {result.Message}");
+            _extractionCoordinator.AppendTaskLog(task, "WARN", $"特定解压失败 —— {result.Message}");
 
             _vm.Logger.Event(
                 "specific.failure",

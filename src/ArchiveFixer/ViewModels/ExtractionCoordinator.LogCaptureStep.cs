@@ -134,7 +134,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal Action? PostProcessStartedForTests { get; set; }
 
-        private void BeginTaskLogCapture(ArchiveTask task)
+        internal void BeginTaskLogCapture(ArchiveTask task)
         {
             // 详细档（⑥设置 →「详细日志（排查用）」，默认关）或测试显式要求 → 不攒，全部原样写出去。
             _currentTaskLog.Value = VerboseTaskLogEnabled ? null : new TaskLogCapture();
@@ -174,7 +174,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 任务收尾：按**机器终态**决定细节留不留（⛔ 不比对中文文案），再补一行"收尾摘要"。
         /// </summary>
-        private void EndTaskLogCapture(ArchiveTask task)
+        internal void EndTaskLogCapture(ArchiveTask task)
         {
             TaskLogCapture? capture = _currentTaskLog.Value;
 
@@ -316,6 +316,20 @@ namespace ArchiveFixer.ViewModels
 
 
         private void AppendLog(string message) => _vm.AppendLog(message);
+
+        /// <summary>任务级日志：统一带任务名前缀，并走与普通解压相同的成功/失败捕获规则。</summary>
+        internal void AppendTaskLog(ArchiveTask task, string message) =>
+            AppendTaskLog(task, "INFO", message);
+
+        internal void AppendTaskLog(ArchiveTask task, string level, string message)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            AppendLog(level, $"{task.LogName}：{message}");
+        }
 
         private void AppendLog(string level, string message)
         {

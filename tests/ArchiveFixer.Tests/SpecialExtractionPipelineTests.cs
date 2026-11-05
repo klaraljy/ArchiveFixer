@@ -563,9 +563,44 @@ namespace ArchiveFixer.Tests
             ArchiveTask task = harness.Vm.Tasks.Single();
             Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
             Assert.Equal(StatusText.PasswordCorrect, task.PasswordStatus);
-            Assert.Contains(harness.LogTexts, text => text.Contains("密码候选", StringComparison.Ordinal));
+            Assert.Contains(harness.LogTexts, text => text.Contains("密码候选", StringComparison.Ordinal)
+                                                       && text.Contains("secret.7z", StringComparison.Ordinal));
             Assert.Contains(harness.LogTexts, text => text.Contains("密码候选", StringComparison.Ordinal)
                                                        && text.Contains("通过", StringComparison.Ordinal));
+        }
+
+        [SevenZipFact]
+        public async Task 特定解压_普通日志档_成功细节进内部日志不刷屏()
+        {
+            string collection = Path.Combine(_root, "specific-logcapture");
+            Directory.CreateDirectory(collection);
+
+            string build = Path.Combine(_root, "build-logcapture");
+            Directory.CreateDirectory(build);
+            WriteText(Path.Combine(build, "payload.txt"), "payload");
+            Run7z(build, "a", "-t7z", Path.Combine(collection, "normal.7z"), "payload.txt");
+
+            Harness harness = CreateHarness("specific-logcapture", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            });
+            harness.Extraction.KeepTaskDetailInLog = false;
+
+            await harness.AddPathsAsync(collection);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            ArchiveTask task = harness.Vm.Tasks.Single();
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+
+            // 成功任务在屏幕上只留一条摘要；候选/层细节只进内部详细日志。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("normal.7z", StringComparison.Ordinal)
+                        && text.Contains("解压 100%", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("密码候选", StringComparison.Ordinal));
         }
 
         // ================================================================ 装配与工具
