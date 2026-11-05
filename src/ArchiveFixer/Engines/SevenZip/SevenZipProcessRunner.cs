@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -857,13 +858,29 @@ namespace ArchiveFixer.Engines.SevenZip
         /// <c>MissingFirstVolume</c> 仍走下面的"数缺号"二次判定；两个码对上层是同一类
         /// （<c>ExtractionCoordinator.IsVolumeMissingErrorType</c> 两个都收）。</para>
         /// </summary>
-        private static string ResolveVolumeMissingErrorType(
+        internal static string ResolveVolumeMissingErrorType(
             string errorType,
             string? archivePath,
             IEnumerable<string>? arguments = null)
         {
             if (string.Equals(errorType, "VolumeMissing", StringComparison.Ordinal))
             {
+                /*
+                 * 2026-11-05 真机 70 份：中间卷被截断，文件名仍是完整组（.001/.002/.003 都在），
+                 * 7-Zip 报“Cannot open the file as [7z] archive”，文本分类先命中了
+                 * “Can not open file + 路径里的 .001” ⇒ 误判“分卷缺失”。
+                 *
+                 * 只有第 1 卷、同目录同基名的分卷片至少 2 片、且数不出缺号时，
+                 * 才能确认“组齐了但打不开” ⇒ 落损坏，不再让用户去补不存在的卷。
+                 * 卷号 ≥2、缺号非空、没兄弟卷都保持原分类。
+                 */
+                string? firstPath = ResolveArchivePath(archivePath, arguments);
+
+                if (IsCompleteVolumeGroup(firstPath))
+                {
+                    return "CorruptedArchive";
+                }
+
                 return errorType;
             }
 
@@ -1020,6 +1037,99 @@ namespace ArchiveFixer.Engines.SevenZip
 
             return null;
         }
+        private static bool IsCompleteVolumeGroup(string? archivePath)
+        {
+            if (string.IsNullOrWhiteSpace(archivePath)
+                || LegacyVolumeNames.TryGetIndex(Path.GetFileName(archivePath)) != 1)
+            {
+                return false;
+            }
+
+            try
+            {
+                string? directory = Path.GetDirectoryName(archivePath);
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return false;
+                }
+
+                string baseName = FileNameHelper.SecondStepBaseName(Path.GetFileName(archivePath));
+                int siblings = 0;
+
+                foreach (string file in Directory.EnumerateFiles(directory))
+                {
+                    string name = Path.GetFileName(file);
+
+                    if (LegacyVolumeNames.TryGetIndex(name) == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(
+                            FileNameHelper.SecondStepBaseName(name),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        siblings++;
+                    }
+                }
+
+                if (siblings < 2)
+                {
+                    return false;
+                }
+
+                /*
+                 * 7z 首卷自述“整包多少片”时，片数是比“缺号清单”更强的证据：
+                 * - 实到片数 < 自述片数 ⇒ 真缺卷（例如缺最后一卷，名字清单看不出缺号）；
+                 * - 实到片数 == 自述片数 ⇒ 组齐了但字节数/内容对不上 ⇒ 损坏。
+                 * 自述片数读不到时，退回原来的“无缺号”判据。
+                 */
+                FileNatureCard card = FileNature.Inspect(archivePath);
+
+                if (card.DeclaredVolumeCount > 0)
+                {
+                    return siblings >= card.DeclaredVolumeCount;
+                }
+
+                if (card.DeclaredTotalBytes > 0)
+                {
+                    string[] pieces = Directory
+                        .EnumerateFiles(directory)
+                        .Where(file => string.Equals(
+                            FileNameHelper.SecondStepBaseName(Path.GetFileName(file)),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase))
+                        .Where(file => LegacyVolumeNames.TryGetIndex(Path.GetFileName(file)) != null)
+                        .OrderBy(file => LegacyVolumeNames.TryGetIndex(Path.GetFileName(file)) ?? int.MaxValue)
+                        .ToArray();
+
+                    long sum = pieces.Sum(file => new FileInfo(file).Length);
+                    long firstSize = new FileInfo(pieces[0]).Length;
+                    long lastSize = new FileInfo(pieces[^1]).Length;
+
+                    if (sum >= card.DeclaredTotalBytes)
+                    {
+                        // 字节数对得上 ⇒ 组齐了；打不开就是内容损坏。
+                        return true;
+                    }
+
+                    /*
+                     * 字节数不够：末片仍是满片大小 ⇒ 后面还有没到齐的卷 ⇒ 缺卷；
+                     * 末片已经小于首片 ⇒ 这是正常的末片被截断 ⇒ 组齐了但内容损坏。
+                     */
+                    return lastSize < firstSize;
+                }
+
+                return FindMissingVolumeParts(archivePath).Count == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         /// <summary>
         /// 在归档所在目录里找分卷缺号。
         ///

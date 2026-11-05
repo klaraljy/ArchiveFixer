@@ -1,4 +1,6 @@
 using System.IO;
+using System.Threading;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 
@@ -155,6 +157,33 @@ public class FileScanServiceTests
 
             Assert.Single(tasks);
             Assert.Equal("root.txt", tasks[0].FileName);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ScanPaths_硬链接双名_只生成一个任务且留干净名()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            string first = Path.Combine(dir, "hard.7z.001");
+            string alias = Path.Combine(dir, "hard.7z.001删");
+            File.WriteAllText(first, "x");
+            Assert.True(HardLinkHelper.TryCreateHardLink(alias, first));
+
+            var service = new FileScanService();
+            var tasks = await service.ScanPathsAsync(
+                new[] { dir },
+                CreateOptions(),
+                CancellationToken.None);
+
+            ArchiveTask task = Assert.Single(tasks);
+            Assert.Equal("hard.7z.001", task.FileName);
         }
         finally
         {

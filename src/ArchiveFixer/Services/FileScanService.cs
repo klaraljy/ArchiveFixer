@@ -118,6 +118,14 @@ namespace ArchiveFixer.Services
                  * 现在扫描结果是一份文件一个任务，分卷组只在交接事实里登记。
                  */
 
+                /*
+                 * 同一份物理文件的多个硬链接名只留一个任务。
+                 * 判据是 FileIdentity（卷序列号 + 文件索引），不是路径/名字；
+                 * 两个名字都干净时保留先出现的，一个带中文字符伪装时保留干净名。
+                 * 这发生在**任务生成**阶段，所以后续扫描/解压/日志都看不到第二条。
+                 */
+                DeduplicatePhysicalInputs(result);
+
                 RebuildIndex(result);
                 return result;
             }, cancellationToken);
@@ -429,6 +437,77 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 重建序号。
         /// </summary>
+        /// <summary>
+        /// 同一份物理文件的多个硬链接名只留一个任务（判据只读 FileIdentity）。
+        /// 不按名字去重：不同文件同名必须保留；按文件索引才能把“硬链接双胞胎”收掉。
+        /// </summary>
+        private static void DeduplicatePhysicalInputs(List<ArchiveTask> tasks)
+        {
+            if (tasks.Count < 2)
+            {
+                return;
+            }
+
+            var accepted = new List<ArchiveTask>(tasks.Count);
+            var byIdentity = new Dictionary<string, ArchiveTask>(StringComparer.Ordinal);
+
+            foreach (ArchiveTask task in tasks)
+            {
+                string path = SafePathHelper.GetFullPathSafe(task.CurrentPath);
+
+                if (string.IsNullOrWhiteSpace(path)
+                    || !FileIdentity.TryGetIdentity(path, out ulong volume, out ulong index))
+                {
+                    accepted.Add(task);
+                    continue;
+                }
+
+                string key = volume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ":"
+                    + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                if (!byIdentity.TryGetValue(key, out ArchiveTask? kept))
+                {
+                    byIdentity[key] = task;
+                    accepted.Add(task);
+                    continue;
+                }
+
+                if (IsCleanerPhysicalAlias(task.CurrentPath, kept.CurrentPath))
+                {
+                    int position = accepted.IndexOf(kept);
+
+                    if (position >= 0)
+                    {
+                        accepted[position] = task;
+                    }
+
+                    byIdentity[key] = task;
+                }
+            }
+
+            tasks.Clear();
+            tasks.AddRange(accepted);
+        }
+
+        /// <summary>带中文字符伪装的名字让位给干净名；两个都干净时保留先出现的。</summary>
+        private static bool IsCleanerPhysicalAlias(string candidate, string kept)
+        {
+            string candidateName = Path.GetFileName(candidate);
+            string keptName = Path.GetFileName(kept);
+
+            bool candidateClean = string.Equals(
+                candidateName,
+                SpecificOutputNaming.RemoveChineseFromExtension(candidateName),
+                StringComparison.Ordinal);
+            bool keptClean = string.Equals(
+                keptName,
+                SpecificOutputNaming.RemoveChineseFromExtension(keptName),
+                StringComparison.Ordinal);
+
+            return candidateClean && !keptClean;
+        }
+
         private static void RebuildIndex(IList<ArchiveTask> tasks)
         {
             if (tasks == null)
