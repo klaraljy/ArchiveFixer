@@ -410,7 +410,24 @@ namespace ArchiveFixer.ViewModels
                         cancellationToken: specificCts.Token,
                         passwordProvider: () => _extractionCoordinator.SpecificExtractionPasswords,
                         onPasswordSuccess: password =>
-                            _extractionCoordinator.RecordSpecificPasswordSuccess(source, password),
+                        {
+                            _extractionCoordinator.RecordSpecificPasswordSuccess(source, password);
+
+                            ApplyProgress(() =>
+                            {
+                                if (!string.IsNullOrEmpty(password))
+                                {
+                                    task.PasswordStatus = StatusText.PasswordCorrect;
+                                }
+                                else if (!string.Equals(
+                                             task.PasswordStatus,
+                                             StatusText.PasswordCorrect,
+                                             StringComparison.Ordinal))
+                                {
+                                    task.PasswordStatus = StatusText.PasswordNotNeeded;
+                                }
+                            });
+                        },
                         onLayerStarted: (depth, archive) => ApplyProgress(() =>
                         {
                             task.Status = StatusText.Extracting;
@@ -461,6 +478,11 @@ namespace ArchiveFixer.ViewModels
                 MarkSpecificTaskCancelled(task);
                 AppendLog("WARN", $"{task.LogName}：已按「{task.ErrorMessage}」停下。");
                 return false;
+            }
+
+            if (!string.IsNullOrEmpty(result.PasswordStatus))
+            {
+                task.PasswordStatus = result.PasswordStatus;
             }
 
             if (result.Success)

@@ -530,6 +530,44 @@ namespace ArchiveFixer.Tests
             return package;
         }
 
+        [SevenZipFact]
+        public async Task 特定解压_加密包成功_密码状态和候选日志都落下来()
+        {
+            string collection = Path.Combine(_root, "specific-password");
+            Directory.CreateDirectory(collection);
+
+            string build = Path.Combine(_root, "build-password");
+            Directory.CreateDirectory(build);
+            WriteText(Path.Combine(build, "secret.txt"), "secret");
+
+            Run7z(build, "a", "-t7z", "-pTEST", Path.Combine(collection, "secret.7z"), "secret.txt");
+
+            Harness harness = CreateHarness("specific-password", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            });
+
+            harness.PasswordService.Passwords.Add(new PasswordItem
+            {
+                Value = "TEST",
+                Source = "ImportedList",
+                IsEnabled = true
+            });
+
+            await harness.AddPathsAsync(collection);
+            Assert.Single(harness.Vm.Tasks);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            ArchiveTask task = harness.Vm.Tasks.Single();
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+            Assert.Equal(StatusText.PasswordCorrect, task.PasswordStatus);
+            Assert.Contains(harness.LogTexts, text => text.Contains("密码候选", StringComparison.Ordinal));
+            Assert.Contains(harness.LogTexts, text => text.Contains("密码候选", StringComparison.Ordinal)
+                                                       && text.Contains("通过", StringComparison.Ordinal));
+        }
+
         // ================================================================ 装配与工具
 
         /// <summary>打开特定解压独立模式（每个用例都写一遍太啰嗦，抽一处）。</summary>
@@ -601,7 +639,7 @@ namespace ArchiveFixer.Tests
             extraction.KeepTaskDetailInLog = true;
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, oneClick, extraction, logService, sourceRoot);
+            return new Harness(vm, oneClick, extraction, logService, passwordService, sourceRoot);
         }
 
         /// <summary>目录树的**逐字**快照（相对 <paramref name="root"/> 的全部条目，排序后比对）。</summary>
@@ -697,12 +735,14 @@ namespace ArchiveFixer.Tests
                 OneClickCoordinator oneClick,
                 ExtractionCoordinator extraction,
                 LogService log,
+                PasswordService passwords,
                 string sourceRoot)
             {
                 Vm = vm;
                 _oneClick = oneClick;
                 Extraction = extraction;
                 Log = log;
+                PasswordService = passwords;
                 SourceRoot = sourceRoot;
             }
 
@@ -711,6 +751,8 @@ namespace ArchiveFixer.Tests
             public ExtractionCoordinator Extraction { get; }
 
             public LogService Log { get; }
+
+            public PasswordService PasswordService { get; }
 
             /// <summary>这一次的源目录（也是"未指定位置"档下的成品根）。</summary>
             public string SourceRoot { get; }

@@ -21,6 +21,9 @@ namespace ArchiveFixer.Extraction
 
         public string RestDirectory { get; init; } = string.Empty;
 
+        /// <summary>本次实际密码结论（密码正确 / 不需要密码 / 需要密码 / 密码错误）；空 = 判不出。</summary>
+        public string PasswordStatus { get; init; } = string.Empty;
+
         /// <summary>失败时的结构化诊断（层号、入口、卷数、分类），只进日志，不参与判据。</summary>
         public string DiagnosticDetail { get; init; } = string.Empty;
 
@@ -61,6 +64,7 @@ namespace ArchiveFixer.Extraction
             }
 
             string currentArchive = sourceArchive;
+            bool anyPasswordUsed = false;
             Directory.CreateDirectory(outputRoot);
             Directory.CreateDirectory(workRoot);
 
@@ -79,10 +83,17 @@ namespace ArchiveFixer.Extraction
 
                 bool extracted = false;
                 string lastError = string.Empty;
+                string lastErrorType = string.Empty;
                 IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
+                List<string?> normalizedPasswords = NormalizePasswords(candidates).ToList();
 
-                foreach (string? password in NormalizePasswords(candidates))
+                for (int passwordIndex = 0; passwordIndex < normalizedPasswords.Count; passwordIndex++)
                 {
+                    string? password = normalizedPasswords[passwordIndex];
+                    string attempt = normalizedPasswords.Count > 1
+                        ? $"密码候选 {passwordIndex + 1}/{normalizedPasswords.Count}，{DescribePasswordCandidate(password)}"
+                        : DescribePasswordCandidate(password);
+                    _log?.Invoke($"第 {depth + 1} 层：开始解压，{attempt}");
                     var request = new ArchiveRequest
                     {
                         ArchivePath = currentArchive,
@@ -110,11 +121,15 @@ namespace ArchiveFixer.Extraction
                     if (result.Success)
                     {
                         extracted = true;
+                        anyPasswordUsed |= !string.IsNullOrEmpty(password);
                         onPasswordSuccess?.Invoke(password);
+                        _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 通过");
                         break;
                     }
 
                     lastError = result.Message;
+                    lastErrorType = result.DetectedErrorType;
+                    _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 不对，继续试下一个。");
                 }
 
                 if (!extracted)
@@ -124,6 +139,7 @@ namespace ArchiveFixer.Extraction
                     return new SpecificExtractionRunResult
                     {
                         Message = "解压失败：" + lastError,
+                        PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
                         DiagnosticDetail =
                             $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
                         RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
@@ -151,6 +167,7 @@ namespace ArchiveFixer.Extraction
                         Success = true,
                         OutputPath = finalPath,
                         RestDirectory = string.Empty,
+                        PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                         Message = "特定解压成功",
                         Depth = depth
                     };
@@ -188,6 +205,7 @@ namespace ArchiveFixer.Extraction
                     Message = decision.Kind == SpecificLayerKind.StandardVolumeGroup
                         ? "标准分卷：这一层没有可用的第一卷"
                         : "这一层的形状不在特定解压支持范围内",
+                    PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                     DiagnosticDetail =
                         $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
                     RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
@@ -198,9 +216,28 @@ namespace ArchiveFixer.Extraction
             return new SpecificExtractionRunResult
             {
                 Message = "超过 3 层仍未得到内容物",
+                PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                 DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
                 RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                 Depth = MaxDepth
+            };
+        }
+
+        private static string DescribePasswordCandidate(string? password) =>
+            string.IsNullOrEmpty(password) ? "尝试空密码" : "尝试密码候选：******";
+
+        private static string DescribePasswordStatus(string errorType, bool usedPassword)
+        {
+            if (usedPassword)
+            {
+                return StatusText.PasswordCorrect;
+            }
+
+            return errorType switch
+            {
+                EngineErrorTypes.WrongPassword or EngineErrorTypes.PasswordOrCorrupted => StatusText.WrongPassword,
+                EngineErrorTypes.NeedPassword or EngineErrorTypes.EncryptedHeaders => StatusText.PasswordNeed,
+                _ => string.Empty
             };
         }
 
