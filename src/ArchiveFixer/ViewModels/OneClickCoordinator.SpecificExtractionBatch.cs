@@ -49,14 +49,23 @@ namespace ArchiveFixer.ViewModels
             int failed = 0;
             int skippedFollowers = 0;
 
+            string SpecificDeviceRoot(SpecificBatchUnit unit)
+            {
+                return Path.GetDirectoryName(unit.Entry.CurrentPath) ?? string.Empty;
+            }
+
             Dictionary<SpecificBatchUnit, ScheduledWorkUnit> workUnits = orderedUnits
-                .ToDictionary(unit => unit, unit => ScheduledWorkUnit.FromSpecificUnit(unit));
-            var scheduler = new SlotScheduler<ScheduledWorkUnit>();
+                .ToDictionary(
+                    unit => unit,
+                    unit => ScheduledWorkUnit.FromSpecificUnit(unit, SpecificDeviceRoot(unit)));
+            var scheduler = new DevicePoolScheduler<ScheduledWorkUnit>();
             scheduler.Reset(
-                workUnits.Values,
+                workUnits.Values.Select(work => (work, work.DeviceRoot)),
                 Math.Max(1, preparedTarget),
+                8,
                 work => work.EstimatedSeconds);
             var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
+
 
             int lastTarget = -1;
             string lastBasis = string.Empty;
@@ -128,13 +137,12 @@ namespace ArchiveFixer.ViewModels
                             + (spaceTight ? $"；{spaceBasis}" : "。"));
                     }
 
-                    foreach (SlotScheduler<ScheduledWorkUnit>.Start start in scheduler.StartAvailable(target))
+                    while (scheduler.TryTakeNext(target, out ScheduledWorkUnit? scheduledWork, out string? deviceRoot))
                     {
-                        SpecificBatchUnit unit = start.Unit.PayloadAs<SpecificBatchUnit>();
+                        SpecificBatchUnit unit = scheduledWork!.PayloadAs<SpecificBatchUnit>();
                         Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
                         running.Add((unit, work));
                     }
-
                     if (running.Count == 0)
                     {
                         break;

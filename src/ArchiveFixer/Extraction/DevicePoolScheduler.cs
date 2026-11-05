@@ -46,6 +46,15 @@ namespace ArchiveFixer.Extraction
             int maximumPerDevice,
             Func<T, double> estimate)
         {
+            Reset(units, _ => initialPerDevice, _ => maximumPerDevice, estimate);
+        }
+
+        public void Reset(
+            IEnumerable<(T Unit, string Root)> units,
+            Func<string, int> initialPerDevice,
+            Func<string, int> maximumPerDevice,
+            Func<T, double> estimate)
+        {
             _pools.Clear();
             _unitRoot.Clear();
             _order.Clear();
@@ -59,8 +68,11 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                var pool = new DevicePool(group.Key, initialPerDevice, maximumPerDevice);
-                pool.Slots.Reset(group, initialPerDevice, estimate);
+                var pool = new DevicePool(
+                    group.Key,
+                    initialPerDevice(group.Key),
+                    maximumPerDevice(group.Key));
+                pool.Slots.Reset(group, pool.Capacity.Current, estimate);
                 _pools[group.Key] = pool;
                 _order.Add(group.Key);
                 foreach (T unit in group)

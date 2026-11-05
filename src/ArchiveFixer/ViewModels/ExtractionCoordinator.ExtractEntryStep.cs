@@ -480,12 +480,31 @@ namespace ArchiveFixer.ViewModels
                  * ② 真正开跑前仍然要过账本（`TryReserve`），**放行判据一个字没放宽**。
                  */
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
-                var scheduler = new SlotScheduler<ScheduledWorkUnit>();
+                var scheduler = new DevicePoolScheduler<ScheduledWorkUnit>();
                 scheduler.Reset(
-                    plan.Ordered.Select(item => ScheduledWorkUnit.FromPlanItem(item)),
-                    maxParallel,
+                    plan.Ordered.Select(item =>
+                    {
+                        string root = _autoTaskRoots.TryGetValue(item.Task, out string? knownRoot)
+                            ? knownRoot
+                            : ResolveConcurrencyRoot(item.Task);
+                        return (ScheduledWorkUnit.FromPlanItem(item, root), root);
+                    }),
+                    root => _autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller)
+                        ? controller.InitialLimit
+                        : Math.Max(1, maxParallel),
+                    root => StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4,
                     work => work.EstimatedSeconds);
                 var slotWorkByTask = new Dictionary<ArchiveTask, ScheduledWorkUnit>();
+                void ApplyDeviceCapacity()
+                {
+                    foreach (string root in scheduler.Roots)
+                    {
+                        int cap = StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd
+                            ? Math.Min(8, maxParallel)
+                            : Math.Min(4, maxParallel);
+                        scheduler.SetCapacity(root, cap);
+                    }
+                }
 
                 while (scheduler.PendingCount > 0 || scheduler.ActiveCount > 0)
                 {
@@ -499,7 +518,7 @@ namespace ArchiveFixer.ViewModels
                     bool queuedLogged = false;
                     DateTime queuedSince = DateTime.Now;
 
-                    scheduler.SetCapacity(maxParallel);
+                    ApplyDeviceCapacity();
 
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
                     while (runningTasks.Count >= maxParallel)
@@ -597,12 +616,11 @@ namespace ArchiveFixer.ViewModels
                             break;
                         }
                     }
-                    scheduler.SetCapacity(maxParallel);
-                    if (!scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork))
+                    ApplyDeviceCapacity();
+                    if (!scheduler.TryTakeNext(null, out ScheduledWorkUnit? scheduledWork, out string? deviceRootTaken))
                     {
                         break;
                     }
-
                     ScheduledExtractionItem item = scheduledWork!.PayloadAs<ScheduledExtractionItem>();
                     ArchiveTask task = item.Task;
 
