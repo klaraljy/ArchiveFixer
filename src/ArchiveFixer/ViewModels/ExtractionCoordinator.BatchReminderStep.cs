@@ -117,7 +117,7 @@ namespace ArchiveFixer.ViewModels
             _autoTaskRoots.Clear();
             _autoActiveByRoot.Clear();
 
-            int minimumInitial = AdaptiveConcurrencyController.DefaultMaxLimit;
+            int maximumInitial = 1;
 
             foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
             {
@@ -174,12 +174,10 @@ namespace ArchiveFixer.ViewModels
                         + $"基线 {(controller.MinLatencySecondsPerGb > 0 ? "继承 profile" : "首批学习")}）");
                 }
 
-                minimumInitial = Math.Min(minimumInitial, controller.InitialLimit);
+                maximumInitial = Math.Max(maximumInitial, controller.InitialLimit);
             }
 
-            return minimumInitial == AdaptiveConcurrencyController.DefaultMaxLimit
-                ? 1
-                : minimumInitial;
+            return maximumInitial;
         }
 
         private ConcurrencyLimit? _runConcurrencyLimit;
@@ -206,21 +204,19 @@ namespace ArchiveFixer.ViewModels
         private int _capacityPolicySeed = -1;
 
         /// <summary>
-        /// 自动并发的唯一取值口：有控制器时取所有卷控制器当前值的最小值；
-        /// 控制器还没建出来时才回落到批首计划值。
-        /// </summary>
+        /// <summary>自动并发取值：取所有卷控制器当前值的最大值，避免慢卷历史把整批锁在 1。</summary>
         internal static int ResolveAutoLimitForBatch(IEnumerable<int> controllerLimits, int? planLimit)
         {
-            int? min = null;
+            int? max = null;
             foreach (int limit in controllerLimits)
             {
-                min = min.HasValue ? Math.Min(min.Value, limit) : limit;
+                max = max.HasValue ? Math.Max(max.Value, limit) : limit;
             }
 
-            return min.HasValue ? Math.Max(1, min.Value) : Math.Max(1, planLimit ?? 1);
+            return max.HasValue ? Math.Max(1, max.Value) : Math.Max(1, planLimit ?? 1);
         }
 
-        /// <summary>本批实际可用的自适应并发 = 所有卷控制器的**最小值**（慢盘不会拖垮快盘，也不会让快盘把慢盘压垮）。</summary>
+        /// <summary>本批实际可用的自适应并发：控制器最大值，再交给 CapacityPolicy 钳制。</summary>
         private int CurrentAutoLimit()
         {
             /*

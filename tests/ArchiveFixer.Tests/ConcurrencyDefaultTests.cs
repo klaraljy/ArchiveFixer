@@ -113,7 +113,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 自动并发_有控制器时不被批首计划值锁死()
         {
-            Assert.Equal(2, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 4, 2 }, planLimit: 1));
+            Assert.Equal(4, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 4, 2 }, planLimit: 1));
             Assert.Equal(2, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 2 }, planLimit: 8));
             Assert.Equal(1, ExtractionCoordinator.ResolveAutoLimitForBatch(Array.Empty<int>(), planLimit: 1));
         }
