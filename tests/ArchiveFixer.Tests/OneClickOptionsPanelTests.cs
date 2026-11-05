@@ -222,6 +222,56 @@ namespace ArchiveFixer.Tests
             Assert.Equal(keepSource, File.Exists(source));
         }
 
+        [Fact]
+        public async Task 跨盘落点_工作区和成品都在目标盘()
+        {
+            if (!Directory.Exists(@"E:\"))
+            {
+                return;
+            }
+
+            Harness harness = CreateHarness();
+            string source = CreateSourceFile("cross-volume-" + Guid.NewGuid().ToString("N") + ".7z");
+            ArchiveTask task = AddTask(harness, source);
+            string customRoot = Path.Combine(
+                @"E:\DeepSeekProjects\_tmp\ArchiveFixer",
+                "cross-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
+                {
+                    PlacementMode = OutputPlacementMode.CustomRootPerArchive,
+                    CustomRoot = customRoot,
+                    SourceHandling = SourceHandlingMode.KeepInPlace,
+                    RestHandling = RestHandlingModes.Keep
+                });
+
+                await harness.OneClick.RunAsync();
+
+                Assert.Equal(StatusText.ExtractSuccess, task.Status);
+                Assert.StartsWith(customRoot, task.OutputPath, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains(
+                    harness.LogTexts,
+                    line => line.Contains("本批工作区", StringComparison.Ordinal)
+                            && line.Contains(customRoot, StringComparison.OrdinalIgnoreCase));
+                Assert.True(File.Exists(source));
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(customRoot))
+                    {
+                        Directory.Delete(customRoot, recursive: true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
         // ================================================================ ④ 无 UI 宿主
 
         /// <summary>
