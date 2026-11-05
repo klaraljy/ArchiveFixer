@@ -1,9 +1,10 @@
 using System.Collections.Generic;
-using ArchiveFixer.Extraction;
+using ArchiveFixer.Experimental.AutoConcurrency;
 using Xunit;
 
 namespace ArchiveFixer.Tests
 {
+    [Trait("Category", "ExperimentalAutoConcurrency")]
     public sealed class DevicePoolSchedulerTests
     {
         [Fact]

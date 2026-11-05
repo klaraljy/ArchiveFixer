@@ -85,6 +85,46 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- ==================== 并发与空间 ==================== -->
+            <GroupBox Header="并发与空间">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="并发数："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding MaxParallelChoices}"
+                                  SelectedItem="{Binding SettingsEditor.Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  ToolTip="同时解压几个包（1–4，默认 2）。这是硬上限；装不下当前可用空间的任务仍会在启动前被拦下，并如实报告各自需要多少。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="1–4，默认 2。程序不再自动改；单盘 HDD/移动盘建议 1，SSD 建议 2。" />
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="按设备算建议"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding RefreshParallelAdviceCommand}"
+                                ToolTip="按选中任务的源盘和落点盘给出建议；只显示，不会改你选的并发数（要读每个源包的大小，可能要一两秒）" />
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding ParallelAdviceText}"
+                               Margin="0,8,0,0"
+                               Style="{StaticResource HintTextStyle}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </GroupBox>
+
             <!--
                 ==================== 内容物保留关键词（用户 2026-10-04 第二次改口径） ====================
                 原话：「你这个内容物保留关键词的输入框这么弄的这么大，你应该弄的像密码一样，

@@ -1,10 +1,12 @@
 using System;
 using System.IO;
+using ArchiveFixer.Experimental.AutoConcurrency;
 using ArchiveFixer.Extraction;
 using Xunit;
 
 namespace ArchiveFixer.Tests
 {
+    [Trait("Category", "ExperimentalAutoConcurrency")]
     /// <summary>
     /// 延迟梯度控制器（Envoy/Netflix 同族）：设备只定起点，方向由归一化延迟决定。
     /// </summary>

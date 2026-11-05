@@ -309,8 +309,8 @@ namespace ArchiveFixer.Tests
 
             Assert.True(throttleLines.Count == 1, $"「并发已满」只该说一次，实际 {throttleLines.Count} 次：\n" + string.Join("\n", throttleLines));
 
-            // 并发数由程序自动决定：等待提示必须说清这一点，且不再出现旧「全速」出口。
-            Assert.Contains("自动调整", throttleLines[0]);
+            // 并发数由用户手动选择：等待提示必须说清这一点，且不再出现旧「全速」出口。
+            Assert.Contains("按你选择的档位", throttleLines[0]);
             Assert.DoesNotContain(lines, line => line.Contains("全速", StringComparison.Ordinal));
 
             // 批末一条汇总（谁等过、等了几个）。

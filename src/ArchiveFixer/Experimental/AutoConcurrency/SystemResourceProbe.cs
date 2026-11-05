@@ -1,7 +1,8 @@
+// STATUS: 未完成 / 暂停（2026-11-05）。自动并发实验代码，不接入产品路径。
 using System;
 using System.Runtime.InteropServices;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Experimental.AutoConcurrency
 {
     /// <summary>
     /// 给自适应并发控制器的低开销系统压力采样：系统 CPU 忙闲 + 可用物理内存。

@@ -213,7 +213,7 @@ namespace ArchiveFixer.Storage
     /// </summary>
     public static class ExtractionScheduler
     {
-        /// <summary>并发档的硬顶（与设置项 <c>MaxParallelExtractCount</c> 的 1–8 一致）。</summary>
+        /// <summary>内部硬顶（空间不足模式仍可按空间用到 8；普通手动档只开放 1–4）。</summary>
         public const int ParallelCeiling = 8;
 
         /// <summary>大任务（单个需求 ≥ 预算 1/4）的并发保护上限；小任务不受这个 3 的限制。</summary>
@@ -223,9 +223,9 @@ namespace ArchiveFixer.Storage
 
         /// <summary>
         /// 界面上允许用户选的并发档（用户 2026-09-22 原话："可以让用户选择解压时并行解压的文件数量"）。
-        /// 8 是硬顶：再往上不是"帮用户省事"，而是把磁盘和内存一起打满。
+        /// 1–4：单盘 HDD/移动盘超过 1 通常更慢，4 已覆盖 SSD 的常见收益区间。
         /// </summary>
-        public static IReadOnlyList<int> AllowedParallelCounts { get; } = new[] { 1, 2, 3, 4, 8 };
+        public static IReadOnlyList<int> AllowedParallelCounts { get; } = new[] { 1, 2, 3, 4 };
 
         /// <summary>把一个并发数夹到合法档位（不在这里的档位取最接近的更大档，兜底 1）。</summary>
         public static int NormalizeParallelCount(int value)
@@ -243,7 +243,7 @@ namespace ArchiveFixer.Storage
                 }
             }
 
-            return ParallelCeiling;
+            return AllowedParallelCounts[AllowedParallelCounts.Count - 1];
         }
 
         /// <summary>

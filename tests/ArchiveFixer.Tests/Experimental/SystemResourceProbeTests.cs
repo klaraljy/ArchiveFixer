@@ -1,10 +1,11 @@
 using System;
 using System.Threading;
-using ArchiveFixer.Services;
+using ArchiveFixer.Experimental.AutoConcurrency;
 using Xunit;
 
 namespace ArchiveFixer.Tests
 {
+    [Trait("Category", "ExperimentalAutoConcurrency")]
     /// <summary>
     /// 系统压力探针的最小事实：Windows API 能返回合法 CPU/内存值，
     /// 不是永远 0；真正为 0 时必须是“本轮确实空闲”，不能当作默认失败。

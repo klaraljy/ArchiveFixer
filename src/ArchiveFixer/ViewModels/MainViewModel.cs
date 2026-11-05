@@ -1330,7 +1330,7 @@ namespace ArchiveFixer.ViewModels
             private set => SetProperty(ref _parallelAdviceText, value ?? string.Empty);
         }
 
-        /// <summary>并发档位的候选（界面的下拉框直接绑它；1 / 2 / 3 / 4 / 8）。</summary>
+        /// <summary>并发档位的候选（界面的下拉框直接绑它；1 / 2 / 3 / 4）。</summary>
         public IReadOnlyList<int> MaxParallelChoices => ExtractionScheduler.AllowedParallelCounts;
 
         /// <summary>当前档位的一句话说明（源包怎么处理 + 其余物怎么处理），显示在并发那一组旁边。</summary>
@@ -1364,16 +1364,19 @@ namespace ArchiveFixer.ViewModels
                     () => _extractionCoordinator.BuildSpaceAdvice(selected));
 
                 /*
-                 * 建议里同时给出**两个约束**（用户 2026-09-22 追加：并行实测的结论）：
-                 * ① 空间侧："当前可用 X，建议并行 N 个"（来自调度器，与真正开跑同一段实现）；
-                 * ② 硬件侧："建议不超过物理核心数（当前检测到 N 核）"——
-                 *    实测并发 1→4 是 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍（6 物理核超订）。
-                 * 两个都是**建议**：程序不会因此悄悄改掉用户选的档位，装不下的任务照旧在启动前被拦下。
+                 * 建议只显示设备侧结论，不自动应用：
+                 * 源/落点是什么盘、建议几个（HDD/未知/移动盘 1，SSD 2）。
+                 * 空间侧仍算一遍并写日志，但不再混进这句建议，避免“建议 5”和用户上限 2 打架。
                  */
-                ParallelAdviceText = plan.ParallelAdviceText() + "；" + ProcessorTopology.DescribeConcurrencyAdvice();
+                ConcurrencySuggestion suggestion = ConcurrencyAdvisor.Suggest(
+                    selected,
+                    Settings?.CustomOutputDirectory,
+                    Settings?.MaxParallelExtractCount ?? 2);
 
-                AppendLog("INFO", $"并行建议（按空间）：{ParallelAdviceText}");
-                AppendLog("INFO", "依据：" + plan.Basis);
+                ParallelAdviceText = suggestion.Text;
+
+                AppendLog("INFO", $"并发建议：{suggestion.Text}");
+                AppendLog("INFO", "空间依据：" + plan.Basis);
 
                 foreach (ScheduledExtractionItem blocked in plan.BlockedAtPlanTime)
                 {
@@ -1404,7 +1407,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshSpaceTightOverrideText();
 
-            ParallelAdviceText = "点「按空间算建议」可以算出当前可用空间能并行几个";
+            ParallelAdviceText = "点「按设备算建议」查看源/落点盘的并发建议（只提示，不会改你选的值）";
         }
 
         /// <summary>

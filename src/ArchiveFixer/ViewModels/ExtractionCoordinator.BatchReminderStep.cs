@@ -72,13 +72,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 本批允许同时跑几个任务（**自适应并发**）。
-        ///
-        /// <para>用户 2026-11-01：并发数不再让用户选，由程序按设备与吞吐自己判断。
-        /// 初始值来自设备画像（SSD 4/硬顶 6，HDD 2/3，未知按 HDD），
-        /// 批内再按窗口吞吐/延迟做 AIMD 调整。</para>
-        /// </summary>
-        /// <summary>
         /// 排队等空位**超过这个秒数**才单独写一行（否则只进批末汇总）。
         ///
         /// <para>用户 2026-09-26 第 45 条：原来每个被节流挡住的包都写两行同义反复的话，真机上 76 个任务
@@ -86,302 +79,34 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private const int ThrottleNoticeThresholdSeconds = 30;
 
-        /// <summary>小包批次的判定阈值：全部任务都不超过它时，HDD/未知盘允许从 4 档起步。</summary>
-        internal const long SmallBatchTaskThresholdBytes = 64L * 1024 * 1024;
+        /// <summary>并发上限的硬顶（用户 2026-11-05 拍板：普通解压 1–4；8 个同时解压不现实）。</summary>
+        private const int MaxParallelExtractCountCeiling = 4;
 
-        /// <summary>按设备与任务规模决定自动并发的起点；固定并发覆盖不在这里处理。</summary>
-        internal static int ResolveInitialLimitForBatch(
-            StorageDeviceKind device,
-            bool allTasksSmall,
-            int profileLimit,
-            int logicalCoreCount)
-        {
-            if (device == StorageDeviceKind.Ssd)
-            {
-                return profileLimit > 0
-                    ? Math.Clamp(profileLimit, 1, 8)
-                    : Math.Clamp(logicalCoreCount / 2, 2, 4);
-            }
-
-            // HDD/未知：最小从 3 起，先给补位留出余量；实际增长/回退由实时吞吐与压力决定。
-            return allTasksSmall ? 4 : 3;
-        }
-
+        /// <summary>
+        /// 本批允许同时跑几个任务（用户手动选择，1–4）。
+        /// </summary>
+        /// <remarks>
+        /// 自动并发已冻结到 <c>Experimental/AutoConcurrency</c>，这里不再建控制器、不再按设备/吞吐升降档。
+        /// <see cref="AppSettings.ConcurrencyOverride"/> 只保留给测试/旧配置做固定覆盖，不暴露到界面。
+        /// </remarks>
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
         {
-            // 全速档已退役（用户 2026-11-01：全部交给算法）。
             fullSpeed = false;
-
-            _autoControllers.Clear();
-            _autoDevices.Clear();
-            _autoTaskRoots.Clear();
-            _autoActiveByRoot.Clear();
-
-            int maximumInitial = 1;
-
-            foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
-            {
-                if (task == null)
-                {
-                    continue;
-                }
-
-                string root = ResolveConcurrencyRoot(task);
-
-                if (root.Length == 0)
-                {
-                    continue;
-                }
-
-                _autoTaskRoots[task] = root;
-
-                if (!_autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller))
-                {
-                    StorageDeviceKind device = StorageDeviceProfile.Detect(root);
-                    _autoDevices[root] = device;
-
-                    ConcurrencyProfile? profile = ConcurrencyProfileStore.Load(
-                        _pathService.DataRootDirectory,
-                        root,
-                        device);
-
-                    IReadOnlyList<ArchiveTask> batchTasks = tasks ?? Array.Empty<ArchiveTask>();
-                    bool allTasksSmall = batchTasks.Count(t => t != null && ResolveConcurrencyRoot(t) == root) > 0
-                        && batchTasks.Where(t => t != null && ResolveConcurrencyRoot(t) == root)
-                            .All(t => t!.SourceSizeBytes > 0 && t.SourceSizeBytes <= SmallBatchTaskThresholdBytes);
-                    int prior = Settings.ConcurrencyOverride > 0
-                        ? Settings.ConcurrencyOverride
-                        : ResolveInitialLimitForBatch(
-                            device,
-                            allTasksSmall,
-                            profile?.LastGoodLimit ?? 0,
-                            Environment.ProcessorCount);
-
-                    controller = new AdaptiveConcurrencyController(
-                        prior,
-                        maxLimit: AdaptiveConcurrencyController.DefaultMaxLimit,
-                        bufferRatio: 0.20,
-                        knownMinLatencySecondsPerGb: profile?.MinLatencySecondsPerGb ?? 0,
-                        fixedLimit: Settings.ConcurrencyOverride > 0);
-
-                    _autoControllers[root] = controller;
-                    _autoActiveByRoot[root] = 0;
-
-                    AppendLog(
-                        "INFO",
-                        $"并发：自动（卷 {root}，设备={DescribeDevice(device)}，"
-                        + $"起点 {controller.InitialLimit} 个，上限 {controller.MaxLimit} 个，"
-                        + $"基线 {(controller.MinLatencySecondsPerGb > 0 ? "继承 profile" : "首批学习")}）");
-                }
-
-                maximumInitial = Math.Max(maximumInitial, controller.InitialLimit);
-            }
-
-            return maximumInitial;
+            return ResolveManualConcurrencyLimit();
         }
 
-        private ConcurrencyLimit? _runConcurrencyLimit;
-        private int ResolveDeviceCapacityCeiling()
+        /// <summary>用户手动选择的并发数（1–4）；测试/旧配置可用 ConcurrencyOverride 固定覆盖。</summary>
+        internal int ResolveManualConcurrencyLimit()
         {
-            if (_autoControllers.Count == 0)
-            {
-                return 4;
-            }
+            int requested = Settings.ConcurrencyOverride > 0
+                ? Settings.ConcurrencyOverride
+                : Settings.MaxParallelExtractCount;
 
-            // 混合批取最保守的设备上限：只要有一块 HDD/未知盘，就不让 SSD 的 8 把整批抬到 8。
-            foreach (string root in _autoControllers.Keys)
-            {
-                try
-                {
-                    if (StorageDeviceProfile.Detect(root) != StorageDeviceKind.Ssd)
-                    {
-                        return 4;
-                    }
-                }
-                catch
-                {
-                    return 4;
-                }
-            }
-
-            return 8;
-        }
-
-        private readonly CapacityPolicy _capacityPolicy = new();
-        private int _capacityPolicySeed = -1;
-
-        /// <summary>
-        /// <summary>自动并发取值：取所有卷控制器当前值的最大值，避免慢卷历史把整批锁在 1。</summary>
-        internal static int ResolveAutoLimitForBatch(IEnumerable<int> controllerLimits, int? planLimit)
-        {
-            int? max = null;
-            foreach (int limit in controllerLimits)
-            {
-                max = max.HasValue ? Math.Max(max.Value, limit) : limit;
-            }
-
-            return max.HasValue ? Math.Max(1, max.Value) : Math.Max(1, planLimit ?? 1);
-        }
-
-        /// <summary>本批实际可用的自适应并发：控制器最大值，再交给 CapacityPolicy 钳制。</summary>
-        private int CurrentAutoLimit()
-        {
-            /*
-             * 2026-11-04 性能测试逮到：这里原来先返回 _runConcurrencyLimit.Effective（批首计划值），
-             * 于是控制器日志里从 1 一路调到 8，调度却始终按 1 跑 —— 自动并发只写日志不生效。
-             * 有控制器时必须以控制器当前值为准；只有控制器还没建出来时才回落到计划值。
-             */
-            int auto = ResolveAutoLimitForBatch(
-                _autoControllers.Values.Select(controller => controller.CurrentLimit),
-                _runConcurrencyLimit?.Effective);
-
-            /*
-             * 系统压力是“下一单能不能开”的即时闸门：用户打开游戏 / 浏览器时，
-             * CPU 或内存压力会先于任务完成出现；先压住新任务，已在跑的收完不杀。
-             */
-            if (Settings.ConcurrencyOverride > 0)
-            {
-                return auto;
-            }
-
-            if (_capacityPolicySeed != auto)
-            {
-                _capacityPolicy.Reset(auto, ResolveDeviceCapacityCeiling());
-                _capacityPolicySeed = auto;
-            }
-
-            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-            bool hasDiskSample = ProcessIoProbe.TryGetMegabytesPerSecond(out double diskMegabytesPerSecond);
-            int activeTasks = _autoActiveByRoot.Values.Sum();
-            bool diskStalled = hasDiskSample
-                               && activeTasks > 0
-                               && diskMegabytesPerSecond < 0.05;
-            int capacity = _capacityPolicy.Evaluate(new CapacitySample(
-                resources.CpuBusyPercent,
-                resources.AvailablePhysicalBytes,
-                UiActivity.TakeUiStallCount() > 0,
-                diskStalled));
-            return capacity;
-        }
-
-        /// <summary>一个任务完成后才推进容量探测窗口；CurrentAutoLimit 本身不升档。</summary>
-        internal void ObserveCapacityWindow(double throughputMegabytesPerSecond, double latencySecondsPerGb)
-        {
-            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-            bool hasDiskSample = ProcessIoProbe.TryGetMegabytesPerSecond(out double diskMegabytesPerSecond);
-            int activeTasks = _autoActiveByRoot.Values.Sum();
-            bool diskStalled = hasDiskSample
-                               && activeTasks > 0
-                               && diskMegabytesPerSecond < 0.05;
-            _capacityPolicy.ObserveCompletion(
-                throughputMegabytesPerSecond,
-                latencySecondsPerGb,
-                new CapacitySample(
-                    resources.CpuBusyPercent,
-                    resources.AvailablePhysicalBytes,
-                    UiActivity.TakeUiStallCount() > 0,
-                    diskStalled));
+            return Math.Clamp(requested, 1, MaxParallelExtractCountCeiling);
         }
 
         /// <summary>
-        /// 特定解压独立批也要建同一套设备画像/控制器；否则它永远按 1 跑。
-        /// </summary>
-        internal int PrepareAutoConcurrencyForSpecificBatch(IReadOnlyList<ArchiveTask> tasks)
-        {
-            _spaceTightThisBatch = false;
-            return ResolveMaxParallel(tasks, out _);
-        }
-
-        /// <summary>特定解压调度每次补位时读取的自动并发值。</summary>
-        internal int CurrentAutoConcurrencyLimit => CurrentAutoLimit();
-
-        /// <summary>完成一个特定解压 unit 后喂给所属卷的控制器。</summary>
-        internal void ObserveSpecificCompleted(ArchiveTask task, int activeTasks)
-        {
-            int ignored = CurrentAutoConcurrencyLimit;
-            ObserveCompletedTask(task, activeTasks, ref ignored);
-        }
-
-        private string ResolveConcurrencyRoot(ArchiveTask task)
-        {
-            string candidate = !string.IsNullOrWhiteSpace(task.OutputPath)
-                ? task.OutputPath
-                : Settings.CustomOutputDirectory;
-
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                candidate = task.CurrentPath;
-            }
-
-            try
-            {
-                return string.IsNullOrWhiteSpace(candidate)
-                    ? string.Empty
-                    : Path.GetPathRoot(Path.GetFullPath(candidate)) ?? string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        /// <summary>批末把每块卷“这次稳定用的并发/基线”记到本机 profile（SQL DOP feedback 式持久化）。</summary>
-        private void SaveConcurrencyProfile()
-        {
-            // 空间不足档是“被空间逼出来的并发”，不是性能结论，⛔ 不写 profile。
-            if (_spaceTightThisBatch || _autoControllers.Count == 0)
-            {
-                return;
-            }
-
-            foreach (KeyValuePair<string, AdaptiveConcurrencyController> pair in _autoControllers)
-            {
-                AdaptiveConcurrencyController controller = pair.Value;
-
-                if (controller.IsFixed || !_autoDevices.TryGetValue(pair.Key, out StorageDeviceKind device))
-                {
-                    continue;
-                }
-
-                ConcurrencyProfileStore.Save(
-                    _pathService.DataRootDirectory,
-                    pair.Key,
-                    device,
-                    new ConcurrencyProfile
-                    {
-                        /*
-                         * 只把**保守的已验证起点**写回去：
-                         * 本批从 1 起步、中途加到 2 ⇒ 存 1（加档只证明"这批混合跑更快"，
-                         * 不证明"下一批一开始就 2 更好"；H 盘实测从 2 冷启动反而慢一倍）。
-                         * 若中途降档，则存降下来的值（那是"更好"的证据）。
-                         */
-                        LastGoodLimit = Math.Min(controller.InitialLimit, controller.CurrentLimit),
-                        MinLatencySecondsPerGb = controller.MinLatencySecondsPerGb,
-                        UpdatedAt = DateTimeOffset.Now
-                    });
-            }
-        }
-
-        private static string DescribeDevice(StorageDeviceKind device) => device switch
-        {
-            StorageDeviceKind.Ssd => "SSD",
-            StorageDeviceKind.Hdd => "HDD",
-            _ => "未知（按 HDD 保守）"
-        };
-
-        /// <summary>
-        /// 「全速」硬顶 = 8（旧档位；UI 删除前保留给旧守门用例，接线后不再使用）。
-        /// </summary>
-        internal static int ResolveFullSpeedParallel(int taskCount) =>
-            Math.Min(Math.Max(1, taskCount), MaxParallelExtractCountCeiling);
-
-        /// <summary>
-        /// 「空间不足」模式下**本批开几个**（S 覆盖普通档：并发档与「全速」都不参与）。
-        ///
-        /// <para>判据全部在 <see cref="ExtractionScheduler.ResolveSpaceTightParallelCount"/> 里：
-        /// 按当前可用空间和待跑需求累加，能装几个就开几个；只有单个需求 ≥ 预算 1/4 的大任务
-        /// 才收在最多 3 个，小任务可达硬顶 8。这里只做两件事：把那个数夹进"不超过任务数"，
-        /// 以及把**为什么是这个数**写进日志。</para>
+        /// 「空间不足」模式下按可用空间算出**最多能跑几个**；它只作为用户并发数的上限，不会把并发抬高。
         /// </summary>
         private int ResolveSpaceTightParallelForBatch(ExtractionSchedulePlan plan)
         {
@@ -395,13 +120,10 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通自动档不参与）。{basis}。");
+                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通并发档不参与）。{basis}。");
 
             return count;
         }
-
-        /// <summary>并发上限的硬顶（与设置界面的 1–8 一致；这里只做兜底夹取）。</summary>
-        private const int MaxParallelExtractCountCeiling = 8;
 
         /// <summary>
         /// 本批的"完成后打开输出目录"记账清零（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>）。

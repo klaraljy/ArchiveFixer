@@ -153,9 +153,9 @@ namespace ArchiveFixer.Models
                 MaxParallelExtractCount = 1;
             }
 
-            if (MaxParallelExtractCount > 8)
+            if (MaxParallelExtractCount > 4)
             {
-                MaxParallelExtractCount = 8;
+                MaxParallelExtractCount = 4;
             }
         }
 

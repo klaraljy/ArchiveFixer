@@ -1,7 +1,9 @@
+// STATUS: 未完成 / 暂停（2026-11-05）。自动并发实验代码，不接入产品路径。
+using ArchiveFixer.Extraction;
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Experimental.AutoConcurrency
 {
     /// <summary>
     /// 普通/特定共用的唯一调度入口：只负责取任务、占槽、完成、补位、

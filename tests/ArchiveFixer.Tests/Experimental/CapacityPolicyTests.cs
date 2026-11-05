@@ -1,8 +1,9 @@
-using ArchiveFixer.Extraction;
+using ArchiveFixer.Experimental.AutoConcurrency;
 using Xunit;
 
 namespace ArchiveFixer.Tests
 {
+    [Trait("Category", "ExperimentalAutoConcurrency")]
     public sealed class CapacityPolicyTests
     {
         [Fact]

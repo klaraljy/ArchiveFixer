@@ -883,6 +883,43 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// 手动并发 2：两个任务必须都能进场，且同时在跑不超过 2。
+        /// </summary>
+        [Fact]
+        public async Task 手动并发2_同时在跑能到2且不超过2()
+        {
+            Harness harness = CreateHarness(settings: s => s.MaxParallelExtractCount = 2);
+
+            AddTask(harness, CreateSourceFile("one.7z"));
+            AddTask(harness, CreateSourceFile("two.7z"));
+
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int inFlight = 0;
+            int maxInFlight = 0;
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
+            harness.Engine.OnExtractAsync = async request =>
+            {
+                int now = Interlocked.Increment(ref inFlight);
+                InterlockedMax(ref maxInFlight, now);
+
+                if (now >= 2)
+                {
+                    entered.TrySetResult(true);
+                }
+
+                await Task.WhenAny(entered.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+                WriteContent(request.OutputPath!, "content.txt", "x");
+                Interlocked.Decrement(ref inFlight);
+                return Succeeded();
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(2, maxInFlight);
+        }
+
+        /// <summary>
         /// 没开「全速」时严格按设置节流：最大并发数不许超过设置值（默认 1）。
         /// 这是上一条的负向对照 —— 也说明"全速"是唯一能让它突破上限的东西。
         /// </summary>
@@ -940,7 +977,7 @@ namespace ArchiveFixer.Tests
                 harness.Log.Logs,
                 item => item.Message.Contains("并发已满", StringComparison.Ordinal) &&
                         item.Message.Contains("等空位", StringComparison.Ordinal) &&
-                        item.Message.Contains("自动调整", StringComparison.Ordinal));
+                        item.Message.Contains("按你选择的档位", StringComparison.Ordinal));
 
             /*
              * ⚠ 2026-09-26 第 45 条：**等待那一段不再逐任务刷**（真机 76 个任务刷了 74 遍），

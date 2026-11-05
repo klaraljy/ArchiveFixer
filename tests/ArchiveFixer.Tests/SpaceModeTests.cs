@@ -604,18 +604,18 @@ namespace ArchiveFixer.Tests
         [InlineData(2, 2)]
         [InlineData(3, 3)]
         [InlineData(4, 4)]
-        [InlineData(5, 8)]
-        [InlineData(8, 8)]
-        [InlineData(99, 8)]
-        public void 并发档_只有1_2_3_4_8四个合法档_其余夹到最接近的更大档(int input, int expected)
+        [InlineData(5, 4)]
+        [InlineData(8, 4)]
+        [InlineData(99, 4)]
+        public void 并发档_只有1_2_3_4四个合法档_其余夹到最接近的更大档(int input, int expected)
         {
             Assert.Equal(expected, ExtractionScheduler.NormalizeParallelCount(input));
         }
 
         [Fact]
-        public void 并发档_候选就是用户要求的那五个()
+        public void 并发档_候选就是用户要求的1到4()
         {
-            Assert.Equal(new[] { 1, 2, 3, 4, 8 }, ExtractionScheduler.AllowedParallelCounts.ToArray());
+            Assert.Equal(new[] { 1, 2, 3, 4 }, ExtractionScheduler.AllowedParallelCounts.ToArray());
         }
 
         // ================================================================ ⑤ 其余物处理：五条门槛（彻底删除 / 移入回收站共用）
@@ -1130,7 +1130,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(3, mixed);
             Assert.Contains("3 个", mixedBasis, StringComparison.Ordinal);
 
-            // 6 个 100 MiB，10 GiB 空闲：不为“小包”再写死 5，能开 6 就开 6。
+            // 6 个 100 MiB，10 GiB 空闲：空间够，能开 6 就开 6。
             int manySmall = ExtractionScheduler.ResolveSpaceTightParallelCountForDemand(
                 Enumerable.Repeat(100L * 1024 * 1024, 6).ToList(),
                 availableBytes: 10 * gib,

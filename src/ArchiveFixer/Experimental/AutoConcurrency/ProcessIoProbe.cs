@@ -1,8 +1,9 @@
+// STATUS: 未完成 / 暂停（2026-11-05）。自动并发实验代码，不接入产品路径。
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Experimental.AutoConcurrency
 {
     /// <summary>
     /// 当前进程的 I/O 吞吐代理：用 GetProcessIoCounters 的读写传输字节差值估算 MB/s。

@@ -396,16 +396,11 @@ namespace ArchiveFixer.ViewModels
                  * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
                  */
                 ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel, _spaceTightThisBatch);
-                _runConcurrencyLimit = plan.Limit;
 
                 if (_spaceTightThisBatch)
                 {
-                    /*
-                     * 并发档在**计划之后**定（它要读计划里的净占用与空间建议）——
-                     * 顺序与普通档相反，因为普通档读的是设置、这里读的是刚刚算出来的空间。
-                     */
                     _spaceLimit = ResolveSpaceTightParallelForBatch(plan);
-                    maxParallel = Math.Min(_spaceLimit, CurrentAutoLimit());
+                    maxParallel = _spaceLimit;
                 }
 
                 _cleanupLedger.Clear();
@@ -440,15 +435,16 @@ namespace ArchiveFixer.ViewModels
                 StartSpaceTrendMonitor(ResolveSpaceProbePath(selectedTasks));
 
                 var runningTasks = new List<Task>();
+                var runningTaskMap = new Dictionary<Task, ArchiveTask>();
                 var startedTasks = new HashSet<ArchiveTask>();
 
                 if (_spaceTightThisBatch)
                 {
                     _spaceLimit = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
-                    maxParallel = Math.Min(_spaceLimit, CurrentAutoLimit());
+                    maxParallel = _spaceLimit;
                     AppendLog(
                         "INFO",
-                        $"空间不足动态并发：空间上限 {_spaceLimit} 个，自适应 {CurrentAutoLimit()} 个 ⇒ 批首实际 {maxParallel} 个");
+                        $"空间不足动态并发：空间上限 {_spaceLimit} 个 ⇒ 批首实际 {maxParallel} 个");
                 }
 
                 /*
@@ -480,19 +476,10 @@ namespace ArchiveFixer.ViewModels
                  * ② 真正开跑前仍然要过账本（`TryReserve`），**放行判据一个字没放宽**。
                  */
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
-                var scheduler = new SlotSchedulerRunner<ScheduledWorkUnit>();
+                var scheduler = new SlotScheduler<ScheduledWorkUnit>();
                 scheduler.Reset(
-                    plan.Ordered.Select(item =>
-                    {
-                        string root = _autoTaskRoots.TryGetValue(item.Task, out string? knownRoot)
-                            ? knownRoot
-                            : ResolveConcurrencyRoot(item.Task);
-                        return (ScheduledWorkUnit.FromPlanItem(item, root), root);
-                    }),
-                    root => _autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller)
-                        ? controller.InitialLimit
-                        : Math.Max(1, maxParallel),
-                    root => StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4,
+                    plan.Ordered.Select(item => ScheduledWorkUnit.FromPlanItem(item)),
+                    maxParallel,
                     work => work.EstimatedSeconds);
                 var slotWorkByTask = new Dictionary<ArchiveTask, ScheduledWorkUnit>();
                 while (scheduler.PendingCount > 0 || scheduler.ActiveCount > 0)
@@ -529,84 +516,22 @@ namespace ArchiveFixer.ViewModels
                         if (!throttleExplained)
                         {
                             throttleExplained = true;
-
-                            /*
-                             * 一批只说一次（用户 2026-09-26 第 45 条：这条刷了 74 遍）。
-                             * 三个必须写对的点：
-                             * ①**位置**：「全速（最高 8 个）」在**②页 →「并发与空间」**，不在主界面；
-                             * ②**怎么用**：勾上**立刻**就放开本批（下面那个 if 会当场生效），不用停也不用重开；
-                             * ③另一条出路是「停止后续」。
-                             */
                             AppendLog(
                                 "INFO",
                                 $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。"
-                                + "并发数由程序根据磁盘与实时吞吐自动调整（无需设置）；"
+                                + "并发数按你选择的档位执行；"
                                 + "也可以点①页「停止后续」不再启动后面的任务。"
                                 + "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）");
                         }
 
-                        /*
-                         * 「全速」档已退役（用户 2026-11-01：并发全部交给算法）。
-                         * 这里只保留"每跑完一个任务就重新看一窗口吞吐"的自适应调整。
-                         */
-                        Task delay = Task.Delay(TimeSpan.FromSeconds(1));
-                        Task finished = await Task.WhenAny(runningTasks.Append(delay));
-
-                        if (ReferenceEquals(finished, delay))
-                        {
-                            // 长任务不结束也能重新读系统压力；只压后续启动，不杀在跑的任务。
-                            maxParallel = CurrentAutoLimit();
-                            continue;
-                        }
-
-                        if (_autoTaskMap.TryGetValue(finished, out ArchiveTask? finishedAutoTask))
-                        {
-                            ObserveCompletedTask(finishedAutoTask, runningTasks.Count, ref maxParallel);
-                            if (slotWorkByTask.Remove(finishedAutoTask, out ScheduledWorkUnit? completedSlotWork))
-                            {
-                                scheduler.Complete(completedSlotWork);
-                                if (finishedAutoTask.StartTime.HasValue
-                                    && finishedAutoTask.EndTime.HasValue)
-                                {
-                                    double seconds = (finishedAutoTask.EndTime.Value - finishedAutoTask.StartTime.Value)
-                                        .TotalSeconds;
-                                    double gigabytes = Math.Max(1L, finishedAutoTask.SourceSizeBytes)
-                                                       / (1024.0 * 1024 * 1024);
-                                    if (seconds > 0 && gigabytes > 0)
-                                    {
-                                        ConcurrencyResourceSnapshot pressure = SystemResourceProbe.Snapshot();
-                                        scheduler.ObserveCompletion(
-                                            completedSlotWork,
-                                            finishedAutoTask.SourceSizeBytes,
-                                            seconds / gigabytes,
-                                            new CapacitySample(
-                                                pressure.CpuBusyPercent,
-                                                pressure.AvailablePhysicalBytes,
-                                                false));
-                                        foreach (DeviceCapacityChange change in scheduler.DrainCapacityChanges())
-                                        {
-                                            AppendLog(
-                                                "INFO",
-                                                $"设备 {change.Root} 容量 {change.Previous} → {change.Current}："
-                                                + $"{change.Reason}；窗口聚合 {change.AggregateMegabytesPerSecond:F1} MB/s，"
-                                                + $"平均延迟 {change.AverageLatencySecondsPerGb:F2} s/GB");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        foreach (ScheduledWorkUnit pendingWork in scheduler.PendingUnits)
-                        {
-                            scheduler.UpdatePendingEstimate(pendingWork, pendingWork.RefreshEstimatedSeconds());
-                        }
-
+                        Task finished = await Task.WhenAny(runningTasks);
                         runningTasks.Remove(finished);
                         await finished;
 
-                        if (_autoTaskMap.Remove(finished, out ArchiveTask? autoFinished))
+                        if (runningTaskMap.Remove(finished, out ArchiveTask? finishedTask)
+                            && slotWorkByTask.Remove(finishedTask, out ScheduledWorkUnit? completedSlotWork))
                         {
-                            DecrementAutoActive(autoFinished);
+                            scheduler.MarkCompleted(completedSlotWork);
                         }
 
                         if (_spaceTightThisBatch && !IsStopping)
@@ -616,14 +541,14 @@ namespace ArchiveFixer.ViewModels
                                 .ToList();
 
                             _spaceLimit = ResolveDynamicSpaceParallel(pending, runningTasks.Count);
-                            int combined = Math.Min(_spaceLimit, CurrentAutoLimit());
 
-                            if (combined != maxParallel)
+                            if (_spaceLimit != maxParallel)
                             {
                                 AppendLog(
                                     "INFO",
-                                    $"空间不足动态并发：空间上限 {_spaceLimit} 个，自适应 {CurrentAutoLimit()} 个 ⇒ 实际 {combined} 个（正在跑 {runningTasks.Count} 个）");
-                                maxParallel = combined;
+                                    $"空间不足动态并发：空间上限 {_spaceLimit} 个 ⇒ 实际 {_spaceLimit} 个（正在跑 {runningTasks.Count} 个）");
+                                maxParallel = _spaceLimit;
+                                scheduler.SetCapacity(maxParallel);
                             }
                         }
 
@@ -632,7 +557,7 @@ namespace ArchiveFixer.ViewModels
                             break;
                         }
                     }
-                    if (!scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork, out string? deviceRootTaken))
+                    if (!scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork))
                     {
                         break;
                     }
@@ -691,7 +616,7 @@ namespace ArchiveFixer.ViewModels
                          * 只写一行 INFO 说清"它在等什么"，用户才不会以为这个包已经被判死刑了。
                          */
                         spaceWaiting.Add((task, item, gate));
-                        scheduler.Complete(scheduledWork);
+                        scheduler.MarkCompleted(scheduledWork);
 
                         AppendLog(
                             "INFO",
@@ -715,23 +640,12 @@ namespace ArchiveFixer.ViewModels
                     runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
                     startedTasks.Add(task);
                     Task runningTask = RunScheduledTaskAsync(task, oneClickRun, runtime);
-                    _autoTaskMap[runningTask] = task;
-
-                    if (_autoTaskRoots.TryGetValue(task, out string? autoRoot))
-                    {
-                        _autoActiveByRoot[autoRoot] = _autoActiveByRoot.TryGetValue(autoRoot, out int active)
-                            ? active + 1
-                            : 1;
-                    }
-
+                    runningTaskMap[runningTask] = task;
                     runningTasks.Add(runningTask);
                     slotWorkByTask[task] = scheduledWork;
                 }
 
                 await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
-
-                // P1：本批稳定值写入本机 profile（下次同卷直接从这里起步）。
-                SaveConcurrencyProfile();
 
                 /*
                  * **目标 ④ 的范围记录**（用户 2026-10-24）：手动「只解压」没有轮循环，本批**不自动接手**
@@ -779,7 +693,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"并发排队汇总：本批 {throttledTasks} 个任务等过空位（同时最多跑 {maxParallel} 个）。"
-                        + "并发数由程序自动调整（磁盘类型 + 实时吞吐），无需设置。");
+                        + "并发数按你选择的档位执行。");
                 }
 
                 /*
@@ -1072,114 +986,12 @@ namespace ArchiveFixer.ViewModels
 
             maxParallel = ResolveMaxParallel(selectedTasks, out fullSpeed);
 
-            if (_spaceTightThisBatch && fullSpeed)
+            if (!_spaceTightThisBatch)
             {
-                /*
-                 * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"；
-                 * S 覆盖普通档，见 ResolveSpaceTightParallelForBatch）。
-                 * 说清原因再关掉它：否则日志里"已开全速"与 S 算出的并发数会自相矛盾。
-                 */
-                AppendLog(
-                    "WARN",
-                    "「空间不足」模式已开：本批「全速」不生效，并发由空间自己定"
-                    + "（若②页的「最大并发解压数」比它更低，就按更低的跑；设置里的值一个字节都没改）。");
-
-                fullSpeed = false;
+                AppendLog("INFO", $"并发：用户选择 {maxParallel} 个（1–4；普通解压按这个数）。");
             }
 
             return true;
-        }
-
-        /// <summary>
-        /// 每完成一个任务就喂一次该任务**所属卷**的控制器（不再等 5 秒窗口，小文件也能采到样）。
-        /// 空间不足档同样采样：实际并发取“空间上限”和“自适应值”的较小者。
-        /// </summary>
-        private void ObserveCompletedTask(ArchiveTask finished, int activeTasks, ref int maxParallel)
-        {
-            if (finished == null
-                || !_autoTaskRoots.TryGetValue(finished, out string? root)
-                || !_autoControllers.TryGetValue(root, out AdaptiveConcurrencyController? controller)
-                || !finished.StartTime.HasValue
-                || !finished.EndTime.HasValue)
-            {
-                return;
-            }
-
-            double elapsedSeconds = (finished.EndTime.Value - finished.StartTime.Value).TotalSeconds;
-            double gigabytes = Math.Max(1L, finished.SourceSizeBytes) / (1024.0 * 1024 * 1024);
-
-            if (elapsedSeconds <= 0 || gigabytes <= 0)
-            {
-                return;
-            }
-
-            if (finished.Outcome == TaskOutcome.Succeeded)
-            {
-                DurationHistory.Record(
-                    finished,
-                    finished.SourceSizeBytes,
-                    elapsedSeconds,
-                    finished.VolumeCount,
-                    finished.IsVolumeGroup || finished.VolumeCount > 1);
-            }
-
-            double latency = elapsedSeconds / gigabytes;
-            double perTaskMbps = gigabytes * 1024 / elapsedSeconds;
-            int stalls = UiActivity.TakeUiStallCount();
-            int failures = finished.Outcome == TaskOutcome.Succeeded ? 0 : 1;
-            int before = controller.CurrentLimit;
-            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-
-            controller.Observe(new ConcurrencyWindowSample(
-                latency,
-                perTaskMbps,
-                activeTasks,
-                stalls,
-                DiskSpaceLow: false,
-                failures)
-            {
-                TaskBytes = finished.SourceSizeBytes,
-                SystemCpuBusyPercent = resources.CpuBusyPercent,
-                AvailablePhysicalBytes = resources.AvailablePhysicalBytes
-            });
-
-            int autoLimit = CurrentAutoLimit();
-            int combined = _spaceTightThisBatch ? Math.Min(_spaceLimit, autoLimit) : autoLimit;
-
-            if (controller.CurrentLimit != before || combined != maxParallel)
-            {
-                AppendLog(
-                    "INFO",
-                    $"并发调整（卷 {root}）{before} → {controller.CurrentLimit}："
-                    + $"归一化延迟 {latency:F2} s/GB，基线 {controller.MinLatencySecondsPerGb:F2} s/GB，"
-                    + $"本任务吞吐 {perTaskMbps:F1} MB/s，活跃 {activeTasks} 个，UI 停顿 {stalls} 次；"
-                    + $"系统 CPU {resources.CpuBusyPercent:F0}%，可用内存 {resources.AvailablePhysicalBytes / (1024 * 1024)} MiB；"
-                    + $"全局自适应 {autoLimit} 个"
-                    + (_spaceTightThisBatch ? $"，空间上限 {_spaceLimit} 个" : string.Empty)
-                    + $" ⇒ 实际 {combined} 个；原因：{controller.LastDecisionReason}");
-            }
-            else
-            {
-                AppendLog(
-                    "INFO",
-                    $"并发采样（卷 {root}）：任务 {finished.SourceSizeBytes / (1024 * 1024)} MiB，"
-                    + $"活跃 {activeTasks} 个，CPU {resources.CpuBusyPercent:F0}%，"
-                    + $"可用内存 {resources.AvailablePhysicalBytes / (1024 * 1024)} MiB，"
-                    + $"本任务吞吐 {perTaskMbps:F1} MB/s；保持 {controller.CurrentLimit} 个"
-                    + $"（{controller.LastDecisionReason}）");
-            }
-
-            maxParallel = combined;
-        }
-
-        private void DecrementAutoActive(ArchiveTask task)
-        {
-            if (task != null
-                && _autoTaskRoots.TryGetValue(task, out string? root)
-                && _autoActiveByRoot.TryGetValue(root, out int active))
-            {
-                _autoActiveByRoot[root] = Math.Max(0, active - 1);
-            }
         }
 
         /// <summary>

@@ -1,3 +1,6 @@
+// STATUS: 未完成 / 暂停（2026-11-05）。自动并发实验代码，不接入产品路径。
+// 恢复前必须先完成 docs/未完成-自动并发.md 里的 T(n) 实测与验收标准。
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
@@ -6,7 +9,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Experimental.AutoConcurrency
 {
     /// <summary>一个并发采样窗口（P0 埋点的唯一出口）。</summary>
     public readonly record struct ConcurrencyWindowSample(

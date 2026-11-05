@@ -274,33 +274,25 @@ namespace ArchiveFixer.Models
         public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
 
         /// <summary>
-        /// 「全速」：不再按 <see cref="MaxParallelExtractCount"/> 节流，但硬顶 8 个并发。
-        ///
-        /// <para><b>用户 2026-09-26 明确要求它必须记住</b>：原话"我刚刚测试当点击并发操作的时候，
-        /// 这个开关就没有保存……我现在是想他们一个要自动保存……而且要有记忆性，下次重启也要有，
-        /// 这点要非常重视"。以前它只是主视图模型上的一个字段（语义刻意写成"只看这一次运行"），
-        /// 于是他勾了、重启又回到节流档 —— 那在他眼里就是"没保存"。</para>
-        ///
-        /// <para>现在的语义：**记住**（写进 appsettings.json）。想回到节流档就取消勾选（同样会被记住）。</para>
+        /// 「全速」旧设置（已退役）。保留字段只为兼容旧 appsettings.json；运行时不再读取。
         /// </summary>
         public bool RunAtFullSpeed { get; set; }
 
         /// <summary>
-        /// **内部/测试专用**的并发覆盖（0 = 自动算法）。
+        /// **内部/测试专用**的并发覆盖（0 = 使用 <see cref="MaxParallelExtractCount"/>）。
         ///
-        /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发完全由
-        /// 自动并发决定。它只留着给无头夹具/排障在需要"固定串行"
-        /// 时用（旧守门用例大量依赖"同时只跑 1 个"）。</para>
+        /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发只由 <see cref="MaxParallelExtractCount"/> 决定。
+        /// 它只留着给无头夹具/排障固定串行（旧守门用例大量依赖"同时只跑 1 个"）。</para>
         /// </summary>
         public int ConcurrencyOverride { get; set; }
 
         /// <summary>
-        /// 并发数的出厂默认值（**4**，见 <see cref="MaxParallelExtractCount"/> 的实测依据）。
+        /// 并发数的出厂默认值（**2**）。用户可手动选 1–4；HDD/移动盘建议 1，SSD 建议 2。
         ///
         /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
         /// <see cref="CreateDefault"/> 与属性初始化器都引用它，改一处就够了。</para>
         /// </summary>
-        public const int DefaultMaxParallelExtractCount = 4;
+        public const int DefaultMaxParallelExtractCount = 2;
 
         /// <summary>
         /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理
@@ -1136,9 +1128,9 @@ namespace ArchiveFixer.Models
                 MaxParallelExtractCount = 1;
             }
 
-            if (MaxParallelExtractCount > 8)
+            if (MaxParallelExtractCount > 4)
             {
-                MaxParallelExtractCount = 8;
+                MaxParallelExtractCount = 4;
             }
 
             if (ConcurrencyOverride < 0)

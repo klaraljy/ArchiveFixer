@@ -1,23 +1,15 @@
 using System;
 using System.IO;
+using System.Linq;
 using ArchiveFixer.Models;
-using ArchiveFixer.Extraction;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.ViewModels;
+using Xunit;
 
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 并发默认值与"处理器拓扑建议"（用户 2026-09-22 追加，依据**并行实测**）。
-    ///
-    /// <para>实测结论（真样本、三档、逐字节校验）：并发 1→4 吞吐 **3.08×**（保守 2.70×），
-    /// **4→8 只再快 1.9%**，而单包耗时 6.63→10.91 s（+108%）、整机 CPU 均值 48.7%→72.7%；
-    /// 根因是 **6 物理核超订**（第 1 波 8 个并发单包 11.9–14.2 s，降到 4 个立刻回到 5.9–6.8 s）。
-    /// 所以默认值从 1 提到 **4**。</para>
-    ///
-    /// <para>两条硬约束一起钉住：① <c>Normalize</c> 的 1..8 夹取**不动**（上限仍是 8）；
-    /// ② 界面那句"建议不超过物理核心数"必须**说得出核数**、拿不到物理核时**如实说逻辑核**。</para>
+    /// 并发默认值与手动档位（用户 2026-11-05 拍板：自动并发冻结，恢复用户选择 1–4，默认 2）。
     /// </summary>
     public class ConcurrencyDefaultTests : IDisposable
     {
@@ -45,45 +37,43 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 并发默认值是4_夹取区间仍然是1到8()
+        public void 并发默认值是2_夹取区间是1到4()
         {
-            Assert.Equal(4, AppSettings.DefaultMaxParallelExtractCount);
-            Assert.Equal(4, new AppSettings().MaxParallelExtractCount);
-            Assert.Equal(4, AppSettings.CreateDefault().MaxParallelExtractCount);
+            Assert.Equal(2, AppSettings.DefaultMaxParallelExtractCount);
+            Assert.Equal(2, new AppSettings().MaxParallelExtractCount);
+            Assert.Equal(2, AppSettings.CreateDefault().MaxParallelExtractCount);
 
-            // 夹取口径一点没动（默认值改了，上限还是 8、下限还是 1）。
             var settings = new AppSettings { MaxParallelExtractCount = 0 };
             settings.Normalize();
             Assert.Equal(1, settings.MaxParallelExtractCount);
 
             settings.MaxParallelExtractCount = 99;
             settings.Normalize();
-            Assert.Equal(8, settings.MaxParallelExtractCount);
+            Assert.Equal(4, settings.MaxParallelExtractCount);
 
-            settings.MaxParallelExtractCount = 6;
+            settings.MaxParallelExtractCount = 3;
             settings.Normalize();
-            Assert.Equal(6, settings.MaxParallelExtractCount);
-        }
-
-        [Theory]
-        [InlineData(1, 1)]
-        [InlineData(3, 3)]
-        [InlineData(8, 8)]
-        [InlineData(20, 8)]
-        public void 全速硬顶是8个_不是所有任务一起开(int taskCount, int expected)
-        {
-            Assert.Equal(expected, ExtractionCoordinator.ResolveFullSpeedParallel(taskCount));
+            Assert.Equal(3, settings.MaxParallelExtractCount);
         }
 
         [Fact]
-        public void 并发默认值_落盘后重启仍然是4()
+        public void 允许的并发档位只有1到4()
+        {
+            Assert.Equal(new[] { 1, 2, 3, 4 }, ExtractionScheduler.AllowedParallelCounts.ToArray());
+            Assert.Equal(8, ExtractionScheduler.ParallelCeiling);
+            Assert.Equal(8, ConcurrencyLimit.Maximum);
+            Assert.Equal(8, ConcurrencyLimit.Create(99, 0).Effective);
+        }
+
+        [Fact]
+        public void 并发默认值_落盘后重启仍然是2()
         {
             var pathService = new PathService { DataRootDirectory = _root };
             new SettingsService(pathService).Save(AppSettings.CreateDefault());
 
             AppSettings reloaded = new SettingsService(new PathService { DataRootDirectory = _root }).Load();
 
-            Assert.Equal(4, reloaded.MaxParallelExtractCount);
+            Assert.Equal(2, reloaded.MaxParallelExtractCount);
         }
 
         [Fact]
@@ -96,8 +86,6 @@ namespace ArchiveFixer.Tests
             if (ProcessorTopology.PhysicalCoreCount > 0)
             {
                 Assert.Contains($"{ProcessorTopology.PhysicalCoreCount} 核", advice, StringComparison.Ordinal);
-
-                // 物理核不可能多于逻辑处理器（开超线程时是它的一半）。
                 Assert.True(ProcessorTopology.PhysicalCoreCount <= ProcessorTopology.LogicalCoreCount);
             }
             else
@@ -106,36 +94,12 @@ namespace ArchiveFixer.Tests
                 Assert.Contains($"{ProcessorTopology.LogicalCoreCount} 核", advice, StringComparison.Ordinal);
             }
 
-            // 设置界面 XAML 用 x:Static 绑的就是这个属性：界面那一句与日志那一句不可能分叉。
             Assert.Equal(advice, ProcessorTopology.ConcurrencyAdvice);
         }
 
         [Fact]
-        public void 自动并发_有控制器时不被批首计划值锁死()
+        public void 解压方式页恢复并发与空间卡片_只剩1到4()
         {
-            Assert.Equal(4, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 4, 2 }, planLimit: 1));
-            Assert.Equal(2, ExtractionCoordinator.ResolveAutoLimitForBatch(new[] { 2 }, planLimit: 8));
-            Assert.Equal(1, ExtractionCoordinator.ResolveAutoLimitForBatch(Array.Empty<int>(), planLimit: 1));
-        }
-
-        [Fact]
-        public void 自动并发_HDD大包从3起_全小包从4起()
-        {
-            Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
-                StorageDeviceKind.Hdd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));
-            Assert.Equal(3, ExtractionCoordinator.ResolveInitialLimitForBatch(
-                StorageDeviceKind.Hdd, allTasksSmall: false, profileLimit: 8, logicalCoreCount: 8));
-            Assert.Equal(4, ExtractionCoordinator.ResolveInitialLimitForBatch(
-                StorageDeviceKind.Ssd, allTasksSmall: true, profileLimit: 0, logicalCoreCount: 8));
-        }
-
-        [Fact]
-        public void 解压方式页没有并发与空间卡片()
-        {
-            /*
-             * 用户 2026-11-02：并发与空间那张卡直接删掉，留着没有用。
-             * 并发全自动；解压方式页不再保留任何相关控件或提示。
-             */
             string path = Path.Combine(
                 XamlBindingScan.RepositoryRoot,
                 "src", "ArchiveFixer",
@@ -147,14 +111,13 @@ namespace ArchiveFixer.Tests
 
             string xaml = File.ReadAllText(path);
 
-            Assert.DoesNotContain("并发与空间", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("MaxParallelExtractCount", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("RunAtFullSpeed", xaml, StringComparison.Ordinal);
+            Assert.Contains("并发与空间", xaml, StringComparison.Ordinal);
+            Assert.Contains("MaxParallelExtractCount", xaml, StringComparison.Ordinal);
+            Assert.Contains("按设备算建议", xaml, StringComparison.Ordinal);
+            Assert.Contains("RefreshParallelAdviceCommand", xaml, StringComparison.Ordinal);
+
             Assert.DoesNotContain("全速", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("并发档", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("RefreshParallelAdviceCommand", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("SpaceModeText", xaml, StringComparison.Ordinal);
-            Assert.DoesNotContain("SpaceTightOverrideText", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("RunAtFullSpeed", xaml, StringComparison.Ordinal);
         }
     }
 }

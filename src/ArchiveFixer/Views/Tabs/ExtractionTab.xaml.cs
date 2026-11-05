@@ -4,10 +4,8 @@ using System.Windows.Controls;
 namespace ArchiveFixer.Views.Tabs
 {
     /// <summary>
-    /// ② 解压方式页的 code-behind。
-    ///
-    /// <para>用户 2026-11-01：并发数不再给用户选（自动算法决定），原来"并发档一变就重算
-    /// 空间档位那句话"的事件处理已随控件一起删除。这里只剩 InitializeComponent。</para>
+    /// ② 解压方式页的 code-behind。并发数由用户手动选择（1–4），下拉框直接绑定设置，
+    /// 不需要在这里写联动逻辑；这里只剩 InitializeComponent。
     /// </summary>
     public partial class ExtractionTab : UserControl
     {

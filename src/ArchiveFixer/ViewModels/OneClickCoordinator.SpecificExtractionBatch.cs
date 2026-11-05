@@ -39,32 +39,22 @@ namespace ArchiveFixer.ViewModels
                 .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            int preparedTarget = _extractionCoordinator.PrepareAutoConcurrencyForSpecificBatch(targets);
+            int configuredTarget = _extractionCoordinator.ResolveManualConcurrencyLimit();
             AppendLog(
                 "INFO",
-                $"特定解压：预计耗时排序完成，自动容量 {preparedTarget} 个"
-                + (spaceTight ? "；空间不足另按空间上限收紧。" : "。"));
+                $"特定解压：按预计耗时降序排好；普通并发按用户选择 {configuredTarget} 个"
+                + (spaceTight ? "；空间不足模式由空间自己定，可能高于普通档。" : "。"));
 
             int succeeded = 0;
             int failed = 0;
             int skippedFollowers = 0;
 
-            string SpecificDeviceRoot(SpecificBatchUnit unit)
-            {
-                return Path.GetDirectoryName(unit.Entry.CurrentPath) ?? string.Empty;
-            }
-
             Dictionary<SpecificBatchUnit, ScheduledWorkUnit> workUnits = orderedUnits
-                .ToDictionary(
-                    unit => unit,
-                    unit => ScheduledWorkUnit.FromSpecificUnit(unit, SpecificDeviceRoot(unit)));
-            var scheduler = new SlotSchedulerRunner<ScheduledWorkUnit>();
-            Func<string, int> maximumByDevice = root =>
-                StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd ? 8 : 4;
+                .ToDictionary(unit => unit, unit => ScheduledWorkUnit.FromSpecificUnit(unit));
+            var scheduler = new SlotScheduler<ScheduledWorkUnit>();
             scheduler.Reset(
-                workUnits.Values.Select(work => (work, work.DeviceRoot)),
-                _ => Math.Max(1, preparedTarget),
-                maximumByDevice,
+                workUnits.Values,
+                Math.Max(1, configuredTarget),
                 work => work.EstimatedSeconds);
             var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
 
@@ -87,9 +77,8 @@ namespace ArchiveFixer.ViewModels
             {
 
                 /*
-                 * 常驻调度池：完成一个就立刻补一个，不等整浪结束。
-                 * 每次补位都重新探空间、按当前 pending 重新算目标并发；pending 从大包变成小包时，
-                 * 目标会从 3 自动升到 5 / 6 / 8。
+                 * 常驻调度池：完成一个就补一个；并发数固定为用户选择的 N。
+                 * LPT 只决定启动顺序，不再按吞吐/设备升降档。
                  */
                 while (scheduler.HasWork)
                 {
@@ -116,16 +105,20 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     string spaceBasis = string.Empty;
-                    int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
-                    int target = spaceTight
-                        ? Math.Min(
-                            ResolveSpecificParallel(
-                                scheduler.PendingUnits.Select(work => work.PayloadAs<SpecificBatchUnit>()).ToList(),
-                                running, runOptions, out spaceBasis),
-                            Math.Max(autoTarget, running.Count))
-                        : autoTarget;
+                    int target = configuredTarget;
+
+                    if (spaceTight)
+                    {
+                        // 空间不足模式是独立通道：由空间自己决定，可以高于普通手动档。
+                        target = ResolveSpecificParallel(
+                            scheduler.PendingUnits.Select(work => work.PayloadAs<SpecificBatchUnit>()).ToList(),
+                            running,
+                            runOptions,
+                            out spaceBasis);
+                    }
 
                     target = Math.Max(1, Math.Min(target, scheduler.PendingCount + scheduler.ActiveCount));
+                    scheduler.SetCapacity(target);
 
                     if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
                     {
@@ -134,35 +127,25 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "INFO",
                             (spaceTight
-                                ? $"特定解压并发（空间不足 + 自动）：当前目标 {target} 个"
-                                : $"特定解压并发（自动）：当前目标 {target} 个")
+                                ? $"特定解压并发（空间不足，用户选择 {configuredTarget}）：当前目标 {target} 个"
+                                : $"特定解压并发（用户选择 {configuredTarget}）：当前目标 {target} 个")
                             + $"（正在跑 {running.Count} 个，待处理 {scheduler.PendingCount} 个）"
                             + (spaceTight ? $"；{spaceBasis}" : "。"));
                     }
 
-                    while (scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork, out string? deviceRoot))
+                    while (running.Count < target && scheduler.TryTakeNext(out ScheduledWorkUnit? scheduledWork))
                     {
                         SpecificBatchUnit unit = scheduledWork!.PayloadAs<SpecificBatchUnit>();
                         Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
                         running.Add((unit, work));
                     }
+
                     if (running.Count == 0)
                     {
                         break;
                     }
 
-                    Task delay = Task.Delay(TimeSpan.FromSeconds(1));
-                    Task finished = await Task.WhenAny(
-                            running.Select(item => item.Work).Append(delay))
-                        .ConfigureAwait(true);
-
-                    if (ReferenceEquals(finished, delay))
-                    {
-                        // 长任务不结束也能重新读一次系统压力；只影响“下一单开不开”，不杀在跑的。
-                        // ⛔ 不要重置 lastTarget：目标没变就不该再写日志，否则会每秒刷一行。
-                        continue;
-                    }
-
+                    Task finished = await Task.WhenAny(running.Select(item => item.Work)).ConfigureAwait(true);
                     Task<bool> finishedWork = (Task<bool>)finished;
                     int index = running.FindIndex(item => ReferenceEquals(item.Work, finishedWork));
 
@@ -174,53 +157,8 @@ namespace ArchiveFixer.ViewModels
                     (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
                     running.RemoveAt(index);
                     bool success = await completedWork.ConfigureAwait(true);
-                    scheduler.Complete(workUnits[completedUnit]);
-                    if (success
-                        && completedUnit.Entry.StartTime.HasValue
-                        && completedUnit.Entry.EndTime.HasValue)
-                    {
-                        double elapsed = (completedUnit.Entry.EndTime.Value - completedUnit.Entry.StartTime.Value)
-                            .TotalSeconds;
-                        DurationHistory.Record(
-                            completedUnit.Entry,
-                            completedUnit.SourceBytes,
-                            elapsed,
-                            completedUnit.Followers.Count + 1,
-                            completedUnit.Followers.Count > 0);
-
-                        double gigabytes = Math.Max(1L, completedUnit.SourceBytes)
-                                           / (1024.0 * 1024 * 1024);
-                        if (elapsed > 0 && gigabytes > 0)
-                        {
-                            ConcurrencyResourceSnapshot pressure = SystemResourceProbe.Snapshot();
-                            scheduler.ObserveCompletion(
-                                workUnits[completedUnit],
-                                completedUnit.SourceBytes,
-                                elapsed / gigabytes,
-                                new CapacitySample(
-                                    pressure.CpuBusyPercent,
-                                    pressure.AvailablePhysicalBytes,
-                                    false));
-                            foreach (DeviceCapacityChange change in scheduler.DrainCapacityChanges())
-                            {
-                                AppendLog(
-                                    "INFO",
-                                    $"设备 {change.Root} 容量 {change.Previous} → {change.Current}："
-                                    + $"{change.Reason}；窗口聚合 {change.AggregateMegabytesPerSecond:F1} MB/s，"
-                                    + $"平均延迟 {change.AverageLatencySecondsPerGb:F2} s/GB");
-                            }
-                        }
-                    }
-
-                    foreach (ScheduledWorkUnit pendingWork in scheduler.PendingUnits)
-                    {
-                        scheduler.UpdatePendingEstimate(pendingWork, pendingWork.RefreshEstimatedSeconds());
-                    }
-
+                    scheduler.MarkCompleted(workUnits[completedUnit]);
                     skippedFollowers += completedUnit.Followers.Count;
-                    _extractionCoordinator.ObserveSpecificCompleted(
-                        completedUnit.Entry,
-                        Math.Max(1, running.Count));
 
                     if (success)
                     {
