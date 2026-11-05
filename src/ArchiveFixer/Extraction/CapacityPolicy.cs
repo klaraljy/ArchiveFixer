@@ -5,7 +5,8 @@ namespace ArchiveFixer.Extraction
     public readonly record struct CapacitySample(
         double CpuBusyPercent,
         long AvailablePhysicalBytes,
-        bool UiStalled);
+        bool UiStalled,
+        bool DiskStalled = false);
 
     /// <summary>
     /// 并发容量策略：静态上限 + 压力降档 + 冷却升档。
@@ -37,8 +38,9 @@ namespace ArchiveFixer.Extraction
             bool memoryCritical = sample.AvailablePhysicalBytes > 0
                                   && sample.AvailablePhysicalBytes < MemoryCriticalBytes;
             bool uiStalled = sample.UiStalled;
+            bool diskStalled = sample.DiskStalled;
 
-            if (cpuCritical || memoryCritical || uiStalled)
+            if (cpuCritical || memoryCritical || uiStalled || diskStalled)
             {
                 _cooldown = CooldownSamples;
                 if (Current > 1)
@@ -46,7 +48,9 @@ namespace ArchiveFixer.Extraction
                     Current--;
                     LastReason = cpuCritical
                         ? "系统 CPU 过高"
-                        : memoryCritical ? "可用内存过低" : "UI 停顿";
+                        : memoryCritical
+                            ? "可用内存过低"
+                            : diskStalled ? "磁盘读写停顿" : "UI 停顿";
                 }
                 else
                 {

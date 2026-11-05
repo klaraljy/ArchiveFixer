@@ -244,10 +244,16 @@ namespace ArchiveFixer.ViewModels
             }
 
             ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
+            bool hasDiskSample = ProcessIoProbe.TryGetMegabytesPerSecond(out double diskMegabytesPerSecond);
+            int activeTasks = _autoActiveByRoot.Values.Sum();
+            bool diskStalled = hasDiskSample
+                               && activeTasks > 0
+                               && diskMegabytesPerSecond < 0.05;
             int capacity = _capacityPolicy.Evaluate(new CapacitySample(
                 resources.CpuBusyPercent,
                 resources.AvailablePhysicalBytes,
-                UiActivity.TakeUiStallCount() > 0));
+                UiActivity.TakeUiStallCount() > 0,
+                diskStalled));
             return capacity;
         }
 

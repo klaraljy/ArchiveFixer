@@ -18,6 +18,16 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 磁盘读写停顿会降档_冷却后才升()
+        {
+            var policy = new CapacityPolicy();
+            policy.Reset(initial: 3, maximum: 4);
+            Assert.Equal(4, policy.Evaluate(new CapacitySample(10, 8L * 1024 * 1024 * 1024, false)));
+            Assert.Equal(3, policy.Evaluate(new CapacitySample(10, 8L * 1024 * 1024 * 1024, false, DiskStalled: true)));
+            Assert.Equal(3, policy.Evaluate(new CapacitySample(10, 8L * 1024 * 1024 * 1024, false)));
+        }
+
+        [Fact]
         public void 已到上限后保持_不无限增长()
         {
             var policy = new CapacityPolicy();
