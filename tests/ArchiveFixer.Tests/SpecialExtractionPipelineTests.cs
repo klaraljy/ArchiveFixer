@@ -535,6 +535,36 @@ namespace ArchiveFixer.Tests
         }
 
         [SevenZipFact]
+        public async Task 特定解压_指定位置_产物落到指定根()
+        {
+            string collection = Path.Combine(_root, "specific-custom-source");
+            Directory.CreateDirectory(collection);
+
+            string build = Path.Combine(_root, "build-specific-custom");
+            Directory.CreateDirectory(build);
+            WriteText(Path.Combine(build, "payload.txt"), "payload");
+            Run7z(build, "a", "-t7z", Path.Combine(collection, "pack.7z"), "payload.txt");
+
+            string target = Path.Combine(_root, "specific-custom-target");
+            Directory.CreateDirectory(target);
+
+            Harness harness = CreateHarness("specific-custom", settings =>
+            {
+                EnableSpecialExtraction(settings);
+                settings.ExtractToOriginalDirectory = false;
+                settings.CustomOutputDirectory = target;
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            });
+
+            await harness.AddPathsAsync(collection);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            ArchiveTask task = harness.Vm.Tasks.Single();
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+            Assert.StartsWith(target, task.OutputPath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [SevenZipFact]
         public async Task 特定解压_加密包成功_密码状态和候选日志都落下来()
         {
             string collection = Path.Combine(_root, "specific-password");

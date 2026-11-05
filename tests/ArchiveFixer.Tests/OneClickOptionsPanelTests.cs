@@ -178,6 +178,50 @@ namespace ArchiveFixer.Tests
             Assert.False(seed.SuppressPanelNextTime);
         }
 
+        /// <summary>
+        /// 用户点名的 2×2×2 组合：落点 × 源包 × 其余物，八个组合都跑真入口，
+        /// 不是只对选项对象做排列。
+        /// </summary>
+        [Theory]
+        [InlineData(false, true, RestHandlingModes.Keep)]
+        [InlineData(false, true, RestHandlingModes.Delete)]
+        [InlineData(false, false, RestHandlingModes.Keep)]
+        [InlineData(false, false, RestHandlingModes.Delete)]
+        [InlineData(true, true, RestHandlingModes.Keep)]
+        [InlineData(true, true, RestHandlingModes.Delete)]
+        [InlineData(true, false, RestHandlingModes.Keep)]
+        [InlineData(true, false, RestHandlingModes.Delete)]
+        public async Task 八个组合_落点和源包处理各自生效(
+            bool customPlacement,
+            bool keepSource,
+            string restHandling)
+        {
+            Harness harness = CreateHarness();
+            string source = CreateSourceFile("matrix-" + Guid.NewGuid().ToString("N") + ".7z");
+            ArchiveTask task = AddTask(harness, source);
+            string customRoot = Path.Combine(_root, "matrix-out-" + Guid.NewGuid().ToString("N"));
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
+            {
+                PlacementMode = customPlacement
+                    ? OutputPlacementMode.CustomRootPerArchive
+                    : OutputPlacementMode.PerArchiveSubfolder,
+                CustomRoot = customPlacement ? customRoot : string.Empty,
+                SourceHandling = keepSource ? SourceHandlingMode.KeepInPlace : SourceHandlingMode.DeleteInPlace,
+                RestHandling = restHandling
+            });
+
+            await harness.OneClick.RunAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            string expectedRoot = customPlacement
+                ? customRoot
+                : Path.GetDirectoryName(source)!;
+            Assert.StartsWith(expectedRoot, task.OutputPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(keepSource, File.Exists(source));
+        }
+
         // ================================================================ ④ 无 UI 宿主
 
         /// <summary>
