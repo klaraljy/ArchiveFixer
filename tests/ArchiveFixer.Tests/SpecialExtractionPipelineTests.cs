@@ -212,6 +212,50 @@ namespace ArchiveFixer.Tests
 
 
         // ================================================================ 小体积：暂停后不再补位
+        [SevenZipFact]
+        public async Task 真机混合盘_两个设备池补位()
+        {
+            string eDir = @"E:\DeepSeekProjects\_tmp\ArchiveFixer\real-mixed-e";
+            string hDir = @"H:\BaiduNetdiskDownload\困难大测试\real-mixed-h";
+            if (!Directory.Exists(@"H:\"))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(eDir);
+            Directory.CreateDirectory(hDir);
+            try
+            {
+                for (int i = 1; i <= 2; i++)
+                {
+                    string build = Path.Combine(_root, "mixed-build-" + i);
+                    Directory.CreateDirectory(build);
+                    byte[] payload = new byte[512 * 1024];
+                    Random.Shared.NextBytes(payload);
+                    File.WriteAllBytes(Path.Combine(build, "a.bin"), payload);
+                    Run7z(build, "a", "-t7z", Path.Combine(eDir, "e" + i + ".7z"), "a.bin");
+                    Run7z(build, "a", "-t7z", Path.Combine(hDir, "h" + i + ".7z"), "a.bin");
+
+                }
+
+                Harness harness = CreateHarness("real-mixed", settings =>
+                {
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                });
+
+                await harness.AddPathsAsync(eDir, hDir);
+                await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+                Assert.True(4 == harness.Vm.Tasks.Count, string.Join(" | ", harness.Vm.Tasks.Select(t => t.CurrentPath)));
+                Assert.True(harness.Vm.Tasks.All(t => t.Outcome == TaskOutcome.Succeeded), string.Join(" | ", harness.Vm.Tasks.Select(t => t.CurrentPath + "=" + t.Status + "/" + t.ErrorMessage)));
+            }
+            finally
+            {
+                if (Directory.Exists(eDir)) Directory.Delete(eDir, recursive: true);
+                if (Directory.Exists(hDir)) Directory.Delete(hDir, recursive: true);
+            }
+        }
+
 
         [SevenZipFact]
         public async Task 特定解压_小包暂停所有操作_不继续启动后续()
