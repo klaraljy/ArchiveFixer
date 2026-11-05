@@ -2907,26 +2907,19 @@ namespace ArchiveFixer.Extraction
 
                         if (!recoveredManifest.Available && !string.IsNullOrEmpty(fallback.HitPassword))
                         {
-                            try
-                            {
-                                ArchiveListResult relisted = await _engine
-                                    .ListAsync(
-                                        ArchiveRequest.For(archivePath, fallback.HitPassword),
-                                        cancellationToken)
-                                    .ConfigureAwait(false);
+                            EncryptedHeaderManifestRecoveryResult recovered = await EncryptedHeaderManifestRecovery
+                                .TryRelistAsync(
+                                    _engine,
+                                    archivePath,
+                                    fallback.HitPassword,
+                                    cancellationToken,
+                                    message => Log("INFO", $"{layerLabel}：{message}"))
+                                .ConfigureAwait(false);
 
-                                if (relisted.Success)
-                                {
-                                    recoveredManifest = LayerManifest.From(relisted);
-                                    lastListedEntries = PartialPublishPlanner.ToManifestEntries(relisted);
-                                    Log(
-                                        "INFO",
-                                        $"{layerLabel}：换引擎成功后用命中的密码重新列目录成功（{relisted.Entries.Count} 个条目）");
-                                }
-                            }
-                            catch
+                            if (recovered.Manifest.Available)
                             {
-                                // 列不出来就仍然按“判不出”处理，绝不伪造清单。
+                                recoveredManifest = recovered.Manifest;
+                                lastListedEntries = recovered.Entries;
                             }
                         }
 
