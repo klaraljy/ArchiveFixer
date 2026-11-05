@@ -1055,6 +1055,16 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            if (finished.Outcome == TaskOutcome.Succeeded)
+            {
+                DurationHistory.Record(
+                    finished,
+                    finished.SourceSizeBytes,
+                    elapsedSeconds,
+                    finished.VolumeCount,
+                    finished.IsVolumeGroup || finished.VolumeCount > 1);
+            }
+
             double latency = elapsedSeconds / gigabytes;
             double perTaskMbps = gigabytes * 1024 / elapsedSeconds;
             int stalls = UiActivity.TakeUiStallCount();

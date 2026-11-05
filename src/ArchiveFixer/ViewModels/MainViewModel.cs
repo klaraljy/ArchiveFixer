@@ -439,6 +439,7 @@ namespace ArchiveFixer.ViewModels
 
             // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
             _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
+            DurationHistory.DataRootDirectory = _pathService.DataRootDirectory;
             ToolLocator.Default.Invalidate();
         }
 

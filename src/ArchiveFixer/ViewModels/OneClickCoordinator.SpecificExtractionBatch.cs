@@ -158,6 +158,20 @@ namespace ArchiveFixer.ViewModels
                     running.RemoveAt(index);
 
                     bool success = await completedWork.ConfigureAwait(true);
+                    if (success
+                        && completedUnit.Entry.StartTime.HasValue
+                        && completedUnit.Entry.EndTime.HasValue)
+                    {
+                        double elapsed = (completedUnit.Entry.EndTime.Value - completedUnit.Entry.StartTime.Value)
+                            .TotalSeconds;
+                        DurationHistory.Record(
+                            completedUnit.Entry,
+                            completedUnit.SourceBytes,
+                            elapsed,
+                            completedUnit.Followers.Count + 1,
+                            completedUnit.Followers.Count > 0);
+                    }
+
                     skippedFollowers += completedUnit.Followers.Count;
                     _extractionCoordinator.ObserveSpecificCompleted(
                         completedUnit.Entry,

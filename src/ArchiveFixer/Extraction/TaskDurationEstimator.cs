@@ -38,7 +38,14 @@ namespace ArchiveFixer.Extraction
                 return 1;
             }
 
-            double throughput = EstimateThroughputMegabytesPerSecond(context);
+            bool encrypted = DurationHistory.IsEncrypted(context);
+            double throughput = DurationHistory.TryGetMegabytesPerSecond(
+                context,
+                encrypted,
+                isVolumeGroup,
+                out double historical)
+                ? historical
+                : EstimateThroughputMegabytesPerSecond(context);
             double seconds = megabytes / Math.Max(1, throughput);
             double volumeOverhead = 0.2 * Math.Max(0, volumeCount - 1) + (isVolumeGroup ? 0.5 : 0);
             // 打开包、列目录、密码候选、收尾都有固定开销；小包不能估成 0 秒。
