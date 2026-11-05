@@ -164,6 +164,38 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 标准分卷后缀带中文_引擎从标准名入口解压()
+        {
+            string source = Path.Combine(_root, "outer.rar");
+            File.WriteAllText(source, "x");
+
+            var engine = new ScriptedEngine();
+            engine.Add("outer.rar", dir =>
+            {
+                File.WriteAllText(Path.Combine(dir, "111.7z.001删"), "x");
+                File.WriteAllText(Path.Combine(dir, "111.7z.002删"), "x");
+            });
+            engine.Add("111.7z.001", dir => File.WriteAllText(Path.Combine(dir, "content.bin"), "x"));
+
+            var runner = new SpecificExtractionRunner(engine);
+            SpecificExtractionRunResult result = await runner.RunAsync(
+                source,
+                Path.Combine(_root, "out"),
+                Path.Combine(_root, "work"),
+                new string?[] { "" });
+
+            Assert.True(result.Success, result.Message);
+            Assert.Contains(
+                engine.Requests,
+                request => request.ArchivePath.EndsWith(
+                    Path.Combine("standard-volume-entry", "111.7z.001"),
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                engine.Requests,
+                request => request.ArchivePath.EndsWith("111.7z.001删", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
         public async Task 输出名已存在时_自动改名_结果路径指向真实目录()
         {
             string source = Path.Combine(_root, "outer.7z");

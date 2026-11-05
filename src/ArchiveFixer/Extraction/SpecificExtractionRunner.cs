@@ -188,17 +188,27 @@ namespace ArchiveFixer.Extraction
                      * 特定解压也要接标准分卷：把这一组的第一卷当作下一层的输入，
                      * 同目录的其余卷由引擎按标准卷名自己找。⛔ 不再直接报“暂未接入”失败。
                      */
-                    string? firstVolume = decision.VolumePaths
+                    List<string> ordered = decision.VolumePaths
                         .OrderBy(path => LegacyVolumeNames.TryGetIndex(
-                            Path.GetFileName(path)) ?? int.MaxValue)
+                            Path.GetFileName(SpecificOutputNaming.RemoveChineseFromExtension(path)))
+                            ?? int.MaxValue)
                         .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-                        .FirstOrDefault();
+                        .ToList();
+
+                    string? firstVolume = ordered.FirstOrDefault();
 
                     if (!string.IsNullOrWhiteSpace(firstVolume))
                     {
-                        currentArchive = firstVolume;
+                        /*
+                         * 分卷片可能只带中文字符伪装（例如 111.7z.001删 / .002删）。
+                         * 引擎按标准卷名找兄弟卷，直接把“删”字入口交给它必然报缺卷。
+                         * 在层工作区里为整组做一套标准名硬链接，再让引擎从标准入口解压；
+                         * 用户原片一个字节都不动。
+                         */
+                        string? standardEntry = MaterializeStandardVolumeEntry(ordered, layerRoot);
+                        currentArchive = standardEntry ?? firstVolume;
                         _log?.Invoke(
-                            $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(firstVolume)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
+                            $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(currentArchive)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
                         continue;
                     }
                 }
@@ -224,6 +234,58 @@ namespace ArchiveFixer.Extraction
                 RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                 Depth = MaxDepth
             };
+        }
+
+        /// <summary>
+        /// 把“标准卷名 + 中文字符伪装”的整组片做成一套标准名硬链接。
+        /// 返回标准入口；源片不动。做不出标准名时返回 null，调用方保留原入口并如实失败。
+        /// </summary>
+        private static string? MaterializeStandardVolumeEntry(
+            IReadOnlyList<string> sourcePieces,
+            string layerRoot)
+        {
+            if (sourcePieces == null || sourcePieces.Count < 2)
+            {
+                return null;
+            }
+
+            string entryRoot = Path.Combine(layerRoot, "standard-volume-entry");
+            Directory.CreateDirectory(entryRoot);
+            string? first = null;
+
+            foreach (string source in sourcePieces)
+            {
+                string cleanedName = SpecificOutputNaming.RemoveChineseFromExtension(Path.GetFileName(source));
+
+                if (string.IsNullOrWhiteSpace(cleanedName)
+                    || string.Equals(cleanedName, Path.GetFileName(source), StringComparison.Ordinal))
+                {
+                    // 已经是标准名：仍放进同一入口目录，保证兄弟卷同目录。
+                }
+
+                string target = Path.Combine(entryRoot, cleanedName);
+
+                try
+                {
+                    if (File.Exists(target))
+                    {
+                        continue;
+                    }
+
+                    if (!HardLinkHelper.TryCreateHardLink(target, source))
+                    {
+                        File.Copy(source, target, overwrite: false);
+                    }
+
+                    first ??= target;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            return first;
         }
 
         private static string DescribePasswordCandidate(string? password) =>

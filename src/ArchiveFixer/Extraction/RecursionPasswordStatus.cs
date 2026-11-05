@@ -27,8 +27,16 @@ namespace ArchiveFixer.Extraction
              * - 只看到“清单无加密”或空密码成功 ⇒ 不需要密码。
              * 优先级按“已经证明成功”优先于失败证据，避免内层成功后被外层噪声覆盖。
              */
+            /*
+             * “密码正确”必须同时证明这一层**真的解出了东西**：
+             * 空归档（0 条目）用任何候选都返回退出码 0，但 OutputFileCount=0，
+             * 不能把最后一个候选误记成“密码正确”。
+             */
             bool sawCorrect = result.Layers.Any(layer =>
-                layer != null && string.Equals(layer.UsedPasswordMasked, "******", System.StringComparison.Ordinal));
+                layer != null
+                && layer.Success
+                && layer.OutputFileCount > 0
+                && string.Equals(layer.UsedPasswordMasked, "******", System.StringComparison.Ordinal));
             if (sawCorrect)
             {
                 task.PasswordStatus = StatusText.PasswordCorrect;

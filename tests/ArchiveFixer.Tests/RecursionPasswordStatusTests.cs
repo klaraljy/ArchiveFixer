@@ -18,6 +18,7 @@ namespace ArchiveFixer.Tests
                     new RecursionLayerReport
                     {
                         Success = true,
+                        OutputFileCount = 1,
                         UsedPasswordMasked = "******"
                     }
                 }
@@ -26,6 +27,29 @@ namespace ArchiveFixer.Tests
             RecursionPasswordStatus.Apply(task, result);
 
             Assert.Equal(StatusText.PasswordCorrect, task.PasswordStatus);
+        }
+
+        [Fact]
+        public void 空归档即使候选返回成功_也不落密码正确()
+        {
+            var task = new ArchiveTask(@"H:\empty.7z", 1);
+            var result = new RecursionResult
+            {
+                Layers = new[]
+                {
+                    new RecursionLayerReport
+                    {
+                        Success = true,
+                        OutputFileCount = 0,
+                        ListingSaidNoEncryption = true,
+                        UsedPasswordMasked = "******"
+                    }
+                }
+            };
+
+            RecursionPasswordStatus.Apply(task, result);
+
+            Assert.Equal(StatusText.PasswordNotNeeded, task.PasswordStatus);
         }
 
         [Fact]
