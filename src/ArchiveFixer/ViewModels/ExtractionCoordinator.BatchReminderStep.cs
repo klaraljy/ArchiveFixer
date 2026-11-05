@@ -183,6 +183,25 @@ namespace ArchiveFixer.ViewModels
         }
 
         private ConcurrencyLimit? _runConcurrencyLimit;
+        private int ResolveDeviceCapacityCeiling()
+        {
+            foreach (string root in _autoControllers.Keys)
+            {
+                try
+                {
+                    if (StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd)
+                    {
+                        return 8;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return 4;
+        }
+
         private readonly CapacityPolicy _capacityPolicy = new();
         private int _capacityPolicySeed = -1;
 
@@ -224,7 +243,7 @@ namespace ArchiveFixer.ViewModels
 
             if (_capacityPolicySeed != auto)
             {
-                _capacityPolicy.Reset(auto, Math.Max(auto, 8));
+                _capacityPolicy.Reset(auto, ResolveDeviceCapacityCeiling());
                 _capacityPolicySeed = auto;
             }
 
@@ -233,7 +252,7 @@ namespace ArchiveFixer.ViewModels
                 resources.CpuBusyPercent,
                 resources.AvailablePhysicalBytes,
                 UiActivity.TakeUiStallCount() > 0));
-            return Math.Min(auto, capacity);
+            return capacity;
         }
 
         /// <summary>

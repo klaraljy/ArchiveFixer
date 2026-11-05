@@ -481,18 +481,15 @@ namespace ArchiveFixer.ViewModels
                  */
                 var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
 
-                IReadOnlyList<ScheduledExtractionItem> scheduledOrder =
-                    SlotScheduler<ScheduledExtractionItem>.SimulateStartOrder(
-                        plan.Ordered,
+                IReadOnlyList<ScheduledWorkUnit> scheduledOrder =
+                    SlotScheduler<ScheduledWorkUnit>.SimulateStartOrder(
+                        plan.Ordered.Select(ScheduledWorkUnit.FromPlanItem),
                         maxParallel,
-                        item => TaskDurationEstimator.EstimateSeconds(
-                            item.Estimate.SourceBytes,
-                            item.Task,
-                            item.Task.VolumeCount,
-                            item.Task.IsVolumeGroup || item.Task.VolumeCount > 1));
+                        work => work.EstimatedSeconds);
 
-                foreach (ScheduledExtractionItem item in scheduledOrder)
+                foreach (ScheduledWorkUnit work in scheduledOrder)
                 {
+                    ScheduledExtractionItem item = work.PayloadAs<ScheduledExtractionItem>();
                     ArchiveTask task = item.Task;
 
                     if (IsStopping || _operationCts.IsCancellationRequested)

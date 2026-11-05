@@ -49,15 +49,13 @@ namespace ArchiveFixer.ViewModels
             int failed = 0;
             int skippedFollowers = 0;
 
-            var scheduler = new SlotScheduler<SpecificBatchUnit>();
+            Dictionary<SpecificBatchUnit, ScheduledWorkUnit> workUnits = orderedUnits
+                .ToDictionary(unit => unit, ScheduledWorkUnit.FromSpecificUnit);
+            var scheduler = new SlotScheduler<ScheduledWorkUnit>();
             scheduler.Reset(
-                orderedUnits,
+                workUnits.Values,
                 Math.Max(1, preparedTarget),
-                unit => TaskDurationEstimator.EstimateSeconds(
-                    unit.SourceBytes,
-                    unit.Entry,
-                    unit.Followers.Count + 1,
-                    unit.Followers.Count > 0));
+                work => work.EstimatedSeconds);
             var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
 
             int lastTarget = -1;
@@ -109,7 +107,9 @@ namespace ArchiveFixer.ViewModels
                     int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
                     int target = spaceTight
                         ? Math.Min(
-                            ResolveSpecificParallel(scheduler.PendingUnits, running, runOptions, out spaceBasis),
+                            ResolveSpecificParallel(
+                                scheduler.PendingUnits.Select(work => work.PayloadAs<SpecificBatchUnit>()).ToList(),
+                                running, runOptions, out spaceBasis),
                             Math.Max(autoTarget, running.Count))
                         : autoTarget;
 
@@ -128,10 +128,9 @@ namespace ArchiveFixer.ViewModels
                             + (spaceTight ? $"；{spaceBasis}" : "。"));
                     }
 
-                    foreach (SlotScheduler<SpecificBatchUnit>.Start start in scheduler.StartAvailable(target))
+                    foreach (SlotScheduler<ScheduledWorkUnit>.Start start in scheduler.StartAvailable(target))
                     {
-                        SpecificBatchUnit unit = start.Unit;
-                        unit.Entry.StartTime = DateTime.Now;
+                        SpecificBatchUnit unit = start.Unit.PayloadAs<SpecificBatchUnit>();
                         Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
                         running.Add((unit, work));
                     }
@@ -163,9 +162,8 @@ namespace ArchiveFixer.ViewModels
 
                     (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
                     running.RemoveAt(index);
-
-                    scheduler.MarkCompleted(completedUnit);
                     bool success = await completedWork.ConfigureAwait(true);
+                    scheduler.MarkCompleted(workUnits[completedUnit]);
                     if (success
                         && completedUnit.Entry.StartTime.HasValue
                         && completedUnit.Entry.EndTime.HasValue)
