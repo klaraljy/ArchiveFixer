@@ -40,7 +40,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "INFO",
                 $"特定解压：按预计耗时降序排好；普通并发按用户选择 {configuredTarget} 个"
-                + (spaceTight ? "；空间不足模式由空间自己定，可能高于普通档。" : "。"));
+                + (spaceTight ? "；空间不足模式只收紧，不会超过这个数。" : "。"));
 
             int succeeded = 0;
             int failed = 0;
@@ -58,7 +58,6 @@ namespace ArchiveFixer.ViewModels
 
 
             int lastTarget = -1;
-            string lastBasis = string.Empty;
 
             // 特定解压分支不经过 RunPipelineAsync 后半段，必须在这里自己接停止令牌。
             void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -103,28 +102,29 @@ namespace ArchiveFixer.ViewModels
 
                     string spaceBasis = string.Empty;
                     int target = configuredTarget;
+                    int spaceCap = configuredTarget;
 
                     if (spaceTight)
                     {
-                        // 空间不足模式是独立通道：由空间自己决定，可以高于普通手动档。
-                        target = ResolveSpecificParallel(
+                        // 空间不足模式只负责收紧：最多回到用户选择的 N，绝不自己抬上去。
+                        spaceCap = ResolveSpecificParallel(
                             scheduler.PendingUnits.Select(work => work.PayloadAs<SpecificBatchUnit>()).ToList(),
                             running,
                             runOptions,
                             out spaceBasis);
+                        target = Math.Min(configuredTarget, spaceCap);
                     }
 
                     target = Math.Max(1, Math.Min(target, scheduler.PendingCount + scheduler.ActiveCount));
                     scheduler.SetCapacity(target);
 
-                    if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
+                    if (target != lastTarget)
                     {
                         lastTarget = target;
-                        lastBasis = spaceBasis;
                         AppendLog(
                             "INFO",
                             (spaceTight
-                                ? $"特定解压并发（空间不足，用户选择 {configuredTarget}）：当前目标 {target} 个"
+                                ? $"特定解压并发（空间不足）：空间上限 {spaceCap} 个，用户上限 {configuredTarget} 个 ⇒ 实际 {target} 个"
                                 : $"特定解压并发（用户选择 {configuredTarget}）：当前目标 {target} 个")
                             + $"（正在跑 {running.Count} 个，待处理 {scheduler.PendingCount} 个）"
                             + (spaceTight ? $"；{spaceBasis}" : "。"));

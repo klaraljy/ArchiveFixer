@@ -395,12 +395,13 @@ namespace ArchiveFixer.ViewModels
                  * ⚠ 排序只影响**执行顺序**，不动任务列表本身：用户在列表里看到的顺序、
                  * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
                  */
-                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel, _spaceTightThisBatch);
+                int userParallel = Math.Max(1, maxParallel);
+                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, userParallel, _spaceTightThisBatch);
 
                 if (_spaceTightThisBatch)
                 {
                     _spaceLimit = ResolveSpaceTightParallelForBatch(plan);
-                    maxParallel = _spaceLimit;
+                    maxParallel = Math.Min(_spaceLimit, userParallel);
                 }
 
                 _cleanupLedger.Clear();
@@ -441,10 +442,10 @@ namespace ArchiveFixer.ViewModels
                 if (_spaceTightThisBatch)
                 {
                     _spaceLimit = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
-                    maxParallel = _spaceLimit;
+                    maxParallel = Math.Min(_spaceLimit, userParallel);
                     AppendLog(
                         "INFO",
-                        $"空间不足动态并发：空间上限 {_spaceLimit} 个 ⇒ 批首实际 {maxParallel} 个");
+                        $"空间不足动态并发：空间上限 {_spaceLimit} 个，用户上限 {userParallel} 个 ⇒ 批首实际 {maxParallel} 个");
                 }
 
                 /*
@@ -541,13 +542,14 @@ namespace ArchiveFixer.ViewModels
                                 .ToList();
 
                             _spaceLimit = ResolveDynamicSpaceParallel(pending, runningTasks.Count);
+                            int combined = Math.Min(_spaceLimit, userParallel);
 
-                            if (_spaceLimit != maxParallel)
+                            if (combined != maxParallel)
                             {
                                 AppendLog(
                                     "INFO",
-                                    $"空间不足动态并发：空间上限 {_spaceLimit} 个 ⇒ 实际 {_spaceLimit} 个（正在跑 {runningTasks.Count} 个）");
-                                maxParallel = _spaceLimit;
+                                    $"空间不足动态并发：空间上限 {_spaceLimit} 个，用户上限 {userParallel} 个 ⇒ 实际 {combined} 个（正在跑 {runningTasks.Count} 个）");
+                                maxParallel = combined;
                                 scheduler.SetCapacity(maxParallel);
                             }
                         }

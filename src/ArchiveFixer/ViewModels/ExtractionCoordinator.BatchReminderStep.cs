@@ -120,7 +120,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"「空间不足」模式接管并发：本批同时最多跑 {count} 个（普通并发档不参与）。{basis}。");
+                $"「空间不足」模式：按空间最多能放 {count} 个（只用于收紧，实际不超过用户选择）。{basis}。");
 
             return count;
         }

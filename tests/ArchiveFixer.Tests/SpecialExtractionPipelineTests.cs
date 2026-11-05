@@ -175,7 +175,7 @@ namespace ArchiveFixer.Tests
         }
 
         [SevenZipFact]
-        public async Task 特定解压_空间不足_小包会按空间提高并发()
+        public async Task 特定解压_空间不足_用户2_最多2()
         {
             string collection = Path.Combine(_root, "合集-concurrent");
             Directory.CreateDirectory(collection);
@@ -205,7 +205,11 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(collection, "b", "01.jpg")));
             Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains("当前目标 2 个", StringComparison.Ordinal));
+                text => text.Contains("用户上限 2 个", StringComparison.Ordinal)
+                        && text.Contains("实际 2 个", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("实际 3 个", StringComparison.Ordinal));
         }
 
         // ================================================================ ③ 多分支：不塌 + WARN
