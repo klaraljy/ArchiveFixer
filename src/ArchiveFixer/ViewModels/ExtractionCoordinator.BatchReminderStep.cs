@@ -202,6 +202,8 @@ namespace ArchiveFixer.ViewModels
 
         private readonly CapacityPolicy _capacityPolicy = new();
         private int _capacityPolicySeed = -1;
+        private int _lastCapacity = -1;
+        private string _lastCapacityReason = string.Empty;
 
         /// <summary>
         /// <summary>自动并发取值：取所有卷控制器当前值的最大值，避免慢卷历史把整批锁在 1。</summary>
@@ -254,6 +256,16 @@ namespace ArchiveFixer.ViewModels
                 resources.AvailablePhysicalBytes,
                 UiActivity.TakeUiStallCount() > 0,
                 diskStalled));
+            if (capacity != _lastCapacity || !string.Equals(_lastCapacityReason, _capacityPolicy.LastReason, StringComparison.Ordinal))
+            {
+                AppendLog(
+                    "INFO",
+                    $"并发容量：{(_lastCapacity < 0 ? "初始" : _lastCapacity.ToString(CultureInfo.InvariantCulture))} → {capacity} 个；"
+                    + $"原因：{_capacityPolicy.LastReason}；活跃 {activeTasks} 个");
+                _lastCapacity = capacity;
+                _lastCapacityReason = _capacityPolicy.LastReason;
+            }
+
             return capacity;
         }
 
