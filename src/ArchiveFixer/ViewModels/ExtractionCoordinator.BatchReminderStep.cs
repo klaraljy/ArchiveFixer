@@ -183,21 +183,28 @@ namespace ArchiveFixer.ViewModels
         private ConcurrencyLimit? _runConcurrencyLimit;
         private int ResolveDeviceCapacityCeiling()
         {
+            if (_autoControllers.Count == 0)
+            {
+                return 4;
+            }
+
+            // 混合批取最保守的设备上限：只要有一块 HDD/未知盘，就不让 SSD 的 8 把整批抬到 8。
             foreach (string root in _autoControllers.Keys)
             {
                 try
                 {
-                    if (StorageDeviceProfile.Detect(root) == StorageDeviceKind.Ssd)
+                    if (StorageDeviceProfile.Detect(root) != StorageDeviceKind.Ssd)
                     {
-                        return 8;
+                        return 4;
                     }
                 }
                 catch
                 {
+                    return 4;
                 }
             }
 
-            return 4;
+            return 8;
         }
 
         private readonly CapacityPolicy _capacityPolicy = new();
