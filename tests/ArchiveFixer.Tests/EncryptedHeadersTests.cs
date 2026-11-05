@@ -1,6 +1,7 @@
 using ArchiveFixer.Converters;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
@@ -263,6 +264,37 @@ Headers Error
 
                 Assert.True(correct.Success);
                 Assert.Contains(correct.Entries, e => e.Path.EndsWith("a.txt", StringComparison.Ordinal));
+            }
+            finally
+            {
+                TryDeleteDirectory(directory);
+            }
+        }
+
+        [SevenZipFact]
+        public async Task 真实7z_加密头命中密码后_恢复清单能用()
+        {
+            string sevenZip = SevenZipFactAttribute.LocateSevenZipPath();
+            string directory = Path.Combine(Path.GetTempPath(), "af-mhe-recover-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                string sourceFile = Path.Combine(directory, "a.txt");
+                string archive = Path.Combine(directory, "hdr.7z");
+                File.WriteAllText(sourceFile, "hello");
+
+                RunSevenZip(sevenZip, new[]
+                {
+                    "a", "-t7z", "-mhe=on", "-p" + SamplePassword, archive, sourceFile
+                });
+
+                EncryptedHeaderManifestRecoveryResult recovered = await EncryptedHeaderManifestRecovery
+                    .TryRelistAsync(new SevenZipEngine(), archive, SamplePassword);
+
+                Assert.True(recovered.Manifest.Available);
+                Assert.Single(recovered.Entries);
+                Assert.Contains(recovered.Entries, item => item.Path.EndsWith("a.txt", StringComparison.Ordinal));
             }
             finally
             {
