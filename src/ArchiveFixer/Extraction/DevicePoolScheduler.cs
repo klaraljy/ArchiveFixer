@@ -4,6 +4,14 @@ using System.Linq;
 
 namespace ArchiveFixer.Extraction
 {
+    public readonly record struct DeviceCapacityChange(
+        string Root,
+        int Previous,
+        int Current,
+        string Reason,
+        double AggregateMegabytesPerSecond,
+        double AverageLatencySecondsPerGb);
+
     /// <summary>
     /// 每设备/卷一个 SlotScheduler + CapacityPolicy。设备池只管调度，
     /// 不碰普通空间门、特定解压 unit、落点或源包处理。
@@ -18,11 +26,15 @@ namespace ArchiveFixer.Extraction
                 Capacity = new CapacityPolicy();
                 Capacity.Reset(initial, maximum);
                 Slots = new SlotScheduler<T>();
+                LastCapacity = Capacity.Current;
+                LastReason = Capacity.LastReason;
             }
 
             public string Root { get; }
             public CapacityPolicy Capacity { get; }
             public SlotScheduler<T> Slots { get; }
+            public int LastCapacity { get; set; }
+            public string LastReason { get; set; } = string.Empty;
             public DateTime WindowStartedUtc { get; set; } = DateTime.UtcNow;
             public long WindowBytes { get; set; }
             public int WindowTasks { get; set; }
@@ -32,6 +44,7 @@ namespace ArchiveFixer.Extraction
         private readonly Dictionary<string, DevicePool> _pools = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<T, string> _unitRoot = new(ReferenceEqualityComparer.Instance);
         private readonly List<string> _order = new();
+        private readonly List<DeviceCapacityChange> _changes = new();
 
         public IReadOnlyList<string> Roots => _order;
         public int ActiveCount => _pools.Values.Sum(pool => pool.Slots.ActiveCount);
@@ -146,6 +159,20 @@ namespace ArchiveFixer.Extraction
                 : 0;
 
             pool.Capacity.ObserveCompletion(aggregateMbps, averageLatency, sample);
+            if (pool.Capacity.Current != pool.LastCapacity
+                || !string.Equals(pool.LastReason, pool.Capacity.LastReason, StringComparison.Ordinal))
+            {
+                _changes.Add(new DeviceCapacityChange(
+                    pool.Root,
+                    pool.LastCapacity,
+                    pool.Capacity.Current,
+                    pool.Capacity.LastReason,
+                    aggregateMbps,
+                    averageLatency));
+                pool.LastCapacity = pool.Capacity.Current;
+                pool.LastReason = pool.Capacity.LastReason;
+            }
+
             pool.Slots.SetCapacity(pool.Capacity.Current);
             pool.WindowStartedUtc = DateTime.UtcNow;
             pool.WindowBytes = 0;
@@ -169,6 +196,18 @@ namespace ArchiveFixer.Extraction
             return _pools.TryGetValue(NormalizeRoot(root), out DevicePool? pool)
                 ? pool.Capacity
                 : null;
+        }
+
+        public IReadOnlyList<DeviceCapacityChange> DrainCapacityChanges()
+        {
+            if (_changes.Count == 0)
+            {
+                return Array.Empty<DeviceCapacityChange>();
+            }
+
+            var copy = _changes.ToList();
+            _changes.Clear();
+            return copy;
         }
 
         public void SetCapacity(string root, int capacity)

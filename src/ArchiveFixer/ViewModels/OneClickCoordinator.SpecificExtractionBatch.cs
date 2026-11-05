@@ -201,6 +201,14 @@ namespace ArchiveFixer.ViewModels
                                     pressure.CpuBusyPercent,
                                     pressure.AvailablePhysicalBytes,
                                     false));
+                            foreach (DeviceCapacityChange change in scheduler.DrainCapacityChanges())
+                            {
+                                AppendLog(
+                                    "INFO",
+                                    $"设备 {change.Root} 容量 {change.Previous} → {change.Current}："
+                                    + $"{change.Reason}；窗口聚合 {change.AggregateMegabytesPerSecond:F1} MB/s，"
+                                    + $"平均延迟 {change.AverageLatencySecondsPerGb:F2} s/GB");
+                            }
                         }
                     }
 

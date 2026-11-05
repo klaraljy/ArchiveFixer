@@ -261,7 +261,7 @@ namespace ArchiveFixer.Tests
             // 实测（2026-09-26，修复后）：**3 个包 → 22 行 / 2,107 字符**（其中 13 行是本批一次的批级行）。
             // 真机基线（修复前，第 45 条那次 38 个包）：1080 行 / 145,387 字符 ≈ **每包 28 行 / 3,826 字符**。
             Assert.True(
-                lines.Count <= 3 * 3 + 21,
+                lines.Count <= 3 * 3 + 22,
                 $"日志行数应随包数线性且很小，实际 {lines.Count} 行；包含任务名的行：\n"
                 + string.Join("\n", lines.Where(line => line.Contains(".7z", StringComparison.Ordinal))));
 
