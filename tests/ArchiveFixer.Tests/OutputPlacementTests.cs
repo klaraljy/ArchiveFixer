@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using Xunit;
 
 namespace ArchiveFixer.Tests
@@ -710,6 +711,41 @@ namespace ArchiveFixer.Tests
             Assert.Equal(
                 expected,
                 OutputPlacement.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot));
+        }
+
+        /// <summary>
+        /// 真机旧配置从磁盘加载后也必须按指定位置走，而不是只在内存对象上归一化。
+        /// </summary>
+        [Fact]
+        public void 加载旧配置_指定位置仍生效()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "ArchiveFixerPlacement-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                var pathService = new PathService { DataRootDirectory = root };
+                var settingsService = new SettingsService(pathService);
+                string json = """
+                              {
+                                "ExtractToOriginalDirectory": false,
+                                "KeepArchiveNameFolder": true,
+                                "CustomOutputDirectory": "D:\\out",
+                                "PlacementMode": 0
+                              }
+                              """;
+                File.WriteAllText(settingsService.SettingsFilePath, json);
+
+                AppSettings loaded = settingsService.Load();
+                OneClickRunOptions options = OneClickRunOptions.FromSettings(loaded, loaded.CustomOutputDirectory);
+
+                Assert.Equal(OutputPlacementMode.CustomRootPerArchive, loaded.PlacementMode);
+                Assert.Equal(OutputPlacementMode.CustomRootPerArchive, options.PlacementMode);
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
 
         /// <summary>

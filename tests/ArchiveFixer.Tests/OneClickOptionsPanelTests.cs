@@ -536,6 +536,10 @@ namespace ArchiveFixer.Tests
             // 三个任务都按同一份快照跑：条件就是"只问一次"必须在结果上看得见
             Assert.All(tasks, task => Assert.Equal(StatusText.ExtractSuccess, task.Status));
             Assert.All(tasks, task => Assert.StartsWith(flatRoot, task.OutputPath, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("本批工作区", StringComparison.Ordinal)
+                        && line.Contains(flatRoot, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>

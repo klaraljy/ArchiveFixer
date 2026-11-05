@@ -2895,9 +2895,42 @@ namespace ArchiveFixer.Extraction
                          * 列不出来的（`-mhe`）本来就是 Unavailable ⇒ 下游落"判不出 ⇒ 什么都不做"。
                          */
                         success = null;
-                        layerManifest = listedAnyCandidate && candidateManifest.Available
+
+                        /*
+                         * 换引擎兜底解开了，主引擎之前没能列出清单 —— 现在密码已经由兜底确认，
+                         * 必须拿这个密码再向主引擎要一次清单；不能把“加密头列不出”永久当成
+                         * “完整性无法确认”，否则成功链里的内层过程物永远删不掉。
+                         */
+                        LayerManifest recoveredManifest = listedAnyCandidate && candidateManifest.Available
                             ? candidateManifest
                             : LayerManifest.Unavailable("这一层没能列出清单（换引擎兜底解开的，主引擎没列出过）");
+
+                        if (!recoveredManifest.Available && !string.IsNullOrEmpty(fallback.HitPassword))
+                        {
+                            try
+                            {
+                                ArchiveListResult relisted = await _engine
+                                    .ListAsync(
+                                        ArchiveRequest.For(archivePath, fallback.HitPassword),
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (relisted.Success)
+                                {
+                                    recoveredManifest = LayerManifest.From(relisted);
+                                    lastListedEntries = PartialPublishPlanner.ToManifestEntries(relisted);
+                                    Log(
+                                        "INFO",
+                                        $"{layerLabel}：换引擎成功后用命中的密码重新列目录成功（{relisted.Entries.Count} 个条目）");
+                                }
+                            }
+                            catch
+                            {
+                                // 列不出来就仍然按“判不出”处理，绝不伪造清单。
+                            }
+                        }
+
+                        layerManifest = recoveredManifest;
 
                         return await FinishSuccessfulLayerAsync(
                                 item,

@@ -354,6 +354,19 @@ namespace ArchiveFixer.Tests
             return new VmHarness(vm, logService);
         }
 
+        [Fact]
+        public void 工作区清理_只读文件也能删_失败必须返回原因()
+        {
+            string directory = Path.Combine(_root, "readonly-work");
+            Directory.CreateDirectory(directory);
+            string file = Path.Combine(directory, "a.bin");
+            File.WriteAllText(file, "x");
+            File.SetAttributes(file, FileAttributes.ReadOnly);
+
+            Assert.True(FileOperations.TryDeleteDirectory(directory, out string error), error);
+            Assert.False(Directory.Exists(directory));
+        }
+
         private sealed class VmHarness
         {
             public VmHarness(MainViewModel vm, LogService logService)

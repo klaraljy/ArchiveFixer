@@ -1019,10 +1019,8 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
-            try
+            if (FileOperations.TryDeleteDirectory(TaskDirectory, out string deleteError))
             {
-                Directory.Delete(TaskDirectory, recursive: true);
-
                 _layers.Clear();
 
                 return new WorkspaceCleanupResult
@@ -1032,16 +1030,14 @@ namespace ArchiveFixer.Extraction
                     Message = $"工作区已清理：{TaskDirectory}"
                 };
             }
-            catch (Exception ex)
+
+            // 目录里有文件被占用、权限不足等等：留着就是了，不影响任务结论。
+            return new WorkspaceCleanupResult
             {
-                // 目录里有文件被占用、权限不足等等：留着就是了，不影响任务结论。
-                return new WorkspaceCleanupResult
-                {
-                    TaskDirectory = TaskDirectory,
-                    Cleaned = false,
-                    Message = $"清理工作区失败（{ex.Message}），目录保留：{TaskDirectory}"
-                };
-            }
+                TaskDirectory = TaskDirectory,
+                Cleaned = false,
+                Message = $"清理工作区失败（{deleteError}），目录保留：{TaskDirectory}"
+            };
         }
 
         /// <summary>
