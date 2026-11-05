@@ -56,7 +56,8 @@ namespace ArchiveFixer.Extraction
             Func<IReadOnlyList<string?>>? passwordProvider = null,
             Action<string?>? onPasswordSuccess = null,
             Action<int, string>? onLayerStarted = null,
-            IProgress<ArchiveProgress>? progress = null)
+            IProgress<ArchiveProgress>? progress = null,
+            Func<string?, int, string>? describePassword = null)
         {
             if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
             {
@@ -90,9 +91,11 @@ namespace ArchiveFixer.Extraction
                 for (int passwordIndex = 0; passwordIndex < normalizedPasswords.Count; passwordIndex++)
                 {
                     string? password = normalizedPasswords[passwordIndex];
+                    string described = describePassword?.Invoke(password, passwordIndex + 1)
+                                       ?? DescribePasswordCandidate(password);
                     string attempt = normalizedPasswords.Count > 1
-                        ? $"密码候选 {passwordIndex + 1}/{normalizedPasswords.Count}，{DescribePasswordCandidate(password)}"
-                        : DescribePasswordCandidate(password);
+                        ? $"密码候选 {passwordIndex + 1}/{normalizedPasswords.Count}，{described}"
+                        : described;
                     _log?.Invoke($"第 {depth + 1} 层：开始解压，{attempt}");
                     var request = new ArchiveRequest
                     {

@@ -63,6 +63,22 @@ namespace ArchiveFixer.ViewModels
         internal void RecordSpecificPasswordSuccess(string sourceArchive, string? password) =>
             _passwordService.RecordPasswordSuccess(sourceArchive, password);
 
+        /// <summary>特定解压候选日志的来源描述（只影响日志，不参与密码选择逻辑）。</summary>
+        internal string DescribeSpecificPasswordCandidate(string? password, int index)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                return "尝试空密码";
+            }
+
+            if (_passwordService.BatchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
+            {
+                return "复用本批已成功的密码：******";
+            }
+
+            return $"尝试密码列表第 {index} 项：******";
+        }
+
         /// <summary>
         /// 特定解压每层候选：无密码 → 空串 → 本批已成功的密码（按**本批**成功次数从多到少）
         /// → 列表顺序（用户 2026-10-25：频率只限单次导入，下一次导入仍按④页原顺序）。

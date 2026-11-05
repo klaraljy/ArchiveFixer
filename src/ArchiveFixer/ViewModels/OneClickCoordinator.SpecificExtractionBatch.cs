@@ -441,7 +441,8 @@ namespace ArchiveFixer.ViewModels
                             task.ProgressText = $"特定解压：第 {depth + 1} 层";
                             task.ApplyProgress(0, $"第 {depth + 1} 层：{archive}", depth + 1);
                         }),
-                        progress: taskProgress)
+                        progress: taskProgress,
+                        describePassword: _extractionCoordinator.DescribeSpecificPasswordCandidate)
                     .ConfigureAwait(true);
             }
             catch (OperationCanceledException)
