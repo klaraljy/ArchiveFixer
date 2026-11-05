@@ -49,7 +49,15 @@ namespace ArchiveFixer.ViewModels
             int failed = 0;
             int skippedFollowers = 0;
 
-            var pending = new List<SpecificBatchUnit>(orderedUnits);
+            var scheduler = new SlotScheduler<SpecificBatchUnit>();
+            scheduler.Reset(
+                orderedUnits,
+                Math.Max(1, preparedTarget),
+                unit => TaskDurationEstimator.EstimateSeconds(
+                    unit.SourceBytes,
+                    unit.Entry,
+                    unit.Followers.Count + 1,
+                    unit.Followers.Count > 0));
             var running = new List<(SpecificBatchUnit Unit, Task<bool> Work)>();
 
             int lastTarget = -1;
@@ -73,7 +81,7 @@ namespace ArchiveFixer.ViewModels
                  * 每次补位都重新探空间、按当前 pending 重新算目标并发；pending 从大包变成小包时，
                  * 目标会从 3 自动升到 5 / 6 / 8。
                  */
-                while (pending.Count > 0 || running.Count > 0)
+                while (scheduler.HasWork)
                 {
                     if (snapshot.StopToken.IsStopRequested)
                     {
@@ -101,11 +109,11 @@ namespace ArchiveFixer.ViewModels
                     int autoTarget = _extractionCoordinator.CurrentAutoConcurrencyLimit;
                     int target = spaceTight
                         ? Math.Min(
-                            ResolveSpecificParallel(pending, running, runOptions, out spaceBasis),
+                            ResolveSpecificParallel(scheduler.PendingUnits, running, runOptions, out spaceBasis),
                             Math.Max(autoTarget, running.Count))
                         : autoTarget;
 
-                    target = Math.Max(1, Math.Min(target, pending.Count + running.Count));
+                    target = Math.Max(1, Math.Min(target, scheduler.PendingCount + scheduler.ActiveCount));
 
                     if (target != lastTarget || (spaceTight && !string.Equals(spaceBasis, lastBasis, StringComparison.Ordinal)))
                     {
@@ -116,14 +124,13 @@ namespace ArchiveFixer.ViewModels
                             (spaceTight
                                 ? $"特定解压并发（空间不足 + 自动）：当前目标 {target} 个"
                                 : $"特定解压并发（自动）：当前目标 {target} 个")
-                            + $"（正在跑 {running.Count} 个，待处理 {pending.Count} 个）"
+                            + $"（正在跑 {running.Count} 个，待处理 {scheduler.PendingCount} 个）"
                             + (spaceTight ? $"；{spaceBasis}" : "。"));
                     }
 
-                    while (running.Count < target && pending.Count > 0)
+                    foreach (SlotScheduler<SpecificBatchUnit>.Start start in scheduler.StartAvailable(target))
                     {
-                        SpecificBatchUnit unit = pending[0];
-                        pending.RemoveAt(0);
+                        SpecificBatchUnit unit = start.Unit;
                         unit.Entry.StartTime = DateTime.Now;
                         Task<bool> work = ProcessSpecificUnitAsync(unit, runOptions, spaceTight, runner);
                         running.Add((unit, work));
@@ -157,6 +164,7 @@ namespace ArchiveFixer.ViewModels
                     (SpecificBatchUnit completedUnit, Task<bool> completedWork) = running[index];
                     running.RemoveAt(index);
 
+                    scheduler.MarkCompleted(completedUnit);
                     bool success = await completedWork.ConfigureAwait(true);
                     if (success
                         && completedUnit.Entry.StartTime.HasValue
