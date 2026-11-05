@@ -183,6 +183,8 @@ namespace ArchiveFixer.ViewModels
         }
 
         private ConcurrencyLimit? _runConcurrencyLimit;
+        private readonly CapacityPolicy _capacityPolicy = new();
+        private int _capacityPolicySeed = -1;
 
         /// <summary>
         /// 自动并发的唯一取值口：有控制器时取所有卷控制器当前值的最小值；
@@ -220,23 +222,18 @@ namespace ArchiveFixer.ViewModels
                 return auto;
             }
 
+            if (_capacityPolicySeed != auto)
+            {
+                _capacityPolicy.Reset(auto, Math.Max(auto, 8));
+                _capacityPolicySeed = auto;
+            }
+
             ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
-
-            if (resources.CpuBusyPercent >= 90
-                || (resources.AvailablePhysicalBytes > 0
-                    && resources.AvailablePhysicalBytes < 1024L * 1024 * 1024))
-            {
-                return 1;
-            }
-
-            if (resources.CpuBusyPercent >= 80
-                || (resources.AvailablePhysicalBytes > 0
-                    && resources.AvailablePhysicalBytes < 1536L * 1024 * 1024))
-            {
-                return Math.Min(auto, 2);
-            }
-
-            return auto;
+            int capacity = _capacityPolicy.Evaluate(new CapacitySample(
+                resources.CpuBusyPercent,
+                resources.AvailablePhysicalBytes,
+                UiActivity.TakeUiStallCount() > 0));
+            return Math.Min(auto, capacity);
         }
 
         /// <summary>
