@@ -62,6 +62,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal("c", starts[0].Unit);
         }
 
+        [Fact]
+        public void 启动顺序模拟_大任务先占空槽_小任务补最早空槽()
+        {
+            IReadOnlyList<string> order = SlotScheduler<string>.SimulateStartOrder(
+                new[] { "10", "5a", "5b", "4", "3", "1" },
+                capacity: 3,
+                Estimate);
+
+            Assert.Equal(new[] { "10", "5a", "5b", "4", "3", "1" }, order);
+        }
+
         private static double Estimate(string unit)
         {
             if (unit.StartsWith("5", StringComparison.Ordinal)) return 5;

@@ -141,6 +141,44 @@ namespace ArchiveFixer.Extraction
             return _slots.Sum(slot => slot.PredictedLoadSeconds);
         }
 
+        /// <summary>
+        /// 只做启动顺序模拟：把任务按预计耗时降序，依次放到最早可用的槽位。
+        /// 普通挡位用它把 plan 顺序换成槽位启动顺序；实际运行仍由调用方启动/收尾。
+        /// </summary>
+        public static IReadOnlyList<T> SimulateStartOrder(
+            IEnumerable<T> units,
+            int capacity,
+            Func<T, double> estimate)
+        {
+            var pending = (units ?? Enumerable.Empty<T>())
+                .Where(unit => unit is not null)
+                .Select(unit => new PendingItem(unit, Math.Max(1, estimate(unit))))
+                .OrderByDescending(item => item.Seconds)
+                .ToList();
+            int slots = Math.Max(1, Math.Min(capacity, Math.Max(1, pending.Count)));
+            double[] available = new double[slots];
+            var ordered = new List<T>(pending.Count);
+
+            while (pending.Count > 0)
+            {
+                int slot = 0;
+                for (int i = 1; i < slots; i++)
+                {
+                    if (available[i] < available[slot])
+                    {
+                        slot = i;
+                    }
+                }
+
+                PendingItem next = pending[0];
+                pending.RemoveAt(0);
+                ordered.Add(next.Unit);
+                available[slot] += Math.Max(1, next.Seconds);
+            }
+
+            return ordered;
+        }
+
         private int FindLeastLoadedFreeSlot()
         {
             int best = -1;
