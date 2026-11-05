@@ -265,10 +265,8 @@ namespace ArchiveFixer.Storage
                 };
             }
 
-            try
+            if (FileOperations.TryDeleteDirectory(full, out string deleteError))
             {
-                Directory.Delete(full, recursive: true);
-
                 return new WorkspaceCleanupOutcome
                 {
                     DirectoryPath = directory,
@@ -276,15 +274,13 @@ namespace ArchiveFixer.Storage
                     Message = "已清理"
                 };
             }
-            catch (Exception ex)
+
+            return new WorkspaceCleanupOutcome
             {
-                return new WorkspaceCleanupOutcome
-                {
-                    DirectoryPath = directory,
-                    Deleted = false,
-                    Message = $"清理失败（{ex.Message}），目录保留：{directory}"
-                };
-            }
+                DirectoryPath = directory,
+                Deleted = false,
+                Message = $"清理失败（{deleteError}），目录保留：{directory}"
+            };
         }
 
         /// <summary>

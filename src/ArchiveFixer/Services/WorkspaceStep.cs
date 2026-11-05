@@ -191,16 +191,15 @@ namespace ArchiveFixer.Services
 
                 foreach (string directory in Directory.EnumerateDirectories(root))
                 {
-                    try
+                    // ② 只删直接子目录（`recursive` 这种父壳就在这一层）。
+                    if (FileOperations.TryDeleteDirectory(directory, out string deleteError))
                     {
-                        // ② 只删直接子目录（`recursive` 这种父壳就在这一层）。
-                        Directory.Delete(directory, recursive: true);
                         _host.AppendLog("INFO", $"顺手清掉了空的工作区壳：{directory}");
                     }
-                    catch (Exception ex)
+                    else
                     {
                         // ③ 收尾的顺手活：失败只写一句，绝不影响批结论。
-                        _host.AppendLog("INFO", $"空的工作区壳没清掉（不影响结果）：{directory} —— {ex.Message}");
+                        _host.AppendLog("INFO", $"空的工作区壳没清掉（不影响结果）：{directory} —— {deleteError}");
                     }
                 }
 
