@@ -169,6 +169,8 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            ReconcileSuffixRenamedSources();
+
             foreach ((string original, string backup) in _keepSourceSnapshots.ToList())
             {
                 try
@@ -216,6 +218,106 @@ namespace ArchiveFixer.ViewModels
 
             _keepSourceSnapshots.Clear();
             _keepSourceSnapshotDirectory = string.Empty;
+        }
+
+        /// <summary>
+        /// 后缀清洗把用户源名 <c>.001删</c> 改成标准名 <c>.001</c> 后，源包档=留下时收尾必须
+        /// 把标准名**还回原名**，不能“恢复原名再留一个标准名硬链接”。
+        /// 判据读文件身份（卷序列号 + 文件索引），不按路径/名字猜。
+        /// </summary>
+        private void ReconcileSuffixRenamedSources()
+        {
+            if (_suffixRenamedSources.Count == 0)
+            {
+                return;
+            }
+
+            foreach ((string original, string renamed) in _suffixRenamedSources.Distinct().ToList())
+            {
+                try
+                {
+                    if (!File.Exists(renamed))
+                    {
+                        continue;
+                    }
+
+                    string? backup = _keepSourceSnapshots
+                        .Where(item => SafePathHelper.PathEquals(item.Original, original))
+                        .Select(item => item.Backup)
+                        .FirstOrDefault();
+
+                    if (string.IsNullOrWhiteSpace(backup)
+                        || !File.Exists(backup)
+                        || !FileIdentity.IsSamePhysicalFile(backup, renamed))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{Path.GetFileName(original)}：后缀清洗别名与保护快照不是同一份文件，保留现状不删");
+                        continue;
+                    }
+
+                    if (!File.Exists(original))
+                    {
+                        string? directory = Path.GetDirectoryName(original);
+
+                        if (!string.IsNullOrWhiteSpace(directory))
+                        {
+                            Directory.CreateDirectory(directory);
+                        }
+
+                        FileOperations.Move(renamed, original);
+                        UpdateRenamedPathReferences(renamed, original);
+                        AppendLog(
+                            "INFO",
+                            $"{Path.GetFileName(original)}：后缀清洗用过的标准名已收回原名（源字节不动）");
+                        continue;
+                    }
+
+                    if (FileIdentity.IsSamePhysicalFile(original, renamed))
+                    {
+                        FileOperations.Delete(renamed);
+                        UpdateRenamedPathReferences(renamed, original);
+                        AppendLog(
+                            "INFO",
+                            $"{Path.GetFileName(original)}：标准名与原名是同一份文件，已收掉多余的标准名");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{Path.GetFileName(original)}：后缀清洗别名收口失败：{ex.Message}");
+                }
+            }
+
+            _suffixRenamedSources.Clear();
+        }
+
+        private void UpdateRenamedPathReferences(string oldPath, string newPath)
+        {
+            foreach (ArchiveTask task in Tasks)
+            {
+                if (SafePathHelper.PathEquals(task.CurrentPath, oldPath))
+                {
+                    task.CurrentPath = newPath;
+                }
+
+                for (int index = 0; index < task.VolumePaths.Count; index++)
+                {
+                    if (SafePathHelper.PathEquals(task.VolumePaths[index], oldPath))
+                    {
+                        task.VolumePaths[index] = newPath;
+                    }
+                }
+            }
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _volumeHandoffEntries)
+            {
+                if (SafePathHelper.PathEquals(entry.Path, oldPath))
+                {
+                    entry.Path = newPath;
+                }
+            }
         }
 
         private (string Directory, List<(string Original, string Backup)> Items) ProtectKeepInPlaceSourcesBeforeRepair(

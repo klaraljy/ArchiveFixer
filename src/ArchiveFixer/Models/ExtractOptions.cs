@@ -271,11 +271,11 @@ namespace ArchiveFixer.Models
 
             return new OneClickRunOptions
             {
-                PlacementMode = settings.PlacementMode
-                    ?? OutputPlacement.FromLegacyFlags(
-                        settings.ExtractToOriginalDirectory,
-                        settings.KeepArchiveNameFolder,
-                        customRoot),
+                // 落点只按用户界面的两个布尔 + 自定义根派生；旧 PlacementMode 不允许再压回来。
+                PlacementMode = OutputPlacement.FromLegacyFlags(
+                    settings.ExtractToOriginalDirectory,
+                    settings.KeepArchiveNameFolder,
+                    customRoot),
                 CustomRoot = customRoot,
                 SourceHandling = AppSettings.ParseSourceHandling(settings.SourceHandling),
                 RestHandling = RestHandlingModes.Normalize(settings.RestHandlingAfterVerify)

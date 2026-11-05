@@ -4070,14 +4070,22 @@ namespace ArchiveFixer.ViewModels
 
             if (options.IsPlacementValid)
             {
+                bool custom = OutputPlacement.UsesCustomRoot(options.PlacementMode);
+
+                /*
+                 * 落点的真值是用户可见的两个布尔 + 自定义根；PlacementMode 只是为了兼容旧配置保留。
+                 * 这里必须把三者同时写成一致状态，不能只写 PlacementMode：
+                 * 下一次启动会从布尔重新派生，单写 enum 会被 Normalize 立刻纠正回旧落点。
+                 */
+                Settings.ExtractToOriginalDirectory = !custom;
+                Settings.KeepArchiveNameFolder = true;
                 Settings.PlacementMode = options.PlacementMode;
 
                 /*
                  * 自定义根只在"指定位置"两档下才有意义，也只在非空时才写 ——
                  * 空串写进去等于把用户上次选的目录抹掉（而落点那两档并不需要它）。
                  */
-                if (OutputPlacement.UsesCustomRoot(options.PlacementMode) &&
-                    !string.IsNullOrWhiteSpace(options.CustomRoot))
+                if (custom && !string.IsNullOrWhiteSpace(options.CustomRoot))
                 {
                     Settings.CustomOutputDirectory = options.CustomRoot.Trim();
 

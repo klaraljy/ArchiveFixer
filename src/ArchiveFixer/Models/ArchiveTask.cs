@@ -775,6 +775,7 @@ namespace ArchiveFixer.Models
                 OnPropertyChanged(nameof(IsVolumeDeficitDeferred));
                 OnPropertyChanged(nameof(StatusDisplayText));
                 OnPropertyChanged(nameof(StatusColorKey));
+                OnPropertyChanged(nameof(PasswordStatusDisplay));
             }
         }
 
@@ -846,7 +847,41 @@ namespace ArchiveFixer.Models
         public string PasswordStatus
         {
             get => _passwordStatus;
-            set => SetProperty(ref _passwordStatus, string.IsNullOrWhiteSpace(value) ? StatusText.NotChecked : value);
+            set
+            {
+                if (SetProperty(ref _passwordStatus, string.IsNullOrWhiteSpace(value) ? StatusText.NotChecked : value))
+                {
+                    OnPropertyChanged(nameof(PasswordStatusDisplay));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 列表“密码状态”列的显示值：在原始密码状态上补“跟班卷 / 缺卷 / 不适用”，
+        /// 避免没有一个任务尝试过密码时整列都停在“未检测”。
+        /// </summary>
+        public string PasswordStatusDisplay
+        {
+            get
+            {
+                if (IsVolumeGroupFollower)
+                {
+                    return "跟班卷";
+                }
+
+                if (IsVolumeDeficitDeferred || string.Equals(Status, StatusText.VolumeMissing, StringComparison.Ordinal))
+                {
+                    return StatusText.PasswordNotApplicable;
+                }
+
+                if (string.Equals(PasswordStatus, StatusText.NotChecked, StringComparison.Ordinal)
+                    && string.Equals(Status, StatusText.Skipped, StringComparison.Ordinal))
+                {
+                    return StatusText.PasswordNotApplicable;
+                }
+
+                return PasswordStatus;
+            }
         }
 
         /// <summary>
@@ -904,6 +939,7 @@ namespace ArchiveFixer.Models
                      * 它还有第二条消费点：`TaskDetailWindow.xaml:232` 同一个键。
                      */
                     OnPropertyChanged(nameof(StatusColorKey));
+                    OnPropertyChanged(nameof(PasswordStatusDisplay));
                 }
             }
         }
@@ -1992,7 +2028,19 @@ namespace ArchiveFixer.Models
         /// <para>每次开工都会重算（任务对象是复用的）：由
         /// <c>ExtractionCoordinator.SkipWhenAnotherTaskOwnsThisVolumeGroup</c> 一处写。</para>
         /// </summary>
-        public bool IsVolumeGroupFollower { get; set; }
+        private bool _isVolumeGroupFollower;
+
+        public bool IsVolumeGroupFollower
+        {
+            get => _isVolumeGroupFollower;
+            set
+            {
+                if (SetProperty(ref _isVolumeGroupFollower, value))
+                {
+                    OnPropertyChanged(nameof(PasswordStatusDisplay));
+                }
+            }
+        }
 
         /// <summary>
         /// 这一单**算不算"这一批要做的事"**（用户 2026-10-01 第三报：批末那句"跳过 4 个"让他以为还有活没干）。

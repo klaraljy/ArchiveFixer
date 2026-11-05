@@ -1175,11 +1175,20 @@ namespace ArchiveFixer.Models
              */
             KeepArchiveNameFolder = true;
 
-            PlacementMode ??= ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags(
-                ExtractToOriginalDirectory,
-                KeepArchiveNameFolder,
-                CustomOutputDirectory);
-            PlacementMode = ArchiveFixer.Extraction.OutputPlacement.NormalizeLegacyMode(PlacementMode.Value);
+            /*
+             * 落点只有**用户可见的两个布尔 + 自定义根**这一份真值。
+             *
+             * `PlacementMode` 是旧版本留下的持久化字段，只作为兼容输出保留：
+             * 它一旦与用户界面的两个布尔不一致，就会把“指定位置”悄悄压成“原地”
+             * （2026-11-05 真机：ExtractToOriginalDirectory=false + CustomOutputDirectory=H:\...\333
+             * 仍在源目录解压，因为旧 PlacementMode=0 赢了）。
+             * 所以每次 Normalize 都从两个布尔重新派生，绝不允许旧字段反向覆盖。
+             */
+            PlacementMode = ArchiveFixer.Extraction.OutputPlacement.NormalizeLegacyMode(
+                ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags(
+                    ExtractToOriginalDirectory,
+                    KeepArchiveNameFolder,
+                    CustomOutputDirectory));
 
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;

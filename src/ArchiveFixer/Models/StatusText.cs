@@ -362,6 +362,9 @@ namespace ArchiveFixer.Models
         public const string PasswordNotNeeded = "不需要密码";
         public const string PasswordNeed = "需要密码";
 
+        /// <summary>密码这一列对“跟班卷 / 缺卷 / 根本没有密码语义的跳过行”的显示值。</summary>
+        public const string PasswordNotApplicable = "不适用";
+
         // 改名预览状态
         public const string RenameReady = "可改名";
         public const string RenameCannot = "无法改名";

@@ -212,7 +212,7 @@
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding OutputPath}" Style="{StaticResource DetailPathTextBoxStyle}" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="密码状态：" Style="{StaticResource DetailLabelStyle}" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PasswordStatus}" Style="{StaticResource DetailValueStyle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PasswordStatusDisplay}" Style="{StaticResource DetailValueStyle}" />
 
                         <!--
                             分卷情况。主界面 DataGrid 的「分卷」列默认隐藏（只有分卷组那一行有内容），

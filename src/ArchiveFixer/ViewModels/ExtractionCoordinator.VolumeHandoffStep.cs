@@ -439,6 +439,7 @@ namespace ArchiveFixer.ViewModels
 
                     string oldPath = entry.Path;
                     entry.Path = target;
+                    _suffixRenamedSources.Add((oldPath, target));
                     renamed++;
 
                     if (tasks != null)

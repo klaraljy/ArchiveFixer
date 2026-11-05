@@ -222,6 +222,7 @@ namespace ArchiveFixer.ViewModels
             _groupLayerByBaseName.Clear();
             _volumeStepTasks.Clear();
             _volumeGroupEntriesThisBatch.Clear();
+            _suffixRenamedSources.Clear();
         }
 
         /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -346,6 +347,9 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>这一组这一层**我们亲手建过**的槽位链接（回滚用；⛔ 只删我们自己建的那些名字）。</summary>
         private readonly Dictionary<string, List<string>> _scoredSlotLinks = new();
+
+        /// <summary>本批后缀清洗改过的源名（原名 → 标准名）；KeepInPlace 收尾按它把标准名收掉。</summary>
+        private readonly List<(string Original, string Renamed)> _suffixRenamedSources = new();
 
         /// <summary>
         /// 这一批里"**停在别人那一组**"的那几单 → 停下来的那一片（2026-10-13 困难批 `11111111` 取证）。

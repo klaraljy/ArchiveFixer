@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using Xunit;
 
 namespace ArchiveFixer.Tests
@@ -709,6 +710,31 @@ namespace ArchiveFixer.Tests
             Assert.Equal(
                 expected,
                 OutputPlacement.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot));
+        }
+
+        /// <summary>
+        /// 真机旧配置的形状：两个布尔已经选了指定位置，但历史 PlacementMode 还是 0。
+        /// 旧字段不许把指定位置压回源目录。
+        /// </summary>
+        [Fact]
+        public void 旧PlacementMode不能压过用户指定位置()
+        {
+            var settings = new AppSettings
+            {
+                ExtractToOriginalDirectory = false,
+                CustomOutputDirectory = @"D:\out",
+                PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
+                KeepArchiveNameFolder = true
+            };
+
+            settings.Normalize();
+
+            Assert.False(settings.ExtractToOriginalDirectory);
+            Assert.Equal(OutputPlacementMode.CustomRootPerArchive, settings.PlacementMode);
+
+            OneClickRunOptions options = OneClickRunOptions.FromSettings(settings, @"D:\out");
+
+            Assert.Equal(OutputPlacementMode.CustomRootPerArchive, options.PlacementMode);
         }
 
     }
