@@ -29,6 +29,30 @@ namespace ArchiveFixer.Extraction
         public bool IsVolumeGroup { get; }
         public double EstimatedSeconds { get; }
 
+        /// <summary>按最新历史吞吐重新估算；只修改 pending，不碰正在跑的任务。</summary>
+        public double RefreshEstimatedSeconds()
+        {
+            if (Payload is ScheduledExtractionItem item)
+            {
+                return TaskDurationEstimator.EstimateSeconds(
+                    SourceBytes,
+                    item.Task,
+                    VolumeCount,
+                    IsVolumeGroup);
+            }
+
+            if (Payload is SpecificBatchUnit unit)
+            {
+                return TaskDurationEstimator.EstimateSeconds(
+                    SourceBytes,
+                    unit.Entry,
+                    VolumeCount,
+                    IsVolumeGroup);
+            }
+
+            return EstimatedSeconds;
+        }
+
         public T PayloadAs<T>() where T : class
         {
             return Payload as T ?? throw new InvalidOperationException("调度单位载荷类型不匹配。");

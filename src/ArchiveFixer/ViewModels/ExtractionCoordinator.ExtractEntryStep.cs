@@ -561,6 +561,11 @@ namespace ArchiveFixer.ViewModels
                             }
                         }
 
+                        foreach (ScheduledWorkUnit pendingWork in scheduler.PendingUnits)
+                        {
+                            scheduler.UpdatePendingEstimate(pendingWork, pendingWork.RefreshEstimatedSeconds());
+                        }
+
                         runningTasks.Remove(finished);
                         await finished;
 
@@ -1104,6 +1109,11 @@ namespace ArchiveFixer.ViewModels
                 SystemCpuBusyPercent = resources.CpuBusyPercent,
                 AvailablePhysicalBytes = resources.AvailablePhysicalBytes
             });
+
+            if (finished.Outcome == TaskOutcome.Succeeded)
+            {
+                ObserveCapacityWindow(perTaskMbps, latency);
+            }
 
             int autoLimit = CurrentAutoLimit();
             int combined = _spaceTightThisBatch ? Math.Min(_spaceLimit, autoLimit) : autoLimit;

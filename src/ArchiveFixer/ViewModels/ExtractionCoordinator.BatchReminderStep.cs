@@ -257,6 +257,25 @@ namespace ArchiveFixer.ViewModels
             return capacity;
         }
 
+        /// <summary>一个任务完成后才推进容量探测窗口；CurrentAutoLimit 本身不升档。</summary>
+        internal void ObserveCapacityWindow(double throughputMegabytesPerSecond, double latencySecondsPerGb)
+        {
+            ConcurrencyResourceSnapshot resources = SystemResourceProbe.Snapshot();
+            bool hasDiskSample = ProcessIoProbe.TryGetMegabytesPerSecond(out double diskMegabytesPerSecond);
+            int activeTasks = _autoActiveByRoot.Values.Sum();
+            bool diskStalled = hasDiskSample
+                               && activeTasks > 0
+                               && diskMegabytesPerSecond < 0.05;
+            _capacityPolicy.ObserveCompletion(
+                throughputMegabytesPerSecond,
+                latencySecondsPerGb,
+                new CapacitySample(
+                    resources.CpuBusyPercent,
+                    resources.AvailablePhysicalBytes,
+                    UiActivity.TakeUiStallCount() > 0,
+                    diskStalled));
+        }
+
         /// <summary>
         /// 特定解压独立批也要建同一套设备画像/控制器；否则它永远按 1 跑。
         /// </summary>

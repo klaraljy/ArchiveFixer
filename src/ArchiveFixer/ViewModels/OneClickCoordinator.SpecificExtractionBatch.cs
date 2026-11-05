@@ -178,6 +178,11 @@ namespace ArchiveFixer.ViewModels
                             completedUnit.Followers.Count > 0);
                     }
 
+                    foreach (ScheduledWorkUnit pendingWork in scheduler.PendingUnits)
+                    {
+                        scheduler.UpdatePendingEstimate(pendingWork, pendingWork.RefreshEstimatedSeconds());
+                    }
+
                     skippedFollowers += completedUnit.Followers.Count;
                     _extractionCoordinator.ObserveSpecificCompleted(
                         completedUnit.Entry,
