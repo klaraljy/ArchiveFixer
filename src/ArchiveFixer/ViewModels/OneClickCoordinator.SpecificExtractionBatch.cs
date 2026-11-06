@@ -370,7 +370,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 long required = TaskSpaceEstimate.SaturatingSum(
                     sourceBytes,
-                    SpaceGate.DefaultReserveBytes);
+                    _extractionCoordinator.SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes);
 
                 if (freeBytes < required)
                 {
@@ -652,12 +652,17 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private static long GetFreeBytes(string path)
+        private long GetFreeBytes(string path)
         {
             try
             {
-                string root = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
+                if (_extractionCoordinator.SpaceProbeOverride is { } probe
+                    && probe(path) is long injected)
+                {
+                    return injected;
+                }
 
+                string root = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
                 return string.IsNullOrWhiteSpace(root) ? 0 : new DriveInfo(root).AvailableFreeSpace;
             }
             catch
@@ -666,10 +671,16 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private static string TryGetFreeBytes(string path)
+        private string TryGetFreeBytes(string path)
         {
             try
             {
+                if (_extractionCoordinator.SpaceProbeOverride is { } probe
+                    && probe(path) is long injected)
+                {
+                    return injected.ToString("N0") + " 字节（注入）";
+                }
+
                 string root = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
 
                 return string.IsNullOrWhiteSpace(root)
