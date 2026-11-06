@@ -2174,6 +2174,13 @@ namespace ArchiveFixer.Services
                         : "每个包定稿 + 校验通过后立刻永久删除它的源包"
                           + "（不进回收站、不可恢复），收回的空间马上给后面的包用。")
                     + "失败 / 部分完成 / 取消的任务一个字节都不删。");
+
+                _host.AppendLog(
+                    "INFO",
+                    "空间不足模式的其余物：最后一层过程物固定保留；"
+                    + "成功层的源包/过程物按逐层回收删除，失败/部分完成的内容物不发布。");
+
+                return;
             }
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
