@@ -48,7 +48,8 @@ namespace ArchiveFixer.Detection
 
         public VolumeContentFormat Format { get; init; }
 
-        public VolumeNumberFromContent.VolumeMembershipVerdict Membership { get; init; }
+        public VolumeNumberFromContent.VolumeMembershipVerdict Membership { get; init; } =
+            VolumeNumberFromContent.VolumeMembershipVerdict.Unknown;
 
         public ArchiveBodyKind BodyKind { get; init; }
 
@@ -184,6 +185,88 @@ namespace ArchiveFixer.Detection
             };
         }
 
+        /// <summary>
+        /// 同一路径再次登记时，保留**已有但后到项缺失**的事实。
+        ///
+        /// <para>2026-11-06 真机 `_2.7z`：首卷登记时会把同目录兄弟片补进账本，但补录项不传
+        /// <see cref="NameSlot"/>；随后兄弟片自己的任务再登记时，若又碰上另一轮补录，
+        /// 后到的“低信息项”会把已有名字槽/租约/角色覆盖掉。于是全场七片，组分析只看到
+        /// 1、3、7 有槽（日志逐字：<c>找到 4 片…有槽 1,3,7</c>），下一次甚至只剩 1 片。
+        /// 账本事实必须**单调**：后到项可以补新事实，但⛔ 不许把已确认的事实抹回“判不出”。</para>
+        /// </summary>
+        public FirstStepFileLedgerEntry PreserveFactsFrom(FirstStepFileLedgerEntry existing)
+        {
+            if (existing == null)
+            {
+                return this;
+            }
+
+            bool incomingHasIdentity = HasIdentity;
+            bool existingHasIdentity = existing.HasIdentity;
+
+            return new FirstStepFileLedgerEntry
+            {
+                Path = Path,
+                BaseName = string.IsNullOrWhiteSpace(BaseName) ? existing.BaseName : BaseName,
+                Size = Size > 0 ? Size : existing.Size,
+                Format = Format != VolumeContentFormat.Unknown ? Format : existing.Format,
+                Membership = Membership != VolumeNumberFromContent.VolumeMembershipVerdict.Unknown
+                    ? Membership
+                    : existing.Membership,
+                BodyKind = BodyKind != ArchiveBodyKind.Unknown ? BodyKind : existing.BodyKind,
+                VolumeNumber = VolumeNumber ?? existing.VolumeNumber,
+                FirstVolumeFlag = FirstVolumeFlag || existing.FirstVolumeFlag,
+                RawVolumeField = RawVolumeField ?? existing.RawVolumeField,
+                DeclaredTotalBytes = DeclaredTotalBytes > 0 ? DeclaredTotalBytes : existing.DeclaredTotalBytes,
+                DeclaredVolumeCount = DeclaredVolumeCount > 0 ? DeclaredVolumeCount : existing.DeclaredVolumeCount,
+                HasZipEndRecord = HasZipEndRecord || existing.HasZipEndRecord,
+                ZipEndRecordMeansSplit = ZipEndRecordMeansSplit || existing.ZipEndRecordMeansSplit,
+                HasZipLocalHeader = HasZipLocalHeader || existing.HasZipLocalHeader,
+                RarVariant = RarVariant != RarVariant.Unknown ? RarVariant : existing.RarVariant,
+                ZipVariant = ZipVariant != ZipVariant.Unknown ? ZipVariant : existing.ZipVariant,
+                Encryption = Encryption != ArchiveEncryptionState.Unknown ? Encryption : existing.Encryption,
+                NameSlot = NameSlot ?? existing.NameSlot,
+                NameEvidence = !string.IsNullOrWhiteSpace(NameEvidence) ? NameEvidence : existing.NameEvidence,
+                Source = Source == VolumeHandoffSource.UserImported
+                         || existing.Source != VolumeHandoffSource.UserImported
+                    ? Source
+                    : existing.Source,
+                SourceLayer = !string.IsNullOrWhiteSpace(SourceLayer) ? SourceLayer : existing.SourceLayer,
+                HasIdentity = incomingHasIdentity || existingHasIdentity,
+                VolumeSerial = incomingHasIdentity ? VolumeSerial : existing.VolumeSerial,
+                FileIndex = incomingHasIdentity ? FileIndex : existing.FileIndex,
+                TaskLogName = !string.IsNullOrWhiteSpace(TaskLogName) ? TaskLogName : existing.TaskLogName,
+                OriginRootId = !string.IsNullOrWhiteSpace(OriginRootId) ? OriginRootId : existing.OriginRootId,
+                ProducedByTaskId = !string.IsNullOrWhiteSpace(ProducedByTaskId)
+                    ? ProducedByTaskId
+                    : existing.ProducedByTaskId,
+                Role = Role != ArtifactRole.Unknown ? Role : existing.Role,
+                CandidateLeaseId = !string.IsNullOrWhiteSpace(CandidateLeaseId)
+                    ? CandidateLeaseId
+                    : existing.CandidateLeaseId,
+                PlacementKey = !string.IsNullOrWhiteSpace(PlacementKey) ? PlacementKey : existing.PlacementKey,
+                IsGatePassed = IsGatePassed || existing.IsGatePassed
+            };
+        }
+
+        /// <summary>
+        /// 这一项有没有资格进入第二大步候选池。
+        ///
+        /// <para>账本会收所有已发布产物（含 MP4/TXT/PNG 等内容物，见
+        /// <c>RegisterProducedOutputsToLedger</c>），而组分析不能把每个内容物都当成“1 片候选”。
+        /// 这里只认底层分卷事实：内容身份、卷号/首卷、名字槽、ZIP split 证据、交界前租约或候选角色。
+        /// 判不出且没有这些事实的内容物由 <c>extraGroupSeeds</c> 的脏名扫描另行补；⛔ 不在这里猜。</para>
+        /// </summary>
+        public bool HasSecondStepEvidence =>
+            BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
+            || Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+            || FirstVolumeFlag
+            || NameSlot.HasValue
+            || ZipEndRecordMeansSplit
+            || HasZipLocalHeader
+            || HasCandidateLease
+            || Role == ArtifactRole.CandidateVolumePiece;
+
         /// <summary>任务改名后只换路径/基名/源层，其它底层事实原样保留。</summary>
         public FirstStepFileLedgerEntry WithPath(string newPath)
         {
@@ -299,8 +382,13 @@ namespace ArchiveFixer.Detection
 
             if (_indexByPath.TryGetValue(fullPath, out int index))
             {
-                _entries[index] = entry;
-                return entry;
+                /*
+                 * 后到项可能是“补录兄弟片”产生的低信息卡（没有名字槽/租约/角色）。
+                 * 直接替换会让账本事实倒退；合并缺口，保留已确认事实。
+                 */
+                FirstStepFileLedgerEntry merged = entry.PreserveFactsFrom(_entries[index]);
+                _entries[index] = merged;
+                return merged;
             }
 
             _indexByPath[fullPath] = _entries.Count;

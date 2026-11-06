@@ -1318,6 +1318,14 @@ namespace ArchiveFixer.ViewModels
                          */
                         List<ArchiveFixer.Detection.VolumeHandoffEntry> ledgerHandoff =
                             _extractionCoordinator.FirstStepLedger.Entries
+                                /*
+                                 * ⛔ 账本收所有已发布产物（MP4/TXT/PNG 也在内），但第二大步候选只认
+                                 * 分卷事实：内容身份/卷号/名字槽/ZIP split 证据/交界前租约。
+                                 * 不过这一道会把“内容文件”当成 1 片候选（真机 15:32/15:33 的
+                                 * `SSNI-727-UC`、`promotion`、`点我安装`）。
+                                 * 脏名的 Unknown 片仍由下面的 extraGroupSeeds 扫描补进来，不在这里放宽。
+                                 */
+                                .Where(entry => entry != null && entry.HasSecondStepEvidence)
                                 .Select(entry => new ArchiveFixer.Detection.VolumeHandoffEntry
                                 {
                                     Path = entry.Path,

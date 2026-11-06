@@ -429,6 +429,25 @@ namespace ArchiveFixer.Services
                             continue;
                         }
 
+                        /*
+                         * 已经在「其余物」里的，正是“失败/部分完成时留下的最后一层过程物”这一档；
+                         * 它已经按用户设置保留，不能再报成“还留在成品目录里、要加进任务列表”。
+                         * 判据与搬运用同一个出口（ProcessArtifactLayout），⛔ 不按名字/样本名。
+                         */
+                        if (!string.IsNullOrWhiteSpace(outputRoot)
+                            && ProcessArtifactLayout.IsInsideArtifactDirectory(
+                                candidatePath,
+                                Path.Combine(outputRoot, ProcessArtifactLayout.ArtifactDirectoryName)))
+                        {
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(rootTask.RestDirectoryPath)
+                            && ArchivePathGuard.IsInsideRoot(rootTask.RestDirectoryPath, candidatePath, out _))
+                        {
+                            continue;
+                        }
+
                         if (!string.IsNullOrWhiteSpace(outputRoot) &&
                             ArchivePathGuard.IsInsideRoot(outputRoot, candidatePath, out _))
                         {
