@@ -91,16 +91,33 @@ namespace ArchiveFixer.Tests
 
             string output = Path.Combine(_root, "out");
 
-            bool completed = RunBlockedOnSingleThreadedContext(() =>
-            {
-                // 旧写法：CheckLimitsBeforeLayer → IsExpansionRatioExceeded 里同步等 ListAsync。
-                ArchiveFixer.Extraction.RecursionResult result = extractor
-                    .ExtractAsync(new ArchiveTask(archive), output)
-                    .GetAwaiter()
-                    .GetResult();
+            /*
+             * 递归工作区根是静态全局：本用例自包含，不能依赖别的用例/界面构造先把它设好。
+             * 用完恢复，避免影响同一进程里的其它用例。
+             */
+            string? previousWorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot;
+            ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot = Path.Combine(_root, "work");
 
-                return result.Completed;
-            }, TimeSpan.FromSeconds(30), out bool success);
+            bool completed;
+            bool success;
+
+            try
+            {
+                completed = RunBlockedOnSingleThreadedContext(() =>
+                {
+                    // 旧写法：CheckLimitsBeforeLayer → IsExpansionRatioExceeded 里同步等 ListAsync。
+                    ArchiveFixer.Extraction.RecursionResult result = extractor
+                        .ExtractAsync(new ArchiveTask(archive), output)
+                        .GetAwaiter()
+                        .GetResult();
+
+                    return result.Completed;
+                }, TimeSpan.FromSeconds(30), out success);
+            }
+            finally
+            {
+                ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
 
             Assert.True(completed, "递归解压在单线程同步上下文里同步等待时没有返回（sync-over-async 死锁）");
             Assert.True(success, "单层包应当解压完成");
