@@ -390,6 +390,17 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * 源文件保护快照必须等批首工作区根定下来才建：旧调用点在 OneClickCoordinator
+                 * 的批首、工作区解析之前，导致旧实现只能拿盘根兜底，在 C/E/H 根目录留下
+                 * `.ArchiveFixerSrcProtect`。现在第一次进入本方法（不是续解轮）时建，
+                 * 快照只进 `<目标目录>\.ArchiveFixer.work\source-protect`；跨卷源包跳过。
+                 */
+                if (oneClickRun && !continueDeferredVolumeDeficits)
+                {
+                    BeginKeepInPlaceSourceProtection(selectedTasks);
+                }
+
+                /*
                  * ===== 空间规划 + 空间门（用户 2026-09-22 需求第 1 / 2 条）=====
                  *
                  * 顺序：

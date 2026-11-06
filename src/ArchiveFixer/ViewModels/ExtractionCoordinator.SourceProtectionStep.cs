@@ -84,16 +84,27 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            string? volumeRoot = Path.GetPathRoot(sources[0]);
+            /*
+             * ⛔ 只在**这一批已经解析过的工作区**里放保护快照：
+             * 旧实现拿 sources[0] 的盘根拼 `<盘>\.ArchiveFixerSrcProtect`，会在 C/E/H 根目录
+             * 留下隐藏目录（C 盘用户明确说只放重要资料）。工作区由批首
+             * `ApplyBatchWorkspaceRoot` 定为 `<选中目标目录>\.ArchiveFixer.work`；
+             * 源包不在同一卷时硬链接建不出来 ⇒ 这一份跳过，绝不回落盘根。
+             */
+            string workspaceRoot = _vm.CurrentWorkspaceRoot;
 
-            if (string.IsNullOrWhiteSpace(volumeRoot))
+            if (string.IsNullOrWhiteSpace(workspaceRoot)
+                || !string.Equals(
+                    Path.GetFileName(workspaceRoot.TrimEnd(Path.DirectorySeparatorChar)),
+                    ".ArchiveFixer.work",
+                    StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
             string backupDirectory = Path.Combine(
-                volumeRoot,
-                ".ArchiveFixerSrcProtect",
+                workspaceRoot,
+                "source-protect",
                 Guid.NewGuid().ToString("N"));
 
             try
