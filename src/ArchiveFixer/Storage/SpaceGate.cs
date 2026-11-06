@@ -80,11 +80,16 @@ namespace ArchiveFixer.Storage
     public static class SpaceGate
     {
         /// <summary>
-        /// 目标盘默认保留余量。**不在这里写数字**：与 <c>ResourceBudgetOptions.MinFreeSpaceReserveBytes</c>
-        /// 同源（那个设置项将来若可配，这一处会跟着变，不会分叉）。
+        /// 目标盘默认保留余量（空间门专用）。
+        ///
+        /// <para>2026-11-06 从 512 MiB 下调到 64 MiB：小说 / TXT / 小文件的实际解压远小于 512 MiB，
+        /// 固定 512 MiB 会把大量本来能跑的小任务误拦。`ResourceBudgetOptions` 的硬预算默认值
+        /// 仍是各自那一档，不复用这里。</para>
+        ///
+        /// <para>测试边界用 <c>SpaceReserveOverride</c> 注入更小的值；生产是否开放配置与最终公式
+        /// 仍待空间单位讨论。</para>
         /// </summary>
-        public static long DefaultReserveBytes =>
-            new Security.ResourceBudgetOptions().MinFreeSpaceReserveBytes;
+        public static long DefaultReserveBytes => 64L * 1024 * 1024;
 
         /// <summary>
         /// 判断能否为一个任务预留 <paramref name="requiredBytes"/> 字节。

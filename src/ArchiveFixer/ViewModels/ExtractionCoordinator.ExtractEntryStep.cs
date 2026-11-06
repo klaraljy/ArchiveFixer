@@ -620,6 +620,18 @@ namespace ArchiveFixer.ViewModels
                     if (!gate.Allowed)
                     {
                         /*
+                         * 空间不足模式：放不下就**当场**记空间不足并退出队列，不反复等待重试。
+                         * 排序已经是从大到小；这个包此刻放不下，后面先跑小包。
+                         * 源包一个字节都不动；用户清出空间后可以手动重试。
+                         */
+                        if (_spaceTightThisBatch)
+                        {
+                            MarkSpaceBlocked(task, item, gate);
+                            scheduler.MarkCompleted(scheduledWork);
+                            continue;
+                        }
+
+                        /*
                          * 不记失败、不改任务状态 —— 先挂进"等空间"名单（见上面那段说明）。
                          * 只写一行 INFO 说清"它在等什么"，用户才不会以为这个包已经被判死刑了。
                          */

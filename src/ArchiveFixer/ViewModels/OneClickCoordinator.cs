@@ -1504,7 +1504,8 @@ namespace ArchiveFixer.ViewModels
                                     prepared,
                                     VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(prepared, targetWorkRoot),
                                     (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
-                                    out string linkError);
+                                    out string linkError,
+                                    allowCrossVolumeCopy: !_vm.SpaceTightMode);
 
                                 /*
                                  * ⛔ 不再为目标盘与源片不同卷回落源卷根/盘根：

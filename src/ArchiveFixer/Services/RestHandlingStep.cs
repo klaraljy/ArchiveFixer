@@ -2078,7 +2078,12 @@ namespace ArchiveFixer.Services
              */
             if (_host.SpaceTightThisBatch)
             {
-                RestHandlingThisBatch = RestHandlingModes.Delete;
+                /*
+                 * 2026-11-06 口径：空间不足模式的“最后一层过程物”固定保留。
+                 * 成功层的过程物/源包由 `PostProcessSuccessAsync` 的 SpaceTight 分支逐层删除；
+                 * 其余物这里只保留，不再套普通“删除操作”，否则失败时最后一份证据也被删掉。
+                 */
+                RestHandlingThisBatch = RestHandlingModes.Keep;
 
                 /*
                  * 「空间不足」模式**不走逐层回收这一档**：它有自己的那一支（`PostProcessSuccessAsync`

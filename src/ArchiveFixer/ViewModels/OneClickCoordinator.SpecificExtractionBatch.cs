@@ -363,11 +363,20 @@ namespace ArchiveFixer.ViewModels
                 long freeBytes = GetFreeBytes(outputRoot);
                 long sourceBytes = requiredSourceBytes > 0 ? requiredSourceBytes : GetSourceSize(task);
 
-                if (freeBytes < sourceBytes)
+                /*
+                 * 特定解压也遵守“内容物 + 过程物 + 保留余量”的方向。
+                 * 这里拿不到内容物清单时用源包大小做保守下界，再加空间门保留余量；
+                 * 真正的动态并发由上面的 SpaceCap 负责。
+                 */
+                long required = TaskSpaceEstimate.SaturatingSum(
+                    sourceBytes,
+                    SpaceGate.DefaultReserveBytes);
+
+                if (freeBytes < required)
                 {
                     MarkSpecificTaskFailed(
                         task,
-                        $"空间不足：需要 {sourceBytes:N0} 字节，当前只剩 {freeBytes:N0} 字节");
+                        $"空间不足：需要至少 {required:N0} 字节（源包 + 保留余量），当前只剩 {freeBytes:N0} 字节");
                     return false;
                 }
             }

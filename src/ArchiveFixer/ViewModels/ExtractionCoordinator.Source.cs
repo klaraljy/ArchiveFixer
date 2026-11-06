@@ -192,6 +192,27 @@ namespace ArchiveFixer.ViewModels
             logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.LogName}：结果校验 —— {verification.Message}"));
 
             /*
+             * 空间不足模式：未完成内容物不发布。
+             *
+             * 普通模式这里可能仍会进入定稿，由后续失败分支给出结论；空间不足模式的目标是
+             * “失败只留最后一层过程物”，所以必须在 ExecuteFinalLayout 之前截断，
+             * 连半成品都不写进最终目录。失败由 PostProcessFailureWriter 统一落终态，源包不动。
+             */
+            if (_spaceTightThisBatch && !verification.Verified)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{task.LogName}：空间不足模式 —— 内容未完成，未完成内容物不发布；"
+                    + "最后一层过程物保留，源包不动。"));
+
+                return new PostProcessWorkResult
+                {
+                    Verification = verification,
+                    LogEntries = logEntries
+                };
+            }
+
+            /*
              * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，过程物归入 <c>其余物</c>。
              *
              * 只在这一刻、只有这一条路径会往最终目录写东西。之前的所有动作（抠内嵌归档、解第一层、

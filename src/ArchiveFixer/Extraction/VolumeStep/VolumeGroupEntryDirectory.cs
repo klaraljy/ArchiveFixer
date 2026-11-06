@@ -30,7 +30,8 @@ namespace ArchiveFixer.Extraction
             PreparedVolumeGroup? group,
             string? entryRoot,
             Action<string, string>? log,
-            out string error)
+            out string error,
+            bool allowCrossVolumeCopy = true)
         {
             error = string.Empty;
 
@@ -129,6 +130,18 @@ namespace ArchiveFixer.Extraction
                     if (HardLinkHelper.TryCreateHardLink(target, piece.OriginalPath))
                     {
                         continue;
+                    }
+
+                    /*
+                     * 空间不足模式不允许跨盘复制：复制一份原包会把“新写空间 = 内容物”
+                     * 变成“内容物 + 原包副本”，正好破坏这个模式的省空间前提。
+                     * 这里不回落到 copy；调用方把这一组落成 Unknown，不写盘、不动源。
+                     */
+                    if (!allowCrossVolumeCopy)
+                    {
+                        error = $"{piece.CanonicalName}：跨盘无法建硬链接，空间不足模式禁止复制源包";
+                        CleanupDirectory(directory, root);
+                        return null;
                     }
 
                     try
