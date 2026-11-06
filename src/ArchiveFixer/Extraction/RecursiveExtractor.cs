@@ -2901,9 +2901,22 @@ namespace ArchiveFixer.Extraction
                          * 必须拿这个密码再向主引擎要一次清单；不能把“加密头列不出”永久当成
                          * “完整性无法确认”，否则成功链里的内层过程物永远删不掉。
                          */
-                        LayerManifest recoveredManifest = listedAnyCandidate && candidateManifest.Available
-                            ? candidateManifest
-                            : LayerManifest.Unavailable("这一层没能列出清单（换引擎兜底解开的，主引擎没列出过）");
+                        LayerManifest recoveredManifest;
+                        IReadOnlyList<(string Path, long Size)> fallbackEntries =
+                            PartialPublishPlanner.ToManifestEntries(fallback.ManifestListing);
+
+                        if (fallback.ManifestListing is { Success: true })
+                        {
+                            // 清单与实际解压引擎同源：优先于主引擎（7z）的清单。
+                            recoveredManifest = LayerManifest.From(fallback.ManifestListing);
+                            lastListedEntries = fallbackEntries;
+                        }
+                        else
+                        {
+                            recoveredManifest = listedAnyCandidate && candidateManifest.Available
+                                ? candidateManifest
+                                : LayerManifest.Unavailable("这一层没能列出清单（换引擎兜底解开的，主引擎没列出过）");
+                        }
 
                         if (!recoveredManifest.Available && !string.IsNullOrEmpty(fallback.HitPassword))
                         {

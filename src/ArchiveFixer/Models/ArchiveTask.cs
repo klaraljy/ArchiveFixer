@@ -1737,6 +1737,12 @@ namespace ArchiveFixer.Models
         public bool OutputManifestCrossChecked { get; set; }
 
         /// <summary>
+        /// 产物内容字节完整，但逐条清单里只缺 0 字节条目（2026-11-06 真机 12/11 口径）。
+        /// 内容可以发布，但完整性不升 Complete、源包不删。
+        /// </summary>
+        public bool OutputOnlyZeroByteEntriesMissing { get; set; }
+
+        /// <summary>
         /// 这一次的 L3 预期清单**来自哪一层**（或者为什么取不到）—— 唯一写入点是
         /// <c>ExtractionCoordinator.PostProcessSuccessAsync</c> 里
         /// <c>ChainManifestResolver.Resolve</c> 的那一行（⛔ 别处不许再判一遍层数）。

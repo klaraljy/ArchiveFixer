@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
@@ -54,7 +55,24 @@ namespace ArchiveFixer.Extraction
             {
                 Available = true,
                 FileCount = fileCount,
-                TotalSize = totalSize
+                TotalSize = totalSize,
+                /*
+                 * 保留**逐条文件事实**：L4 的“只缺 0 字节条目”政策需要知道缺的是谁、大小多少。
+                 * 目录条目在这里先滤掉；大小写折叠仍交给 OutputVerifier 的唯一出口。
+                 */
+                Entries = list.Entries?
+                    .Where(entry => entry != null
+                        && !entry.IsDirectory
+                        && !string.IsNullOrWhiteSpace(entry.Path))
+                    .Select(entry => new ArchiveEntry
+                    {
+                        Path = entry.Path,
+                        Size = entry.Size,
+                        IsDirectory = false,
+                        IsEncrypted = entry.IsEncrypted
+                    })
+                    .ToArray()
+                    ?? Array.Empty<ArchiveEntry>()
             };
         }
 
@@ -82,6 +100,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>折算后的解压后总字节。</summary>
         public long TotalSize { get; init; }
 
+        /// <summary>
+        /// 这一层的**文件条目**（目录已滤掉；大小写折叠仍由 OutputVerifier 做）。
+        /// 空 = 引擎没给逐条清单，只能按两个总数核对。
+        /// </summary>
+        public IReadOnlyList<ArchiveEntry> Entries { get; init; } = Array.Empty<ArchiveEntry>();
+
         /// <summary>取不到时的原因（给用户看的一句话）；取得到时为空串。</summary>
         public string Reason { get; init; } = string.Empty;
 
@@ -99,7 +123,7 @@ namespace ArchiveFixer.Extraction
                 Success = true,
                 FileCount = FileCount,
                 TotalUncompressedSize = TotalSize,
-                Entries = Array.Empty<ArchiveEntry>(),
+                Entries = Entries,
                 Message = $"本层清单：{FileCount} 个文件 / {TotalSize} 字节"
             };
         }

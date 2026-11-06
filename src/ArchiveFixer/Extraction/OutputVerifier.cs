@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
@@ -78,6 +79,15 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>被大小写折叠**吃掉**的条目数（预期折算时扣掉的份数）。</summary>
         public int CaseOnlyDroppedEntries { get; init; }
+
+        /// <summary>
+        /// **只缺 0 字节条目**：逐条核对时缺的条目全是 0 字节，且产物总字节不少于清单。
+        /// 这一档内容字节可发布，但完整性**不升到 Complete**（不能删源包）。
+        /// </summary>
+        public bool OnlyZeroByteEntriesMissing { get; init; }
+
+        /// <summary>逐条核对时缺的条目（路径 + 清单字节数；没有逐条清单时为空）。</summary>
+        public IReadOnlyList<ArchiveEntry> MissingEntries { get; init; } = Array.Empty<ArchiveEntry>();
 
         /// <summary>
         /// 这一次校验**到底有没有拿可信清单逐条核对过**（L4 的判据，用户 2026-09-30 的检验等级）。
@@ -224,6 +234,14 @@ namespace ArchiveFixer.Extraction
             bool directoryExists = SafeDirectoryExists(outputDirectory);
             (int actualFileCount, long actualTotalSize) = Measure(outputDirectory);
 
+            bool hasExpectedEntries =
+                expected is { Success: true } &&
+                expected.Entries is { Count: > 0 };
+
+            (List<ArchiveEntry> missingEntries, int sizeMismatchCount) = hasExpectedEntries
+                ? CompareExpectedEntries(outputDirectory, expected!)
+                : (new List<ArchiveEntry>(), 0);
+
             /*
              * 规则 1：输出目录不存在 / 是空目录 —— 直接不通过。
              * 必须放在最前面：后面两条规则都以"确实有产物"为前提，
@@ -331,7 +349,39 @@ namespace ArchiveFixer.Extraction
              */
             bool verified = actualFileCount >= expectedFileCount && actualTotalSize >= expectedTotalSize;
 
+            /*
+             * 只缺 0 字节条目：
+             * · 引擎清单里有、盘上没有，但缺的每一条都是 0 字节；
+             * · 没有“存在但大小不对”的条目；
+             * · 产物总字节不少于清单。
+             * 这一档内容字节是完整的（真机 24 就是 12/11、6,937,356,265 对 6,937,356,265），
+             * 但逐条完整性仍不是 Complete：不删源包，只允许发布已核过的内容。
+             */
+            bool onlyZeroByteEntriesMissing =
+                !verified
+                && hasExpectedEntries
+                && sizeMismatchCount == 0
+                && missingEntries.Count > 0
+                && missingEntries.All(entry => entry.Size == 0)
+                && actualTotalSize >= expectedTotalSize;
+
+            if (onlyZeroByteEntriesMissing)
+            {
+                verified = true;
+            }
+
+            string missingNote = missingEntries.Count == 0
+                ? string.Empty
+                : "；缺 " + missingEntries.Count + " 个条目："
+                  + string.Join(
+                      "、",
+                      missingEntries
+                          .Take(5)
+                          .Select(entry => $"{entry.Path}（{entry.Size} 字节）"))
+                  + (missingEntries.Count > 5 ? " 等" : string.Empty);
+
             string surplusNote = verified
+                && !onlyZeroByteEntriesMissing
                 && (actualFileCount > expectedFileCount || actualTotalSize > expectedTotalSize)
                     ? DescribeSurplus(outputDirectory, expected, actualFileCount - expectedFileCount)
                     : string.Empty;
@@ -340,19 +390,30 @@ namespace ArchiveFixer.Extraction
             {
                 Verified = verified,
 
-                // 走到这一行就说明：手上确实有可信清单，而且**真的逐条比对过**（判据 = 上面那次比较）。
-                ManifestCrossChecked = true,
+                /*
+                 * 正常清单核对通过 ⇒ true。
+                 * 只缺 0 字节条目 ⇒ false：内容可以发布，但不是“可证完整”，
+                 * 因此 L4 落 Undeterminable、源包不删（用户 2026-11-06 拍板的口径）。
+                 */
+                ManifestCrossChecked = verified && !onlyZeroByteEntriesMissing,
                 ExpectedFileCount = expectedFileCount,
                 ActualFileCount = actualFileCount,
                 ExpectedTotalSize = expectedTotalSize,
                 ActualTotalSize = actualTotalSize,
                 CaseOnlyDuplicateGroups = caseGroups,
                 CaseOnlyDroppedEntries = caseDropped,
-                Message = (verified
-                    ? $"校验通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
-                    : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节")
-                    + surplusNote
-                    + caseNote
+                OnlyZeroByteEntriesMissing = onlyZeroByteEntriesMissing,
+                MissingEntries = missingEntries,
+                Message = onlyZeroByteEntriesMissing
+                    ? $"内容字节完整，但清单核对缺 {missingEntries.Count} 个 0 字节条目"
+                      + $"（预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，"
+                      + $"实际 {actualFileCount} 个 / {actualTotalSize} 字节）{missingNote}"
+                    : (verified
+                        ? $"校验通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
+                        : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节")
+                      + missingNote
+                      + surplusNote
+                      + caseNote
             };
         }
 
@@ -410,6 +471,61 @@ namespace ArchiveFixer.Extraction
             return $"（实际比预期多 {extraFileCount} 个文件 —— 多出来的这些不在这一层的清单里，"
                 + "多半是别的层解出来、仍留在产物树里的内容物（也可能目录里本来就有）："
                 + listed + more + "；判据是「实际多于预期也算通过」，所以照旧通过）";
+        }
+
+        /// <summary>
+        /// 逐条对账：返回清单里有、盘上**根本不存在**的条目，以及“存在但大小不对”的条目数。
+        ///
+        /// <para>只做事实比较；大小写折叠与“后写覆盖先写”沿用 <see cref="CollapseCaseOnlyDuplicates"/>
+        /// 的同一口径（每组最后一条）。目录已在清单侧滤掉。</para>
+        /// </summary>
+        private static (List<ArchiveEntry> Missing, int SizeMismatchCount) CompareExpectedEntries(
+            string? outputDirectory,
+            ArchiveListResult expected)
+        {
+            var actualByPath = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string file in EnumerateFilesSafe(outputDirectory))
+            {
+                try
+                {
+                    actualByPath[NormalizeRelativePath(Path.GetRelativePath(outputDirectory!, file))] =
+                        new FileInfo(file).Length;
+                }
+                catch
+                {
+                    // 读不到大小：按“不存在”参与缺件判定，偏保守，不会把缺件当通过。
+                }
+            }
+
+            var lastExpectedByPath = new Dictionary<string, ArchiveEntry>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveEntry entry in expected.Entries ?? Array.Empty<ArchiveEntry>())
+            {
+                if (entry == null || entry.IsDirectory || string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    continue;
+                }
+
+                lastExpectedByPath[NormalizeRelativePath(entry.Path)] = entry;
+            }
+
+            var missing = new List<ArchiveEntry>();
+            int sizeMismatchCount = 0;
+
+            foreach ((string path, ArchiveEntry entry) in lastExpectedByPath)
+            {
+                if (!actualByPath.TryGetValue(path, out long actualSize))
+                {
+                    missing.Add(entry);
+                }
+                else if (actualSize != entry.Size)
+                {
+                    sizeMismatchCount++;
+                }
+            }
+
+            return (missing, sizeMismatchCount);
         }
 
         /// <summary>路径归一：反斜杠统一成正斜杠、去掉开头的分隔符，比较时再忽略大小写。</summary>

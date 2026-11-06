@@ -154,6 +154,12 @@ namespace ArchiveFixer.Extraction
         public string EngineVersion { get; init; } = string.Empty;
 
         /// <summary>
+        /// 兜底成功之后，用**实际解压的那个引擎**（UnRAR 命令行）重新列出的清单。
+        /// 空 = 列不出来 / 该引擎不可用；调用方这时才回落到主引擎清单。
+        /// </summary>
+        public ArchiveListResult? ManifestListing { get; init; }
+
+        /// <summary>
         /// 写进**结论**的那一句（<see cref="StatusText"/> 常量拼的；兜底跑过 / 没跑成两种）。
         /// 空串 = 什么都没有可说（判据不成立时）。
         /// </summary>
@@ -435,6 +441,39 @@ namespace ArchiveFixer.Extraction
                         router.RememberWinRarFallback(request.ArchivePath, version);
                     }
 
+                    /*
+                     * 清单必须跟**实际解压的引擎**同源：主引擎（7z）之前列不出来的加密头，
+                     * 兜底成功后也可能列出不同的条目数（真机 12/11：7z 报 12 个文件，WinRAR 实际落 11 个）。
+                     * 只有生产路由才补列；测试里的脚本引擎不触发真实 UnRAR。
+                     */
+                    ArchiveListResult? manifestListing = null;
+
+                    if (request.MainEngine is EngineRouter)
+                    {
+                        try
+                        {
+                            var unRar = new UnRarEngine();
+
+                            if (unRar.IsAvailable)
+                            {
+                                ArchiveListResult listed = await unRar
+                                    .ListAsync(
+                                        ArchiveRequest.For(request.ArchivePath, candidate),
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (listed.Success)
+                                {
+                                    manifestListing = listed;
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // 列不出来 ⇒ 调用方回落到主引擎清单；不得伪造成清单。
+                        }
+                    }
+
                     return new PasswordEngineFallbackOutcome
                     {
                         Attempted = true,
@@ -443,7 +482,8 @@ namespace ArchiveFixer.Extraction
                         HitOrdinal = attempted,
                         AttemptedCandidates = attempted,
                         LastExitCode = result.ExitCode,
-                        EngineVersion = version
+                        EngineVersion = version,
+                        ManifestListing = manifestListing
                     };
                 }
 

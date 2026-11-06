@@ -1125,6 +1125,13 @@ namespace ArchiveFixer.Models
             + "按规矩不动源包，解出来的结果照常保留";
 
         /// <summary>
+        /// 内容字节完整、逐条清单只缺 0 字节条目（真机 2026-11-06 的 12/11）。
+        /// 内容可发布，但不算可证完整、不删源包。
+        /// </summary>
+        public const string CompletenessOnlyZeroByteGapFormat =
+            "完整性：内容字节完整，但逐条清单只缺 0 字节条目 —— 按规矩不升「可证完整」、源包不删，解出来的内容照常保留";
+
+        /// <summary>
         /// 「为什么没删源包」——**唯一**一处拼这句话（<c>ResultCompletenessVerdict.Blocker</c>）。
         /// {0} = 判据（三态那句结论）。
         /// </summary>

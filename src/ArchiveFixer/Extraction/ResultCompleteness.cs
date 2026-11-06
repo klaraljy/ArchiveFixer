@@ -115,6 +115,17 @@ namespace ArchiveFixer.Extraction
                 };
             }
 
+            if (verification.OnlyZeroByteEntriesMissing)
+            {
+                return new ResultCompletenessVerdict
+                {
+                    State = ResultCompleteness.Undeterminable,
+                    Evidence = $"OnlyZeroByteEntriesMissing={verification.MissingEntries.Count}",
+                    Message = StatusText.CompletenessOnlyZeroByteGapFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessOnlyZeroByteGapFormat, expectation)
+                };
+            }
+
             return Classify(
                 verification.Outcome,
                 verification.ManifestCrossChecked,
@@ -155,6 +166,17 @@ namespace ArchiveFixer.Extraction
                     Evidence = "MissingVolumeNames=" + task.MissingVolumeNames.Count,
                     Message = StatusText.CompletenessIncompleteFormat,
                     Blocker = BuildBlocker(StatusText.CompletenessIncompleteFormat, task.ManifestExpectation)
+                };
+            }
+
+            if (task.OutputOnlyZeroByteEntriesMissing)
+            {
+                return new ResultCompletenessVerdict
+                {
+                    State = ResultCompleteness.Undeterminable,
+                    Evidence = "OutputOnlyZeroByteEntriesMissing=true",
+                    Message = StatusText.CompletenessOnlyZeroByteGapFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessOnlyZeroByteGapFormat, task.ManifestExpectation)
                 };
             }
 

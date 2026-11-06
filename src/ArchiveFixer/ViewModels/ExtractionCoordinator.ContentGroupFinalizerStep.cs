@@ -103,6 +103,11 @@ namespace ArchiveFixer.ViewModels
                 return (FinalContentState.Partial, "产物未通过输出校验");
             }
 
+            if (owner.OutputOnlyZeroByteEntriesMissing)
+            {
+                return (FinalContentState.Partial, "内容字节完整，但逐条清单只缺 0 字节条目；不升 Complete、不删源包");
+            }
+
             if (!owner.OutputManifestCrossChecked)
             {
                 return (FinalContentState.Partial, "产物只做了非空底线校验，未拿清单逐条核对");

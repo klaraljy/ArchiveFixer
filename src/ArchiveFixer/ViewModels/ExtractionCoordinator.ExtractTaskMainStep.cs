@@ -553,6 +553,7 @@ namespace ArchiveFixer.ViewModels
              */
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
             task.OutputManifestCrossChecked = false;
+            task.OutputOnlyZeroByteEntriesMissing = false;
             task.Outcome = TaskOutcome.Pending;
             task.VerifyMessage = string.Empty;
 

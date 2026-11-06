@@ -434,6 +434,7 @@ namespace ArchiveFixer.ViewModels
 
             // L4 的第二个事实：这一次"通过"是**核对过清单**还是**只做了非空底线校验**（判不出完整性）。
             task.OutputManifestCrossChecked = work.Verification.ManifestCrossChecked;
+            task.OutputOnlyZeroByteEntriesMissing = work.Verification.OnlyZeroByteEntriesMissing;
 
             /*
              * ===== 产物校验未通过 = **结论本身不成立**（用户 2026-09-24 铁证，不变量 6）=====

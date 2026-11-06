@@ -24,6 +24,7 @@ namespace ArchiveFixer.Extraction
             task.VerifyMessage = failureMessage;
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
             task.OutputManifestCrossChecked = false;
+            task.OutputOnlyZeroByteEntriesMissing = false;
             task.Outcome = TaskOutcome.Cancelled;
             task.Reason = TaskReason.Cancelled;
             task.LastUpdatedTime = DateTime.Now;
