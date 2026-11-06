@@ -566,6 +566,16 @@ namespace ArchiveFixer.ViewModels
             string triggerLabel = DescribeLayerPurgeTrigger(trigger);
 
             /*
+             * 空间不足模式删源前先清掉这一组的 group-entry 硬链接别名：
+             * 只删源路径、别名还在时数据不会释放，下一单会误判“空间没回来”。
+             * 失败/缺卷不会走到这里；清理失败也由 SourceCleanupService 的别名检查兜底。
+             */
+            if (trigger == LayerPurgeTrigger.SpaceTight && task.IsVolumeGroup)
+            {
+                CleanupVolumeStepGroupEntry(task);
+            }
+
+            /*
              * 日志措辞按"这一层的源包是什么"分开说：最外层是用户拖进来的那个包，
              * 续解层是上一层解出来的内层包（对用户来说是过程物，但对这一层就是它的源）。
              * 一句"源包"盖两种东西，真机上就会有人问"其余物里的内层包怎么也叫源包"。
