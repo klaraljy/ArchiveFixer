@@ -322,6 +322,12 @@ namespace ArchiveFixer.ViewModels
             {
                 _runSettings = SettingsSnapshot.Capture(_vm.Settings).ToSettings();
 
+                /*
+                 * 源根先于任何解压登记：账本项/产出物后面都要挂到这条稳定身份上。
+                 * 后续轮次会重复调用，登记是幂等的；⛔ 不在这里判组。
+                 */
+                RegisterSourceRoots(selectedTasks, runOptions);
+
                 try
                 {
                     _operationCts?.Dispose();

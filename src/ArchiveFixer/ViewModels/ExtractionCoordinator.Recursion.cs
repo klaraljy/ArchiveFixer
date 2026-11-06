@@ -387,6 +387,14 @@ namespace ArchiveFixer.ViewModels
                 manualSingleLayer: !oneClickRun,
                 spaceTight: _spaceTightThisBatch);
             recursiveExtractor.RetainedArtifactDirectory = task.OutputPath;
+
+            /*
+             * 交界前遇到“某个还没凑齐的分卷组的一员”时，不把它当独立内层包继续解：
+             * 登记候选并加租约，原样留给交界处归组。判据在协调器那一处收口。
+             */
+            recursiveExtractor.ShouldStopAtVolumeGroupMember =
+                path => ShouldStopAtCandidateVolumePiece(path, task);
+
             // 「先测试再解压」：用户开了这一档就必须交给递归核心（它才有 TestAsync 那一支）。
             recursiveExtractor.TestBeforeExtract = Settings.TestBeforeExtract;
 

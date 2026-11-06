@@ -161,6 +161,13 @@ namespace ArchiveFixer.Models
         public event PropertyChangedEventHandler? PropertyChanged;
 
         /// <summary>
+        /// 本任务对象的稳定身份（只在本次进程内有效，不写盘、不显示）。
+        /// <para>用于把账本项/产出物挂到产生它的任务上；⛔ 不用 <see cref="Index"/> 代替，
+        /// 因为序号会随批内增删改写。</para>
+        /// </summary>
+        public string TaskId { get; } = Guid.NewGuid().ToString("N");
+
+        /// <summary>
         /// 是否选择此任务参与处理。
         /// </summary>
         public bool IsSelected

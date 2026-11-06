@@ -193,16 +193,22 @@ namespace ArchiveFixer.ViewModels
                 .Where(file => !string.IsNullOrWhiteSpace(file)
                     && !IsAnyTaskOriginalPath(file)
                     && !IsAnyTaskOriginalIdentity(file)
-                    && !IsUserImportedSourcePath(file))
+                    && !IsUserImportedSourcePath(file)
+                    && !_extractionContentGraph.IsLeased(file))
                 .ToList();
 
-            if (reclaimableFiles.Count != request.GroupFiles.Count)
+            int sourceCount = request.GroupFiles.Count - reclaimableFiles.Count;
+
+            if (sourceCount > 0)
             {
                 AppendLog(
                     "WARN",
-                    $"{request.ChildLayerLabel}：逐层回收清单里有用户源包（{request.GroupFiles.Count - reclaimableFiles.Count} 份）"
-                    + "—— 这一层只回收过程物，源包按链尾「源包操作」处理");
+                    $"{request.ChildLayerLabel}：逐层回收清单里有用户源包或交界前候选片（{sourceCount} 份）"
+                    + "—— 这一层只回收过程物，源包按链尾「源包操作」处理，候选片留给交界处归组");
+            }
 
+            if (reclaimableFiles.Count != request.GroupFiles.Count)
+            {
                 request = new RecursiveLayerReclaimRequest
                 {
                     ChildLayerLabel = request.ChildLayerLabel,

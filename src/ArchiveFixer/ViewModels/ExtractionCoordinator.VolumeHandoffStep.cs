@@ -34,6 +34,9 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly FirstStepFileLedger _firstStepFileLedger = new();
 
+        /// <summary>本批的源根 → 产出物 → 内容组账本骨架（第一阶段只登记源根）。</summary>
+        private readonly ExtractionContentGraph _extractionContentGraph = new();
+
         /// <summary>
         /// **边界解析管线**（共用骨架）：族 resolver 从这里注册；骨架阶段未注册任何族，
         /// 因此 `ResolveAllAsync` 返回空，既有行为一个字不变。
@@ -62,6 +65,150 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批的第一大步文件账本（只读给第二大步/日志用）。</summary>
         internal FirstStepFileLedger FirstStepLedger => _firstStepFileLedger;
 
+        /// <summary>本批源根图（只读给测试/后续阶段用）。</summary>
+        internal ExtractionContentGraph ContentGraph => _extractionContentGraph;
+
+        /// <summary>
+        /// 批首/每轮登记源根。只登记用户导入的根任务；续解任务不是源根。
+        /// </summary>
+        internal int RegisterSourceRoots(IEnumerable<ArchiveTask>? tasks, OneClickRunOptions? runOptions)
+        {
+            if (tasks == null)
+            {
+                return 0;
+            }
+
+            SourceHandlingMode sourceHandling = runOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
+            OutputPlacementMode placementMode = runOptions?.PlacementMode
+                ?? OutputPlacement.FromLegacyFlags(
+                    Settings.ExtractToOriginalDirectory,
+                    Settings.KeepArchiveNameFolder,
+                    Settings.CustomOutputDirectory);
+
+            string customRoot = runOptions is { IsPlacementValid: true }
+                ? runOptions.CustomRoot
+                : !string.IsNullOrWhiteSpace(_vm.SelectedOutputDirectory)
+                    ? _vm.SelectedOutputDirectory
+                    : Settings.CustomOutputDirectory;
+
+            int registered = 0;
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null || task.IsContinuationTask)
+                {
+                    continue;
+                }
+
+                string placementKey = BuildSourcePlacementKey(task, placementMode, customRoot);
+                _extractionContentGraph.RegisterSourceRoot(task, placementKey, sourceHandling);
+                registered++;
+            }
+
+            return registered;
+        }
+
+        /// <summary>
+        /// 源根落点域：未指定位置时按选中文件夹/选中文件所在目录；指定位置时目标根必须同类。
+        /// ⛔ 不拿盘根当域。
+        /// </summary>
+        private static string BuildSourcePlacementKey(
+            ArchiveTask task,
+            OutputPlacementMode placementMode,
+            string? customRoot)
+        {
+            string scope;
+
+            if (task.SourceSelectionKind == SourceSelectionKind.Folder
+                && !string.IsNullOrWhiteSpace(task.SourceSelectionRoot))
+            {
+                scope = "folder:" + NormalizePlacementPath(task.SourceSelectionRoot);
+            }
+            else
+            {
+                string directory = Path.GetDirectoryName(task.OriginalPath) ?? string.Empty;
+                scope = "file:" + NormalizePlacementPath(directory);
+            }
+
+            return $"{(int)OutputPlacement.NormalizeLegacyMode(placementMode)}"
+                + "|" + NormalizePlacementPath(customRoot)
+                + "|" + scope;
+        }
+
+        private static string NormalizePlacementPath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                return path.Trim();
+            }
+        }
+
+        /// <summary>
+        /// 递归层遇到“某个还没凑齐的分卷组的一员”时，不再把它当独立内层包解：
+        /// 登记成候选产出物并加租约，原样留给交界处归组。
+        /// </summary>
+        private bool ShouldStopAtCandidateVolumePiece(string path, ArchiveTask owner)
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || !File.Exists(path)
+                || !RecursiveExtractor.IsPieceOfIncompleteGroup(path))
+            {
+                return false;
+            }
+
+            string originRootId = _extractionContentGraph.ResolveRootId(owner);
+            string placementKey = _extractionContentGraph.ResolvePlacementKey(owner);
+            string leaseId = _extractionContentGraph.LeaseCandidate(
+                path,
+                originRootId,
+                owner.TaskId,
+                placementKey);
+
+            if (_firstStepFileLedger.TryGetByPath(path, out _))
+            {
+                return true;
+            }
+
+            try
+            {
+                ArchiveFixer.Detection.FileNatureCard card =
+                    ArchiveFixer.Detection.FileNature.Inspect(path);
+
+                int? nameSlot = LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(path));
+
+                _firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                    card,
+                    owner.LogName,
+                    VolumeHandoffSource.ChainProduced,
+                    gatePassed: true,
+                    rarVariant: card.RarVariant,
+                    zipVariant: ResolveZipVariant(card),
+                    nameSlot: nameSlot,
+                    originRootId: originRootId,
+                    producedByTaskId: owner.TaskId,
+                    role: ArtifactRole.CandidateVolumePiece,
+                    candidateLeaseId: leaseId,
+                    placementKey: placementKey));
+            }
+            catch
+            {
+                // 读不动内容卡时租约仍然有效；不把候选降级成可回收过程物。
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// 把这一单产出的全部文件登记进唯一第一大步账本。
         /// 这是“文件产物产生时”的登记点，覆盖包装/递归产出的 Unknown 与中间片。
@@ -79,6 +226,9 @@ namespace ArchiveFixer.ViewModels
             {
                 return;
             }
+
+            string originRootId = _extractionContentGraph.ResolveRootId(task);
+            string placementKey = _extractionContentGraph.ResolvePlacementKey(task);
 
             IEnumerable<string> files;
 
@@ -110,6 +260,16 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                /*
+                 * 已经由候选登记点挂上租约的片：保留那份角色/租约/来源根，
+                 * ⛔ 不用这次“普通产出物”登记把它降级成可回收。
+                 */
+                if (_firstStepFileLedger.TryGetByPath(file, out FirstStepFileLedgerEntry existing)
+                    && existing.HasCandidateLease)
+                {
+                    continue;
+                }
+
                 ArchiveFixer.Detection.FileNatureCard card;
                 try
                 {
@@ -128,13 +288,37 @@ namespace ArchiveFixer.ViewModels
                 int? nameSlot = LegacyVolumeNames.TryGetIndex(
                     FileNameHelper.GetFileName(file));
 
+                bool candidate = RecursiveExtractor.IsPieceOfIncompleteGroup(file);
+                string leaseId = candidate
+                    ? _extractionContentGraph.LeaseCandidate(
+                        file,
+                        originRootId,
+                        task.TaskId,
+                        placementKey)
+                    : string.Empty;
+
+                if (candidate)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：候选分卷片已登记交界前租约 —— {FileNameHelper.GetFileName(file)}"
+                        + "（组收片前不再按普通过程物回收）");
+                }
+
                 _firstStepFileLedger.AddOrReplace(
                     ArchiveFixer.Detection.FirstStepFileLedgerEntry.FromCard(
                         card,
                         FileNameHelper.GetFileName(file),
                         ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced,
                         gatePassed: true,
-                        nameSlot: nameSlot));
+                        nameSlot: nameSlot,
+                        originRootId: originRootId,
+                        producedByTaskId: task.TaskId,
+                        role: candidate
+                            ? ArtifactRole.CandidateVolumePiece
+                            : ArtifactRole.Unknown,
+                        candidateLeaseId: leaseId,
+                        placementKey: placementKey));
             }
 
         }
@@ -166,6 +350,14 @@ namespace ArchiveFixer.ViewModels
 
             ZipVariant zipVariant = ResolveZipVariant(card);
 
+            string originRootId = _extractionContentGraph.ResolveRootId(task);
+            string placementKey = _extractionContentGraph.ResolvePlacementKey(task);
+            ArtifactRole role = insideWork
+                ? ArtifactRole.Unknown
+                : task.IsContinuationTask
+                    ? ArtifactRole.InnerArchive
+                    : ArtifactRole.SourceRoot;
+
             FirstStepFileLedgerEntry entry = FirstStepFileLedgerEntry.FromCard(
                 card,
                 task.LogName,
@@ -175,7 +367,11 @@ namespace ArchiveFixer.ViewModels
                 gatePassed: true,
                 rarVariant: card.RarVariant,
                 zipVariant: zipVariant,
-                nameSlot: nameSlot);
+                nameSlot: nameSlot,
+                originRootId: originRootId,
+                producedByTaskId: task.TaskId,
+                role: role,
+                placementKey: placementKey);
 
             FirstStepFileLedgerEntry registered = insideWork
                 ? entry
@@ -244,6 +440,9 @@ namespace ArchiveFixer.ViewModels
                     ArchiveFixer.Detection.FileNatureCard card =
                         ArchiveFixer.Detection.FileNature.Inspect(sibling);
 
+                    string siblingRootId = _extractionContentGraph.ResolveRootId(task);
+                    string siblingPlacementKey = _extractionContentGraph.ResolvePlacementKey(task);
+
                     _firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
                         card,
                         task.LogName,
@@ -252,7 +451,13 @@ namespace ArchiveFixer.ViewModels
                             : VolumeHandoffSource.UserImported,
                         gatePassed: true,
                         rarVariant: card.RarVariant,
-                        zipVariant: ResolveZipVariant(card)));
+                        zipVariant: ResolveZipVariant(card),
+                        originRootId: siblingRootId,
+                        producedByTaskId: task.TaskId,
+                        role: task.IsContinuationTask
+                            ? ArtifactRole.CandidateVolumePiece
+                            : ArtifactRole.SourceRoot,
+                        placementKey: siblingPlacementKey));
                 }
                 catch
                 {
@@ -572,6 +777,7 @@ namespace ArchiveFixer.ViewModels
         {
             _volumeHandoffEntries.Clear();
             _firstStepFileLedger.Clear();
+            _extractionContentGraph.Clear();
         }
 
         /// <summary>
