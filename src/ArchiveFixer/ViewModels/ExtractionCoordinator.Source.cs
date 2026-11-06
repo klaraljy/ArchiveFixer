@@ -570,8 +570,22 @@ namespace ArchiveFixer.ViewModels
              * 只删源路径、别名还在时数据不会释放，下一单会误判“空间没回来”。
              * 失败/缺卷不会走到这里；清理失败也由 SourceCleanupService 的别名检查兜底。
              */
-            if (trigger == LayerPurgeTrigger.SpaceTight && task.IsVolumeGroup)
+            IReadOnlyList<string>? groupSourcePaths = null;
+
+            /*
+             * 第二大步的 owner 任务不一定带 IsVolumeGroup（真机形状：入口任务 .001
+             * 也可能只是普通任务，后面两片才是 follower）⇒ 判据用“这一单有没有组收片账”，
+             * 不能用 IsVolumeGroup 代替。
+             */
+            if (trigger == LayerPurgeTrigger.SpaceTight
+                && _volumeStepGroupWork.TryGetValue(task, out VolumeStepGroupWork? groupWork))
             {
+                /*
+                 * 第二大步新组的源片清单在 VolumeStepGroupWork.Pieces 里；
+                 * task.VolumePaths 可能只装入口那一份（旧归组服务才全量写）。
+                 * 在 CleanupVolumeStepGroupEntry 摘掉这份账之前先保住整组清单。
+                 */
+                groupSourcePaths = groupWork.Pieces;
                 CleanupVolumeStepGroupEntry(task);
             }
 
@@ -736,7 +750,11 @@ namespace ArchiveFixer.ViewModels
                 ? $"{triggerLabel}：内容物可证完整（{evidence}）"
                 : $"{triggerLabel}：判不出完整性（未拿清单逐条核对），保留源文件";
 
-            var sourceTargets = SourceCleanupService.BuildTargetList(task, _spaceTightThisBatch);
+            var sourceTargets = SourceCleanupService.BuildTargetList(
+                task,
+                _spaceTightThisBatch,
+                groupSourcePaths);
+
             var sourcePlan = new DeletionPlan
             {
                 Targets = sourceTargets,

@@ -177,7 +177,8 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static string? TryResolveTargetEntryRoot(
             PreparedVolumeGroup? group,
-            string? targetWorkRoot)
+            string? targetWorkRoot,
+            bool allowSourceVolumeFallback = false)
         {
             if (group == null
                 || string.IsNullOrWhiteSpace(targetWorkRoot)
@@ -189,11 +190,36 @@ namespace ArchiveFixer.Extraction
 
             try
             {
+                string sourcePath = group.Pieces[0].OriginalPath;
+                string targetRoot = Path.GetFullPath(targetWorkRoot);
+                string sourceRoot = Path.GetFullPath(Path.GetPathRoot(sourcePath) ?? sourcePath);
+                string targetDrive = Path.GetPathRoot(targetRoot) ?? string.Empty;
+
                 /*
-                 * 合法目标工作区永远优先；跨卷时 TryMaterialize 会复制片到这里，
-                 * 所以这里不再用“能不能硬链接”把合法目标否掉（那正是指定位置跨盘全空的来源）。
+                 * 空间不足模式：目标跨盘时不在目标盘复制源包。
+                 * 标准名入口改放**源盘**自己的 .ArchiveFixer.work\group-entry，
+                 * 用同盘硬链接（零数据复制），引擎读源盘、内容仍写目标盘。
+                 * 普通模式保留目标工作区 + 跨盘复制兜底。
                  */
-                return Path.Combine(targetWorkRoot, GroupEntryFolderName);
+                if (allowSourceVolumeFallback
+                    && !string.Equals(
+                        sourceRoot.TrimEnd(Path.DirectorySeparatorChar),
+                        targetDrive.TrimEnd(Path.DirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    string sourceDirectory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+
+                    if (sourceDirectory.Length > 0)
+                    {
+                        return Path.Combine(sourceDirectory, WorkFolderName, GroupEntryFolderName);
+                    }
+                }
+
+                /*
+                 * 合法目标工作区优先；普通模式跨卷时 TryMaterialize 允许复制，
+                 * 这里不再用“能不能硬链接”把合法目标否掉。
+                 */
+                return Path.Combine(targetRoot, GroupEntryFolderName);
             }
             catch
             {

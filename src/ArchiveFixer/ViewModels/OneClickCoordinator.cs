@@ -1502,7 +1502,10 @@ namespace ArchiveFixer.ViewModels
                                 string? targetWorkRoot = ResolvePreparedGroupTargetWorkRoot(prepared);
                                 PreparedVolumeGroup? linked = VolumeGroupEntryDirectory.TryMaterialize(
                                     prepared,
-                                    VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(prepared, targetWorkRoot),
+                                    VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(
+                                        prepared,
+                                        targetWorkRoot,
+                                        allowSourceVolumeFallback: _vm.SpaceTightMode),
                                     (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
                                     out string linkError,
                                     allowCrossVolumeCopy: !_vm.SpaceTightMode);

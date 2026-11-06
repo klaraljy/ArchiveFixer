@@ -80,6 +80,63 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 跨盘空间不足_标准名入口落在源盘_目标盘零复制()
+        {
+            if (!Directory.Exists(@"H:\"))
+            {
+                return;
+            }
+
+            string source = Path.Combine(_sourceRoot, "111.7z.001");
+            File.WriteAllBytes(source, new byte[1024]);
+            Directory.CreateDirectory(_targetRoot);
+
+            var group = new PreparedVolumeGroup
+            {
+                BaseName = "111",
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = _sourceRoot,
+                OriginalEntryPath = source,
+                EntryCanonicalName = "111.7z.001",
+                State = PreparedGroupState.Complete,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece
+                    {
+                        CanonicalName = "111.7z.001",
+                        OriginalPath = source,
+                        Size = 1024
+                    }
+                }
+            };
+
+            string? entryRoot = VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(
+                group,
+                _targetRoot,
+                allowSourceVolumeFallback: true);
+
+            Assert.NotNull(entryRoot);
+            Assert.StartsWith(
+                Path.GetFullPath(_sourceRoot),
+                Path.GetFullPath(entryRoot!),
+                StringComparison.OrdinalIgnoreCase);
+
+            PreparedVolumeGroup? materialized = VolumeGroupEntryDirectory.TryMaterialize(
+                group,
+                entryRoot,
+                null,
+                out string error,
+                allowCrossVolumeCopy: false);
+
+            Assert.NotNull(materialized);
+            Assert.True(File.Exists(Path.Combine(materialized!.EntryLayer, "111.7z.001")), error);
+            Assert.True(File.Exists(source));
+            Assert.Empty(Directory.GetFiles(_targetRoot, "*", SearchOption.AllDirectories));
+
+            Assert.True(VolumeGroupEntryDirectory.TryDelete(materialized.EntryLayer, entryRoot));
+        }
+
         private static void TryDelete(string path)
         {
             try

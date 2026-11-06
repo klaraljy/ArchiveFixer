@@ -329,7 +329,14 @@ namespace ArchiveFixer.Extraction
         /// —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5：同一件事的真值只允许有一个出口），
         /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
         /// </summary>
-        internal static List<string> BuildTargetList(ArchiveTask task, bool includeRestAliases = false)
+        /// <param name="additionalPaths">
+        /// 额外来源清单：第二大步新组的源片账在 <c>VolumeStepGroupWork.Pieces</c>，不一定写进
+        /// <see cref="ArchiveTask.VolumePaths"/>；调用方只在组可证完整且已通过删除闸门后传入。
+        /// </param>
+        internal static List<string> BuildTargetList(
+            ArchiveTask task,
+            bool includeRestAliases = false,
+            IReadOnlyList<string>? additionalPaths = null)
         {
             var targets = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -362,6 +369,8 @@ namespace ArchiveFixer.Extraction
                     AddTarget(targets, seen, task.OriginalPath);
                 }
 
+                AddAdditionalTargets(additionalPaths, targets, seen);
+
                 if (includeRestAliases)
                 {
                     AddRestAliases(task, targets, seen);
@@ -379,12 +388,30 @@ namespace ArchiveFixer.Extraction
              */
             AddTarget(targets, seen, task.OriginalPath);
 
+            AddAdditionalTargets(additionalPaths, targets, seen);
+
             if (includeRestAliases)
             {
                 AddRestAliases(task, targets, seen);
             }
 
             return targets;
+        }
+
+        private static void AddAdditionalTargets(
+            IReadOnlyList<string>? additionalPaths,
+            List<string> targets,
+            HashSet<string> seen)
+        {
+            if (additionalPaths == null)
+            {
+                return;
+            }
+
+            foreach (string path in additionalPaths)
+            {
+                AddTarget(targets, seen, path);
+            }
         }
 
         /// <summary>
