@@ -1517,6 +1517,12 @@ namespace ArchiveFixer.ViewModels
                             preparedGroups = materialized;
 
                             /*
+                             * 交界屏障：prepared 组此刻已经拿到族/片/入口，登记成内容组，
+                             * 接上第一大步账本里的来源根与落点域。只登记事实，不点名、不动盘。
+                             */
+                            _extractionCoordinator.RegisterContentGroups(preparedGroups);
+
+                            /*
                              * ⛔ 2026-11-01：旧行为"prepared 组一旦存在，同基名旧候选让位"必须保留
                              * （真机 904 批：让位被改成"只有 Complete 才让位"后，多出来的 Unknown 候选
                              * 干扰了正常组结算 ⇒ c4 过程物按档 6 条红）。
@@ -1811,6 +1817,10 @@ namespace ArchiveFixer.ViewModels
                                 + $"（候选建议={group.SuggestedVerdict}）⇒ 不点名、不链接。");
                             continue;
                         }
+
+                        _extractionCoordinator.AttachContentGroupOwner(
+                            group.PreparedGroup,
+                            entryTask.FileName);
 
                         _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
 

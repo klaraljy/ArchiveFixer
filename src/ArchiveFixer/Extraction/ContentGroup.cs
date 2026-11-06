@@ -1,0 +1,167 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using ArchiveFixer.Detection;
+
+namespace ArchiveFixer.Extraction
+{
+    /// <summary>
+    /// **交界处的内容组**：把“哪些片、来自哪些源根、最终内容落在哪”收成一条组级事实。
+    ///
+    /// <para>它只由交界屏障登记；⛔ 不在导入时预建、⛔ 不按任务名猜、⛔ 不碰盘。
+    /// 组状态与入口来自 <see cref="PreparedVolumeGroup"/>；来源根来自第一大步账本。</para>
+    /// </summary>
+    public sealed class ContentGroup
+    {
+        private readonly HashSet<string> _sourceRootIds = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _memberPaths = new();
+        private readonly List<string> _missingNumbers = new();
+
+        public string GroupId { get; init; } = string.Empty;
+
+        public string BaseName { get; init; } = string.Empty;
+
+        public VolumeNamingFamily? Family { get; init; }
+
+        public string SourceLayer { get; init; } = string.Empty;
+
+        public string PlacementKey { get; private set; } = string.Empty;
+
+        public string EntryPath { get; private set; } = string.Empty;
+
+        public PreparedGroupState State { get; private set; } = PreparedGroupState.Unknown;
+
+        public string Evidence { get; private set; } = string.Empty;
+
+        public string OwnerTaskFileName { get; private set; } = string.Empty;
+
+        /// <summary>组唯一最终输出根；空 = 还没定，⛔ 不拿任务 OutputPath 猜。</summary>
+        public string FinalOutputRoot { get; private set; } = string.Empty;
+
+        public string FinalContentPath { get; private set; } = string.Empty;
+
+        public bool FinalContentVerified { get; private set; }
+
+        public string FinalContentEvidence { get; private set; } = string.Empty;
+
+        public IReadOnlyCollection<string> SourceRootIds => _sourceRootIds;
+
+        public IReadOnlyList<string> MemberPaths => _memberPaths;
+
+        public IReadOnlyList<string> MissingNumbers => _missingNumbers;
+
+        public bool HasPlacementConflict { get; private set; }
+
+        public bool HasPlacementKey => !string.IsNullOrWhiteSpace(PlacementKey);
+
+        public void MergePrepared(PreparedVolumeGroup prepared, FirstStepFileLedger? ledger)
+        {
+            if (prepared == null)
+            {
+                throw new ArgumentNullException(nameof(prepared));
+            }
+
+            /*
+             * 后到分析可能只看得到剩余片（成功组收片后 .002/.003 已经不在了）。
+             * ⛔ 不能用“后到的少片分析”把已经可证完整的组降级/缩成员：
+             * 组的事实一旦由 5 片证成 Complete，就保留这 5 片的成员账，后到结果只作补充。
+             */
+            bool keepStrongerState = State == PreparedGroupState.Complete
+                && prepared.State != PreparedGroupState.Complete;
+
+            if (!keepStrongerState)
+            {
+                State = prepared.State;
+                Evidence = prepared.Describe();
+
+                _missingNumbers.Clear();
+
+                foreach (int number in prepared.MissingNumbers)
+                {
+                    _missingNumbers.Add(number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            else
+            {
+                Evidence = prepared.Describe();
+            }
+
+            if (!string.IsNullOrWhiteSpace(prepared.OriginalEntryPath))
+            {
+                EntryPath = prepared.OriginalEntryPath;
+            }
+
+            foreach (PreparedVolumePiece piece in prepared.Pieces)
+            {
+                if (!string.IsNullOrWhiteSpace(piece.OriginalPath)
+                    && !_memberPaths.Contains(piece.OriginalPath, StringComparer.OrdinalIgnoreCase))
+                {
+                    _memberPaths.Add(piece.OriginalPath);
+                }
+            }
+
+            foreach (PreparedVolumePiece piece in prepared.Pieces)
+            {
+                if (string.IsNullOrWhiteSpace(piece.OriginalPath)
+                    || ledger == null
+                    || !ledger.TryGetByPath(piece.OriginalPath, out FirstStepFileLedgerEntry entry))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(entry.OriginRootId))
+                {
+                    _sourceRootIds.Add(entry.OriginRootId);
+                }
+
+                if (string.IsNullOrWhiteSpace(entry.PlacementKey))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(PlacementKey))
+                {
+                    PlacementKey = entry.PlacementKey;
+                }
+                else if (!string.Equals(PlacementKey, entry.PlacementKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    HasPlacementConflict = true;
+                }
+            }
+        }
+
+        public void AttachOwner(string? ownerTaskFileName)
+        {
+            if (!string.IsNullOrWhiteSpace(ownerTaskFileName))
+            {
+                OwnerTaskFileName = ownerTaskFileName!;
+            }
+        }
+
+        public void SetFinalOutput(string? outputRoot, string? finalContentPath, bool verified, string? evidence)
+        {
+            FinalOutputRoot = outputRoot ?? string.Empty;
+            FinalContentPath = finalContentPath ?? string.Empty;
+            FinalContentVerified = verified;
+            FinalContentEvidence = evidence ?? string.Empty;
+        }
+
+        public string Describe()
+        {
+            string roots = _sourceRootIds.Count == 0
+                ? "来源根判不出"
+                : string.Join(",", _sourceRootIds.Select(System.IO.Path.GetFileName).OrderBy(name => name));
+
+            string placement = HasPlacementConflict
+                ? "落点域冲突"
+                : string.IsNullOrWhiteSpace(PlacementKey) ? "落点域判不出" : PlacementKey;
+
+            return $"{BaseName} ｜ 族={Family} ｜ 状态={State} ｜ 片={_memberPaths.Count}"
+                + $" ｜ 来源根={roots} ｜ {placement}"
+                + (string.IsNullOrWhiteSpace(EntryPath) ? string.Empty : $" ｜ 入口={System.IO.Path.GetFileName(EntryPath)}")
+                + (_missingNumbers.Count == 0 ? string.Empty : $" ｜ 缺={string.Join(",", _missingNumbers)}")
+                + (string.IsNullOrWhiteSpace(FinalContentPath) ? string.Empty : $" ｜ 最终内容={FinalContentPath}")
+                + (FinalContentVerified ? " ｜ 最终内容已证" : string.Empty);
+        }
+    }
+}

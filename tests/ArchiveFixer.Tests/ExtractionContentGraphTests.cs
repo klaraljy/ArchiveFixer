@@ -126,6 +126,123 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 交界登记内容组_接上来源根和共同落点域_同组可反复更新()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            for (int number = 1; number <= 3; number++)
+            {
+                ledger.AddOrReplace(new FirstStepFileLedgerEntry
+                {
+                    Path = $@"C:\out\part{number}\A.7z.{number:000}",
+                    BaseName = "A",
+                    Size = 10,
+                    OriginRootId = $@"C:\in\root{number}.7z",
+                    ProducedByTaskId = $"task-{number}",
+                    PlacementKey = "placement-A",
+                    Role = ArtifactRole.CandidateVolumePiece,
+                    CandidateLeaseId = "lease-" + number
+                });
+            }
+
+            var prepared = new PreparedVolumeGroup
+            {
+                BaseName = "A",
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = @"C:\in",
+                OriginalEntryPath = @"C:\out\part1\A.7z.001",
+                EntryCanonicalName = "A.7z.001",
+                State = PreparedGroupState.Complete,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = @"C:\out\part1\A.7z.001" },
+                    new PreparedVolumePiece { CanonicalName = "A.7z.002", OriginalPath = @"C:\out\part2\A.7z.002" },
+                    new PreparedVolumePiece { CanonicalName = "A.7z.003", OriginalPath = @"C:\out\part3\A.7z.003" }
+                }
+            };
+
+            var graph = new ExtractionContentGraph();
+            ContentGroup group = graph.RegisterContentGroup(prepared, ledger);
+
+            Assert.Equal(1, graph.GroupCount);
+            Assert.Equal("A", group.BaseName);
+            Assert.Equal(PreparedGroupState.Complete, group.State);
+            Assert.Equal("placement-A", group.PlacementKey);
+            Assert.Equal(3, group.SourceRootIds.Count);
+            Assert.Equal(3, group.MemberPaths.Count);
+            Assert.Contains("A.7z.001", group.Describe());
+
+            group.AttachOwner("owner.7z");
+            group.SetFinalOutput(@"C:\out\A", @"C:\out\A\content.bin", verified: true, "L3");
+
+            Assert.Equal("owner.7z", group.OwnerTaskFileName);
+            Assert.True(group.FinalContentVerified);
+            Assert.Equal(@"C:\out\A\content.bin", group.FinalContentPath);
+
+            ContentGroup same = graph.RegisterContentGroup(prepared, ledger);
+
+            Assert.Same(group, same);
+            Assert.Equal("owner.7z", same.OwnerTaskFileName);
+
+            var shrunk = new PreparedVolumeGroup
+            {
+                BaseName = "A",
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = @"C:\in",
+                OriginalEntryPath = @"C:\out\part1\A.7z.001",
+                State = PreparedGroupState.Unknown,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = @"C:\out\part1\A.7z.001" }
+                }
+            };
+
+            ContentGroup stillComplete = graph.RegisterContentGroup(shrunk, ledger);
+
+            Assert.Equal(PreparedGroupState.Complete, stillComplete.State);
+            Assert.Equal(3, stillComplete.MemberPaths.Count);
+        }
+
+        [Fact]
+        public void 内容组落点域冲突_不硬合并成共同落点()
+        {
+            var ledger = new FirstStepFileLedger();
+            ledger.AddOrReplace(new FirstStepFileLedgerEntry
+            {
+                Path = @"C:\out\part1\A.7z.001",
+                BaseName = "A",
+                OriginRootId = @"C:\in\root1.7z",
+                PlacementKey = "placement-A"
+            });
+            ledger.AddOrReplace(new FirstStepFileLedgerEntry
+            {
+                Path = @"C:\out\part2\A.7z.002",
+                BaseName = "A",
+                OriginRootId = @"C:\in\root2.7z",
+                PlacementKey = "placement-B"
+            });
+
+            var prepared = new PreparedVolumeGroup
+            {
+                BaseName = "A",
+                Family = VolumeNamingFamily.SevenZipNumbered,
+                OriginalSourceLayer = @"C:\in",
+                State = PreparedGroupState.Complete,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = @"C:\out\part1\A.7z.001" },
+                    new PreparedVolumePiece { CanonicalName = "A.7z.002", OriginalPath = @"C:\out\part2\A.7z.002" }
+                }
+            };
+
+            var graph = new ExtractionContentGraph();
+            ContentGroup group = graph.RegisterContentGroup(prepared, ledger);
+
+            Assert.True(group.HasPlacementConflict);
+            Assert.Equal("placement-A", group.PlacementKey);
+        }
+
+        [Fact]
         public void 协调器登记源根后_第一大步账本项挂上源根和产生任务()
         {
             string root = Path.Combine(

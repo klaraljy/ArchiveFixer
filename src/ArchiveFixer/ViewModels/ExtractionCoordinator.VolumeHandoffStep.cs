@@ -137,6 +137,55 @@ namespace ArchiveFixer.ViewModels
                 + "|" + scope;
         }
 
+        /// <summary>
+        /// 交界屏障：把 prepared 组登记成内容组，接上来源根与落点域。
+        /// ⛔ 只登记事实，不建入口、不点名、不动盘。
+        /// </summary>
+        internal int RegisterContentGroups(IEnumerable<PreparedVolumeGroup>? groups)
+        {
+            if (groups == null)
+            {
+                return 0;
+            }
+
+            int registered = 0;
+
+            foreach (PreparedVolumeGroup group in groups)
+            {
+                if (group == null || string.IsNullOrWhiteSpace(group.BaseName))
+                {
+                    continue;
+                }
+
+                ContentGroup contentGroup = _extractionContentGraph.RegisterContentGroup(
+                    group,
+                    _firstStepFileLedger);
+
+                AppendLog("INFO", $"[内容组] {contentGroup.Describe()}");
+                registered++;
+            }
+
+            return registered;
+        }
+
+        /// <summary>把唯一 owner 写回内容组；⛔ 不换 owner，只补空位。</summary>
+        internal void AttachContentGroupOwner(PreparedVolumeGroup? prepared, string? ownerTaskFileName)
+        {
+            if (prepared == null
+                || string.IsNullOrWhiteSpace(ownerTaskFileName)
+                || !_extractionContentGraph.TryGetContentGroup(
+                    prepared.BaseName,
+                    prepared.Family,
+                    prepared.OriginalSourceLayer,
+                    out ContentGroup group))
+            {
+                return;
+            }
+
+            group.AttachOwner(ownerTaskFileName);
+            AppendLog("INFO", $"[内容组] {group.BaseName}：owner={ownerTaskFileName}。");
+        }
+
         private static string NormalizePlacementPath(string? path)
         {
             if (string.IsNullOrWhiteSpace(path))

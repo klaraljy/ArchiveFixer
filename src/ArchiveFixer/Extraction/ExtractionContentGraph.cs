@@ -69,13 +69,20 @@ namespace ArchiveFixer.Extraction
         private readonly Dictionary<string, ProducedArtifactRecord> _artifactsByPath =
             new(StringComparer.OrdinalIgnoreCase);
 
+        private readonly Dictionary<string, ContentGroup> _contentGroups =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public IReadOnlyCollection<SourceRootRecord> SourceRoots => _rootsByRootId.Values;
 
         public IReadOnlyCollection<ProducedArtifactRecord> Artifacts => _artifactsByPath.Values;
 
+        public IReadOnlyCollection<ContentGroup> ContentGroups => _contentGroups.Values;
+
         public int Count => _rootsByRootId.Count;
 
         public int ArtifactCount => _artifactsByPath.Count;
+
+        public int GroupCount => _contentGroups.Count;
 
         /// <summary>批首清空；⛔ 不把上一批的源根/产出物带进下一批。</summary>
         public void Clear()
@@ -84,6 +91,7 @@ namespace ArchiveFixer.Extraction
             _rootIdByTaskId.Clear();
             _rootIdByPath.Clear();
             _artifactsByPath.Clear();
+            _contentGroups.Clear();
         }
 
         /// <summary>
@@ -293,6 +301,84 @@ namespace ArchiveFixer.Extraction
         /// <summary>这一份现在是否被交界前租约保护。</summary>
         public bool IsLeased(string? path) =>
             TryGetArtifact(path, out ProducedArtifactRecord artifact) && artifact.HasCandidateLease;
+
+        /// <summary>
+        /// 交界屏障登记/更新一个内容组。组键只读 prepared 事实；同键后到事实覆盖旧状态，
+        /// 但来源根与落点域是累加的（后到片仍属于同一组）。
+        /// </summary>
+        public ContentGroup RegisterContentGroup(
+            PreparedVolumeGroup? prepared,
+            FirstStepFileLedger? ledger)
+        {
+            if (prepared == null || string.IsNullOrWhiteSpace(prepared.BaseName))
+            {
+                throw new ArgumentException("内容组没有可用基名。", nameof(prepared));
+            }
+
+            string groupId = BuildGroupId(prepared.BaseName, prepared.Family, prepared.OriginalSourceLayer);
+
+            if (!_contentGroups.TryGetValue(groupId, out ContentGroup? group))
+            {
+                group = new ContentGroup
+                {
+                    GroupId = groupId,
+                    BaseName = prepared.BaseName,
+                    Family = prepared.Family,
+                    SourceLayer = prepared.OriginalSourceLayer
+                };
+
+                _contentGroups[groupId] = group;
+            }
+
+            group.MergePrepared(prepared, ledger);
+            return group;
+        }
+
+        public bool TryGetContentGroup(
+            string? baseName,
+            VolumeNamingFamily? family,
+            string? sourceLayer,
+            out ContentGroup group)
+        {
+            group = null!;
+
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                return false;
+            }
+
+            string groupId = BuildGroupId(baseName, family, sourceLayer);
+
+            if (_contentGroups.TryGetValue(groupId, out ContentGroup? found))
+            {
+                group = found;
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool TryGetContentGroup(string? groupId, out ContentGroup group)
+        {
+            group = null!;
+
+            if (string.IsNullOrWhiteSpace(groupId)
+                || !_contentGroups.TryGetValue(groupId, out ContentGroup? found))
+            {
+                return false;
+            }
+
+            group = found;
+            return true;
+        }
+
+        private static string BuildGroupId(
+            string baseName,
+            VolumeNamingFamily? family,
+            string? sourceLayer)
+        {
+            return baseName + "|" + (family?.ToString() ?? "?") + "|" + (sourceLayer ?? string.Empty);
+        }
 
         private void IndexPath(string? path, string rootId)
         {
