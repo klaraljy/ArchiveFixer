@@ -122,16 +122,22 @@ namespace ArchiveFixer.Extraction
                         return null;
                     }
 
-                    if (!HardLinkHelper.CanHardLink(piece.OriginalPath, directory))
+                    /*
+                     * 同卷优先硬链接；跨卷（目标位置在另一个盘）复制一份到**目标工作区**。
+                     * ⛔ 不移动、不改名用户源片；复制件只活在 group-entry 临时目录里。
+                     */
+                    if (HardLinkHelper.TryCreateHardLink(target, piece.OriginalPath))
                     {
-                        error = $"{piece.CanonicalName}：源片与临时入口根不在同一卷，硬链接做不了";
-                        CleanupDirectory(directory, root);
-                        return null;
+                        continue;
                     }
 
-                    if (!HardLinkHelper.TryCreateHardLink(target, piece.OriginalPath))
+                    try
                     {
-                        error = $"{piece.CanonicalName}：硬链接建不出来";
+                        File.Copy(piece.OriginalPath, target, overwrite: false);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = $"{piece.CanonicalName}：入口链接/复制都失败：{ex.GetType().Name}：{ex.Message}";
                         CleanupDirectory(directory, root);
                         return null;
                     }
@@ -170,11 +176,11 @@ namespace ArchiveFixer.Extraction
 
             try
             {
-                string root = Path.Combine(targetWorkRoot, GroupEntryFolderName);
-
-                return HardLinkHelper.CanHardLink(group.Pieces[0].OriginalPath, root)
-                    ? root
-                    : null;
+                /*
+                 * 合法目标工作区永远优先；跨卷时 TryMaterialize 会复制片到这里，
+                 * 所以这里不再用“能不能硬链接”把合法目标否掉（那正是指定位置跨盘全空的来源）。
+                 */
+                return Path.Combine(targetWorkRoot, GroupEntryFolderName);
             }
             catch
             {

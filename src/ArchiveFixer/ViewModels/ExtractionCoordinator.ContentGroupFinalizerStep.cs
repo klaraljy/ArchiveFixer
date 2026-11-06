@@ -60,6 +60,11 @@ namespace ArchiveFixer.ViewModels
 
                 MarkContentGroupTasks(group, owner, finalTask, tasks, state);
 
+                if (state == FinalContentState.Verified)
+                {
+                    CleanupEmptyProcessOutputDirectories(group, tasks);
+                }
+
                 if (!changed)
                 {
                     continue;
@@ -148,6 +153,76 @@ namespace ArchiveFixer.ViewModels
                     isProcessTask: !isFinalTask,
                     finalContentPath: isFinalTask ? group.FinalContentPath : string.Empty,
                     finalOutputPath: isFinalTask ? group.FinalOutputRoot : string.Empty);
+            }
+        }
+
+        /// <summary>
+        /// 指定位置档：组内过程任务的输出壳在成功后已经空了，连同空父目录一起收掉。
+        /// ⛔ 只删空目录、只删 PlacementRoot 之下；有任何一个文件/非空子目录就停手。
+        /// </summary>
+        private static void CleanupEmptyProcessOutputDirectories(
+            ContentGroup group,
+            IReadOnlyList<ArchiveTask> tasks)
+        {
+            string placementRoot = SafeFullPath(group.PlacementRoot);
+
+            if (placementRoot.Length == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null
+                    || !task.IsContentGroupProcessTask
+                    || !string.Equals(task.ContentGroupId, group.GroupId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string directory = SafeFullPath(task.OutputPath);
+
+                if (directory.Length == 0
+                    || string.Equals(directory, placementRoot, StringComparison.OrdinalIgnoreCase)
+                    || !IsUnder(directory, placementRoot))
+                {
+                    continue;
+                }
+
+                if (!Directory.Exists(directory))
+                {
+                    directory = SafeFullPath(Path.GetDirectoryName(directory));
+                }
+
+                while (directory.Length > 0
+                       && !string.Equals(directory, placementRoot, StringComparison.OrdinalIgnoreCase)
+                       && IsUnder(directory, placementRoot)
+                       && Directory.Exists(directory)
+                       && !ContainsAnyFile(directory))
+                {
+                    try
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+
+                    directory = SafeFullPath(Path.GetDirectoryName(directory));
+                }
+            }
+        }
+
+        private static bool ContainsAnyFile(string directory)
+        {
+            try
+            {
+                return Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Any();
+            }
+            catch
+            {
+                return true;
             }
         }
 

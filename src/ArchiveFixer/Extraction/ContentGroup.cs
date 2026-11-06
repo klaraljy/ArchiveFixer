@@ -42,6 +42,11 @@ namespace ArchiveFixer.Extraction
 
         public string PlacementKey { get; private set; } = string.Empty;
 
+        /// <summary>指定位置时的目标根（从 PlacementKey 的落点域取）；Original 档为空。</summary>
+        public string PlacementRoot { get; private set; } = string.Empty;
+
+        public bool HasPlacementRoot => !string.IsNullOrWhiteSpace(PlacementRoot);
+
         public string EntryPath { get; private set; } = string.Empty;
 
         public PreparedGroupState State { get; private set; } = PreparedGroupState.Unknown;
@@ -149,6 +154,18 @@ namespace ArchiveFixer.Extraction
                 else if (!string.Equals(PlacementKey, entry.PlacementKey, StringComparison.OrdinalIgnoreCase))
                 {
                     HasPlacementConflict = true;
+                }
+
+                /*
+                 * PlacementKey 形状：模式|自定义根|选中范围（BuildSourcePlacementKey 唯一出口）。
+                 * 指定位置档第二段就是目标根；Original 档第二段为空。
+                 */
+                string[] keyParts = entry.PlacementKey.Split('|');
+                if (keyParts.Length >= 2
+                    && string.IsNullOrWhiteSpace(PlacementRoot)
+                    && !string.IsNullOrWhiteSpace(keyParts[1]))
+                {
+                    PlacementRoot = keyParts[1];
                 }
             }
         }

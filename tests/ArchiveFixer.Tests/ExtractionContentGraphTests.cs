@@ -262,8 +262,10 @@ namespace ArchiveFixer.Tests
                 string ownerRoot = Path.Combine(root, "out");
                 string finalDirectory = Path.Combine(ownerRoot, "deep");
                 string emptyRoot = Path.Combine(root, "empty");
+                string emptyProcessDirectory = Path.Combine(ownerRoot, "empty-process");
                 Directory.CreateDirectory(finalDirectory);
                 Directory.CreateDirectory(emptyRoot);
+                Directory.CreateDirectory(emptyProcessDirectory);
                 File.WriteAllText(Path.Combine(finalDirectory, "content.bin"), "ok");
 
                 RecursionFixHarness harness = RecursionFixHarness.Create(
@@ -271,13 +273,25 @@ namespace ArchiveFixer.Tests
                     Array.Empty<string>(),
                     attemptLimit: 1);
 
+                string groupPiece = Path.Combine(ownerRoot, "piece.7z.001");
+                harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+                {
+                    Path = groupPiece,
+                    BaseName = "A",
+                    OriginRootId = Path.Combine(root, "A.7z.001"),
+                    PlacementKey = "2|" + ownerRoot + "|folder:" + root
+                });
+
                 var prepared = new PreparedVolumeGroup
                 {
                     BaseName = "A",
                     Family = VolumeNamingFamily.SevenZipNumbered,
                     OriginalSourceLayer = root,
                     State = PreparedGroupState.Complete,
-                    Pieces = Array.Empty<PreparedVolumePiece>()
+                    Pieces = new[]
+                    {
+                        new PreparedVolumePiece { CanonicalName = "piece.7z.001", OriginalPath = groupPiece }
+                    }
                 };
 
                 ContentGroup group = harness.Coordinator.ContentGraph.RegisterContentGroup(
@@ -304,11 +318,19 @@ namespace ArchiveFixer.Tests
                     OutputManifestCrossChecked = true
                 };
 
+                var emptyProcess = new ArchiveTask(Path.Combine(root, "process.7z"), 4)
+                {
+                    OutputPath = emptyProcessDirectory,
+                    ContentFileCount = 0,
+                    Outcome = TaskOutcome.Succeeded
+                };
+
                 group.AttachOwner(owner.FileName, owner.CurrentPath);
 
                 Assert.Equal(
                     1,
-                    harness.Coordinator.FinalizeContentGroups(new[] { owner, finalTask }));
+                    harness.Coordinator.FinalizeContentGroups(new[] { owner, finalTask, emptyProcess }));
+                Assert.False(Directory.Exists(emptyProcessDirectory));
 
                 Assert.Equal(FinalContentState.Verified, group.FinalState);
                 Assert.True(group.FinalContentVerified);
