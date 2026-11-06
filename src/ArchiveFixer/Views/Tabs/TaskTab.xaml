@@ -492,7 +492,7 @@
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="输出目录"
-                                                Binding="{Binding OutputPath}"
+                                                Binding="{Binding OutputDisplayPath}"
                                                 Width="240"
                                                 Visibility="Collapsed"
                                                 IsReadOnly="True" />

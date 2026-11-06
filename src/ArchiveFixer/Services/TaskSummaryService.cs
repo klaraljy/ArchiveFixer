@@ -479,6 +479,13 @@ namespace ArchiveFixer.Services
                 builder.AppendLine(followerNote);
             }
 
+            string processNote = tally.DescribeContentGroupProcessNote();
+
+            if (!string.IsNullOrWhiteSpace(processNote))
+            {
+                builder.AppendLine(processNote);
+            }
+
             builder.AppendLine();
 
             foreach (ArchiveTask task in failedTasks)

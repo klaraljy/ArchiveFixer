@@ -65,7 +65,10 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 tally.Failed > 0 ? "WARN" : "INFO",
                 $"本批汇总：{tally.Total} 个任务 —— {string.Join(" / ", parts)}。"
-                + (tally.FollowerSkipped > 0 ? " " + tally.DescribeFollowerNote() : string.Empty));
+                + (tally.FollowerSkipped > 0 ? " " + tally.DescribeFollowerNote() : string.Empty)
+                + (tally.ContentGroupProcessSkipped > 0
+                    ? " " + tally.DescribeContentGroupProcessNote()
+                    : string.Empty));
 
             /*
              * 用户 2026-10-06 报的那一格：**"`111.z0删除2` 没改名"** —— 那一行是"如设计"，

@@ -1411,6 +1411,7 @@ namespace ArchiveFixer.ViewModels
 
             if (rootTasks == null || rootTasks.Count == 0)
             {
+                SettleVerifiedContentGroupSources(runOptions);
                 return;
             }
 
@@ -1533,6 +1534,12 @@ namespace ArchiveFixer.ViewModels
                     cancellationToken).ConfigureAwait(false);
 
             }
+
+            /*
+             * 组级最后一道：只有组最终内容 Verified 才处理组内所有贡献源根。
+             * 旧的逐 rootTask 循环可能只认入口那一单；这里按组补齐，组未证则一个字节不动。
+             */
+            SettleVerifiedContentGroupSources(runOptions);
         }
 
 

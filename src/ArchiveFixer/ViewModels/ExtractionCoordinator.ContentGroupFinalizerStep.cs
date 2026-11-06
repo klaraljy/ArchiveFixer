@@ -1,0 +1,277 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
+
+namespace ArchiveFixer.ViewModels
+{
+    /// <summary>内容组最终内容判决：任务级成功不代替组级最终内容。</summary>
+    internal sealed partial class ExtractionCoordinator
+    {
+        /// <summary>
+        /// 从当前任务表回填每组最终内容。只读任务上的既有校验/定稿事实，
+        /// ⛔ 不重算解压结果、⛔ 不把 Pending/Skipped 的 owner 判成失败。
+        /// </summary>
+        internal int FinalizeContentGroups(IReadOnlyList<ArchiveTask>? tasks)
+        {
+            if (tasks == null || tasks.Count == 0)
+            {
+                return 0;
+            }
+
+            int changedCount = 0;
+
+            foreach (ContentGroup group in _extractionContentGraph.ContentGroups.ToList())
+            {
+                ArchiveTask? owner = FindContentGroupOwner(group, tasks);
+
+                if (owner == null || owner.Outcome is TaskOutcome.Pending or TaskOutcome.Skipped)
+                {
+                    continue;
+                }
+
+                /*
+                 * owner 自己往往只是“这一组的入口包”，它的内容物可能是内层包；
+                 * 最终内容要取 owner 输出树下**最深的有内容物任务**，不能拿入口层的
+                 * “内容物=1 个内层包”冒充最终内容。
+                 */
+                ArchiveTask finalTask = FindFinalContentTask(owner, tasks) ?? owner;
+
+                string contentPath = !string.IsNullOrWhiteSpace(finalTask.ContentDirectoryPath)
+                    ? finalTask.ContentDirectoryPath
+                    : finalTask.OutputPath;
+
+                (int measuredFiles, long measuredBytes) = OutputVerifier.Measure(contentPath);
+                int fileCount = finalTask.ContentFileCount > 0
+                    ? finalTask.ContentFileCount
+                    : measuredFiles;
+
+                (FinalContentState state, string evidence) = ClassifyFinalContent(finalTask, fileCount);
+
+                bool changed = group.SetFinalOutput(
+                    owner.OutputPath,
+                    contentPath,
+                    state,
+                    fileCount,
+                    measuredBytes,
+                    evidence);
+
+                MarkContentGroupTasks(group, owner, finalTask, tasks, state);
+
+                if (!changed)
+                {
+                    continue;
+                }
+
+                changedCount++;
+
+                AppendLog(
+                    state == FinalContentState.Verified ? "INFO" : "WARN",
+                    $"[内容组·最终] {group.BaseName}：{state} ｜ 文件={fileCount}"
+                    + $" ｜ 输出={(string.IsNullOrWhiteSpace(contentPath) ? "判不出" : contentPath)}"
+                    + $" ｜ 证据={evidence}");
+            }
+
+            return changedCount;
+        }
+
+        private static (FinalContentState State, string Evidence) ClassifyFinalContent(
+            ArchiveTask owner,
+            int fileCount)
+        {
+            if (owner.Outcome is TaskOutcome.Failed or TaskOutcome.Cancelled or TaskOutcome.PartiallyCompleted)
+            {
+                return fileCount > 0
+                    ? (FinalContentState.Partial, $"owner={owner.Outcome}；有 {fileCount} 个产物但未通过最终校验")
+                    : (FinalContentState.Missing, $"owner={owner.Outcome}；没有最终内容");
+            }
+
+            if (owner.Outcome != TaskOutcome.Succeeded || fileCount <= 0)
+            {
+                return (FinalContentState.Missing, "owner 不是成功终态，或最终内容为空");
+            }
+
+            if (!owner.IsOutputVerified)
+            {
+                return (FinalContentState.Partial, "产物未通过输出校验");
+            }
+
+            if (!owner.OutputManifestCrossChecked)
+            {
+                return (FinalContentState.Partial, "产物只做了非空底线校验，未拿清单逐条核对");
+            }
+
+            return (FinalContentState.Verified, "输出校验通过且清单逐条核对");
+        }
+
+        private static void MarkContentGroupTasks(
+            ContentGroup group,
+            ArchiveTask owner,
+            ArchiveTask finalTask,
+            IReadOnlyList<ArchiveTask> tasks,
+            FinalContentState state)
+        {
+            string ownerOutput = SafeFullPath(owner.OutputPath);
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                bool inGroup = group.SourceRootIds.Any(rootId =>
+                        string.Equals(
+                            NormalizePath(task.OriginalPath),
+                            NormalizePath(rootId),
+                            StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(
+                            NormalizePath(task.CurrentPath),
+                            NormalizePath(rootId),
+                            StringComparison.OrdinalIgnoreCase))
+                    || (ownerOutput.Length > 0
+                        && (IsUnder(SafeFullPath(task.OutputPath), ownerOutput)
+                            || IsUnder(SafeFullPath(task.CurrentPath), ownerOutput)));
+
+                if (!inGroup)
+                {
+                    continue;
+                }
+
+                bool isFinalTask = ReferenceEquals(task, finalTask);
+                task.ApplyContentGroupFacts(
+                    group.GroupId,
+                    group.BaseName,
+                    state,
+                    isProcessTask: !isFinalTask,
+                    finalContentPath: isFinalTask ? group.FinalContentPath : string.Empty,
+                    finalOutputPath: isFinalTask ? group.FinalOutputRoot : string.Empty);
+            }
+        }
+
+        private static string NormalizePath(string? path) => SafeFullPath(path);
+
+        private static ArchiveTask? FindFinalContentTask(
+            ArchiveTask owner,
+            IReadOnlyList<ArchiveTask> tasks)
+        {
+            string ownerOutput = SafeFullPath(owner.OutputPath);
+
+            if (ownerOutput.Length == 0)
+            {
+                return owner.ContentFileCount > 0 ? owner : null;
+            }
+
+            ArchiveTask? best = null;
+            int bestDepth = -1;
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null
+                    || task == owner
+                    || task.Outcome != TaskOutcome.Succeeded
+                    || task.ContentFileCount <= 0)
+                {
+                    continue;
+                }
+
+                string contentPath = SafeFullPath(
+                    !string.IsNullOrWhiteSpace(task.ContentDirectoryPath)
+                        ? task.ContentDirectoryPath
+                        : task.OutputPath);
+
+                if (contentPath.Length == 0 || !IsUnder(contentPath, ownerOutput))
+                {
+                    continue;
+                }
+
+                int depth = contentPath.Count(ch => ch == Path.DirectorySeparatorChar || ch == Path.AltDirectorySeparatorChar);
+
+                if (depth > bestDepth)
+                {
+                    best = task;
+                    bestDepth = depth;
+                }
+            }
+
+            return best;
+        }
+
+        private static string SafeFullPath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.GetFullPath(path);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool IsUnder(string path, string root)
+        {
+            return string.Equals(path, root, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(
+                    root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static ArchiveTask? FindContentGroupOwner(
+            ContentGroup group,
+            IReadOnlyList<ArchiveTask> tasks)
+        {
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(group.OwnerTaskPath)
+                    && (PathsEqual(task.CurrentPath, group.OwnerTaskPath)
+                        || PathsEqual(task.OriginalPath, group.OwnerTaskPath)))
+                {
+                    return task;
+                }
+
+                if (!string.IsNullOrWhiteSpace(group.OwnerTaskFileName)
+                    && string.Equals(task.FileName, group.OwnerTaskFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return task;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool PathsEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(
+                    Path.GetFullPath(left),
+                    Path.GetFullPath(right),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+    }
+}

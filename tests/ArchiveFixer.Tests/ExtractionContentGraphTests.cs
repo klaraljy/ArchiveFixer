@@ -173,7 +173,13 @@ namespace ArchiveFixer.Tests
             Assert.Contains("A.7z.001", group.Describe());
 
             group.AttachOwner("owner.7z");
-            group.SetFinalOutput(@"C:\out\A", @"C:\out\A\content.bin", verified: true, "L3");
+            group.SetFinalOutput(
+                @"C:\out\A",
+                @"C:\out\A\content.bin",
+                FinalContentState.Verified,
+                fileCount: 1,
+                bytes: 10,
+                evidence: "L3");
 
             Assert.Equal("owner.7z", group.OwnerTaskFileName);
             Assert.True(group.FinalContentVerified);
@@ -240,6 +246,277 @@ namespace ArchiveFixer.Tests
 
             Assert.True(group.HasPlacementConflict);
             Assert.Equal("placement-A", group.PlacementKey);
+        }
+
+        [Fact]
+        public void 最终内容判决_取最深内容任务_空输出不判成功()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "archivefixer-final-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                string ownerRoot = Path.Combine(root, "out");
+                string finalDirectory = Path.Combine(ownerRoot, "deep");
+                string emptyRoot = Path.Combine(root, "empty");
+                Directory.CreateDirectory(finalDirectory);
+                Directory.CreateDirectory(emptyRoot);
+                File.WriteAllText(Path.Combine(finalDirectory, "content.bin"), "ok");
+
+                RecursionFixHarness harness = RecursionFixHarness.Create(
+                    root,
+                    Array.Empty<string>(),
+                    attemptLimit: 1);
+
+                var prepared = new PreparedVolumeGroup
+                {
+                    BaseName = "A",
+                    Family = VolumeNamingFamily.SevenZipNumbered,
+                    OriginalSourceLayer = root,
+                    State = PreparedGroupState.Complete,
+                    Pieces = Array.Empty<PreparedVolumePiece>()
+                };
+
+                ContentGroup group = harness.Coordinator.ContentGraph.RegisterContentGroup(
+                    prepared,
+                    harness.Coordinator.FirstStepLedger);
+
+                var owner = new ArchiveTask(Path.Combine(root, "A.7z.001"), 1)
+                {
+                    OutputPath = ownerRoot,
+                    ContentDirectoryPath = ownerRoot,
+                    ContentFileCount = 1,
+                    Outcome = TaskOutcome.Succeeded,
+                    OutputVerification = OutputVerificationOutcome.Passed,
+                    OutputManifestCrossChecked = true
+                };
+
+                var finalTask = new ArchiveTask(Path.Combine(root, "inner.7z"), 2)
+                {
+                    OutputPath = ownerRoot,
+                    ContentDirectoryPath = finalDirectory,
+                    ContentFileCount = 1,
+                    Outcome = TaskOutcome.Succeeded,
+                    OutputVerification = OutputVerificationOutcome.Passed,
+                    OutputManifestCrossChecked = true
+                };
+
+                group.AttachOwner(owner.FileName, owner.CurrentPath);
+
+                Assert.Equal(
+                    1,
+                    harness.Coordinator.FinalizeContentGroups(new[] { owner, finalTask }));
+
+                Assert.Equal(FinalContentState.Verified, group.FinalState);
+                Assert.True(group.FinalContentVerified);
+                Assert.Equal(finalDirectory, group.FinalContentPath);
+                Assert.Equal(ownerRoot, group.FinalOutputRoot);
+                Assert.True(owner.IsContentGroupProcessTask);
+                Assert.Equal(StatusText.ContentGroupProcessTask, owner.StatusDisplayText);
+                Assert.Equal("—（组内过程任务）", owner.OutputDisplayPath);
+                Assert.False(finalTask.IsContentGroupProcessTask);
+                Assert.True(finalTask.FinalContentVerified);
+                Assert.Equal(ownerRoot, finalTask.OutputDisplayPath);
+                Assert.Equal(finalDirectory, finalTask.FinalContentPath);
+
+                var emptyOwner = new ArchiveTask(Path.Combine(root, "B.7z.001"), 3)
+                {
+                    OutputPath = emptyRoot,
+                    ContentDirectoryPath = emptyRoot,
+                    ContentFileCount = 0,
+                    Outcome = TaskOutcome.Succeeded,
+                    OutputVerification = OutputVerificationOutcome.Passed,
+                    OutputManifestCrossChecked = true
+                };
+
+                var emptyPrepared = new PreparedVolumeGroup
+                {
+                    BaseName = "B",
+                    Family = VolumeNamingFamily.SevenZipNumbered,
+                    OriginalSourceLayer = root,
+                    State = PreparedGroupState.Complete,
+                    Pieces = Array.Empty<PreparedVolumePiece>()
+                };
+
+                ContentGroup emptyGroup = harness.Coordinator.ContentGraph.RegisterContentGroup(
+                    emptyPrepared,
+                    harness.Coordinator.FirstStepLedger);
+
+                emptyGroup.AttachOwner(emptyOwner.FileName, emptyOwner.CurrentPath);
+
+                harness.Coordinator.FinalizeContentGroups(new[] { emptyOwner });
+
+                Assert.Equal(FinalContentState.Missing, emptyGroup.FinalState);
+                Assert.False(emptyGroup.FinalContentVerified);
+                Assert.Equal(StatusText.ContentGroupMissing, emptyOwner.StatusDisplayText);
+                Assert.Equal(StatusText.ExtractFailed, emptyOwner.StatusColorKey);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        [Fact]
+        public void 组最终内容已证_才按来源根删除_未证组一个字节不动()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "archivefixer-settle-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                string sourceA = Path.Combine(root, "A.7z.001");
+                string sourceB = Path.Combine(root, "B.7z.001");
+                File.WriteAllText(sourceA, "source-a");
+                File.WriteAllText(sourceB, "source-b");
+
+                RecursionFixHarness harness = RecursionFixHarness.Create(
+                    root,
+                    Array.Empty<string>(),
+                    attemptLimit: 1);
+
+                var taskA = new ArchiveTask(sourceA, 1)
+                {
+                    OutputPath = root,
+                    SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd
+                };
+                var taskB = new ArchiveTask(sourceB, 2)
+                {
+                    OutputPath = root,
+                    SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd
+                };
+                harness.Vm.Tasks.Add(taskA);
+                harness.Vm.Tasks.Add(taskB);
+
+                harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+                {
+                    Path = sourceA,
+                    BaseName = "A",
+                    OriginRootId = sourceA,
+                    PlacementKey = "placement-A"
+                });
+                harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+                {
+                    Path = sourceB,
+                    BaseName = "B",
+                    OriginRootId = sourceB,
+                    PlacementKey = "placement-A"
+                });
+
+                ContentGroup verified = harness.Coordinator.ContentGraph.RegisterContentGroup(
+                    new PreparedVolumeGroup
+                    {
+                        BaseName = "A",
+                        Family = VolumeNamingFamily.SevenZipNumbered,
+                        OriginalSourceLayer = root,
+                        State = PreparedGroupState.Complete,
+                        Pieces = new[]
+                        {
+                            new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = sourceA }
+                        }
+                    },
+                    harness.Coordinator.FirstStepLedger);
+
+                verified.SetFinalOutput(root, root, FinalContentState.Verified, 1, 1, "test");
+
+                ContentGroup partial = harness.Coordinator.ContentGraph.RegisterContentGroup(
+                    new PreparedVolumeGroup
+                    {
+                        BaseName = "B",
+                        Family = VolumeNamingFamily.SevenZipNumbered,
+                        OriginalSourceLayer = root,
+                        State = PreparedGroupState.Complete,
+                        Pieces = new[]
+                        {
+                            new PreparedVolumePiece { CanonicalName = "B.7z.001", OriginalPath = sourceB }
+                        }
+                    },
+                    harness.Coordinator.FirstStepLedger);
+
+                partial.SetFinalOutput(root, root, FinalContentState.Partial, 0, 0, "test");
+
+                int deleted = harness.Coordinator.SettleVerifiedContentGroupSources(
+                    new OneClickRunOptions { SourceHandling = SourceHandlingMode.DeleteInPlace });
+
+                Assert.True(
+                    deleted == 1,
+                    $"deleted={deleted}; AExists={File.Exists(sourceA)}; BExists={File.Exists(sourceB)};"
+                    + $" moveA={taskA.SourcePackageMove}; moveB={taskB.SourcePackageMove};"
+                    + $" logs={string.Join(" || ", harness.LogTexts)}");
+
+                Assert.False(File.Exists(sourceA));
+                Assert.True(File.Exists(sourceB));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        [Fact]
+        public void 临时入口根缺失_不回落盘根()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "archivefixer-entryroot-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                string piecePath = Path.Combine(root, "A.7z.001");
+                File.WriteAllText(piecePath, "piece");
+
+                var group = new PreparedVolumeGroup
+                {
+                    BaseName = "A",
+                    Family = VolumeNamingFamily.SevenZipNumbered,
+                    OriginalSourceLayer = root,
+                    EntryCanonicalName = "A.7z.001",
+                    State = PreparedGroupState.Complete,
+                    Pieces = new[]
+                    {
+                        new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = piecePath }
+                    }
+                };
+
+                PreparedVolumeGroup? materialized = VolumeGroupEntryDirectory.TryMaterialize(
+                    group,
+                    entryRoot: null,
+                    log: null,
+                    out string error);
+
+                Assert.Null(materialized);
+                Assert.Contains("不回落到盘根", error);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
         }
 
         [Fact]

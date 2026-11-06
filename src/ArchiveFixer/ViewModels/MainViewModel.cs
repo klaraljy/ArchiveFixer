@@ -4521,6 +4521,11 @@ namespace ArchiveFixer.ViewModels
                 lines.Add(tally.DescribeFollowerNote());
             }
 
+            if (tally.ContentGroupProcessSkipped > 0)
+            {
+                lines.Add(tally.DescribeContentGroupProcessNote());
+            }
+
             string engine = DescribeEngineIdentity();
 
             if (!string.IsNullOrWhiteSpace(engine))

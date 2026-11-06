@@ -9,12 +9,12 @@ namespace ArchiveFixer.Extraction
     /// <summary>
     /// **临时组入口目录**（共用骨架）：把一组的标准名做成硬链接，供 VolumeCandidateDiscovery/引擎读取。
     ///
-    /// <para>优先放在**这一单自己的目标工作区**（<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry</c>），
-    /// 这样“在哪里解压，临时入口就在哪里”；只有目标盘与源片不同卷、硬链接做不了时，
-    /// 才回落到源卷根（硬链接不能跨卷）。⛔ 不复制、不移动、不改名用户源文件。</para>
+    /// <para>入口根必须由调用方给出**合法工作区**（<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry</c>）。
+    /// 目标盘与源片不同卷、硬链接做不了时，⛔ 不再回落到源卷根；拿不到合法根就失败，
+    /// 由调用方把组落成 Unknown。⛔ 不复制、不移动、不改名用户源文件。</para>
     ///
-    /// <para>形状：<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry\&lt;基名&gt;-&lt;guid&gt;\</c>；
-    /// 回落时才是源卷根。目录必须带 Hidden 属性。</para>
+    /// <para>形状：<c>&lt;目标目录&gt;\.ArchiveFixer.work\group-entry\&lt;基名&gt;-&lt;guid&gt;\</c>。
+    /// 目录必须带 Hidden 属性。</para>
     /// </summary>
     public static class VolumeGroupEntryDirectory
     {
@@ -66,13 +66,15 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            string root = string.IsNullOrWhiteSpace(entryRoot)
-                ? BuildDefaultEntryRoot(sourcePath)
-                : entryRoot!;
+            /*
+             * ⛔ 不再回落盘根：合法入口根只能来自这一组的目标工作区/明确允许的源卷工作区。
+             * 拿不到就不建目录、不动作，由调用方把组落成 Unknown。
+             */
+            string root = entryRoot ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(root))
             {
-                error = "拿不到源卷上的临时入口根";
+                error = "拿不到合法的临时入口根（不回落到盘根）";
                 return null;
             }
 
@@ -274,25 +276,6 @@ namespace ArchiveFixer.Extraction
             catch
             {
                 // 收不掉空壳只影响整洁，不影响这一组已经处理完的事实。
-            }
-        }
-
-        private static string BuildDefaultEntryRoot(string sourcePath)
-        {
-            try
-            {
-                string? volumeRoot = Path.GetPathRoot(Path.GetFullPath(sourcePath));
-
-                if (string.IsNullOrWhiteSpace(volumeRoot))
-                {
-                    return string.Empty;
-                }
-
-                return Path.Combine(volumeRoot, WorkFolderName, GroupEntryFolderName);
-            }
-            catch
-            {
-                return string.Empty;
             }
         }
 

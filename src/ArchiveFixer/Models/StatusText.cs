@@ -106,6 +106,15 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string ExtractSuccessAsGroup = "这一组解压成功";
 
+        /// <summary>内容组里的过程任务：已并入组，不重复显示成最终成功。</summary>
+        public const string ContentGroupProcessTask = "已并入内容组（过程任务）";
+
+        /// <summary>组已有产物，但最终内容没有通过完整校验。</summary>
+        public const string ContentGroupPartial = "组内容未全部证实";
+
+        /// <summary>组没有最终内容。</summary>
+        public const string ContentGroupMissing = "组没有最终内容";
+
         public const string VolumeMissing = "分卷缺失";
 
         /// <summary>分卷结构异常（数量/槽位/大小/混族矛盾）：只显示，不处理。</summary>

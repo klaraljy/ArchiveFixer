@@ -5,6 +5,21 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
+    /// <summary>内容组的最终内容结论；⛔ 任务级“解压成功”不能替代它。</summary>
+    public enum FinalContentState
+    {
+        Unknown = 0,
+
+        /// <summary>有产物但证据只到非空/未逐条核对，不能当最终成功。</summary>
+        Partial = 1,
+
+        /// <summary>产物校验通过且逐条核对过，可当最终成功。</summary>
+        Verified = 2,
+
+        /// <summary>没有最终内容。</summary>
+        Missing = 3
+    }
+
     /// <summary>
     /// **交界处的内容组**：把“哪些片、来自哪些源根、最终内容落在哪”收成一条组级事实。
     ///
@@ -35,12 +50,20 @@ namespace ArchiveFixer.Extraction
 
         public string OwnerTaskFileName { get; private set; } = string.Empty;
 
+        public string OwnerTaskPath { get; private set; } = string.Empty;
+
         /// <summary>组唯一最终输出根；空 = 还没定，⛔ 不拿任务 OutputPath 猜。</summary>
         public string FinalOutputRoot { get; private set; } = string.Empty;
 
         public string FinalContentPath { get; private set; } = string.Empty;
 
-        public bool FinalContentVerified { get; private set; }
+        public FinalContentState FinalState { get; private set; } = FinalContentState.Unknown;
+
+        public bool FinalContentVerified => FinalState == FinalContentState.Verified;
+
+        public int FinalFileCount { get; private set; }
+
+        public long FinalBytes { get; private set; }
 
         public string FinalContentEvidence { get; private set; } = string.Empty;
 
@@ -130,20 +153,42 @@ namespace ArchiveFixer.Extraction
             }
         }
 
-        public void AttachOwner(string? ownerTaskFileName)
+        public void AttachOwner(string? ownerTaskFileName, string? ownerTaskPath = null)
         {
             if (!string.IsNullOrWhiteSpace(ownerTaskFileName))
             {
                 OwnerTaskFileName = ownerTaskFileName!;
             }
+
+            if (!string.IsNullOrWhiteSpace(ownerTaskPath))
+            {
+                OwnerTaskPath = ownerTaskPath!;
+            }
         }
 
-        public void SetFinalOutput(string? outputRoot, string? finalContentPath, bool verified, string? evidence)
+        /// <summary>
+        /// 写最终内容结论；返回状态是否发生变化（用于只记录一次）。⛔ 不允许用 Partial 冒充 Verified。
+        /// </summary>
+        public bool SetFinalOutput(
+            string? outputRoot,
+            string? finalContentPath,
+            FinalContentState state,
+            int fileCount,
+            long bytes,
+            string? evidence)
         {
+            bool changed = FinalState != state
+                || !string.Equals(FinalOutputRoot, outputRoot ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(FinalContentPath, finalContentPath ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
             FinalOutputRoot = outputRoot ?? string.Empty;
             FinalContentPath = finalContentPath ?? string.Empty;
-            FinalContentVerified = verified;
+            FinalState = state;
+            FinalFileCount = fileCount;
+            FinalBytes = bytes;
             FinalContentEvidence = evidence ?? string.Empty;
+
+            return changed;
         }
 
         public string Describe()

@@ -42,6 +42,9 @@ namespace ArchiveFixer.Models
         /// <summary>跟班卷（同一分卷组的后续卷）—— 按设计跳过，**不是"没做成"**，所以单列一档。</summary>
         public int FollowerSkipped { get; private init; }
 
+        /// <summary>内容组内的过程任务：不重复计入最终成功。</summary>
+        public int ContentGroupProcessSkipped { get; private init; }
+
         /// <summary>部分完成（解出来一部分，源包没能收干净 / 递归停在要用户决定的层）。</summary>
         public int PartiallyCompleted { get; private init; }
 
@@ -70,6 +73,8 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static bool IsCountedAsSuccess(ArchiveTask task) =>
             task != null &&
+            !task.IsContentGroupProcessTask &&
+            (!task.HasContentGroup || task.FinalContentVerified) &&
             task.Outcome == TaskOutcome.Succeeded &&
             task.OutputVerification != OutputVerificationOutcome.Failed;
 
@@ -94,6 +99,7 @@ namespace ArchiveFixer.Models
             int failed = 0;
             int skipped = 0;
             int followerSkipped = 0;
+            int contentGroupProcessSkipped = 0;
             int partiallyCompleted = 0;
             int cancelled = 0;
             bool hasVerificationFailure = false;
@@ -104,6 +110,12 @@ namespace ArchiveFixer.Models
                     && task.OutputVerification == OutputVerificationOutcome.Failed)
                 {
                     hasVerificationFailure = true;
+                }
+
+                if (task.IsContentGroupProcessTask)
+                {
+                    contentGroupProcessSkipped++;
+                    continue;
                 }
                 /*
                  * 「缺卷待批末判」那一档：**这一批还没到判死的时候**（用户 2026-10-08 口径：
@@ -145,6 +157,28 @@ namespace ArchiveFixer.Models
                 switch (task.Outcome)
                 {
                     case TaskOutcome.Succeeded:
+                        /*
+                         * 组最终内容没证：任务层“解压成功”不能算成功。
+                         * Missing = 红（空输出/没有最终内容）；Partial = 部分完成。
+                         */
+                        if (task.HasContentGroup && !task.FinalContentVerified)
+                        {
+                            if (task.ContentGroupFinalState == FinalContentState.Missing)
+                            {
+                                failed++;
+                            }
+                            else if (task.ContentGroupFinalState == FinalContentState.Partial)
+                            {
+                                partiallyCompleted++;
+                            }
+                            else
+                            {
+                                skipped++;
+                            }
+
+                            break;
+                        }
+
                         /*
                          * 「终态说成功、校验却判否」那一帧（不变量 6 的真机违反：7z 用错密码写出 0 字节桩）。
                          * 它必须落**失败**侧 —— 判据由 IsCountedAsFailure 一处给出，
@@ -207,10 +241,12 @@ namespace ArchiveFixer.Models
                 Failed = failed,
                 Skipped = skipped,
                 FollowerSkipped = followerSkipped,
+                ContentGroupProcessSkipped = contentGroupProcessSkipped,
                 PartiallyCompleted = partiallyCompleted,
                 Cancelled = cancelled,
                 HasVerificationFailure = hasVerificationFailure,
-                Untouched = list.Count - succeeded - failed - skipped - followerSkipped - partiallyCompleted - cancelled
+                Untouched = list.Count - succeeded - failed - skipped - followerSkipped
+                    - contentGroupProcessSkipped - partiallyCompleted - cancelled
             };
         }
 
@@ -265,6 +301,12 @@ namespace ArchiveFixer.Models
                     CultureInfo.CurrentCulture,
                     StatusText.VolumeGroupFollowerSummaryFormat,
                     FollowerSkipped)
+                : string.Empty;
+
+        /// <summary>组内过程任务不重复计入最终成功的那一句。</summary>
+        public string DescribeContentGroupProcessNote() =>
+            ContentGroupProcessSkipped > 0
+                ? $"另有 {ContentGroupProcessSkipped} 个是内容组内的过程任务 —— 不计最终成功（最终内容按组只算一次）。"
                 : string.Empty;
     }
 }

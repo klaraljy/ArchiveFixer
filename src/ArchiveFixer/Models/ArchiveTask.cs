@@ -894,6 +894,66 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 输出目录。
         /// </summary>
+        /// <summary>
+        /// 这一单属于哪个内容组（空 = 普通单包，不参与组级最终内容口径）。
+        /// 组级字段只由 <c>ExtractionCoordinator.FinalizeContentGroups</c> 写。
+        /// </summary>
+        public string ContentGroupId { get; set; } = string.Empty;
+
+        public string ContentGroupBaseName { get; set; } = string.Empty;
+
+        /// <summary>组最终内容三态；空组/未判决 = Unknown。</summary>
+        public FinalContentState ContentGroupFinalState { get; set; } = FinalContentState.Unknown;
+
+        /// <summary>这一单是组内的过程任务（入口/中间层），不计最终成功。</summary>
+        public bool IsContentGroupProcessTask { get; set; }
+
+        /// <summary>只有组最终内容任务才有值；过程任务为空。</summary>
+        public string FinalContentPath { get; set; } = string.Empty;
+
+        /// <summary>组唯一最终输出根；只有最终内容任务才有值。</summary>
+        public string FinalOutputPath { get; set; } = string.Empty;
+
+        public bool HasContentGroup => !string.IsNullOrWhiteSpace(ContentGroupId);
+
+        public bool FinalContentVerified =>
+            HasContentGroup
+            && !IsContentGroupProcessTask
+            && ContentGroupFinalState == FinalContentState.Verified;
+
+        /// <summary>列表「输出目录」列：组内过程任务不再显示自己的中间落点。</summary>
+        public string OutputDisplayPath =>
+            !HasContentGroup
+                ? OutputPath
+                : IsContentGroupProcessTask
+                    ? "—（组内过程任务）"
+                    : !string.IsNullOrWhiteSpace(FinalOutputPath)
+                        ? FinalOutputPath
+                        : OutputPath;
+
+        /// <summary>组判决回写后统一发通知，界面状态格/颜色当场更新。</summary>
+        public void ApplyContentGroupFacts(
+            string? groupId,
+            string? baseName,
+            FinalContentState state,
+            bool isProcessTask,
+            string? finalContentPath,
+            string? finalOutputPath)
+        {
+            ContentGroupId = groupId ?? string.Empty;
+            ContentGroupBaseName = baseName ?? string.Empty;
+            ContentGroupFinalState = state;
+            IsContentGroupProcessTask = isProcessTask;
+            FinalContentPath = finalContentPath ?? string.Empty;
+            FinalOutputPath = finalOutputPath ?? string.Empty;
+
+            OnPropertyChanged(nameof(HasContentGroup));
+            OnPropertyChanged(nameof(FinalContentVerified));
+            OnPropertyChanged(nameof(OutputDisplayPath));
+            OnPropertyChanged(nameof(StatusDisplayText));
+            OnPropertyChanged(nameof(StatusColorKey));
+        }
+
         public string OutputPath
         {
             get => _outputPath;
@@ -1066,12 +1126,52 @@ namespace ArchiveFixer.Models
         /// 而**颜色**原先绑的是机器状态 ⇒ 待判那一行说着"跳过"却顶着红色。
         /// 现在两处（`TaskTab.xaml` / `TaskDetailWindow.xaml`）都绑这个键，⛔ 不再各绑各的。</para>
         /// </summary>
-        public string StatusColorKey => IsVolumeDeficitDeferred ? StatusText.Skipped : Status;
+        public string StatusColorKey
+        {
+            get
+            {
+                if (HasContentGroup)
+                {
+                    if (IsContentGroupProcessTask)
+                    {
+                        return StatusText.Skipped;
+                    }
+
+                    if (!FinalContentVerified)
+                    {
+                        return ContentGroupFinalState == FinalContentState.Missing
+                            ? StatusText.ExtractFailed
+                            : StatusText.PartiallyCompleted;
+                    }
+                }
+
+                return IsVolumeDeficitDeferred ? StatusText.Skipped : Status;
+            }
+        }
 
         public string StatusDisplayText
         {
             get
             {
+                /*
+                 * 组内过程任务不重复显示成最终成功；组最终内容未证也不许显示“解压成功”。
+                 * 只改显示，不动 Status/Outcome（删除闸门/统计仍读机器字段）。
+                 */
+                if (HasContentGroup)
+                {
+                    if (IsContentGroupProcessTask)
+                    {
+                        return StatusText.ContentGroupProcessTask;
+                    }
+
+                    if (!FinalContentVerified)
+                    {
+                        return ContentGroupFinalState == FinalContentState.Missing
+                            ? StatusText.ContentGroupMissing
+                            : StatusText.ContentGroupPartial;
+                    }
+                }
+
                 /*
                  * ===== 口径①（用户 2026-10-06 拍板）：一行只讲"你导进来的那个文件" =====
                  *

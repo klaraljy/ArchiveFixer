@@ -1170,6 +1170,12 @@ namespace ArchiveFixer.ViewModels
                      */
                     await _extractionCoordinator.StartExtractForOneClickAsync(runOptions, continuationRound: round > 1);
 
+                    /*
+                     * 组级最终内容判决：owner 已经落终态才回填；空输出/未逐条核对一律不判 Verified。
+                     * 这一行只读任务上的既有事实，不重算解压结果。
+                     */
+                    _extractionCoordinator.FinalizeContentGroups(Tasks);
+
                     UpdateSummary();
 
                     // 「停止后续」之后不许再续解：按下过停止，或者这一轮有任务根本没轮到。
@@ -1492,16 +1498,10 @@ namespace ArchiveFixer.ViewModels
                                     (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
                                     out string linkError);
 
-                                if (linked == null && targetWorkRoot != null)
-                                {
-                                    // 目标盘与源片不同卷时，硬链接只能在源卷上建；回落旧行为。
-                                    linked = VolumeGroupEntryDirectory.TryMaterialize(
-                                        prepared,
-                                        null,
-                                        (level, message) => AppendLog(level, $"[第二大步·标准名] {message}"),
-                                        out linkError);
-                                }
-
+                                /*
+                                 * ⛔ 不再为目标盘与源片不同卷回落源卷根/盘根：
+                                 * 拿不到合法工作区入口就不建目录，由这一组落 Unknown。
+                                 */
                                 if (linked == null)
                                 {
                                     materialized.Add(prepared.WithState(
@@ -1820,7 +1820,8 @@ namespace ArchiveFixer.ViewModels
 
                         _extractionCoordinator.AttachContentGroupOwner(
                             group.PreparedGroup,
-                            entryTask.FileName);
+                            entryTask.FileName,
+                            entryTask.CurrentPath);
 
                         _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
 
@@ -3825,6 +3826,11 @@ namespace ArchiveFixer.ViewModels
             if (tally.FollowerSkipped > 0)
             {
                 line += " " + tally.DescribeFollowerNote();
+            }
+
+            if (tally.ContentGroupProcessSkipped > 0)
+            {
+                line += " " + tally.DescribeContentGroupProcessNote();
             }
 
             int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);

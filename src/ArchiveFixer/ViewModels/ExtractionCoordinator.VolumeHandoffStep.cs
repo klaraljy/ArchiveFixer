@@ -169,7 +169,10 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>把唯一 owner 写回内容组；⛔ 不换 owner，只补空位。</summary>
-        internal void AttachContentGroupOwner(PreparedVolumeGroup? prepared, string? ownerTaskFileName)
+        internal void AttachContentGroupOwner(
+            PreparedVolumeGroup? prepared,
+            string? ownerTaskFileName,
+            string? ownerTaskPath = null)
         {
             if (prepared == null
                 || string.IsNullOrWhiteSpace(ownerTaskFileName)
@@ -182,7 +185,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            group.AttachOwner(ownerTaskFileName);
+            group.AttachOwner(ownerTaskFileName, ownerTaskPath);
             AppendLog("INFO", $"[内容组] {group.BaseName}：owner={ownerTaskFileName}。");
         }
 
