@@ -1,23 +1,25 @@
 param(
     [string]$SpaceRoot = 'H:\BaiduNetdiskDownload\困难大测试',
     [string]$SevenZip = 'E:\ArchiveFixer\tools\7zip\7z.exe',
+    [int]$NormalBase = 910300000,
+    [int]$SpecificBase = 910400000,
     [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 
-$normalBase = 910300000
-$specificBase = 910400000
+$normalBase = $NormalBase
+$specificBase = $SpecificBase
 $normalCount = 15
 $specificCount = 5
 $reserveBytes = 64 * 1024
 
-$normalRoot = Join-Path $SpaceRoot '大测试\910300000'
-$specificRoot = Join-Path $SpaceRoot '大测试\910400000'
-$normalBackup = Join-Path $SpaceRoot '大测试备份位置\910300000-空间不足-备份'
-$specificBackup = Join-Path $SpaceRoot '大测试备份位置\910400000-空间不足-特定解压-备份'
-$normalLog = Join-Path $SpaceRoot '大测试日志\大测试日志-910300000-空间不足'
-$specificLog = Join-Path $SpaceRoot '大测试日志\大测试日志-910400000-空间不足-特定解压'
+$normalRoot = Join-Path $SpaceRoot ("大测试\$normalBase")
+$specificRoot = Join-Path $SpaceRoot ("大测试\$specificBase")
+$normalBackup = Join-Path $SpaceRoot ("大测试备份位置\$normalBase-空间不足-备份")
+$specificBackup = Join-Path $SpaceRoot ("大测试备份位置\$specificBase-空间不足-特定解压-备份")
+$normalLog = Join-Path $SpaceRoot ("大测试日志\大测试日志-$normalBase-空间不足")
+$specificLog = Join-Path $SpaceRoot ("大测试日志\大测试日志-$specificBase-空间不足-特定解压")
 
 if (-not (Test-Path -LiteralPath $SevenZip)) { throw "7z 不存在：$SevenZip" }
 if ($null -eq (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '找不到 dotnet' }
@@ -36,13 +38,16 @@ function Assert-SafeRoot {
     if ($unknown) { throw "拒绝覆盖：$Root 有未知内容：$($unknown.Name -join ', ')" }
 }
 
+$normalSeedText = [string]$normalBase
+$specificSeedText = [string]$specificBase
+
 foreach ($pair in @(
-    @($normalRoot, '910300000'),
-    @($specificRoot, '910400000'),
-    @($normalBackup, '910300000-空间不足-备份'),
-    @($specificBackup, '910400000-空间不足-特定解压-备份'),
-    @($normalLog, '910300000-空间不足'),
-    @($specificLog, '910400000-空间不足-特定解压')
+    @($normalRoot, $normalSeedText),
+    @($specificRoot, $specificSeedText),
+    @($normalBackup, $normalSeedText + '-空间不足-备份'),
+    @($specificBackup, $specificSeedText + '-空间不足-特定解压-备份'),
+    @($normalLog, $normalSeedText + '-空间不足'),
+    @($specificLog, $specificSeedText + '-空间不足-特定解压')
 )) {
     if (Test-Path -LiteralPath $pair[0]) {
         if (-not $Force) { throw "批次已存在：$($pair[0])（确认覆盖请加 -Force）" }
@@ -53,12 +58,12 @@ foreach ($pair in @(
 foreach ($dir in @($normalRoot, $specificRoot, $normalBackup, $specificBackup, $normalLog, $specificLog)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
-Set-Content -LiteralPath (Join-Path $normalRoot '.space-generated') -Value '910300000' -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $specificRoot '.space-generated') -Value '910400000' -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $normalBackup '.space-generated') -Value '910300000-空间不足-备份' -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $specificBackup '.space-generated') -Value '910400000-空间不足-特定解压-备份' -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $normalLog '.space-generated') -Value '910300000-空间不足' -Encoding utf8NoBOM
-Set-Content -LiteralPath (Join-Path $specificLog '.space-generated') -Value '910400000-空间不足-特定解压' -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $normalRoot '.space-generated') -Value $normalSeedText -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $specificRoot '.space-generated') -Value $specificSeedText -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $normalBackup '.space-generated') -Value ($normalSeedText + '-空间不足-备份') -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $specificBackup '.space-generated') -Value ($specificSeedText + '-空间不足-特定解压-备份') -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $normalLog '.space-generated') -Value ($normalSeedText + '-空间不足') -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $specificLog '.space-generated') -Value ($specificSeedText + '-空间不足-特定解压') -Encoding utf8NoBOM
 
 $normalGroups = @(
     [ordered]@{ id = 'N1'; freeBytes = 2200000; samples = @(
@@ -288,3 +293,4 @@ $validation | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $normalLog '�
 $validation | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $specificLog '校验结果.json') -Encoding utf8NoBOM
 
 Write-Output ("空间不足造包完成：普通 {0}/15，特定 {1}/5，总 {2}" -f $normalManifest.Count, $specificManifest.Count, $validation.total)
+
