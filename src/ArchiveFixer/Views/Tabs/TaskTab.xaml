@@ -302,6 +302,7 @@
 
                 <Grid>
                     <DataGrid x:Name="TaskDataGrid"
+                              AutomationProperties.Name="任务列表"
                               ItemsSource="{Binding Tasks}"
                               SelectedItem="{Binding SelectedTask, Mode=TwoWay}"
                               SelectionMode="Extended"
