@@ -36,6 +36,8 @@ namespace ArchiveFixer
         private TrayIconService? _trayIcon;
         private bool _allowClose;
         private MainViewModel? _watchedViewModel;
+        private readonly WindowPlacementService _windowPlacement;
+        private bool _restoredWindowPlacement;
 
         /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
         private const string UsageDocRelativePath = @"docs\使用说明.md";
@@ -43,6 +45,9 @@ namespace ArchiveFixer
         public MainWindow()
         {
             InitializeComponent();
+
+            _windowPlacement = new WindowPlacementService(ArchiveFixer.App.DataRootDirectory);
+            RestoreWindowPlacement();
 
             Loaded += MainWindow_Loaded;
 
@@ -67,6 +72,8 @@ namespace ArchiveFixer
         /// </summary>
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            FitInitialWindowToWorkArea();
+
             if (DataContext is MainViewModel viewModel)
             {
                 viewModel.TabRequested -= ViewModel_TabRequested;
@@ -74,6 +81,55 @@ namespace ArchiveFixer
 
                 SubscribeTaskProgress(viewModel);
                 ImportStartupPaths(viewModel);
+            }
+        }
+
+        /// <summary>
+        /// 首次显示按当前工作区夹一次，避免默认尺寸/最小尺寸在 1366×768、
+        /// 125%–150% 缩放下把标题栏和按钮顶到屏幕外。用户之后仍可自由缩放。
+        /// </summary>
+        private void FitInitialWindowToWorkArea()
+        {
+            if (_restoredWindowPlacement)
+            {
+                return;
+            }
+
+            Rect workArea = SystemParameters.WorkArea;
+
+            if (workArea.Width < 320 || workArea.Height < 240)
+            {
+                return;
+            }
+
+            double maxWidth = Math.Max(320, workArea.Width * 0.96);
+            double maxHeight = Math.Max(240, workArea.Height * 0.96);
+
+            MinWidth = Math.Min(MinWidth, maxWidth);
+            MinHeight = Math.Min(MinHeight, maxHeight);
+            Width = Math.Min(Math.Max(Width, MinWidth), maxWidth);
+            Height = Math.Min(Math.Max(Height, MinHeight), maxHeight);
+        }
+
+        private void RestoreWindowPlacement()
+        {
+            WindowPlacementService.Placement? placement = _windowPlacement.Load();
+
+            if (placement == null || !WindowPlacementService.IsVisibleOnScreen(placement))
+            {
+                return;
+            }
+
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = placement.Left;
+            Top = placement.Top;
+            Width = placement.Width;
+            Height = placement.Height;
+            _restoredWindowPlacement = true;
+
+            if (placement.Maximized)
+            {
+                WindowState = WindowState.Maximized;
             }
         }
 
@@ -161,9 +217,9 @@ namespace ArchiveFixer
         }
 
         /// <summary>
-        /// 只同步托盘悬停文字。任务栏缩略图/进度覆盖已移除：
-        /// Windows 11 的 TaskbarItemInfo 缩略图在部分 WPF 窗口上会出现下半截白块，
-        /// 用户要求先去掉，以确认是否由它引起。
+        /// 同步托盘悬停文字和任务栏进度条。
+        /// 任务栏缩略图/覆盖图标仍不启用（Windows 11 某些 WPF 窗口会出白块）；
+        /// 只给 TaskbarItemInfo 设置 ProgressState/ProgressValue。
         /// </summary>
         private void RefreshShellProgress()
         {
@@ -197,7 +253,23 @@ namespace ArchiveFixer
                     StatusText.TrayProgressFormat,
                     active.ProgressPercent,
                     eta));
+
+                if (TaskbarProgressInfo != null)
+                {
+                    TaskbarProgressInfo.ProgressState = System.Windows.Shell.TaskbarItemProgressState.Normal;
+                    TaskbarProgressInfo.ProgressValue = Math.Clamp(active.ProgressPercent / 100.0, 0, 1);
+                }
+
                 return;
+            }
+
+            if (TaskbarProgressInfo != null)
+            {
+                TaskbarProgressInfo.ProgressState = _watchedViewModel.IsBusy
+                    ? System.Windows.Shell.TaskbarItemProgressState.Indeterminate
+                    : System.Windows.Shell.TaskbarItemProgressState.None;
+
+                TaskbarProgressInfo.ProgressValue = 0;
             }
 
             _trayIcon?.SetStatusText(
@@ -312,12 +384,20 @@ namespace ArchiveFixer
             if (!_allowClose)
             {
                 /*
-                 * 右上角 X = 收进托盘，不退出、不取消正在跑的任务。
-                 * 真正退出走托盘菜单 / 文件菜单的「退出」。
+                 * WinRAR 式关闭（用户 2026-11-07 确认）：
+                 * - 没有任务在跑：X = 正常退出；
+                 * - 有任务在跑：X = 收进托盘，任务继续，真正退出走托盘/菜单「退出」。
+                 * 这里只负责决定“不让这次关闭”，不替用户取消任务。
                  */
-                e.Cancel = true;
-                _trayIcon?.HideToTray();
-                return;
+                if (DataContext is MainViewModel viewModel
+                    && WindowClosePolicy.ShouldHideToTray(viewModel.IsBusy))
+                {
+                    e.Cancel = true;
+                    _trayIcon?.HideToTray();
+                    return;
+                }
+
+                _allowClose = true;
             }
 
             _trayIcon?.Dispose();
@@ -346,6 +426,8 @@ namespace ArchiveFixer
 
         protected override void OnClosed(EventArgs e)
         {
+            _windowPlacement.Save(this);
+
             UnsubscribeTaskProgress();
 
             _trayIcon?.SetStatusText(StatusText.TrayIdleText);
@@ -363,6 +445,16 @@ namespace ArchiveFixer
             }
 
             base.OnClosed(e);
+
+            // ShutdownMode=OnExplicitShutdown：空闲时用户点 X，必须由这里真正结束进程。
+            // 只在“当前 Application 的主窗口就是这一扇”时关闭，避免 UI 探针关闭测试窗口时误杀进程。
+            if (_allowClose
+                && System.Windows.Application.Current is ArchiveFixer.App application
+                && application.MainWindow == this
+                && application.Dispatcher.HasShutdownStarted == false)
+            {
+                application.Shutdown();
+            }
         }
 
         /// <summary>

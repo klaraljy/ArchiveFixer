@@ -238,6 +238,12 @@ namespace ArchiveFixer.ViewModels
         public ICommand ClearPasswordsCommand { get; }
         public ICommand ImportPasswordsCommand { get; }
 
+        /// <summary>
+        /// 把当前完整列表导出成一份**明文** txt，供换机器/备份用。
+        /// 只导出副本，不移动、不删除程序内置的加密密码本。
+        /// </summary>
+        public ICommand ExportPlaintextPasswordsCommand { get; }
+
         /// <summary>把手工添加的密码追加进用户自己的密码本 txt（写前自动备份）。</summary>
         public ICommand WriteBackPasswordsCommand { get; }
 
@@ -286,6 +292,7 @@ namespace ArchiveFixer.ViewModels
             RemovePasswordCommand = new RelayCommand(RemovePassword, CanRemoveSelected);
             ClearPasswordsCommand = new RelayCommand(ClearPasswords, () => Passwords.Count > 0);
             ImportPasswordsCommand = new RelayCommand(ImportPasswords);
+            ExportPlaintextPasswordsCommand = new RelayCommand(ExportPlaintextPasswords, () => Passwords.Count > 0);
             WriteBackPasswordsCommand = new RelayCommand(WriteBackPasswords, CanWriteBackPasswords);
             SavePasswordListCommand = new RelayCommand(SavePasswordList, () => Passwords.Count > 0);
             MoveUpCommand = new RelayCommand(MoveUp, CanMoveUp);
@@ -593,6 +600,46 @@ namespace ArchiveFixer.ViewModels
                 Message = "导入密码失败：" + ex.Message;
                 SetNotice(PasswordNoticeKind.Error, "导入密码失败：" + ex.Message);
                 _dialogService.ShowError("导入密码失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 显式导出完整明文密码本。只写用户选定的副本，程序内部密码本原样保留。
+        /// </summary>
+        private void ExportPlaintextPasswords()
+        {
+            try
+            {
+                string path = _dialogService.ShowSaveFileDialog(
+                    "导出明文密码本",
+                    "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+                    "passwords.txt");
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    Message = "已取消导出。";
+                    return;
+                }
+
+                if (!PasswordTextStore.TryExportPlaintext(
+                        path,
+                        Passwords.Select(item => item.Value ?? string.Empty),
+                        out string exportError))
+                {
+                    throw new IOException(exportError);
+                }
+
+                Message = "已导出明文密码本副本；程序内部密码本没有移动、没有删除。";
+                SetNotice(
+                    PasswordNoticeKind.Warning,
+                    "这是一份明文密码副本，任何能打开它的人都能看到密码。"
+                    + Environment.NewLine
+                    + "程序内部密码本仍在原位置，后续修改请继续用「保存密码列表」。");
+            }
+            catch (Exception ex)
+            {
+                Message = "导出明文密码本失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "导出明文密码本失败：" + ex.Message);
             }
         }
 
@@ -1424,6 +1471,8 @@ namespace ArchiveFixer.ViewModels
             RaiseCanExecuteChanged(AddPasswordCommand);
             RaiseCanExecuteChanged(RemovePasswordCommand);
             RaiseCanExecuteChanged(ClearPasswordsCommand);
+            RaiseCanExecuteChanged(ExportPlaintextPasswordsCommand);
+            RaiseCanExecuteChanged(SavePasswordListCommand);
             RaiseCanExecuteChanged(WriteBackPasswordsCommand);
             RaiseCanExecuteChanged(MoveUpCommand);
             RaiseCanExecuteChanged(MoveDownCommand);

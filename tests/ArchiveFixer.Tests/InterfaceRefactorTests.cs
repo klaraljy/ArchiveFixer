@@ -414,17 +414,16 @@ namespace ArchiveFixer.Tests
         {
             XDocument document = Load(Path.Combine("src", "ArchiveFixer", "MainWindow.xaml"));
 
-            Assert.Equal("1400", (string?)document.Root?.Attribute("Width"));
-            Assert.Equal("900", (string?)document.Root?.Attribute("Height"));
+            Assert.Equal("1200", (string?)document.Root?.Attribute("Width"));
+            Assert.Equal("760", (string?)document.Root?.Attribute("Height"));
 
             /*
-             * 最小宽度 2026-09-25 由 1000 抬到 1180（第 27 条）：①页工具条中间那一格
-             * 「输出位置」要有余量 —— 1000px 时右边那串按钮（全选…一键处理…特定解压）约 900px，
-             * 路径格会被压到几乎看不见、右端的「未指定位置」还可能被裁掉。
-             * 默认 1400 下完全够用，这条只防"用户把窗口拖到最小"那一种情况。
+             * 2026-11-07：默认尺寸/最小尺寸改为能落进 1366×768 + 125% 缩放的可用区；
+             * 启动时 MainWindow_Loaded 还会按当前工作区再夹一次。这里只钉住 XAML 名义值，
+             * 不把“真实屏幕大小”写进用例。
              */
-            Assert.Equal("1180", (string?)document.Root?.Attribute("MinWidth"));
-            Assert.Equal("640", (string?)document.Root?.Attribute("MinHeight"));
+            Assert.Equal("960", (string?)document.Root?.Attribute("MinWidth"));
+            Assert.Equal("600", (string?)document.Root?.Attribute("MinHeight"));
         }
 
         // ================================================================ ⑦ 搬走的设置项

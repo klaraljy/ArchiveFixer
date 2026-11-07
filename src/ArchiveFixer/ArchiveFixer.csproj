@@ -6,6 +6,9 @@
     <UseWPF>true</UseWPF>
     <!-- 托盘图标用 WinForms NotifyIcon；不引入新 NuGet。 -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- PerMonitorV2 + longPathAware；WPF 不会自动声明 per-monitor DPI。 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ArchiveFixer</AssemblyName>

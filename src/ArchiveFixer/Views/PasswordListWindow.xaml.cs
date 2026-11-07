@@ -16,7 +16,7 @@ namespace ArchiveFixer.Views
             {
                 if (_viewModel == null)
                 {
-                    _viewModel = new PasswordListViewModel(new PasswordService { DataRootDirectory = PathService.DefaultDataRootDirectory }, new DialogService());
+                    _viewModel = new PasswordListViewModel(CreateProductionPasswordService(), new DialogService());
                     DataContext = _viewModel;
                     AttachViewModel(_viewModel);
                 }
@@ -51,7 +51,7 @@ namespace ArchiveFixer.Views
             /*
              * 密码本窗口是高强度提醒（用户 2026-09-22 反馈：它"躲到主窗口后面，只有声音、没有闪烁，
              * 声音还很轻"）。这里的强度固定为 Strong —— 解压卡在"等密码"上时整批都不动，
-             * 用户必须过来处理，所以一直闪到被点 + 连响三声。
+             * 用户必须过来处理，所以一直闪到被点 + 最多响一声（2026-11-07 口径）。
              */
             ArchiveFixer.Helpers.WindowAttention.Attach(this, ArchiveFixer.Helpers.AttentionStrength.Strong);
 
@@ -61,7 +61,7 @@ namespace ArchiveFixer.Views
             }
             else
             {
-                ViewModel = new PasswordListViewModel(new PasswordService { DataRootDirectory = PathService.DefaultDataRootDirectory }, new DialogService());
+                ViewModel = new PasswordListViewModel(CreateProductionPasswordService(), new DialogService());
             }
         }
 
@@ -117,6 +117,18 @@ namespace ArchiveFixer.Views
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
+        }
+
+        private static PasswordService CreateProductionPasswordService()
+        {
+            var service = new PasswordService
+            {
+                DataRootDirectory = PathService.DefaultDataRootDirectory
+            };
+
+            service.UseTextStore = true;
+            service.TextStore.EncryptAtRest = true;
+            return service;
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)

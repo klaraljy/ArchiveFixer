@@ -6,10 +6,10 @@
         xmlns:tabs="clr-namespace:ArchiveFixer.Views.Tabs"
         Style="{StaticResource AppWindowStyle}"
         Title="{x:Static models:StatusText.AppWindowTitle}"
-        Width="1400"
-        Height="900"
-        MinWidth="1180"
-        MinHeight="640"
+        Width="1200"
+        Height="760"
+        MinWidth="960"
+        MinHeight="600"
         WindowStartupLocation="CenterScreen"
         AllowDrop="True"
         PreviewDragOver="Window_PreviewDragOver"
@@ -18,6 +18,11 @@
     <Window.DataContext>
         <viewModels:MainViewModel />
     </Window.DataContext>
+
+    <!-- 只使用任务栏进度，不启用缩略图/覆盖图标（Win11 上曾出现白块）。 -->
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="TaskbarProgressInfo" ProgressState="None" />
+    </Window.TaskbarItemInfo>
 
     <!--
         勾选的键盘入口（用户 2026-09-22 追加需求："像文件夹选中一样，有一个全选的选项"）。
@@ -34,7 +39,8 @@
         主窗口 = 顶部菜单（三组）+ 六个选项卡 + 底部状态/进度条（用户 2026-09-24 第 11 条）。
         原来堆在这里的并发档 / 空间管理 / 危险模式红横幅 / 输出位置那一大块全部按功能搬进了选项卡，
         ① 任务页现在只有"选任务 → 点一键处理 → 看结果"这条主线。
-        第 20 条：窗口默认 1400×900、最小 1000×640；整页用星号行列，拉大时各页跟着长。
+        窗口默认 1200×760、最小 960×600；启动时再按当前工作区夹一次，
+        整页用星号行列，拉大时各页跟着长。
     -->
 
     <DockPanel Margin="12">
@@ -118,9 +124,12 @@
         </Border>
 
         <!--
-            ============ 六个选项卡 ============
+            ============ 九个选项卡 ============
         -->
-        <TabControl x:Name="MainTabControl" Margin="0,0,0,0" SelectionChanged="MainTabControl_SelectionChanged">
+        <TabControl x:Name="MainTabControl"
+                    AutomationProperties.Name="功能选项卡"
+                    Margin="0,0,0,0"
+                    SelectionChanged="MainTabControl_SelectionChanged">
             <TabControl.Template>
                 <ControlTemplate TargetType="TabControl">
                     <Grid>

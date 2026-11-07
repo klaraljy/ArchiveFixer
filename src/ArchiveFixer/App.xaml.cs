@@ -109,6 +109,11 @@ namespace ArchiveFixer
 
             EnsureApplicationDirectories();
             LegacyUserDataMigration.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
+
+            if (SystemParameters.HighContrast)
+            {
+                ArchiveFixer.Helpers.HighContrastPalette.Apply(Resources);
+            }
             UserDataMaintenance.CleanupLegacyLocalLogs(DataRootDirectory, LogsDirectory);
             UserDataMaintenance.CleanupEmptyLegacyLocalTemp(DataRootDirectory, TempDirectory);
 

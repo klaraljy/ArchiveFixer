@@ -18,12 +18,12 @@ namespace ArchiveFixer.Tests
     public class WindowAttentionTests
     {
         [Fact]
-        public void 强提醒响三声_普通提醒响一声()
+        public void 提醒最多一声_不连响()
         {
-            Assert.Equal(3, WindowAttention.ChimeCount(AttentionStrength.Strong));
+            Assert.Equal(1, WindowAttention.ChimeCount(AttentionStrength.Strong));
             Assert.Equal(1, WindowAttention.ChimeCount(AttentionStrength.Normal));
 
-            // 间隔必须在"听得出是两声"与"不拖沓"之间。
+            // 间隔仍保留；强提醒不再连续使用它。
             Assert.InRange(WindowAttention.ChimeIntervalMs, 300, 1200);
         }
 

@@ -46,7 +46,8 @@ namespace ArchiveFixer.Views
         {
             if (PasswordList.SelectedItem is not string picked)
             {
-                MessageBox.Show(this, "先选中一条。", "密码", MessageBoxButton.OK, MessageBoxImage.Information);
+                HintTextBlock.Text = "先选中一条密码，再点「使用这一条」。";
+                PasswordList.Focus();
                 return;
             }
 

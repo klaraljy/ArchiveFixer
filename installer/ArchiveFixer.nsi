@@ -168,7 +168,7 @@ Page custom UpgradePage UpgradePageLeave
         Pop $UnDataDialog
         StrCmp $UnDataDialog "error" un_data_show_done
 
-        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个固定目录里放的是你长期要留着的东西，不是程序：$\r$\n${USER_DATA_DIR}$\r$\n· passwords.txt / passwords.meta.json —— 密码本（明文）$\r$\n· appsettings.json —— 你调过的设置与习惯"
+        ${NSD_CreateLabel} 0 0 100% 46u "程序会被卸掉，但下面这个固定目录里放的是你长期要留着的东西，不是程序：$\r$\n${USER_DATA_DIR}$\r$\n· passwords.txt / passwords.meta.json —— 密码本（DPAPI 加密；换机器先用「导出明文…」）$\r$\n· appsettings.json —— 你调过的设置与习惯"
         Pop $UnDataLabel
 
         ${NSD_CreateRadioButton} 0 56u 100% 24u "保留设置与密码（推荐）：只删程序，${USER_DATA_DIR} 原样留着；以后重装能接着用"

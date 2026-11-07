@@ -296,6 +296,17 @@ namespace ArchiveFixer.Services
                 {
                     if (TextStore.TryLoad(out List<string> textValues, out _))
                     {
+                        // 旧明文密码本读入后立即升级为 DPAPI 密文；写失败也不阻断本次启动，
+                        // 下一次保存或启动会再试。
+                        if (TextStore.EncryptAtRest && !TextStore.LastLoadWasEncrypted)
+                        {
+                            if (!TextStore.TrySave(textValues, out string upgradeError))
+                            {
+                                LastListWarning = "密码本加密升级失败，仍在使用旧明文文件：" + upgradeError;
+                                RememberedListWarning?.Invoke(LastListWarning);
+                            }
+                        }
+
                         bool hasMetadata = MetadataStore.TryLoad(
                             out Dictionary<string, PasswordMetadataEntry> metadata,
                             out string metadataFailure);
@@ -337,6 +348,20 @@ namespace ArchiveFixer.Services
                 }
                 catch (Exception ex)
                 {
+                    if (TextStore.LastLoadWasEncryptedFailure)
+                    {
+                        /*
+                         * 加密密码本解不开（换 Windows 用户/机器、文件损坏）时绝不能回落到旧 DPAPI
+                         * 记忆再覆盖它；本次禁止写回，用户可以用备份/导出恢复。
+                         */
+                        TextStoreWriteBlocked = true;
+                        LastListWarning =
+                            "内置密码本无法解密（可能换了 Windows 用户/机器，或文件被改动）；"
+                            + "本次不写回任何密码文件，原文件保留。";
+                        RememberedListWarning?.Invoke(LastListWarning);
+                        return PasswordListLoadStatus.NoFile;
+                    }
+
                     LastListWarning = "内置密码清单读取失败，已回落到旧的密码记忆：" + ex.Message;
                     RememberedListWarning?.Invoke(LastListWarning);
                 }

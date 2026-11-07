@@ -9,10 +9,10 @@ namespace ArchiveFixer.Helpers
     /// <summary>需要引起注意的强度（决定响几声、闪多久）。</summary>
     public enum AttentionStrength
     {
-        /// <summary>普通提示：闪任务栏 + 响一声。</summary>
+        /// <summary>普通提示：窗口没到前台时闪任务栏 + 响一声。</summary>
         Normal,
 
-        /// <summary>必须有人处理的提示（警告 / 错误 / 询问 / 密码）：闪任务栏（一直闪到被点）+ 连响三声。</summary>
+        /// <summary>必须有人处理的提示（警告 / 错误 / 询问 / 密码）：窗口没到前台时闪任务栏 + 响一声。</summary>
         Strong
     }
 
@@ -34,8 +34,8 @@ namespace ArchiveFixer.Helpers
     /// 再用 <c>Topmost</c> 脉冲把 z 序顶上去（<c>Topmost</c> 立刻复位，不是"永远置顶"）。
     /// 另加一次 <c>SetForegroundWindow</c> 尽力而为 —— 前台锁可能拒绝它，那时靠闪烁兜底。</description></item>
     /// <item><description><b>任务栏闪烁</b>：<c>FlashWindowEx</c> + <c>FLASHW_TIMERNOFG</c>
-    /// （一直闪到窗口被激活为止，正是 WinRAR 那种"强提醒"的手感）。窗口获得焦点时立刻停。</description></item>
-    /// <item><description><b>提示音</b>：连响 <see cref="ChimeCount"/> 声（间隔 <see cref="ChimeIntervalMs"/> 毫秒）。
+    /// （一直闪到窗口被激活为止）。窗口获得焦点时立刻停。</description></item>
+    /// <item><description><b>提示音</b>：最多响 <see cref="ChimeCount"/> 声（2026-11-07 用户要求：强提醒也只要一声）。
     /// ⚠ 音量由**系统音量**决定，程序不能（也不该）超过它 —— 这条写进「已知限制」，不假装"更响"。</description></item>
     /// </list>
     ///
@@ -78,11 +78,11 @@ namespace ArchiveFixer.Helpers
         private const uint FLASHW_ALL = 3;
         private const uint FLASHW_TIMERNOFG = 12;
 
-        /// <summary>要响几声：普通 1 声（"知道一下"），强提醒 3 声（"过来处理"）。</summary>
-        public static int ChimeCount(AttentionStrength strength)
-        {
-            return strength == AttentionStrength.Strong ? 3 : 1;
-        }
+        /// <summary>
+        /// 要响几声：普通/强提醒都只响 1 声。
+        /// 强弱只保留给将来可能的视觉强度；用户 2026-11-07 明确要求不要连响。
+        /// </summary>
+        public static int ChimeCount(AttentionStrength strength) => 1;
 
         /// <summary>
         /// 这个窗口**有没有资格**被"提醒"：屏幕外的不提醒、<c>ShowActivated=false</c> 的不提醒。

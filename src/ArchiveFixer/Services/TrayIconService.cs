@@ -14,6 +14,7 @@ namespace ArchiveFixer.Services
         private readonly NotifyIcon _notifyIcon;
         private WindowState _lastWindowState;
         private bool _hidden;
+        private bool _hideHintShown;
 
         public TrayIconService(Window window)
         {
@@ -81,6 +82,24 @@ namespace ArchiveFixer.Services
             _hidden = true;
             _window.ShowInTaskbar = false;
             _window.Hide();
+
+            if (!_hideHintShown)
+            {
+                _hideHintShown = true;
+
+                try
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        3000,
+                        "ArchiveFixer",
+                        "程序仍在运行，任务没有停止。左键托盘图标恢复窗口，右键菜单可以退出。",
+                        ToolTipIcon.Info);
+                }
+                catch
+                {
+                    // 系统通知被关闭/托盘实现不支持时，不影响隐藏与恢复。
+                }
+            }
         }
 
         public void Restore()

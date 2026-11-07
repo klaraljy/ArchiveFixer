@@ -2273,7 +2273,9 @@ namespace ArchiveFixer.ViewModels
                   // 生产入口：内置 passwords.txt 是主存储（测试用带参构造，保持旧 DPAPI 夹具语义）。
                   // ⛔ 必须走构造参数：在构造体里补设就太晚了 —— AutoLoadPasswordBook() 在
                   // 显式构造的末尾已经读过一遍记忆（真机 2026-11-01：13 条被 1 条旧记忆顶替）。
-                  useTextStore: true)
+                  useTextStore: true,
+                  // 生产密码本 DPAPI 加密；测试仍可按旧明文夹具运行。
+                  encryptTextStore: true)
         {
         }
 
@@ -2295,7 +2297,8 @@ namespace ArchiveFixer.ViewModels
             DialogService dialogService,
             MaintenanceCleanupService? cleanupService = null,
             EngineRegistry? engineRegistry = null,
-            bool useTextStore = false)
+            bool useTextStore = false,
+            bool encryptTextStore = false)
         {
             _fileScanService = fileScanService;
             _archiveDetectService = archiveDetectService;
@@ -2323,6 +2326,12 @@ namespace ArchiveFixer.ViewModels
              * 随后又把那份旧列表写回 txt（真机：用户 13 条被 1 条测试密码顶替）。
              */
             _passwordService.UseTextStore = useTextStore;
+
+            if (useTextStore)
+            {
+                _passwordService.TextStore.EncryptAtRest = encryptTextStore;
+            }
+
             _logService = logService;
             _settingsService = settingsService;
             _pathService = pathService;

@@ -6,17 +6,34 @@ using System.Text;
 namespace ArchiveFixer.Storage
 {
     /// <summary>
-    /// 程序自带的内置密码清单（纯文本，一行一条，行顺序 = 尝试顺序）。
+    /// 程序自带的内置密码清单（文件名仍为 <c>passwords.txt</c>，一行一条，行顺序 = 尝试顺序）。
     ///
     /// <para>用户 2026-10-25：不再把外部密码本当活链接；外部导入只复制/合并进这里。
     /// 文件名固定英文 <c>passwords.txt</c>；默认在数据根目录下，随设置的数据根一起走。</para>
     ///
-    /// <para>⚠ 这是**明文**，任何能打开数据目录的人都能看到密码；这是用户明确选择的可搬运方案。
-    /// 旧的 DPAPI <c>password-list.dat</c> 只作为迁移来源保留备份，不再是主存储。</para>
+    /// <para>2026-11-07：生产使用 DPAPI（当前 Windows 用户）加密写入；旧明文/旧加密文件
+    /// 仍能读，读入后下一次保存自动升级。测试夹具可通过 <see cref="EncryptAtRest"/> 明确
+    /// 选择明文，以便继续验证旧格式；生产入口由 MainViewModel 打开加密。</para>
     /// </summary>
     public sealed class PasswordTextStore
     {
         public const string FileName = "passwords.txt";
+
+        internal const string EncryptedHeader = "ARCHIVEFIXER-PASSWORDS-DPAPI-V1\n";
+
+        private static readonly byte[] EncryptedHeaderBytes = Encoding.ASCII.GetBytes(EncryptedHeader);
+
+        /// <summary>
+        /// 是否加密写入。生产入口显式置 true；测试夹具默认 false，保留旧明文测试语义。
+        /// 读取永远同时兼容明文与加密，不依赖这个开关。
+        /// </summary>
+        public bool EncryptAtRest { get; set; }
+
+        /// <summary>最近一次读取失败是否因为加密文件解不开（用于阻止旧记忆覆盖）。</summary>
+        public bool LastLoadWasEncryptedFailure { get; private set; }
+
+        /// <summary>最近一次成功读取的文件是否已经是 DPAPI 加密格式。</summary>
+        public bool LastLoadWasEncrypted { get; private set; }
 
         public string DataRootDirectory { get; set; } = string.Empty;
 
@@ -31,6 +48,8 @@ namespace ArchiveFixer.Storage
         {
             values = new List<string>();
             failureReason = string.Empty;
+            LastLoadWasEncryptedFailure = false;
+            LastLoadWasEncrypted = false;
 
             string path = FilePath;
 
@@ -41,25 +60,68 @@ namespace ArchiveFixer.Storage
 
             try
             {
-                foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                byte[] raw = File.ReadAllBytes(path);
+
+                if (raw.AsSpan().StartsWith(EncryptedHeaderBytes))
                 {
-                    string value = line.TrimEnd('\r');
+                    LastLoadWasEncrypted = true;
 
-                    // 空行只是排版，不是密码；用户不会想试一个空串。
-                    if (value.Length == 0)
+                    try
                     {
-                        continue;
-                    }
+                        string encoded = Encoding.UTF8.GetString(
+                            raw,
+                            EncryptedHeaderBytes.Length,
+                            raw.Length - EncryptedHeaderBytes.Length).Trim();
 
-                    values.Add(value);
+                        byte[] cipher = Convert.FromBase64String(encoded);
+                        byte[] plain = PasswordTextDpapi.Unprotect(cipher);
+                        string text = Encoding.UTF8.GetString(plain);
+
+                        ParseLines(text, values);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        LastLoadWasEncryptedFailure = true;
+                        failureReason = "密码本解密失败（可能换了 Windows 用户/机器，或文件被改动）：" + ex.Message;
+                        throw new InvalidDataException(failureReason, ex);
+                    }
                 }
 
+                ParseLines(Encoding.UTF8.GetString(raw), values);
                 return true;
+            }
+            catch (InvalidDataException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 failureReason = ex.Message;
                 throw;
+            }
+        }
+
+        private static void ParseLines(string text, List<string> values)
+        {
+            // 旧明文文件用 File.WriteAllText(..., UTF8Encoding(true)) 写时会带 BOM；
+            // 第一行不能被读成 "\uFEFF密码"。
+            if (text.Length > 0 && text[0] == '\uFEFF')
+            {
+                text = text[1..];
+            }
+
+            foreach (string line in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                string value = line.TrimEnd('\r');
+
+                // 空行只是排版，不是密码；用户不会想试一个空串。
+                if (value.Length == 0)
+                {
+                    continue;
+                }
+
+                values.Add(value);
             }
         }
 
@@ -110,6 +172,82 @@ namespace ArchiveFixer.Storage
             }
         }
 
+        /// <summary>
+        /// 把当前值写出一份**明文副本**（显式导出用）。只写目标文件，绝不移动/删除内置密码本。
+        /// </summary>
+        public static bool TryExportPlaintext(
+            string destinationPath,
+            IEnumerable<string> values,
+            out string failureReason)
+        {
+            failureReason = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(destinationPath))
+            {
+                failureReason = "导出路径为空";
+                return false;
+            }
+
+            try
+            {
+                var builder = new StringBuilder();
+
+                foreach (string value in values)
+                {
+                    if (value is null)
+                    {
+                        continue;
+                    }
+
+                    builder.Append(value.Replace("\r", " ").Replace("\n", " "));
+                    builder.Append("\r\n");
+                }
+
+                string? directory = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllText(destinationPath, builder.ToString(), new UTF8Encoding(false));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failureReason = ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 旧文件 → .bak。加密模式下，若旧文件还是明文，备份也先加密，
+        /// 避免“主文件已加密、.bak 仍是明文”的漏口。
+        /// </summary>
+        private void TryWriteBackup(string path)
+        {
+            try
+            {
+                string backup = path + ".bak";
+                byte[] old = File.ReadAllBytes(path);
+
+                if (!EncryptAtRest || old.AsSpan().StartsWith(EncryptedHeaderBytes))
+                {
+                    File.WriteAllBytes(backup, old);
+                    return;
+                }
+
+                byte[] cipher = PasswordTextDpapi.Protect(old);
+                File.WriteAllText(
+                    backup,
+                    EncryptedHeader + Convert.ToBase64String(cipher),
+                    new UTF8Encoding(false));
+            }
+            catch
+            {
+                // 备份失败不阻断主保存；原有的恢复逻辑仍会尝试主文件/旧 .bak。
+            }
+        }
+
         /// <summary>原子写入；顺序就是传进来的顺序。旧文件先留一份 .bak。</summary>
         public bool TrySave(IEnumerable<string> values, out string failureReason)
         {
@@ -129,14 +267,7 @@ namespace ArchiveFixer.Storage
 
                 if (File.Exists(path))
                 {
-                    try
-                    {
-                        File.Copy(path, path + ".bak", overwrite: true);
-                    }
-                    catch
-                    {
-                        // 备份失败不阻断主保存。
-                    }
+                    TryWriteBackup(path);
                 }
 
                 string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -154,7 +285,19 @@ namespace ArchiveFixer.Storage
                     builder.Append("\r\n");
                 }
 
-                File.WriteAllText(temp, builder.ToString(), new UTF8Encoding(true));
+                string plaintext = builder.ToString();
+
+                if (EncryptAtRest)
+                {
+                    byte[] cipher = PasswordTextDpapi.Protect(Encoding.UTF8.GetBytes(plaintext));
+                    string encoded = Convert.ToBase64String(cipher);
+                    File.WriteAllText(temp, EncryptedHeader + encoded, new UTF8Encoding(false));
+                }
+                else
+                {
+                    File.WriteAllText(temp, plaintext, new UTF8Encoding(true));
+                }
+
                 File.Move(temp, path, overwrite: true);
                 return true;
             }
