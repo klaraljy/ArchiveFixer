@@ -472,9 +472,10 @@ namespace ArchiveFixer
 
             // ShutdownMode=OnExplicitShutdown：空闲时用户点 X，必须由这里真正结束进程。
             // 只在“当前 Application 的主窗口就是这一扇”时关闭，避免 UI 探针关闭测试窗口时误杀进程。
-            if (_allowClose
-                && System.Windows.Application.Current is ArchiveFixer.App application
-                && application.MainWindow == this
+            if (System.Windows.Application.Current is ArchiveFixer.App application
+                && WindowClosePolicy.ShouldShutdownAfterClose(
+                    _allowClose,
+                    isProductionApplication: true)
                 && application.Dispatcher.HasShutdownStarted == false)
             {
                 application.Shutdown();
