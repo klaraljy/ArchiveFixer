@@ -4648,6 +4648,7 @@ namespace ArchiveFixer.Extraction
              * 只摘其中一卷会让引擎拿剩下的残卷去试开（既打不开，还会在日志里留下一条看不懂的失败）。
              */
             found = ApplyContentKeepRules(found, layerLabel);
+            found = ApplyContentContainerProtection(found, layerLabel);
 
             // 排序让候选清单在 UI 与测试里都是稳定顺序（不同文件系统返回顺序不一致）。
             found.Sort(StringComparer.OrdinalIgnoreCase);
@@ -4662,7 +4663,10 @@ namespace ArchiveFixer.Extraction
 
             if (renameOnlyPieces.Count > 0)
             {
-                foreach (string piece in ApplyContentKeepRules(renameOnlyPieces, layerLabel))
+                List<string> keptRenameOnly = ApplyContentKeepRules(renameOnlyPieces, layerLabel);
+                keptRenameOnly = ApplyContentContainerProtection(keptRenameOnly, layerLabel);
+
+                foreach (string piece in keptRenameOnly)
                 {
                     if (archiveCandidates.Contains(piece) || !renameOnlySet.Add(piece))
                     {
@@ -5012,8 +5016,9 @@ namespace ArchiveFixer.Extraction
         /// 这些压缩文件碰都不要碰」「包含的也同样是」。判据唯一出口 <see cref="ContentKeepRules"/>
         /// （包含即命中、<see cref="StringComparison.OrdinalIgnoreCase"/>、空关键词忽略、⛔ 不做通配 / 正则）。</para>
         ///
-        /// <para>⛔ **空关键词列表 = 一个都不摘**（原样返回，行为与加这条功能之前逐字相同）。
-        /// 这一条是回归命根，别为了"顺手清理"改动它。</para>
+        /// <para>⛔ **空关键词列表时本方法不摘任何东西**（原样返回）。
+        /// 默认内容容器保护由紧随其后的 <c>ApplyContentContainerProtection</c> 单独执行，
+        /// 两者不混在一起；这一条是关键词回归命根。</para>
         ///
         /// <para>⛔ 为什么不跟引擎、文件内容打交道：用户明确说"你甚至不用去检测他是否是压缩文件" ——
         /// 判据**只看文件名**（内容探测在这一步之前已经做完了，这里只决定"要不要当内层归档"）。</para>
@@ -5082,6 +5087,36 @@ namespace ArchiveFixer.Extraction
                 }
 
                 kept.Add(path);
+            }
+
+            return kept;
+        }
+
+        /// <summary>
+        /// 内容容器默认保护：`.docx` / `.xlsx` / `.epub` / `.jar` 等即使内容是 ZIP，也当内容物保留。
+        /// 只在解压链内部消费；用户直接导入的源包不经过这里（手动「只解压」仍可拆）。
+        /// </summary>
+        private List<string> ApplyContentContainerProtection(List<string> found, string layerLabel)
+        {
+            if (found.Count == 0)
+            {
+                return found;
+            }
+
+            var kept = new List<string>(found.Count);
+
+            foreach (string path in found)
+            {
+                if (!ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(path))
+                {
+                    kept.Add(path);
+                    continue;
+                }
+
+                Log(
+                    "INFO",
+                    $"{layerLabel}：{Path.GetFileName(path)} 是内容容器（{ArchiveFixer.Security.ContentContainerProtection.Describe(path)}）"
+                    + " —— 默认当内容物保留，不递归也不改名；要拆请单独选中它用「只解压」。");
             }
 
             return kept;

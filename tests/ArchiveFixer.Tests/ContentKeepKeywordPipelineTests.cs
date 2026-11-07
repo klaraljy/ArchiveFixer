@@ -132,6 +132,74 @@ namespace ArchiveFixer.Tests
             Assert.NotEmpty(FindFiles("layer1.txt"));
         }
 
+        /// <summary>
+        /// <b>用例 C（默认内容容器保护）</b>：外层 7z 里装着一个真的 ZIP、但名字是
+        /// <c>说明.docx</c>。没有设置关键词，也必须默认当内容物保留，不得递归拆成 XML。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例C_默认档_内层docx不被递归解压()
+        {
+            Harness harness = CreateHarness(keepKeywords: Array.Empty<string>());
+            string outer = BuildOuter(innerName: "说明.docx", innerPayloadName: "docx内部内容.txt", innerPayload: "不该被拆出来");
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            _output.WriteLine(
+                $"【用例C】盘上文件：{string.Join("、", FindFiles("*").Select(Path.GetFileName).OrderBy(x => x, StringComparer.Ordinal))}");
+
+            Assert.NotEmpty(FindFiles("layer1.txt"));
+            Assert.Empty(FindFiles("docx内部内容.txt"));
+            Assert.NotEmpty(FindFiles("说明.docx"));
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("内容容器", StringComparison.Ordinal)
+                         && entry.Message.Contains("说明.docx", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>用例 D（手动强制拆）</b>：同一个 <c>.docx</c> 如果作为**源包**直接交给
+        /// 「只解压」，入口不套内容容器保护，仍然必须能拆开。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例D_内容容器作为源包时_只解压仍可拆()
+        {
+            string build = Path.Combine(_root, "build-docx");
+            Directory.CreateDirectory(build);
+            File.WriteAllText(Path.Combine(build, "内部内容.txt"), "手动只解压应该看到的内容", new UTF8Encoding(false));
+
+            string docx = Path.Combine(_root, "手动源.docx");
+            Run7z(build, "a", "-tzip", docx, "内部内容.txt");
+
+            string output = Path.Combine(_root, "manual-out");
+            Directory.CreateDirectory(output);
+
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = Path.Combine(_root, "manual-work");
+
+                var extractor = new RecursiveExtractor(
+                    new SevenZipEngine(new SevenZipProcessRunner(new ToolLocator())),
+                    new MagicArchiveProber(),
+                    _ => new[] { string.Empty },
+                    new RecursionLimits { ManualSingleLayer = true });
+
+                RecursionResult result = await extractor
+                    .ExtractAsync(new ArchiveTask(docx), output)
+                    .WaitAsync(TimeSpan.FromSeconds(180));
+
+                Assert.True(result.Completed, result.Summary);
+                Assert.NotEmpty(FindFiles("内部内容.txt"));
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+        }
+
         // ================================================================ 夹具
 
         /// <summary>

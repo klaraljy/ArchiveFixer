@@ -394,18 +394,13 @@ namespace ArchiveFixer.Storage
         /// 其余物这棵树里**有没有**名字命中关键词的文件 —— 有 ⇒ 返回一句话（点名哪几个 + 命中哪个词），
         /// 调用方**整份不删**；没有 ⇒ <c>null</c>（照旧按档删）。
         ///
-        /// <para><b>三条口径</b>：① 空关键词列表 ⇒ 直接 <c>null</c>（连扫都不扫，行为与加这条功能之前
-        /// 逐字相同）；② <paramref name="exemptPaths"/> 里的是**这一单自己的源包**（用户划的界：
+        /// <para><b>三条口径</b>：① 空关键词列表也要扫默认内容容器（`.docx` / `.jar` 等）；
+        /// ② <paramref name="exemptPaths"/> 里的是**这一单自己的源包**（用户划的界：
         /// 只管内容物，源包照常处理）；③ **扫不动（权限 / 目录读不了）⇒ 当作"有命中项"拦下**
         /// —— 兜底永远落在"什么都不做"那一档（AGENTS.md §9.5）。</para>
         /// </summary>
         private string? DescribeContentKeepBlocker(string directory, IReadOnlyList<string> exemptPaths)
         {
-            if (_keepRules.IsEmpty)
-            {
-                return null;
-            }
-
             var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (string path in exemptPaths)
@@ -420,6 +415,7 @@ namespace ArchiveFixer.Storage
 
             var hits = new List<string>();
             string? hitKeyword = null;
+            string? hitContainer = null;
 
             try
             {
@@ -432,13 +428,17 @@ namespace ArchiveFixer.Storage
                     }
 
                     string? keyword = _keepRules.FindMatch(file);
+                    bool protectedContainer = ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(file);
 
-                    if (keyword == null)
+                    if (keyword == null && !protectedContainer)
                     {
                         continue;
                     }
 
                     hitKeyword ??= keyword;
+                    hitContainer ??= protectedContainer
+                        ? ArchiveFixer.Security.ContentContainerProtection.Describe(file)
+                        : null;
                     hits.Add(file);
                 }
             }
@@ -453,7 +453,11 @@ namespace ArchiveFixer.Storage
                 return null;
             }
 
-            return $"其余物里有 {hits.Count} 个文件命中「内容物保留关键词」（{hitKeyword}）："
+            string reason = hitKeyword != null
+                ? $"「内容物保留关键词」（{hitKeyword}）"
+                : $"内容容器保护（{hitContainer}）";
+
+            return $"其余物里有 {hits.Count} 个文件命中{reason}："
                    + $"{ContentKeepRules.DescribeHitNames(hits, MaxContentKeepNames)}"
                    + " —— 按设置这些文件碰都不碰，所以这一份其余物整份不删（一个字节都没动）";
         }

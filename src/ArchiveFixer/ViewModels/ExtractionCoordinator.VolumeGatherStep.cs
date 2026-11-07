@@ -334,13 +334,18 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 string? keyword = keepRules.FindMatch(path);
+                bool protectedContainer = ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(path);
 
-                if (keyword != null)
+                if (keyword != null || protectedContainer)
                 {
+                    string reason = keyword != null
+                        ? $"命中了「内容物保留关键词」（{keyword}）"
+                        : $"是内容容器（{ArchiveFixer.Security.ContentContainerProtection.Describe(path)}）";
+
                     AppendLog(
                         "INFO",
-                        $"{consumer.LogName}：这一组的卷 {name} 命中了「内容物保留关键词」（{keyword}）"
-                        + " —— 按设置碰都不碰，这一份留在原处。");
+                        $"{consumer.LogName}：这一组的卷 {name} {reason}"
+                        + " —— 默认碰都不碰，这一份留在原处。");
                     continue;
                 }
 

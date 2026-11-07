@@ -1357,10 +1357,10 @@ namespace ArchiveFixer.ViewModels
                             ArchiveFixer.Security.ContentKeepRules.FromSettings(Settings);
 
                         ledgerHandoff = ledgerHandoff
-                            .Where(entry => entry != null && keepRules.FindMatch(entry.Path) == null)
+                            .Where(entry => entry != null && !keepRules.ShouldKeep(entry.Path))
                             .ToList();
                         extraGroupSeeds = extraGroupSeeds
-                            .Where(seed => keepRules.FindMatch(seed) == null)
+                            .Where(seed => !keepRules.ShouldKeep(seed))
                             .ToList();
 
                         /*
@@ -3287,6 +3287,14 @@ namespace ArchiveFixer.ViewModels
                     if (keepsKeyword != null)
                     {
                         skippedLines.Add($"{file}（名字命中「内容物保留关键词」：{keepsKeyword} —— 按设置不解开也不改名）");
+                        continue;
+                    }
+
+                    if (ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(file))
+                    {
+                        skippedLines.Add(
+                            $"{file}（{ArchiveFixer.Security.ContentContainerProtection.Describe(file)}"
+                            + " —— 默认当内容物保留，不解开也不改名；要拆请单独选中它用「只解压」）");
                         continue;
                     }
 

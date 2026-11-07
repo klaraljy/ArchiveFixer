@@ -593,19 +593,26 @@ namespace ArchiveFixer.Services
                  * 链尾把内层包收进其余物，是为了让「删除操作」那一档把它们清掉；命中关键词的既然
                  * "碰都不碰"，那就**一步都不动**：不搬、不改名、后面的删除也删不到它（它不在其余物里）。
                  *
-                 * ⛔ 判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中 / 大小写不敏感 / 不做通配正则）。
+                 * ⛔ 判据唯一出口 <see cref="ContentKeepRules"/>（关键词 + 默认内容容器保护）。
                  * ⛔ 分卷组**整组一起判**：一卷命中就整组留着，绝不只留一半。
-                 * ⛔ 空关键词列表 ⇒ 这里一个都不拦（行为与以前逐字相同）。
+                 * 空关键词列表仍要拦默认内容容器（.docx / .jar 等）。
                  */
                 string? keepKeyword = groupPaths
                     .Select(groupPath => rules.FindMatch(groupPath))
                     .FirstOrDefault(keyword => keyword != null);
+                string? protectedContainer = groupPaths
+                    .FirstOrDefault(ArchiveFixer.Security.ContentContainerProtection.ShouldProtect);
 
-                if (keepKeyword != null)
+                if (keepKeyword != null || protectedContainer != null)
                 {
+                    string reason = keepKeyword != null
+                        ? $"命中「内容物保留关键词」（{keepKeyword}）"
+                        : $"是内容容器（{ArchiveFixer.Security.ContentContainerProtection.Describe(protectedContainer)}）";
+
                     warnings.Add(
-                        $"{rootTask.LogName}：{Path.GetFileName(path)} 命中「内容物保留关键词」（{keepKeyword}）"
-                        + " —— 按设置碰都不碰，这次不搬进其余物（它留在原处，也不参与后面的删除）。");
+                        $"{rootTask.LogName}：{Path.GetFileName(path)} {reason}"
+                        + " —— 默认当内容物保留，这次不搬进其余物（它留在原处，也不参与后面的删除）；"
+                        + "要拆请单独选中它用「只解压」。");
                     continue;
                 }
 

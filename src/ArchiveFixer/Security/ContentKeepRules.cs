@@ -128,8 +128,12 @@ namespace ArchiveFixer.Security
             return null;
         }
 
-        /// <summary>要不要"碰都不碰"这一个文件（<see cref="FindMatch"/> 的布尔形态）。</summary>
-        public bool ShouldKeep(string? fileNameOrPath) => FindMatch(fileNameOrPath) != null;
+        /// <summary>
+        /// 要不要"碰都不碰"这一个文件：命中用户关键词，或属于默认内容容器保护名单。
+        /// 内容容器保护独立于关键词，空关键词列表时仍然生效。
+        /// </summary>
+        public bool ShouldKeep(string? fileNameOrPath) =>
+            FindMatch(fileNameOrPath) != null || ContentContainerProtection.ShouldProtect(fileNameOrPath);
 
         /// <summary>
         /// 点名（日志 / 结论里"哪几个"的那半句，最多 <paramref name="max"/> 个名字，多出来折成"还有 K 个"）。
