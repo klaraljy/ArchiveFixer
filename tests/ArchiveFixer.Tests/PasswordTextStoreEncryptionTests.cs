@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using ArchiveFixer.Storage;
 using Xunit;
@@ -41,6 +42,26 @@ namespace ArchiveFixer.Tests
 
             Assert.True(store.TryLoad(out var loaded, out string loadError), loadError);
             Assert.Equal(new[] { "第一层密码", "second-pass" }, loaded);
+        }
+
+        [Fact]
+        public void 加密文件被编辑器加BOM后仍能读()
+        {
+            var store = new PasswordTextStore
+            {
+                DataRootDirectory = _root,
+                EncryptAtRest = true
+            };
+
+            Assert.True(store.TrySave(new[] { "bom-secret" }, out string saveError), saveError);
+
+            byte[] raw = File.ReadAllBytes(store.FilePath);
+            File.WriteAllBytes(
+                store.FilePath,
+                new byte[] { 0xEF, 0xBB, 0xBF }.Concat(raw).ToArray());
+
+            Assert.True(store.TryLoad(out var loaded, out string loadError), loadError);
+            Assert.Equal(new[] { "bom-secret" }, loaded);
         }
 
         [Fact]

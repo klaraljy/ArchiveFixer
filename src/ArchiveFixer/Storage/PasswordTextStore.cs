@@ -61,8 +61,9 @@ namespace ArchiveFixer.Storage
             try
             {
                 byte[] raw = File.ReadAllBytes(path);
+                int headerOffset = HasUtf8Bom(raw) ? 3 : 0;
 
-                if (raw.AsSpan().StartsWith(EncryptedHeaderBytes))
+                if (raw.AsSpan(headerOffset).StartsWith(EncryptedHeaderBytes))
                 {
                     LastLoadWasEncrypted = true;
 
@@ -70,8 +71,8 @@ namespace ArchiveFixer.Storage
                     {
                         string encoded = Encoding.UTF8.GetString(
                             raw,
-                            EncryptedHeaderBytes.Length,
-                            raw.Length - EncryptedHeaderBytes.Length).Trim();
+                            headerOffset + EncryptedHeaderBytes.Length,
+                            raw.Length - headerOffset - EncryptedHeaderBytes.Length).Trim();
 
                         byte[] cipher = Convert.FromBase64String(encoded);
                         byte[] plain = PasswordTextDpapi.Unprotect(cipher);
@@ -100,6 +101,14 @@ namespace ArchiveFixer.Storage
                 failureReason = ex.Message;
                 throw;
             }
+        }
+
+        private static bool HasUtf8Bom(byte[] bytes)
+        {
+            return bytes.Length >= 3
+                   && bytes[0] == 0xEF
+                   && bytes[1] == 0xBB
+                   && bytes[2] == 0xBF;
         }
 
         private static void ParseLines(string text, List<string> values)
@@ -230,7 +239,10 @@ namespace ArchiveFixer.Storage
                 string backup = path + ".bak";
                 byte[] old = File.ReadAllBytes(path);
 
-                if (!EncryptAtRest || old.AsSpan().StartsWith(EncryptedHeaderBytes))
+                int headerOffset = HasUtf8Bom(old) ? 3 : 0;
+
+                if (!EncryptAtRest
+                    || old.AsSpan(headerOffset).StartsWith(EncryptedHeaderBytes))
                 {
                     File.WriteAllBytes(backup, old);
                     return;

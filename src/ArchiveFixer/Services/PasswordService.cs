@@ -67,6 +67,9 @@ namespace ArchiveFixer.Services
         private readonly Dictionary<string, PasswordMetadataEntry> _orphanMetadata =
             new(StringComparer.Ordinal);
 
+        /// <summary>每个条目上一次的值；用于“改值后把旧值的元数据留成孤儿”。</summary>
+        private readonly Dictionary<PasswordItem, string> _lastKnownValues = new();
+
         /// <summary>
         /// 记住的密码本路径（**有序**，可多本）—— 用户 2026-09-24 要求多本密码本。
         ///
@@ -948,17 +951,23 @@ namespace ArchiveFixer.Services
                 {
                     item.PropertyChanged -= PasswordItem_PropertyChanged;
 
-                    // 删除/清空/改值后，原值的启用状态与备注继续留在元数据里，
+                    // 删除/清空后，原值的启用状态与备注继续留在元数据里，
                     // 以后同一个值再加回来时还能恢复；不在这里静默丢掉。
-                    if (!string.IsNullOrEmpty(item.Value))
+                    string oldValue = _lastKnownValues.TryGetValue(item, out string? tracked)
+                        ? tracked
+                        : item.Value;
+
+                    if (!string.IsNullOrEmpty(oldValue))
                     {
-                        _orphanMetadata[item.Value] = new PasswordMetadataEntry
+                        _orphanMetadata[oldValue] = new PasswordMetadataEntry
                         {
-                            Value = item.Value,
+                            Value = oldValue,
                             IsEnabled = item.IsEnabled,
                             Remark = item.Remark ?? string.Empty
                         };
                     }
+
+                    _lastKnownValues.Remove(item);
                 }
             }
 
@@ -968,6 +977,7 @@ namespace ArchiveFixer.Services
                 {
                     item.PropertyChanged -= PasswordItem_PropertyChanged;
                     item.PropertyChanged += PasswordItem_PropertyChanged;
+                    _lastKnownValues[item] = item.Value ?? string.Empty;
                 }
             }
 
@@ -986,6 +996,28 @@ namespace ArchiveFixer.Services
                 or nameof(PasswordItem.Remark)
                 or nameof(PasswordItem.Source))
             {
+                if (e.PropertyName == nameof(PasswordItem.Value) && sender is PasswordItem changed)
+                {
+                    string oldValue = _lastKnownValues.TryGetValue(changed, out string? tracked)
+                        ? tracked
+                        : string.Empty;
+
+                    string newValue = changed.Value ?? string.Empty;
+
+                    if (!string.Equals(oldValue, newValue, StringComparison.Ordinal)
+                        && !string.IsNullOrEmpty(oldValue))
+                    {
+                        _orphanMetadata[oldValue] = new PasswordMetadataEntry
+                        {
+                            Value = oldValue,
+                            IsEnabled = changed.IsEnabled,
+                            Remark = changed.Remark ?? string.Empty
+                        };
+                    }
+
+                    _lastKnownValues[changed] = newValue;
+                }
+
                 PersistPasswordList();
             }
         }
