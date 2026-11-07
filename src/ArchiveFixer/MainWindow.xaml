@@ -110,6 +110,8 @@
                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock x:Name="BottomProgressText"
                            Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
+                           AutomationProperties.Name="处理进度"
+                           AutomationProperties.LiveSetting="Polite"
                            Style="{StaticResource HintTextStyle}"
                            VerticalAlignment="Center"
                            Margin="0,0,10,0" />
