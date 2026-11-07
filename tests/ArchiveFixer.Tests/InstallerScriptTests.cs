@@ -38,6 +38,10 @@ namespace ArchiveFixer.Tests
             Assert.Contains("WriteRegStr HKCU \"${APP_KEY}\" \"DataDir\"", text, StringComparison.Ordinal);
             Assert.Contains("RMDir /r \"${USER_DATA_DIR}\"", text, StringComparison.Ordinal);
             Assert.Contains("RMDir /r \"$INSTDIR\\tools\"", text, StringComparison.Ordinal);
+            Assert.Contains("PurgeInstalledAppDirs", text, StringComparison.Ordinal);
+            Assert.Contains("RMDir /r \"$INSTDIR\\zh-Hans\"", text, StringComparison.Ordinal);
+            Assert.Contains("RMDir /r \"$INSTDIR\\zh-Hant\"", text, StringComparison.Ordinal);
+            Assert.Contains("StrCpy $R8 $INSTDIR", text, StringComparison.Ordinal);
             Assert.DoesNotContain("FindFirst $R0 $R1 \"$INSTDIR\\*.*\"", text, StringComparison.Ordinal);
         }
 

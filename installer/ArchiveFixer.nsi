@@ -61,6 +61,28 @@ SetCompressorDictSize 64
 ;    升级、换安装目录、卸载都读这一个位置；不要把它改回 $INSTDIR\data。
 !define USER_DATA_DIR "$LOCALAPPDATA\ArchiveFixer"
 
+; 覆盖安装/卸载时清掉“程序自己发布过”的目录，保留用户放在安装目录里的其它文件。
+; 语言资源目录必须逐个列：自包含发布会在根下生成这些子目录，旧版本残留同样要清。
+!macro PurgeInstalledAppDirs
+    RMDir /r "$INSTDIR\tools"
+    RMDir /r "$INSTDIR\docs"
+    RMDir /r "$INSTDIR\runtimes"
+    RMDir /r "$INSTDIR\win-x64"
+    RMDir /r "$INSTDIR\cs"
+    RMDir /r "$INSTDIR\de"
+    RMDir /r "$INSTDIR\es"
+    RMDir /r "$INSTDIR\fr"
+    RMDir /r "$INSTDIR\it"
+    RMDir /r "$INSTDIR\ja"
+    RMDir /r "$INSTDIR\ko"
+    RMDir /r "$INSTDIR\pl"
+    RMDir /r "$INSTDIR\pt-BR"
+    RMDir /r "$INSTDIR\ru"
+    RMDir /r "$INSTDIR\tr"
+    RMDir /r "$INSTDIR\zh-Hans"
+    RMDir /r "$INSTDIR\zh-Hant"
+!macroend
+
 Name "${APP_NAME} ${APPVERSION}"
 OutFile "${OUTFILE}"
 BrandingText "${APP_NAME} ${APPVERSION}（绿色工具，不写注册表项以外的系统位置）"
@@ -107,6 +129,7 @@ Var UpgradeRadioOverwrite
 Var UpgradeRadioUninstall
 Var UpgradeRadioCancel
 Var DefaultOnSystemDrive
+Var ExplicitInstallDir
 Var UnDataChoice
 Var UnDataDialog
 Var UnDataLabel
@@ -212,6 +235,7 @@ Function .onInit
     StrCpy $UpgradeAlreadyHandled "0"
     StrCpy $InstalledDir ""
     StrCpy $InstalledVersion ""
+    StrCpy $ExplicitInstallDir "0"
 
     ${GetParameters} $R0
     ${GetOptions} $R0 "/SHORTCUTS=" $R1
@@ -219,8 +243,16 @@ Function .onInit
     StrCpy $ForceShortcuts "1"
     onInit_shortcuts_done:
 
-    ; ③ 数据落点：默认目录 = 第一个非系统固定盘上的 \ArchiveFixer
+    ; 显式 /D=<目录> 必须优先于“自动选盘”和“注册表里的旧目录”：
+    ; 静默验收、用户自定义目录都靠它；不先判它，/D 会被 ResolveDefaultInstallDir 覆盖。
+    ; ⚠ NSIS 会把 /D 从 GetOptions 的参数串里拿掉，不能靠 GetOptions 判；改为比较
+    ;   .onInit 开始时的 $INSTDIR：不是兜底目录就说明 /D（或 InstallDirRegKey）已经指定过。
+    StrCpy $R8 $INSTDIR
     Call ResolveDefaultInstallDir
+    StrCmp $R8 "${FALLBACK_DIR}" onInit_dir_ready
+    StrCpy $INSTDIR $R8
+    StrCpy $ExplicitInstallDir "1"
+    onInit_dir_ready:
 
     ; ① 升级判据：注册表 / 安装目录里那个 exe，两条都要看
     ReadRegStr $R0 HKCU "${APP_KEY}" "InstallDir"
@@ -230,6 +262,8 @@ Function .onInit
     StrCpy $InstalledVersion $R1
     StrCmp $InstalledVersion "" 0 +2
     StrCpy $InstalledVersion "（没记版本）"
+    ; 显式 /D 时安装目录由用户指定，不能让旧注册表值把它改回去。
+    StrCmp $ExplicitInstallDir "1" onInit_done
     ; 装过就默认接着装到老地方（升级不搬家）；老目录已经不在了才用新算的默认值
     IfFileExists "$InstalledDir\*.*" 0 onInit_reg_dir_gone
     StrCpy $INSTDIR $InstalledDir
@@ -239,6 +273,7 @@ Function .onInit
         StrCpy $InstalledDir ""
         Goto onInit_done
     onInit_no_reg:
+    StrCmp $ExplicitInstallDir "1" onInit_done
     IfFileExists "$INSTDIR\${APP_EXE}" 0 onInit_done
     StrCpy $InstalledDir $INSTDIR
     StrCpy $InstalledVersion "（注册表里没记）"
@@ -291,10 +326,7 @@ Section "主程序（必需）" SecMain
     ; 覆盖升级：先清掉上一版自己的工具 / 文档 / 运行时目录，避免旧 DLL 残留。
     ; 用户数据不在 $INSTDIR 下，这里不碰它；只在这确实是一个已有安装时才清。
     IfFileExists "$INSTDIR\${APP_EXE}" 0 upgrade_copy
-        RMDir /r "$INSTDIR\tools"
-        RMDir /r "$INSTDIR\docs"
-        RMDir /r "$INSTDIR\runtimes"
-        RMDir /r "$INSTDIR\win-x64"
+        !insertmacro PurgeInstalledAppDirs
     upgrade_copy:
 
     SetOutPath "$INSTDIR"
@@ -387,10 +419,7 @@ Section "Uninstall"
 
     ; 3) 只删安装包自己知道的程序子目录；⛔ 不再“删所有子目录除 data”，
     ;    避免用户把程序装进一个还有别的东西的自定义目录时被整份清掉。
-    RMDir /r "$INSTDIR\tools"
-    RMDir /r "$INSTDIR\docs"
-    RMDir /r "$INSTDIR\runtimes"
-    RMDir /r "$INSTDIR\win-x64"
+    !insertmacro PurgeInstalledAppDirs
 
     ; 4) 快捷方式与注册表
     ;    桌面那个 .lnk 只有"装的时候确实是我们建的"（$R2 == 1）才删 —— 否则会误删用户自己的快捷方式
