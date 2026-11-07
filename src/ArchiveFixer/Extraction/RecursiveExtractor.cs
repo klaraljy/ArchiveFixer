@@ -3716,6 +3716,11 @@ namespace ArchiveFixer.Extraction
         /// <para>只在 7-Zip **列不出这一份**之后才调用（见候选循环里的挂点）：引擎能正常列目录的
         /// 外层 7z 里也可能恰好藏着一个自洽 ZIP，抢在引擎前面会误判。判据与既有直读同一个出口
         /// <see cref="EmbeddedZipStreamExtractor"/>；失败就返回 null，原样回落到 7-Zip/单条目近路。</para>
+        ///
+        /// <para>⚠ 2026-11-07：未加密、且条目全是**原样存**的多条目 ZIP 也走这条直读。
+        /// 旧实现只给 AES 开，于是识别阶段已经说“可以 ZIP 直读”的双面文件，递归首层仍要抠
+        /// 一份等大副本再交给 7z（真机 4.06 GiB 的 P93 多花近 3 分钟）。压缩条目仍按老路走
+        /// （直读器不解压）；直读不支持 / 结构不自洽时行为也不变。</para>
         /// </summary>
         private async Task<LayerOutcome?> TryTakeEmbeddedZipDirectAsync(
             WorkItem item,
@@ -3749,10 +3754,20 @@ namespace ArchiveFixer.Extraction
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                if (!probe.Supported || probe.List == null || probe.ResolvedPasswordIndex <= 0)
+                if (!probe.Supported || probe.List == null)
                 {
-                    // 这一档只补 AES/加密 ZIP 的 7-Zip 编码缺口；未加密的单条目/多条目继续走
-                    // 既有近路（单条目直取 / 抠副本 + 引擎），不改它们的行为。
+                    // 不支持 / 结构不自洽 ⇒ 原样回落抠取 + 引擎。
+                    return null;
+                }
+
+                /*
+                 * 未加密的条目只直读**原样存**的：直读器不解压、也不校验 CRC，压缩条目
+                 * 走回退老路（抠副本 + 7z）才和既有判据一致（真实机器 2026-10-05 的对照用例
+                 * 钉的就是这一档）。AES 条目已经由直读器解密并验认证码，不在这个限制里。
+                 */
+                if (probe.ResolvedPasswordIndex <= 0
+                    && probe.Entries.Any(entry => entry.Method != 0))
+                {
                     return null;
                 }
 

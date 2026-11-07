@@ -745,6 +745,40 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// 未加密、**多条目**的内嵌 ZIP 也必须走直读，不能退回“抠一整份副本 + 7z”。
+        /// 真机 2222 批次：4.06 GiB 的双面文件，识别阶段已经说“可以 ZIP 直读”，
+        /// 递归首层却仍然抠了 4.06 GiB（日志 21:55:42 → 21:58:28），多花近 3 分钟。
+        /// </summary>
+        [Fact]
+        public async Task 未加密多条目双面zip_递归首层走直读不抠副本()
+        {
+            byte[] zip = BuildZipBytes(
+                ("第一条.txt", Encoding.UTF8.GetBytes("first"), CompressionLevel.NoCompression),
+                ("第二条.txt", Encoding.UTF8.GetBytes("second"), CompressionLevel.NoCompression));
+            string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "multi");
+
+            Harness harness = CreateHarness();
+            await harness.AddPathsAsync(source);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.True(task.EmbeddedArchiveOffset > 0, "应该识别出尾部有内嵌归档");
+
+            await harness.RunOneClickAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.Equal("first", File.ReadAllText(
+                Assert.Single(Directory.GetFiles(harness.OutputRoot, "第一条.txt", SearchOption.AllDirectories))));
+            Assert.Equal("second", File.ReadAllText(
+                Assert.Single(Directory.GetFiles(harness.OutputRoot, "第二条.txt", SearchOption.AllDirectories))));
+
+            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("直读", StringComparison.Ordinal));
+            Assert.DoesNotContain(harness.Log.Logs,
+                x => x.Message.Contains("按偏移取出归档副本", StringComparison.Ordinal));
+            Assert.DoesNotContain(harness.Log.Logs,
+                x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
+        }
+
         // ================================================================ 样本构造
 
         /// <summary>固定种子的随机字节（样本可复现，也不是全零 —— 全零会掩盖偏移写错）。</summary>
@@ -1160,9 +1194,8 @@ namespace ArchiveFixer.Tests
             settings.CustomSevenZipExePath = string.Empty;
 
             /*
-             * ⚠ 2026-10-04（出厂默认档改成「展开所有分支」）：**ZIP 直读只在「只解当前这一层」这一档生效**
-             * （递归模式第 0 层必须交给 7-Zip 逐层展开、照旧抠一份副本）。本类测的正是"直读那条快路"，
-             * 所以夹具显式钉住那一档 —— 否则"工作区里没有抠出来的 zip"这类断言会被递归模式推翻。
+             * ZIP 直读在递归首层也生效（2026-11-07 起；此前只给 AES / 单条目近路开）。
+             * 这条夹具保持默认递归档，正好覆盖"识别说可直读 ⇒ 首层真的不抠副本"。
              */
             settingsService.Save(settings);
 
