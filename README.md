@@ -137,7 +137,11 @@ dotnet build ArchiveFixer.slnx                                          # 构建
 dotnet run   --project src/ArchiveFixer/ArchiveFixer.csproj             # 运行（GUI）
 dotnet test  tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj         # 测试（必须全绿）
 dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式检查
+pwsh -File scripts/verify-release.ps1                                  # 发布前自动化验收
 ```
+
+`verify-release.ps1` 会串行执行：Release 构建、依赖漏洞扫描、敏感信息扫描、format、全量测试、自包含打包、setup 编译、静默安装/覆盖升级/卸载验证、启动冒烟。  
+它**不包含**托盘、多屏/DPI、高对比度/Narrator、SmartScreen/Defender、断电等物理或人工判断项。
 
 - 环境：目标框架 **`net8.0-windows`**（用 .NET 8 或更高版本的 SDK 都能构建）、Windows 10/11。
 - 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
