@@ -108,6 +108,7 @@ namespace ArchiveFixer
             Helpers.CodePageEncodingBootstrap.EnsureRegistered();
 
             EnsureApplicationDirectories();
+            LegacyUserDataMigration.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
             UserDataMaintenance.CleanupLegacyLocalLogs(DataRootDirectory, LogsDirectory);
             UserDataMaintenance.CleanupEmptyLegacyLocalTemp(DataRootDirectory, TempDirectory);
 
