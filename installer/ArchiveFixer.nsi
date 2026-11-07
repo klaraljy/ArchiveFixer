@@ -163,7 +163,7 @@ Page custom UpgradePage UpgradePageLeave
     Function un.DataChoiceShow_${MUI_UNIQUEID}
         ; 静默卸载不问（$UnDataChoice 在 un.onInit 里已经置成 keep）
         IfSilent un_data_show_done
-        !insertmacro MUI_HEADER_TEXT "卸载 ${APP_NAME}" "最后一步：data\ 怎么办"
+        !insertmacro MUI_HEADER_TEXT "卸载 ${APP_NAME}" "最后一步：用户数据怎么办"
         nsDialogs::Create 1018
         Pop $UnDataDialog
         StrCmp $UnDataDialog "error" un_data_show_done
@@ -173,7 +173,7 @@ Page custom UpgradePage UpgradePageLeave
 
         ${NSD_CreateRadioButton} 0 56u 100% 24u "保留设置与密码（推荐）：只删程序，${USER_DATA_DIR} 原样留着；以后重装能接着用"
         Pop $UnDataRadioKeep
-        ${NSD_CreateRadioButton} 0 84u 100% 24u "全部删除：连 ${USER_DATA_DIR} 一起删（密码本、设置、日志全没，不可恢复）"
+        ${NSD_CreateRadioButton} 0 84u 100% 24u "全部删除：连 ${USER_DATA_DIR} 一起删（密码本、设置全没；程序目录日志随程序删除，不可恢复）"
         Pop $UnDataRadioDelete
 
         SendMessage $UnDataRadioKeep ${BM_SETCHECK} ${BST_CHECKED} 0
@@ -411,7 +411,7 @@ Section "Uninstall"
     RMDir "$INSTDIR"
     IfSilent uninst_no_data_note
     IfFileExists "${USER_DATA_DIR}\*.*" 0 uninst_no_data_note
-    MessageBox MB_OK|MB_ICONINFORMATION "设置、日志和密码列表保留在：$\r$\n${USER_DATA_DIR}$\r$\n$\r$\n以后重装、换安装目录或升级都能接着用；不需要的话可以自己删掉这个目录。"
+    MessageBox MB_OK|MB_ICONINFORMATION "设置和密码列表保留在：$\r$\n${USER_DATA_DIR}$\r$\n$\r$\n程序目录下的 logs\ 日志随程序删除；以后重装、换安装目录或升级时设置与密码仍能接着用。"
     uninst_no_data_note:
 SectionEnd
 
@@ -440,7 +440,7 @@ FunctionEnd
 Function WelcomePageCustom
     StrCmp $DefaultOnSystemDrive "1" 0 welcome_custom_done
     SendMessage $mui.WelcomePage.Title ${WM_SETTEXT} 0 "STR:${APP_NAME} ${APPVERSION} 安装向导（本机没有其它盘）"
-    SendMessage $mui.WelcomePage.Text ${WM_SETTEXT} 0 "STR:本机没有第二个固定盘，只能装到 C 盘。$\r$\n$\r$\n· 程序目录：$INSTDIR$\r$\n· 你的密码本、设置、日志固定写在：${USER_DATA_DIR}$\r$\n$\r$\n如果你有别的盘（移动硬盘 / 第二块盘），点「下一步」后可以在目录页自己改到那个盘上；$\r$\n用户数据仍然在 ${USER_DATA_DIR}，不会跟着程序搬家。$\r$\n$\r$\n点「下一步」继续。"
+    SendMessage $mui.WelcomePage.Text ${WM_SETTEXT} 0 "STR:本机没有第二个固定盘，只能装到 C 盘。$\r$\n$\r$\n· 程序目录：$INSTDIR$\r$\n· 你的密码本、设置固定写在：${USER_DATA_DIR}$\r$\n（日志在程序安装目录的 logs\，随程序升级/卸载处理）$\r$\n$\r$\n如果你有别的盘（移动硬盘 / 第二块盘），点「下一步」后可以在目录页自己改到那个盘上；$\r$\n用户数据仍然在 ${USER_DATA_DIR}，不会跟着程序搬家。$\r$\n$\r$\n点「下一步」继续。"
     welcome_custom_done:
 FunctionEnd
 

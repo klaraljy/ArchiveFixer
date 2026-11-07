@@ -29,11 +29,16 @@ namespace ArchiveFixer
         public static string SettingsFilePath =>
             Path.Combine(DataRootDirectory, "appsettings.json");
 
-        public static string LogsDirectory =>
-            Path.Combine(DataRootDirectory, "logs");
+        /// <summary>
+        /// 正式日志目录：唯一来源是 <see cref="PathService.LogsDirectory"/>。
+        /// 生产环境跟程序目录走；程序目录不可写时才由它退回数据根，⛔ 这里不再另拼一套。
+        /// </summary>
+        public static string LogsDirectory => new PathService().LogsDirectory;
 
-        public static string TempDirectory =>
-            Path.Combine(DataRootDirectory, "temp");
+        /// <summary>
+        /// 临时目录：唯一来源是 <see cref="PathService.TempDirectory"/>，理由同上。
+        /// </summary>
+        public static string TempDirectory => new PathService().TempDirectory;
 
         /// <summary>
         /// 老位置的工作区目录（<c>&lt;程序目录&gt;\data\work</c>）。
@@ -102,8 +107,9 @@ namespace ArchiveFixer
              */
             Helpers.CodePageEncodingBootstrap.EnsureRegistered();
 
-            MigrateLegacyData();
             EnsureApplicationDirectories();
+            UserDataMaintenance.CleanupLegacyLocalLogs(DataRootDirectory, LogsDirectory);
+            UserDataMaintenance.CleanupEmptyLegacyLocalTemp(DataRootDirectory, TempDirectory);
 
             /*
              * 整机被拖死的问题：批量解压会连着读几百 MB、写几百 MB，再交给 7-Zip 解一层，
@@ -292,15 +298,6 @@ namespace ArchiveFixer
             SafeCreateDirectory(TempDirectory);
             SafeCreateDirectory(ToolsDirectory);
             SafeCreateDirectory(SevenZipDirectory);
-        }
-
-        /// <summary>
-        /// 一次性迁移：把旧版本留在程序目录 / 旧 %AppData% / 旧安装目录里的
-        /// 设置与密码复制到固定用户数据目录。
-        /// </summary>
-        private static void MigrateLegacyData()
-        {
-
         }
 
         private static void SafeCreateDirectory(string path)
