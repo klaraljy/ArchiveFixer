@@ -1976,6 +1976,42 @@ namespace ArchiveFixer.Tests
             };
         }
 
+        /// <summary>
+        /// 资源预算在解压前拒绝时，必须把**机器终态**也落成 Failed。
+        /// 912200014 现场：状态写着「解压失败」，Outcome 却是 Pending，批末汇总把它算成
+        /// 「未处理」；这里用假引擎给一个超过单文件上限的清单，直接钉住这条。
+        /// </summary>
+        [Fact]
+        public async Task 资源预算未通过_机器终态必须是失败()
+        {
+            Harness harness = CreateHarness(configure: settings =>
+            {
+                settings.MaxSingleExtractedFileGiB = 1;
+            });
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("bomb.7z"));
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = 2L * 1024 * 1024 * 1024,
+                Entries = new List<ArchiveEntry>
+                {
+                    new() { Path = "bomb.bin", Size = 2L * 1024 * 1024 * 1024 }
+                },
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            Assert.Contains("资源预算未通过", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Empty(harness.Engine.ExtractCalls);
+        }
+
         private static ArchiveListResult ListResult(int fileCount)
         {
             return new ArchiveListResult

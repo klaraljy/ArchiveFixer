@@ -191,7 +191,15 @@ namespace ArchiveFixer.ViewModels
                          * 密码已经证实、坏的是数据：状态与终态由分类器落（Corrupted + 部分完成），
                          * 但**原因必须写清**——否则用户会拿着密码本去核对一个根本没问题的密码。
                          */
-                        if (stoppedStatus == StatusText.Corrupted)
+                        /*
+                         * 只有“确实解出过内容，而且清单没说这个包没加密”时，才能说“密码已经证实”。
+                         * 未加密的 CRC 损坏也会走 Corrupted；把密码结论套上去会让用户去核对一个
+                         * 根本不存在的密码问题（912200013 现场）。
+                         */
+                        bool passwordProven = result.ProducedAnyLayerOutput
+                            && !result.Layers.Any(layer => layer.ListingSaidNoEncryption);
+
+                        if (stoppedStatus == StatusText.Corrupted && passwordProven)
                         {
                             task.ErrorMessage =
                                 "密码已经证实（这一趟真解出了内容，坏的是数据）—— 不再往下试密码候选。";

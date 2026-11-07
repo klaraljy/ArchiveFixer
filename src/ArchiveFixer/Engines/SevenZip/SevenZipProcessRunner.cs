@@ -876,6 +876,28 @@ namespace ArchiveFixer.Engines.SevenZip
                  */
                 string? firstPath = ResolveArchivePath(archivePath, arguments);
 
+                /*
+                 * 单文件、文件名也没有任何分卷槽，内容卡却证明它是 SingleComplete /
+                 * ProvablyNotVolumeMember ⇒ 引擎文字里的 VolumeMissing 不成立，
+                 * 真原因是数据层失败（ZIP CRC 损坏现场：7z 报 CRC Failed，但文本分类先
+                 * 命中了 VolumeMissing）。⛔ 只否证“内容已证明不是分卷成员”这一种；
+                 * 真分卷片 / 判不出内容卡时保持原分类。
+                 */
+                if (!string.IsNullOrWhiteSpace(firstPath))
+                {
+                    FileNatureCard card = FileNature.Inspect(firstPath);
+
+                    /*
+                     * 以**内容卡**为准，不再先看文件名：ZIP 入口/跨盘末片本身就叫 .zip，
+                     * 名字槽可能也返回一个卷号；唯一可用的是内容层的明确否证：
+                     * “可证不是分卷组的一员” ⇒ 引擎文字里的 VolumeMissing 不成立。
+                     */
+                    if (card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember)
+                    {
+                        return "CorruptedArchive";
+                    }
+                }
+
                 if (IsCompleteVolumeGroup(firstPath))
                 {
                     return "CorruptedArchive";

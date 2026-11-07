@@ -1493,8 +1493,19 @@ namespace ArchiveFixer.ViewModels
                         return;
                     }
 
-                    task.Status = StatusText.ExtractFailed;
-                    task.ErrorMessage = "资源预算未通过：" + budget.Reason;
+                    /*
+                     * 预检拒绝也是**任务终态**：状态不能单独写。
+                     * 以前这里只写 Status / ErrorMessage，Outcome 停在 Pending ⇒ 批末汇总把
+                     * 一个明确的“资源预算未通过”算成“没轮到/未处理”，用户看到的是“解压失败”
+                     * 但统计里既不是失败也不是跳过（912 压缩炸弹现场）。
+                     * 走统一收口：MarkStoppedBeforeExtract 落状态 + 结束时间，FinalizeOutcomeIfPending
+                     * 按既有判据落 Failed（这里不是缺卷）。
+                     */
+                    MarkStoppedBeforeExtract(
+                        task,
+                        StatusText.ExtractFailed,
+                        "资源预算未通过：" + budget.Reason);
+                    FinalizeOutcomeIfPending(task);
 
                     AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}");
                     return;

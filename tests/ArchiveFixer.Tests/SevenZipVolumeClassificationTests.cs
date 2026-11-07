@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.IO.Compression;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Engines.SevenZip;
 using Xunit;
 
@@ -52,6 +54,27 @@ namespace ArchiveFixer.Tests
             string type = SevenZipProcessRunner.ResolveVolumeMissingErrorType("VolumeMissing", first);
 
             Assert.Equal("VolumeMissing", type);
+        }
+
+        [Fact]
+        public void 单文件zip内容自证完整_引擎误报缺卷时落损坏而不是缺卷()
+        {
+            string archive = Path.Combine(_root, "bad-crc.zip");
+
+            using (ZipArchive zip = ZipFile.Open(archive, ZipArchiveMode.Create))
+            {
+                using StreamWriter writer = new(zip.CreateEntry("坏数据.txt").Open());
+                writer.Write("CRC 坏");
+            }
+
+            FileNatureCard card = FileNature.Inspect(archive);
+            Assert.True(
+                card.BodyKind == ArchiveBodyKind.SingleComplete,
+                $"测试 zip 的内容卡不是 SingleComplete：BodyKind={card.BodyKind}，Membership={card.Membership}，Format={card.Format}");
+
+            string type = SevenZipProcessRunner.ResolveVolumeMissingErrorType("VolumeMissing", archive);
+
+            Assert.Equal("CorruptedArchive", type);
         }
 
         [Fact]
