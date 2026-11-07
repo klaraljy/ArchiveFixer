@@ -1,4 +1,5 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using System;
 using System.Text;
@@ -120,7 +121,7 @@ namespace ArchiveFixer.Views
             Close();
         }
 
-        private static string BuildDetailText(ArchiveTask task)
+        internal static string BuildDetailText(ArchiveTask task)
         {
             if (task == null)
             {
@@ -221,7 +222,8 @@ namespace ArchiveFixer.Views
             builder.AppendLine("【安全说明】");
             builder.AppendLine("此详情信息不会包含明文密码。");
 
-            return builder.ToString();
+            // 错误文本可能夹带引擎命令行片段；详情窗口既显示也复制，必须走同一个脱敏出口。
+            return PasswordMasker.Sanitize(builder.ToString());
         }
 
         private static string Safe(string? value)

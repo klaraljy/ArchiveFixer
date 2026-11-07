@@ -1,4 +1,5 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -54,7 +55,7 @@ namespace ArchiveFixer.Services
         public bool CopyFailedList(IEnumerable<ArchiveTask> tasks)
         {
             string text = _taskSummaryService.BuildFailedListText(tasks);
-            return CopyText(text);
+            return CopyText(PasswordMasker.Sanitize(text));
         }
 
         /// <summary>
@@ -93,7 +94,7 @@ namespace ArchiveFixer.Services
                 return CopyText(string.Empty);
             }
 
-            return CopyText(task.ErrorMessage ?? string.Empty);
+            return CopyText(PasswordMasker.Sanitize(task.ErrorMessage));
         }
 
         /// <summary>
@@ -125,7 +126,7 @@ namespace ArchiveFixer.Services
             builder.AppendLine("错误信息：" + (task.ErrorMessage ?? string.Empty));
             builder.AppendLine("耗时：" + (task.ElapsedText ?? string.Empty));
 
-            return CopyText(builder.ToString().TrimEnd());
+            return CopyText(PasswordMasker.Sanitize(builder.ToString().TrimEnd()));
         }
 
         /// <summary>
