@@ -29,6 +29,7 @@ namespace ArchiveFixer.Tests
     /// 在这条线程上同步等待异步操作（这正是 WPF 上 <c>AsyncRelayCommand</c> 之外那些
     /// "同步点按钮"的效果），并对等待设上限 —— 死锁时**用例失败而不是把测试进程挂死**。
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public class AsyncDeadlockGuardTests : IDisposable
     {
         private readonly string _root;
