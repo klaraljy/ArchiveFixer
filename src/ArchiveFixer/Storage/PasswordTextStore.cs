@@ -261,6 +261,8 @@ namespace ArchiveFixer.Storage
                 return false;
             }
 
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
             try
             {
                 Directory.CreateDirectory(DataRootDirectory);
@@ -270,7 +272,6 @@ namespace ArchiveFixer.Storage
                     TryWriteBackup(path);
                 }
 
-                string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 var builder = new StringBuilder();
 
                 foreach (string value in values)
@@ -305,6 +306,19 @@ namespace ArchiveFixer.Storage
             {
                 failureReason = ex.Message;
                 return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temp))
+                    {
+                        File.Delete(temp);
+                    }
+                }
+                catch
+                {
+                }
             }
         }
     }

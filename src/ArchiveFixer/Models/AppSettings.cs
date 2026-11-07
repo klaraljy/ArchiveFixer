@@ -2,6 +2,8 @@ using ArchiveFixer.Engines;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ArchiveFixer.Models
 {
@@ -182,6 +184,13 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class AppSettings
     {
+        /// <summary>
+        /// 旧版本/未来版本写进 appsettings.json、当前模型不认识的键。
+        /// 读入后原样保留，保存时一起写回；避免升级后静默丢掉旧设置。
+        /// </summary>
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? UnknownSettings { get; set; }
+
         public bool RecursiveScan { get; set; } = true;
 
         public string ScanMode { get; set; } = "ScanAllFiles";
@@ -1087,8 +1096,30 @@ namespace ArchiveFixer.Models
                 return true;
             }
         }
+        /// <summary>
+        /// 明确退役、不能原样保留的旧键。其它未知键按“未来版本设置”原样保留。
+        /// </summary>
+        private void RemoveRetiredUnknownSettings()
+        {
+            if (UnknownSettings == null || UnknownSettings.Count == 0)
+            {
+                return;
+            }
+
+            // 2026-09-30 用户拍板彻底删除「缓存根目录」；保留它等于把已经取消的
+            // “用户自定义工作区”权限又带回配置里，因此只对这一个键做清理。
+            UnknownSettings.Remove("CacheRootDirectory");
+
+            if (UnknownSettings.Count == 0)
+            {
+                UnknownSettings = null;
+            }
+        }
+
         public void Normalize()
         {
+            RemoveRetiredUnknownSettings();
+
             if (string.IsNullOrWhiteSpace(ScanMode))
             {
                 ScanMode = "ScanAllFiles";

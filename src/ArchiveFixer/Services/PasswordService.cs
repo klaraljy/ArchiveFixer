@@ -60,6 +60,14 @@ namespace ArchiveFixer.Services
         private readonly object _persistGate = new();
 
         /// <summary>
+        /// passwords.meta.json 里存在、但当前 passwords.txt 列表里暂时没有的条目。
+        /// 用户删掉/改掉一条密码时不能把它的备注和启用状态一起静默丢掉；
+        /// 值以后重新出现时可以恢复。保存时原样合并回去。
+        /// </summary>
+        private readonly Dictionary<string, PasswordMetadataEntry> _orphanMetadata =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
         /// 记住的密码本路径（**有序**，可多本）—— 用户 2026-09-24 要求多本密码本。
         ///
         /// <para>它与 <see cref="AppSettings.PasswordBookPaths"/> 是一份事实的两处落点：
@@ -315,6 +323,19 @@ namespace ArchiveFixer.Services
                         {
                             LastListWarning = "密码启用状态 / 备注读取失败，已按启用、无备注恢复：" + metadataFailure;
                             RememberedListWarning?.Invoke(LastListWarning);
+                        }
+
+                        _orphanMetadata.Clear();
+                        if (hasMetadata)
+                        {
+                            var currentValues = new HashSet<string>(textValues, StringComparer.Ordinal);
+                            foreach (var pair in metadata)
+                            {
+                                if (!currentValues.Contains(pair.Key))
+                                {
+                                    _orphanMetadata[pair.Key] = pair.Value;
+                                }
+                            }
                         }
 
                         _persistSuspensions++;
@@ -869,17 +890,35 @@ namespace ArchiveFixer.Services
                     textFailure = "内置密码清单写入失败：" + textFailure;
                 }
 
-                if (UseTextStore && textFailure.Length == 0
-                    && !MetadataStore.TrySave(
+                if (UseTextStore && textFailure.Length == 0)
+                {
+                    var metadataEntries = new List<PasswordMetadataEntry>(
                         Passwords.Select(item => new PasswordMetadataEntry
                         {
                             Value = item.Value ?? string.Empty,
                             IsEnabled = item.IsEnabled,
                             Remark = item.Remark ?? string.Empty
-                        }),
-                        out string metadataFailure))
-                {
-                    textFailure = "密码启用状态 / 备注写入失败：" + metadataFailure;
+                        }));
+
+                    if (_orphanMetadata.Count > 0)
+                    {
+                        var currentValues = new HashSet<string>(
+                            metadataEntries.Select(entry => entry.Value),
+                            StringComparer.Ordinal);
+
+                        foreach (var pair in _orphanMetadata)
+                        {
+                            if (!currentValues.Contains(pair.Key))
+                            {
+                                metadataEntries.Add(pair.Value);
+                            }
+                        }
+                    }
+
+                    if (!MetadataStore.TrySave(metadataEntries, out string metadataFailure))
+                    {
+                        textFailure = "密码启用状态 / 备注写入失败：" + metadataFailure;
+                    }
                 }
 
                 // DPAPI 记忆继续保留，供迁移 / 统计等旧逻辑使用；它不是用户要写回的那一份。
@@ -908,6 +947,18 @@ namespace ArchiveFixer.Services
                 foreach (PasswordItem item in e.OldItems)
                 {
                     item.PropertyChanged -= PasswordItem_PropertyChanged;
+
+                    // 删除/清空/改值后，原值的启用状态与备注继续留在元数据里，
+                    // 以后同一个值再加回来时还能恢复；不在这里静默丢掉。
+                    if (!string.IsNullOrEmpty(item.Value))
+                    {
+                        _orphanMetadata[item.Value] = new PasswordMetadataEntry
+                        {
+                            Value = item.Value,
+                            IsEnabled = item.IsEnabled,
+                            Remark = item.Remark ?? string.Empty
+                        };
+                    }
                 }
             }
 

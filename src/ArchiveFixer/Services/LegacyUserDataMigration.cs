@@ -20,7 +20,9 @@ namespace ArchiveFixer.Services
         {
             "appsettings.json",
             "passwords.txt",
+            "passwords.txt.bak",
             "passwords.meta.json",
+            "passwords.meta.json.bak",
             "password-list.dat",
             "password-book.path"
         };
@@ -32,6 +34,7 @@ namespace ArchiveFixer.Services
             Action<string>? log = null)
         {
             var copied = new List<string>();
+            bool hadFailure = false;
 
             if (string.IsNullOrWhiteSpace(destinationRoot))
             {
@@ -89,6 +92,14 @@ namespace ArchiveFixer.Services
                         continue;
                     }
 
+                    // 主密码本已存在时，旧 .bak 只是过期副本；直接复制会把旧版本可能留下的
+                    // 明文备份重新带回数据根。只有主文件缺失时才对备份做迁移（恢复时会升级加密）。
+                    if (string.Equals(fileName, "passwords.txt.bak", StringComparison.OrdinalIgnoreCase)
+                        && File.Exists(Path.Combine(destinationRoot, "passwords.txt")))
+                    {
+                        continue;
+                    }
+
                     try
                     {
                         CopyAtomically(source, destination);
@@ -97,12 +108,17 @@ namespace ArchiveFixer.Services
                     }
                     catch
                     {
-                        // 迁移失败不阻断启动；目标没有的文件留给用户手工处理。
+                        // 迁移失败不阻断启动；不写标记，下次启动还会再试。
+                        hadFailure = true;
                     }
                 }
             }
 
-            WriteVersion(versionPath);
+            if (!hadFailure)
+            {
+                WriteVersion(versionPath);
+            }
+
             return copied;
         }
 

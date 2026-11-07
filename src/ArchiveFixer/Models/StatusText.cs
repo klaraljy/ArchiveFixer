@@ -40,6 +40,12 @@ namespace ArchiveFixer.Models
         /// <summary>托盘悬停提示的进度格式；{0} = 百分比，{1} = 可空的剩余时间后缀。</summary>
         public const string TrayProgressFormat = "ArchiveFixer {0}%{1}";
 
+        /// <summary>主窗口底栏的进度格式；{0} = 当前任务/阶段，{1} = 百分比，{2} = 可空的剩余时间后缀。</summary>
+        public const string BottomProgressFormat = "正在处理：{0} · {1}%{2}";
+
+        /// <summary>主窗口底栏：在处理、但还没有可用百分比。</summary>
+        public const string BottomBusyText = "正在处理…";
+
         /// <summary>托盘悬停提示：只有“在处理”但没有可用百分比。</summary>
         public const string TrayBusyText = "ArchiveFixer 处理中";
 

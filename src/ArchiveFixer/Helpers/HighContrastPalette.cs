@@ -65,6 +65,11 @@ namespace ArchiveFixer.Helpers
             Set(resources, "InfoBorderBrush", frame);
             Set(resources, "InfoTextBrush", text);
 
+            Set(resources, "SummarySuccessBrush", highlight);
+            Set(resources, "SummaryPartialBrush", highlight);
+            Set(resources, "SummaryFailedBrush", highlight);
+            Set(resources, "SummaryBorderBrush", frame);
+
             Set(resources, "RowHoverBrush", highlight);
             Set(resources, "RowSelectedBrush", highlight);
             Set(resources, "DisabledBackgroundBrush", window);

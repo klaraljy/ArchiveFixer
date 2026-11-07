@@ -108,12 +108,15 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
+                <TextBlock x:Name="BottomProgressText"
+                           Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
                            Style="{StaticResource HintTextStyle}"
                            VerticalAlignment="Center"
                            Margin="0,0,10,0" />
 
-                <ProgressBar IsIndeterminate="True"
+                <ProgressBar x:Name="BottomProgressBar"
+                             IsIndeterminate="True"
+                             AutomationProperties.Name="当前处理进度"
                              Height="4"
                              Width="180"
                              VerticalAlignment="Center"

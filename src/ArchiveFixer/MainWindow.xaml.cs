@@ -260,6 +260,23 @@ namespace ArchiveFixer
                     TaskbarProgressInfo.ProgressValue = Math.Clamp(active.ProgressPercent / 100.0, 0, 1);
                 }
 
+                if (BottomProgressText != null && BottomProgressBar != null)
+                {
+                    string detail = string.IsNullOrWhiteSpace(active.ProgressEntry)
+                        ? active.ProgressText
+                        : active.ProgressEntry;
+
+                    BottomProgressText.Text = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.BottomProgressFormat,
+                        detail,
+                        active.ProgressPercent,
+                        eta);
+
+                    BottomProgressBar.IsIndeterminate = false;
+                    BottomProgressBar.Value = Math.Clamp(active.ProgressPercent, 0, 100);
+                }
+
                 return;
             }
 
@@ -270,6 +287,13 @@ namespace ArchiveFixer
                     : System.Windows.Shell.TaskbarItemProgressState.None;
 
                 TaskbarProgressInfo.ProgressValue = 0;
+            }
+
+            if (BottomProgressText != null && BottomProgressBar != null)
+            {
+                BottomProgressText.Text = StatusText.BottomBusyText;
+                BottomProgressBar.IsIndeterminate = true;
+                BottomProgressBar.Value = 0;
             }
 
             _trayIcon?.SetStatusText(

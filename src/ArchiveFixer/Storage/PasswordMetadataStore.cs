@@ -77,6 +77,8 @@ namespace ArchiveFixer.Storage
                 return false;
             }
 
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
             try
             {
                 Directory.CreateDirectory(DataRootDirectory);
@@ -92,7 +94,6 @@ namespace ArchiveFixer.Storage
                     }
                 }
 
-                string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 string json = JsonSerializer.Serialize(
                     entries.ToList(),
                     new JsonSerializerOptions { WriteIndented = true });
@@ -105,6 +106,19 @@ namespace ArchiveFixer.Storage
             {
                 failureReason = ex.Message;
                 return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temp))
+                    {
+                        File.Delete(temp);
+                    }
+                }
+                catch
+                {
+                }
             }
         }
     }

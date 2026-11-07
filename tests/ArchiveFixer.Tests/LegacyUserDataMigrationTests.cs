@@ -50,6 +50,45 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 主密码本已存在时不把旧明文备份带回数据根()
+        {
+            string target = Path.Combine(_root, "target");
+            string roaming = Path.Combine(_root, "roaming");
+            Directory.CreateDirectory(target);
+            Directory.CreateDirectory(roaming);
+            File.WriteAllText(Path.Combine(target, "passwords.txt"), "current");
+            File.WriteAllText(Path.Combine(roaming, "passwords.txt.bak"), "old-backup");
+            File.WriteAllText(Path.Combine(roaming, "passwords.meta.json.bak"), "[]");
+
+            var copied = LegacyUserDataMigration.MigrateIfNeeded(
+                Path.Combine(_root, "program"),
+                target,
+                roaming);
+
+            Assert.DoesNotContain("passwords.txt.bak", copied);
+            Assert.Contains("passwords.meta.json.bak", copied);
+            Assert.Equal("current", File.ReadAllText(Path.Combine(target, "passwords.txt")));
+            Assert.False(File.Exists(Path.Combine(target, "passwords.txt.bak")));
+        }
+
+        [Fact]
+        public void 主密码本缺失时旧备份可以补入()
+        {
+            string target = Path.Combine(_root, "target");
+            string roaming = Path.Combine(_root, "roaming");
+            Directory.CreateDirectory(roaming);
+            File.WriteAllText(Path.Combine(roaming, "passwords.txt.bak"), "old-backup");
+
+            var copied = LegacyUserDataMigration.MigrateIfNeeded(
+                Path.Combine(_root, "program"),
+                target,
+                roaming);
+
+            Assert.Contains("passwords.txt.bak", copied);
+            Assert.Equal("old-backup", File.ReadAllText(Path.Combine(target, "passwords.txt.bak")));
+        }
+
+        [Fact]
         public void 目标已有当前密码时绝不覆盖_只补缺失设置()
         {
             string target = Path.Combine(_root, "target");
@@ -66,6 +105,35 @@ namespace ArchiveFixer.Tests
             Assert.Equal("current-pass", File.ReadAllText(Path.Combine(target, "passwords.txt")));
             Assert.Contains("appsettings.json", copied);
             Assert.DoesNotContain("passwords.txt", copied);
+        }
+
+        [Fact]
+        public void 源文件暂时读不出时不写迁移标记_解锁后下一次还能补()
+        {
+            string target = Path.Combine(_root, "target");
+            string roaming = Path.Combine(_root, "roaming");
+            Directory.CreateDirectory(roaming);
+            string source = Path.Combine(roaming, "passwords.txt");
+            File.WriteAllText(source, "old-pass");
+
+            using (new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var first = LegacyUserDataMigration.MigrateIfNeeded(
+                    Path.Combine(_root, "program"),
+                    target,
+                    roaming);
+
+                Assert.DoesNotContain("passwords.txt", first);
+                Assert.False(File.Exists(Path.Combine(target, LegacyUserDataMigration.VersionFileName)));
+            }
+
+            var second = LegacyUserDataMigration.MigrateIfNeeded(
+                Path.Combine(_root, "program"),
+                target,
+                roaming);
+
+            Assert.Contains("passwords.txt", second);
+            Assert.True(File.Exists(Path.Combine(target, "passwords.txt")));
         }
 
         [Fact]

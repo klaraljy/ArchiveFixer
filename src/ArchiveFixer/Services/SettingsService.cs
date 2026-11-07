@@ -101,7 +101,28 @@ namespace ArchiveFixer.Services
                 }
 
                 string json = Serialize(settings);
-                File.WriteAllText(SettingsFilePath, json);
+                string path = SettingsFilePath;
+                string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+                try
+                {
+                    File.WriteAllText(temp, json);
+                    File.Move(temp, path, overwrite: true);
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(temp))
+                        {
+                            File.Delete(temp);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
                 return true;
             }
             catch
