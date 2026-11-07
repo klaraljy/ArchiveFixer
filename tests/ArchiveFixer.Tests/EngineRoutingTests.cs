@@ -586,8 +586,15 @@ namespace ArchiveFixer.Tests
                 Assert.IsType<EngineRouter>(vm.PipelineEngine);
                 Assert.NotSame(sevenZip, vm.PipelineEngine);
 
-                string rarPath = CreateMagicFile("pipe.rar", Rar5Magic);
-                string zipPath = CreateMagicFile("pipe.zip", ZipMagic);
+                /*
+                 * 两个包的**基名必须不同**：保持同一基名时，KeepArchiveNameFolder=true 会把
+                 * RAR 与 ZIP 都落到同一个输出目录；RecordingEngine 又都写 content.txt，
+                 * 单跑时 RAR 先写、ZIP 再写同路径 ⇒ ZIP 被自己的夹具冲突判失败。
+                 * 本用例要验的是“按格式分派引擎”，不是“同名不同格式如何共享落点”，
+                 * 所以用不同基名把两棵输出树隔开。
+                 */
+                string rarPath = CreateMagicFile("pipe-rar.rar", Rar5Magic);
+                string zipPath = CreateMagicFile("pipe-zip.zip", ZipMagic);
 
                 ArchiveTask rarTask = AddTask(vm, rarPath, "RAR5");
                 ArchiveTask zipTask = AddTask(vm, zipPath, "ZIP");
