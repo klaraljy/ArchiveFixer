@@ -52,6 +52,9 @@ namespace ArchiveFixer.ViewModels
         private void PreserveStoppedLayerProcessArtifact(ArchiveTask task, RecursionResult? result) =>
             _partialPublishStep.PreserveStoppedLayerProcessArtifact(task, result);
 
+        private void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath) =>
+            _partialPublishStep.PreserveCurrentProcessArtifact(task, artifactPath);
+
         private Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
             _partialPublishStep.TryPublishPartialProductsAsync(task, cancelled);
 

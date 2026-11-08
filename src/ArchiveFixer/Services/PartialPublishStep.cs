@@ -227,6 +227,92 @@ namespace ArchiveFixer.Services
         /// ⛔ 取消这一档不在这里判：取消的判定在 <c>TryPublishPartialProductsAsync</c> 与调用方，
         /// 而"留下"本身是**非破坏性**动作（比删安全），失败/部分完成/取消都该留下（不变量 1）。</para>
         /// </summary>
+        /// <summary>
+        /// 把“这一层正在解的当前过程物”按其它层同一口径留下/任其清理。
+        /// 只接受工作区里的产物；源包/判不出位置一律不动。
+        /// </summary>
+        internal void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(artifactPath) || !File.Exists(artifactPath))
+            {
+                return;
+            }
+
+            if (!_host.IsInsideRecursionWorkspace(artifactPath))
+            {
+                _host.AppendLog(
+                    "WARN",
+                    $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」不在工作区里"
+                    + "（可能是用户源包）—— 判不出位置，一个字节都不动。");
+                return;
+            }
+
+            if (_host.SpaceTightThisBatch)
+            {
+                _host.AppendLog(
+                    "INFO",
+                    $"{task.LogName}：空间不足模式 —— 当前过程物「{Path.GetFileName(artifactPath)}」不保留。");
+                return;
+            }
+
+            if (string.Equals(_host.RestHandlingThisBatch, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
+            {
+                _host.AppendLog(
+                    "INFO",
+                    $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」按「删除操作」处理，"
+                    + "不另起名字，随工作区清理。");
+                return;
+            }
+
+            string? restDirectory = ResolveRecursionRestDirectory(task, artifactPath);
+
+            if (string.IsNullOrWhiteSpace(restDirectory))
+            {
+                _host.AppendLog(
+                    "WARN",
+                    $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」推不出其余物目录 —— 不动。");
+                return;
+            }
+
+            try
+            {
+                SafePathHelper.EnsureDirectoryExists(restDirectory);
+            }
+            catch (Exception ex)
+            {
+                _host.AppendLog("WARN", $"{task.LogName}：当前过程物其余物目录建不出来：{ex.Message}");
+                return;
+            }
+
+            string target = Path.Combine(restDirectory, Path.GetFileName(artifactPath));
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (File.Exists(target) || Directory.Exists(target))
+            {
+                target = ProcessArtifactLayout.MakeUniqueTarget(
+                    target,
+                    isDirectory: false,
+                    reserved,
+                    FileSystemArtifactTargetProbe.Instance);
+            }
+
+            if (!HardLinkHelper.TryCreateHardLink(target, artifactPath))
+            {
+                _host.AppendLog(
+                    "WARN",
+                    $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」没能留下第二个名字"
+                    + "（硬链接建不出来）—— 留在原处，随工作区清理。");
+                return;
+            }
+
+            task.RestDirectoryPath = restDirectory;
+            task.LastProcessArtifactPath = target;
+
+            _host.AppendLog(
+                "INFO",
+                $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」按「留下」在其余物里留了一个名字：{target}");
+        }
+
         internal void PreserveStoppedLayerProcessArtifact(ArchiveTask task, RecursionResult? result)
         {
             if (task == null)

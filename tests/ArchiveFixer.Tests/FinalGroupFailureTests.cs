@@ -75,8 +75,6 @@ namespace ArchiveFixer.Tests
             await vm.AddPathsAsync(new[] { source }, ImportMode.Replace);
             await one.RunAsync().WaitAsync(TimeSpan.FromMinutes(3));
 
-            foreach (ArchiveTask t in vm.Tasks)
-                Console.WriteLine($"ROOT {sample} {t.FileName} outcome={t.Outcome} reason={t.Reason} group={t.ContentGroupFinalState}");
             ArchiveTask[] tasks = vm.Tasks.ToArray();
             Assert.Contains(tasks, t => t.Reason.ToString() == expectedReason);
             Assert.DoesNotContain(tasks, t => t.Reason.ToString() == expectedReason && t.Outcome == TaskOutcome.Skipped);
@@ -102,5 +100,7 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+
+
 
 
