@@ -158,6 +158,17 @@ namespace ArchiveFixer.Models
                 {
                     case TaskOutcome.Succeeded:
                         /*
+                         * 跟班卷的终态可能是 Succeeded（它自己的解压已经跑过），但状态明确写着
+                         * 「已跳过」——它没有独立成品，不能占成功名额；否则汇总会把
+                         * 「已跳过」的行算成成功，和①页明细对不上（真机 2026-11-08 2222 批）。
+                         */
+                        if (!task.CountsTowardBatchOutcome)
+                        {
+                            followerSkipped++;
+                            break;
+                        }
+
+                        /*
                          * 组最终内容没证：任务层“解压成功”不能算成功。
                          * Missing = 红（空输出/没有最终内容）；Partial = 部分完成。
                          */

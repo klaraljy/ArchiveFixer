@@ -281,6 +281,18 @@ namespace ArchiveFixer.Tests
         /// 而 4 个全是各组后续卷 —— 用户会再报一次「这四个应该是要跳过的，我绝对没必要」。</para>
         /// </summary>
         [Fact]
+        public void 汇总那一行_同一任务对象重复出现只算一次()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask owner = Succeeded("111.part1.rar");
+
+            string line = harness.OneClick.BuildSummaryLine(new[] { owner, owner });
+
+            Assert.Contains("本次 1 个", line, StringComparison.Ordinal);
+            Assert.Contains("成功 1", line, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void 汇总那一行_跟班卷从跳过里剔出去_且恒等式不许破()
         {
             Harness harness = CreateHarness();

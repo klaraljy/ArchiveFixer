@@ -142,8 +142,13 @@ namespace ArchiveFixer.ViewModels
                 files = Array.Empty<string>();
             }
 
+            /*
+             * 「没有记下其余物目录」和「记过但目录已不在」不是同一档：
+             * 前者常见于跟班卷（根本没有自己的成品/其余物），这次真机 2222 的风景02 就是
+             * 0 文件的空判据；后者可能是真的被删掉/丢了，仍按 WARN 留证据。
+             */
             AppendLog(
-                "WARN",
+                string.IsNullOrWhiteSpace(restDirectory) ? "INFO" : "WARN",
                 string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.CriterionInputsPassThroughRestFormat,

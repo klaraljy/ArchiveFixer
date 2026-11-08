@@ -78,6 +78,27 @@ namespace ArchiveFixer.Tests
             Assert.Equal(0, tally.Failed);
         }
 
+        /// <summary>
+        /// 跟班卷的机器终态可能是 Succeeded（它自己的解压跑过），但状态写着「已跳过」：
+        /// 不能占成功名额，否则①页明细和汇总行会一个说跳过、一个说成功。
+        /// </summary>
+        [Fact]
+        public void 跟班卷终态成功但状态跳过_仍进跟班档()
+        {
+            var follower = new ArchiveTask(@"C:\t\in\111\111.rar", 1)
+            {
+                Outcome = TaskOutcome.Succeeded,
+                IsVolumeGroupFollower = true,
+                Status = StatusText.Skipped
+            };
+
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(new List<ArchiveTask> { follower });
+
+            Assert.Equal(0, tally.Succeeded);
+            Assert.Equal(0, tally.Skipped);
+            Assert.Equal(1, tally.FollowerSkipped);
+        }
+
         /// <summary>恒等式那条不许破：各分项之和 + 未处理 = 任务数。</summary>
         [Fact]
         public void 分项之和加未处理等于任务数()

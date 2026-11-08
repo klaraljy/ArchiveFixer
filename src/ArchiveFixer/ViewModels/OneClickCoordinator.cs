@@ -1637,6 +1637,25 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
+                        /*
+                         * 入口包已经不在盘上，而同层同基名有一个成功任务（2222 批的三个「风景01」
+                         * 都是这种：任务名是 .mp4，组入口是已经清掉的 .7z.001）⇒ 这一组已收口，
+                         * 不再进 TryCommit（否则会先打一条 prepared 组建组被拒的 WARN）。
+                         * 只在“入口确实不存在”时走，入口还在就不许猜。
+                         */
+                        string earlyEntryPath = group.PreparedGroup?.OriginalEntryPath
+                            ?? group.OriginalEntryPath;
+
+                        if (!string.IsNullOrWhiteSpace(earlyEntryPath)
+                            && !File.Exists(earlyEntryPath)
+                            && FindSucceededTaskInLayer(entryLayer, group.BaseName) != null)
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"[第二大步·接住] {group.BaseName}：入口包已不在盘上，但同层同基名任务已完成 ⇒ 已收口，不重复建组。");
+                            continue;
+                        }
+
                         bool standardNameFastPath = fastReadyEntries.Contains(group.EntryPath)
                             && ArchiveFixer.Extraction.StandardNameFastPath.Find(group.Pieces)
                                 .Any(standard => standard.Pieces.Count == group.Pieces.Count);
@@ -1727,10 +1746,33 @@ namespace ArchiveFixer.ViewModels
                             }
                             else
                             {
-                                AppendLog(
-                                    "WARN",
-                                    $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
-                                    + $"（{FileNameHelper.GetFileName(entryPath)}）⇒ 这一组不动。");
+                                /*
+                                 * 同层、同基名已经有一个成功任务（真机 2222：三个「风景01」各自
+                                 * 在不同层，入口是 `.7z.001`，而成功任务名是 `.mp4`）⇒ 这一组
+                                 * 实际上已经由那个任务收口，不能再报"找不到入口"的 WARN。
+                                 * 只认同一层 + 同基名 + 机器终态成功，禁跨层猜。
+                                 */
+                                ArchiveTask? settledSameBase = FindSucceededTaskInLayer(entryLayer, group.BaseName);
+
+                                if (settledSameBase != null)
+                                {
+                                    if (preUnit != null)
+                                    {
+                                        _extractionCoordinator.SettleExtractedVolumeGroup(preUnit);
+                                    }
+
+                                    AppendLog(
+                                        "INFO",
+                                        $"[第二大步·接住] {group.BaseName}：入口任务不在表里，但同层同基名任务"
+                                        + $"「{settledSameBase.LogName}」已完成 ⇒ 视为已收口，不再点名。");
+                                }
+                                else
+                                {
+                                    AppendLog(
+                                        "WARN",
+                                        $"[第二大步·接住] {group.BaseName}：可证完整，但任务表里找不到入口那一份"
+                                        + $"（{FileNameHelper.GetFileName(entryPath)}）⇒ 这一组不动。");
+                                }
                             }
 
                             continue;
@@ -3795,6 +3837,13 @@ namespace ArchiveFixer.ViewModels
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
              * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
              */
+            /*
+             * ⛔ 同一任务对象可能被连续两轮追加进 processed（真机 2026-11-08：风景01 三单在
+             * 第一/第二轮各出现一次，最终行写“本次 40 / 列表 37”）。汇总按**对象身份**去重，
+             * 不能把同一单的两次处理算成两个任务。
+             */
+            targets = DistinctTargets(targets);
+
             BatchReport report = BatchReport.Create(targets);
             BatchOutcomeTally tally = report.Tally;
 
@@ -3973,6 +4022,54 @@ namespace ArchiveFixer.ViewModels
         /// 实测量到的错话（负向对照）：
         /// "一键处理已停止：成功 0 / 失败 0 / 跳过 0 / 未处理 1（本次 1 个任务）。已按「停止后续」中断…"
         /// </summary>
+        private ArchiveTask? FindSucceededTaskInLayer(string layer, string baseName)
+        {
+            if (string.IsNullOrWhiteSpace(layer)
+                || string.IsNullOrWhiteSpace(baseName))
+            {
+                return null;
+            }
+
+            foreach (ArchiveTask task in Tasks)
+            {
+                if (task.Outcome != TaskOutcome.Succeeded
+                    || !task.CountsTowardBatchOutcome
+                    || string.IsNullOrWhiteSpace(task.CurrentPath))
+                {
+                    continue;
+                }
+
+                string taskLayer = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+
+                if (string.Equals(taskLayer, layer, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        FileNameHelper.GetArchiveBaseName(task.CurrentPath),
+                        baseName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return task;
+                }
+            }
+
+            return null;
+        }
+
+        private static IReadOnlyList<ArchiveTask> DistinctTargets(IReadOnlyList<ArchiveTask> targets)
+        {
+            var seen = new HashSet<ArchiveTask>();
+            var result = new List<ArchiveTask>(targets.Count);
+
+            foreach (ArchiveTask task in targets)
+            {
+                if (seen.Add(task))
+                {
+                    result.Add(task);
+                }
+            }
+
+            return result;
+        }
+
         internal static bool IsFailureStatus(ArchiveTask task)
         {
             /*
