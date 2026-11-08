@@ -101,7 +101,9 @@ namespace ArchiveFixer.ViewModels
             {
                 ArchiveTask? owner = FindContentGroupOwner(group, tasks);
 
-                if (owner == null || owner.Outcome is TaskOutcome.Pending or TaskOutcome.Skipped)
+                if (owner == null
+                    || (owner.Outcome is TaskOutcome.Pending or TaskOutcome.Skipped
+                        && group.FailureKind == FinalGroupFailureKind.None))
                 {
                     continue;
                 }
