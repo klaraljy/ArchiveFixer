@@ -453,6 +453,13 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public sealed class RecursiveExtractor
     {
+        /*
+         * 自动 WinRAR 双面快路的硬开关。
+         * 取证结论：-cfg- 不能阻止 WinRAR 写 HKCU\Software\WinRAR\FileList\FileColumnWidths；
+         * 在注册表隔离/恢复方案验证通过之前保持 false，普通任务绝不静默改用户配置。
+         */
+        private static readonly bool EnableWinRarDoubleSidedFastPath = false;
+
         /// <summary>说明类文件后缀：它们和内层归档同级出现时，不构成"多分支"。</summary>
         private static readonly string[] InformationalExtensions =
         {
@@ -1907,16 +1914,25 @@ namespace ArchiveFixer.Extraction
                         return direct;
                     }
 
-                    LayerOutcome? winrar = await TryTakeEmbeddedWithWinRarAsync(
-                            item,
-                            candidates,
-                            progress,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (winrar != null)
+                    /*
+                     * 2026-11-08 取证：即使带 -cfg-，WinRAR 仍会写
+                     * HKCU\Software\WinRAR\FileList\FileColumnWidths。
+                     * 在隔离方案落地前，自动快路保持关闭 —— 只保留执行体与测试，
+                     * 不允许普通任务静默改用户 WinRAR 配置。
+                     */
+                    if (EnableWinRarDoubleSidedFastPath)
                     {
-                        return winrar;
+                        LayerOutcome? winrar = await TryTakeEmbeddedWithWinRarAsync(
+                                item,
+                                candidates,
+                                progress,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (winrar != null)
+                        {
+                            return winrar;
+                        }
                     }
 
                     if (taken != null)

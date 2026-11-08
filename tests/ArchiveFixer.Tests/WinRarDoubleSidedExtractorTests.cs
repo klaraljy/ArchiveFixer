@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -69,18 +70,67 @@ namespace ArchiveFixer.Tests
 
             string beforeHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
             string output = Path.Combine(_root, "out");
+            string registryBackup = Path.Combine(_root, "winrar-before.reg");
+            bool hasBackup = ExportWinRarRegistry(registryBackup);
 
-            WinRarDoubleSidedExtractResult result = await new WinRarDoubleSidedExtractor().TryExtractAsync(
-                source,
-                output);
+            try
+            {
+                WinRarDoubleSidedExtractResult result = await new WinRarDoubleSidedExtractor().TryExtractAsync(
+                    source,
+                    output);
 
-            Assert.True(result.Success, result.Message);
-            Assert.Equal("first", File.ReadAllText(
-                Assert.Single(Directory.GetFiles(output, "第一条.txt", SearchOption.AllDirectories))));
-            Assert.Equal("second", File.ReadAllText(
-                Assert.Single(Directory.GetFiles(output, "第二条.txt", SearchOption.AllDirectories))));
-            Assert.Equal(beforeHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source))));
-            Assert.Empty(Directory.GetFiles(_root, "af-winrar-*", SearchOption.AllDirectories));
+                Assert.True(result.Success, result.Message);
+                Assert.Equal("first", File.ReadAllText(
+                    Assert.Single(Directory.GetFiles(output, "第一条.txt", SearchOption.AllDirectories))));
+                Assert.Equal("second", File.ReadAllText(
+                    Assert.Single(Directory.GetFiles(output, "第二条.txt", SearchOption.AllDirectories))));
+                Assert.Equal(beforeHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source))));
+                Assert.Empty(Directory.GetFiles(_root, "af-winrar-*", SearchOption.AllDirectories));
+            }
+            finally
+            {
+                if (hasBackup)
+                {
+                    ImportWinRarRegistry(registryBackup);
+                }
+            }
+        }
+
+        private static bool ExportWinRarRegistry(string path)
+        {
+            return RunReg("export", @"HKCU\Software\WinRAR", path);
+        }
+
+        private static void ImportWinRarRegistry(string path)
+        {
+            RunReg("import", path, null);
+        }
+
+        private static bool RunReg(string verb, string key, string? file)
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "reg.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            info.ArgumentList.Add(verb);
+            info.ArgumentList.Add(key);
+            if (file != null)
+            {
+                info.ArgumentList.Add(file);
+                if (verb == "export")
+                {
+                    info.ArgumentList.Add("/y");
+                }
+            }
+
+            using Process process = Process.Start(info)!;
+            process.WaitForExit(30000);
+            return process.ExitCode == 0;
         }
     }
 }
