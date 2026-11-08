@@ -84,6 +84,12 @@ namespace ArchiveFixer.Tests
                 task => task.Reason.ToString() == expectedReason
                         && !task.IsContentGroupProcessTask
                         && task.ContentGroupFinalState == FinalContentState.Verified);
+            if (expectedReason == "FinalGroupCorrupted")
+            {
+                ArchiveTask failed = tasks.First(t => t.Reason == TaskReason.FinalGroupCorrupted);
+                Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "坏片必须落当前过程物路径");
+                Assert.True(File.Exists(failed.LastProcessArtifactPath), "Keep 档当前过程物必须存在");
+            }
         }
 
         private static void Copy(string s, string d)
@@ -100,6 +106,7 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+
 
 
 

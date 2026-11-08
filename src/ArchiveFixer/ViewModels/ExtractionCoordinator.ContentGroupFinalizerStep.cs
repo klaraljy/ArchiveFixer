@@ -85,6 +85,15 @@ namespace ArchiveFixer.ViewModels
                 representative.EndTime ??= DateTime.Now;
             }
 
+            ArchiveTask? processOwner = representative
+                ?? tasks?.FirstOrDefault(candidate => candidate != null);
+
+            if (processOwner != null
+                && !string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
+            {
+                PreserveCurrentProcessArtifact(processOwner, group.CurrentProcessArtifactPath);
+            }
+
             return changed;
         }
 
@@ -156,6 +165,11 @@ namespace ArchiveFixer.ViewModels
                         owner.Status = group.FailureKind == FinalGroupFailureKind.Corrupted
                             ? StatusText.FinalGroupCorrupted
                             : StatusText.FinalGroupIncomplete;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
+                    {
+                        PreserveCurrentProcessArtifact(owner, group.CurrentProcessArtifactPath);
                     }
                 }
 

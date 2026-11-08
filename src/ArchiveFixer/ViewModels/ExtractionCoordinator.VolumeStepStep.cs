@@ -530,14 +530,6 @@ namespace ArchiveFixer.ViewModels
                         Tasks);
                 }
 
-                string? currentProcessArtifact = unit.NamePlan?.Items
-                    .FirstOrDefault(item => item.IsEntry)?.PiecePath;
-
-                if (!string.IsNullOrWhiteSpace(currentProcessArtifact))
-                {
-                    PreserveCurrentProcessArtifact(task, currentProcessArtifact);
-                }
-
                 _volumeGroupService.MarkState(
                     unit,
                     VolumeGroupState.Failed,

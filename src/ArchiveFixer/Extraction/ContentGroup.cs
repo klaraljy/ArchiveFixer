@@ -71,6 +71,9 @@ namespace ArchiveFixer.Extraction
 
         public string EntryPath { get; private set; } = string.Empty;
 
+        /// <summary>组入口在临时 group-entry 工作区的规范路径；失败时作为 CurrentProcessArtifact。</summary>
+        public string CurrentProcessArtifactPath { get; private set; } = string.Empty;
+
         public PreparedGroupState State { get; private set; } = PreparedGroupState.Unknown;
 
         public string Evidence { get; private set; } = string.Empty;
@@ -149,6 +152,11 @@ namespace ArchiveFixer.Extraction
             if (!string.IsNullOrWhiteSpace(prepared.OriginalEntryPath))
             {
                 EntryPath = prepared.OriginalEntryPath;
+            }
+
+            if (!string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath))
+            {
+                CurrentProcessArtifactPath = prepared.CanonicalEntryPath;
             }
 
             foreach (PreparedVolumePiece piece in prepared.Pieces)
