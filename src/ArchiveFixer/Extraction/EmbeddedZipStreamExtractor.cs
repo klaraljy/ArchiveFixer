@@ -287,7 +287,8 @@ namespace ArchiveFixer.Extraction
             string? targetDirectory = null,
             IReadOnlyList<string>? passwords = null,
             CancellationToken cancellationToken = default,
-            bool confirmResolvedPassword = true)
+            bool confirmResolvedPassword = true,
+            bool allowUnsupportedMethodsForList = false)
         {
             try
             {
@@ -309,7 +310,15 @@ namespace ArchiveFixer.Extraction
                     bufferSize: 4096,
                     FileOptions.RandomAccess);
 
-                return Parse(stream, offset, end, targetDirectory, passwords, cancellationToken, confirmResolvedPassword);
+                return Parse(
+                    stream,
+                    offset,
+                    end,
+                    targetDirectory,
+                    passwords,
+                    cancellationToken,
+                    confirmResolvedPassword,
+                    allowUnsupportedMethodsForList);
             }
             catch (Exception ex)
             {
@@ -464,7 +473,8 @@ namespace ArchiveFixer.Extraction
             string? targetDirectory,
             IReadOnlyList<string>? passwords,
             CancellationToken cancellationToken,
-            bool confirmResolvedPassword)
+            bool confirmResolvedPassword,
+            bool allowUnsupportedMethodsForList)
         {
             long zipLength = end - offset;
             int windowLength = (int)Math.Min(zipLength, TailBytes);
@@ -495,6 +505,7 @@ namespace ArchiveFixer.Extraction
                     passwords,
                     cancellationToken,
                     confirmResolvedPassword,
+                    allowUnsupportedMethodsForList,
                     out string? reason);
 
                 if (reason != null)
@@ -529,6 +540,7 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<string>? passwords,
             CancellationToken cancellationToken,
             bool confirmResolvedPassword,
+            bool allowUnsupportedMethodsForList,
             out string? structuralReason)
         {
             structuralReason = null;
@@ -646,7 +658,8 @@ namespace ArchiveFixer.Extraction
                 targetDirectory,
                 passwords,
                 cancellationToken,
-                confirmResolvedPassword);
+                confirmResolvedPassword,
+                allowUnsupportedMethodsForList);
         }
 
         /// <summary>
@@ -665,13 +678,15 @@ namespace ArchiveFixer.Extraction
             string? targetDirectory,
             IReadOnlyList<string>? passwords,
             CancellationToken cancellationToken,
-            bool confirmResolvedPassword)
+            bool confirmResolvedPassword,
+            bool allowUnsupportedMethodsForList)
         {
             var entries = new List<EmbeddedZipEntry>();
             var listEntries = new List<ArchiveEntry>();
             int index = 0;
             long totalBytes = 0;
             bool hasAesEntry = false;
+            bool hasUnsupportedMethodForList = false;
 
             while (index < centralDirectory.Length)
             {
@@ -783,7 +798,12 @@ namespace ArchiveFixer.Extraction
 
                 if (method != 0 && method != 8)
                 {
-                    return CandidateEvaluation.Unsupported($"条目 {name} 用了直读不支持的压缩方法（{method}）");
+                    if (!allowUnsupportedMethodsForList)
+                    {
+                        return CandidateEvaluation.Unsupported($"条目 {name} 用了直读不支持的压缩方法（{method}）");
+                    }
+
+                    hasUnsupportedMethodForList = true;
                 }
 
                 bool isDirectory = name.EndsWith("/", StringComparison.Ordinal) ||
@@ -905,21 +925,33 @@ namespace ArchiveFixer.Extraction
                     totalBytes);
             }
 
+            var list = new ArchiveListResult
+            {
+                Success = true,
+                Entries = listEntries,
+                TotalUncompressedSize = totalBytes,
+                FileCount = listEntries.Count(e => !e.IsDirectory),
+                DirectoryCount = listEntries.Count(e => e.IsDirectory),
+                IsEncrypted = hasAesEntry,
+                IsMultiVolume = false,
+                EngineId = "embedded-zip-direct",
+                EngineVersion = EmbeddedZipStreamExtractorVersion,
+                Message = "内置 ZIP 直读解析出的条目清单"
+            };
+
+            if (hasUnsupportedMethodForList)
+            {
+                return CandidateEvaluation.ListOnly(
+                    entries,
+                    list,
+                    totalBytes,
+                    offset,
+                    offset + zipLength);
+            }
+
             return CandidateEvaluation.Ok(
                 entries,
-                new ArchiveListResult
-                {
-                    Success = true,
-                    Entries = listEntries,
-                    TotalUncompressedSize = totalBytes,
-                    FileCount = listEntries.Count(e => !e.IsDirectory),
-                    DirectoryCount = listEntries.Count(e => e.IsDirectory),
-                    IsEncrypted = hasAesEntry,
-                    IsMultiVolume = false,
-                    EngineId = "embedded-zip-direct",
-                    EngineVersion = EmbeddedZipStreamExtractorVersion,
-                    Message = "内置 ZIP 直读解析出的条目清单"
-                },
+                list,
                 totalBytes,
                 offset,
                 offset + zipLength,
@@ -2325,6 +2357,32 @@ namespace ArchiveFixer.Extraction
                             DirectoryCount = listEntries.Count(e => e.IsDirectory),
                             IsEncrypted = isEncrypted
                         }
+                    }
+                };
+
+            /// <summary>
+            /// 是候选，直读不支持，但中央目录清单已完整解析；供 WinRAR 快路核对产物，
+            /// ⛔ 不能把它当成可直读。
+            /// </summary>
+            public static CandidateEvaluation ListOnly(
+                List<EmbeddedZipEntry> entries,
+                ArchiveListResult list,
+                long totalBytes,
+                long offset,
+                long end) => new()
+                {
+                    IsCandidate = true,
+                    Result = new EmbeddedZipProbeResult
+                    {
+                        Supported = false,
+                        Reason = "直读不支持该压缩方法，仅返回清单供外部快路核对",
+                        Message = "直读不支持该压缩方法，仅返回清单供外部快路核对",
+                        Entries = entries,
+                        List = list,
+                        ArchiveLength = end - offset,
+                        Offset = offset,
+                        End = end,
+                        TotalBytes = totalBytes
                     }
                 };
 
