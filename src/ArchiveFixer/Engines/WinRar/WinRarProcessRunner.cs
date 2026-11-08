@@ -107,6 +107,8 @@ namespace ArchiveFixer.Engines.WinRar
                 "-cfg-",
                 "-ibck",
                 "-inul",
+                "-o+",
+                "-y",
                 BuildPasswordArgument(password),
                 archivePath,
                 EnsureTrailingSeparator(outputDirectory)
