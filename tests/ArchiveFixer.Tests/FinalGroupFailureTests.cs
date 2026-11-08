@@ -19,17 +19,19 @@ namespace ArchiveFixer.Tests
     public sealed class FinalGroupFailureTests
     {
         [Theory]
-        [InlineData("915000041", "FinalGroupIncomplete")]
-        [InlineData("915000042", "FinalGroupIncomplete")]
-        [InlineData("915000043", "FinalGroupIncomplete")]
-        [InlineData("915000044", "FinalGroupIncomplete")]
-        [InlineData("915000045", "FinalGroupIncomplete")]
-        [InlineData("915000046", "FinalGroupCorrupted")]
-        [InlineData("915000047", "FinalGroupCorrupted")]
-        [InlineData("915000048", "FinalGroupCorrupted")]
-        [InlineData("915000049", "FinalGroupCorrupted")]
-        [InlineData("915000050", "FinalGroupCorrupted")]
-        public async Task Probe(string sample, string expectedReason)
+        [InlineData("915000041", "FinalGroupIncomplete", RestHandlingModes.Keep, false)]
+        [InlineData("915000042", "FinalGroupIncomplete", RestHandlingModes.Keep, false)]
+        [InlineData("915000043", "FinalGroupIncomplete", RestHandlingModes.Keep, false)]
+        [InlineData("915000044", "FinalGroupIncomplete", RestHandlingModes.Keep, false)]
+        [InlineData("915000045", "FinalGroupIncomplete", RestHandlingModes.Keep, false)]
+        [InlineData("915000046", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000047", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000048", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000050", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000046", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
+        [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
+        public async Task Probe(string sample, string expectedReason, string restHandling, bool spaceTight)
         {
             const string backupRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915000000-备份";
             string backup = Path.Combine(backupRoot, sample, "原包");
@@ -53,7 +55,7 @@ namespace ArchiveFixer.Tests
             AppSettings s = AppSettings.CreateDefault();
             s.CustomOutputDirectory = target;
             s.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            s.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            s.RestHandlingAfterVerify = restHandling;
             s.KeepFailedWorkspace = true;
             ss.Save(s);
             var engine = new SevenZipEngine();
@@ -62,6 +64,8 @@ namespace ArchiveFixer.Tests
                 engine, pw, new LogService(ps), ss, ps, new TaskSummaryService(),
                 new ClipboardService(), new DialogService(), useTextStore: true, encryptTextStore: false);
             var coordinator = new ExtractionCoordinator(vm, engine, pw, ps, new DialogService());
+            vm.SpaceTightMode = spaceTight;
+            if (spaceTight) { coordinator.SpaceProbeOverride = _ => 1; coordinator.SpaceReserveOverride = 0; }
             var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
             var one = new OneClickCoordinator(vm, scan, rename, coordinator, new DialogService());
@@ -70,7 +74,7 @@ namespace ArchiveFixer.Tests
                 PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = target,
                 SourceHandling = SourceHandlingMode.KeepInPlace,
-                RestHandling = RestHandlingModes.Keep
+                RestHandling = restHandling
             });
             await vm.AddPathsAsync(new[] { source }, ImportMode.Replace);
             await one.RunAsync().WaitAsync(TimeSpan.FromMinutes(3));
@@ -84,11 +88,24 @@ namespace ArchiveFixer.Tests
                 task => task.Reason.ToString() == expectedReason
                         && !task.IsContentGroupProcessTask
                         && task.ContentGroupFinalState == FinalContentState.Verified);
+
             if (expectedReason == "FinalGroupCorrupted")
             {
                 ArchiveTask failed = tasks.First(t => t.Reason == TaskReason.FinalGroupCorrupted);
-                Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "坏片必须落当前过程物路径");
-                Assert.True(File.Exists(failed.LastProcessArtifactPath), "Keep 档当前过程物必须存在");
+
+                if (spaceTight) { Assert.True(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath) || !File.Exists(failed.LastProcessArtifactPath), "空间不足不保留当前过程物"); }
+                else if (restHandling == RestHandlingModes.Keep)
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "Keep 必须落当前过程物路径");
+                    Assert.True(File.Exists(failed.LastProcessArtifactPath), "Keep 当前过程物必须存在");
+                }
+                else
+                {
+                    Assert.True(
+                        string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath)
+                        || !File.Exists(failed.LastProcessArtifactPath),
+                        "Delete 当前过程物必须不存在");
+                }
             }
         }
 
@@ -106,8 +123,6 @@ namespace ArchiveFixer.Tests
         }
     }
 }
-
-
 
 
 
