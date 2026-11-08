@@ -875,38 +875,6 @@ namespace ArchiveFixer.Tests
                 x => x.Message.Contains("按偏移取出归档副本", StringComparison.Ordinal));
         }
 
-        /// <summary>
-        /// 直读不支持的压缩方法：默认探针必须仍然“不支持”；清单模式可以拿到条目清单，
-        /// 供 WinRAR 快路核对产物。清单模式绝不能把 Supported 改成 true。
-        /// </summary>
-        [Fact]
-        public void 不支持的方法_默认回落_清单模式只返回清单()
-        {
-            byte[] zip = BuildZipBytes(("method.txt", Encoding.UTF8.GetBytes("method payload"), CompressionLevel.NoCompression));
-            zip = PatchZipMethod(zip, 12); // BZip2：直读不支持
-
-            string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "unsupported-method");
-
-            EmbeddedZipProbeResult normal = EmbeddedZipStreamExtractor.Probe(
-                source,
-                BeyondSevenZipTolerancePrefixLength,
-                BeyondSevenZipTolerancePrefixLength + zip.Length);
-
-            Assert.False(normal.Supported);
-            Assert.Null(normal.List);
-
-            EmbeddedZipProbeResult listOnly = EmbeddedZipStreamExtractor.Probe(
-                source,
-                BeyondSevenZipTolerancePrefixLength,
-                BeyondSevenZipTolerancePrefixLength + zip.Length,
-                allowUnsupportedMethodsForList: true);
-
-            Assert.False(listOnly.Supported);
-            Assert.NotNull(listOnly.List);
-            Assert.Equal(1, listOnly.List!.FileCount);
-            Assert.Equal("method.txt", Assert.Single(listOnly.List.Entries).Path);
-        }
-
         // ================================================================ 样本构造
 
         private static uint Crc32Of(byte[] data)
@@ -924,23 +892,6 @@ namespace ArchiveFixer.Tests
             }
 
             return ~crc;
-        }
-
-        private static byte[] PatchZipMethod(byte[] zip, ushort method)
-        {
-            byte[] localSignature = Encoding.ASCII.GetBytes("PK\x03\x04");
-            byte[] centralSignature = Encoding.ASCII.GetBytes("PK\x01\x02");
-
-            int local = IndexOf(zip, localSignature, 0);
-            int central = IndexOf(zip, centralSignature, 0);
-
-            Assert.True(local >= 0, "local header missing");
-            Assert.True(central >= 0, "central header missing");
-
-            BitConverter.GetBytes(method).CopyTo(zip, local + 8);
-            BitConverter.GetBytes(method).CopyTo(zip, central + 10);
-
-            return zip;
         }
 
         private static int IndexOf(byte[] haystack, byte[] needle, int start)

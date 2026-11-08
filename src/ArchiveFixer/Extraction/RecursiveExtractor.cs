@@ -1,6 +1,5 @@
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.WinRar;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
@@ -453,13 +452,6 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public sealed class RecursiveExtractor
     {
-        /*
-         * 自动 WinRAR 双面快路的硬开关。
-         * 取证结论：-cfg- 不能阻止 WinRAR 写 HKCU\Software\WinRAR\FileList\FileColumnWidths；
-         * 在注册表隔离/恢复方案验证通过之前保持 false，普通任务绝不静默改用户配置。
-         */
-        private static readonly bool EnableWinRarDoubleSidedFastPath = false;
-
         /// <summary>说明类文件后缀：它们和内层归档同级出现时，不构成"多分支"。</summary>
         private static readonly string[] InformationalExtensions =
         {
@@ -1912,27 +1904,6 @@ namespace ArchiveFixer.Extraction
                     if (direct != null)
                     {
                         return direct;
-                    }
-
-                    /*
-                     * 2026-11-08 取证：即使带 -cfg-，WinRAR 仍会写
-                     * HKCU\Software\WinRAR\FileList\FileColumnWidths。
-                     * 在隔离方案落地前，自动快路保持关闭 —— 只保留执行体与测试，
-                     * 不允许普通任务静默改用户 WinRAR 配置。
-                     */
-                    if (EnableWinRarDoubleSidedFastPath)
-                    {
-                        LayerOutcome? winrar = await TryTakeEmbeddedWithWinRarAsync(
-                                item,
-                                candidates,
-                                progress,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-
-                        if (winrar != null)
-                        {
-                            return winrar;
-                        }
                     }
 
                     if (taken != null)
@@ -3928,133 +3899,6 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 成功时**不写 ERROR**：用户看到的必须是"为什么引擎打不开 + 我们换了什么办法"，
         /// 而不是一句会被读成"包坏了"的失败。</para>
         /// </summary>
-        /// <summary>
-        /// 双面 ZIP 的可选 WinRAR 快路：只在内嵌归档是单卷 ZIP、内置直读不支持、
-        /// 中央目录清单完整可解析且未加密、WinRAR 可用时尝试。解压后先用同一份清单
-        /// 做 OutputVerifier 校验；失败就清空本层输出并回落抠副本 + 7z。
-        /// </summary>
-        private async Task<LayerOutcome?> TryTakeEmbeddedWithWinRarAsync(
-            WorkItem item,
-            IReadOnlyList<string> candidates,
-            IProgress<ArchiveProgress>? progress,
-            CancellationToken cancellationToken)
-        {
-            string layerLabel = DescribeProbeLabel(item);
-
-            try
-            {
-                EmbeddedArchiveInfo info = DetectEmbeddedArchive(item.ArchivePath);
-
-                if (!info.Found ||
-                    info.IsVolumePart ||
-                    info.Offset <= 0 ||
-                    !string.Equals(info.Format, "ZIP", StringComparison.OrdinalIgnoreCase))
-                {
-                    return null;
-                }
-
-                IReadOnlyList<string> limitedCandidates = candidates
-                    .Take(Math.Max(1, _limits.MaxPasswordAttemptsPerLayer))
-                    .ToList();
-
-                EmbeddedZipProbeResult probe = await Task.Run(
-                        () => EmbeddedZipStreamExtractor.Probe(
-                            item.ArchivePath,
-                            info.Offset,
-                            info.ArchiveEnd,
-                            item.Layer.OutputPath,
-                            limitedCandidates,
-                            cancellationToken,
-                            confirmResolvedPassword: false,
-                            allowUnsupportedMethodsForList: true),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (probe.Supported ||
-                    probe.List == null ||
-                    probe.List.IsEncrypted ||
-                    probe.List.FileCount == 0)
-                {
-                    return null;
-                }
-
-                var winrar = new WinRarDoubleSidedExtractor();
-
-                if (!winrar.IsAvailable)
-                {
-                    return null;
-                }
-
-                TryResetLayerOutputDirectory(item.Layer.OutputPath);
-
-                WinRarDoubleSidedExtractResult extraction = await winrar.TryExtractAsync(
-                        item.ArchivePath,
-                        item.Layer.OutputPath,
-                        password: null,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (!extraction.Success)
-                {
-                    TryResetLayerOutputDirectory(item.Layer.OutputPath);
-                    Log(
-                        "WARN",
-                        $"{layerLabel}：WinRAR 双面快路未成功（{extraction.Message}）—— 回落到抠副本 + 引擎。");
-
-                    return null;
-                }
-
-                OutputVerificationResult verification = OutputVerifier.Verify(
-                    item.Layer.OutputPath,
-                    probe.List);
-
-                if (!verification.Verified)
-                {
-                    TryResetLayerOutputDirectory(item.Layer.OutputPath);
-                    Log(
-                        "WARN",
-                        $"{layerLabel}：WinRAR 双面快路产物校验未通过（{verification.Message}）—— 回落到抠副本 + 引擎。");
-
-                    return null;
-                }
-
-                DangerousEntriesReported?.Invoke(
-                    ViewModels.ExtractionCoordinator.AnalyzeDangerousEntries(
-                        probe.List.Entries,
-                        ReportDangerousEntries));
-
-                item.ListingSaidNoEncryption = true;
-
-                Log("INFO", $"{layerLabel}：使用 WinRAR 双面直解（不抠副本），产物校验通过。");
-
-                return await FinishSuccessfulLayerAsync(
-                        item,
-                        new ArchiveOperationResult
-                        {
-                            Success = true,
-                            Status = StatusText.ExtractSuccess,
-                            EngineDisplayName = WinRarProcessRunner.DisplayName
-                        },
-                        LayerManifest.From(probe.List),
-                        succeededPassword: null,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                TryResetLayerOutputDirectory(item.Layer.OutputPath);
-                Log(
-                    "WARN",
-                    $"{layerLabel}：WinRAR 双面快路异常（{ex.Message}）—— 回落到抠副本 + 引擎。");
-
-                return null;
-            }
-        }
-
         private async Task<LayerOutcome?> TryTakeSingleStoredEntryAsync(
             WorkItem item,
             IProgress<ArchiveProgress>? progress,
