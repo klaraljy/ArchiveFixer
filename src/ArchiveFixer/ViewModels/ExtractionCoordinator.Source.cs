@@ -982,8 +982,14 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
-            return task.IsVolumeGroupFollower
-                   && reclaimVerdict != null
+            /*
+             * 链尾组源包结算：调用方已经把**组级结论**作为 reclaimVerdict 传进来
+             * （组齐全 + owner 可证完整 + 内容校验通过）。这一份结论覆盖的不只是 owner 自己，
+             * 还包括为这一组产出片的包装单（111-1/111-2）；它们不一定被标成
+             * IsVolumeGroupFollower，但它们的片已经全部被这个已验证组消费，半套分卷闸门不再适用。
+             * 只有组结论为允许删除时才走这里；其它没有组结论的路径仍按原判据。
+             */
+            return reclaimVerdict != null
                    && reclaimVerdict.AllowsSourceRemoval;
         }
 

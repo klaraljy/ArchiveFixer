@@ -442,27 +442,45 @@ namespace ArchiveFixer.ViewModels
              * 先按**组的入口全路径/片路径**精确匹配，匹配不到才退回文件名（兼容入口被改名）。
              */
             ArchiveTask[] snapshot = SnapshotTaskTable(Tasks);
-            ArchiveTask? byPath = snapshot.FirstOrDefault(candidate =>
+
+            /*
+             * ⛔ 先认**入口**和**owner 文件名**，最后才允许按任意片路径兜底。
+             *
+             * 2026-11-08 真机：`aaa-L4` 四片里第一片是用户导入的 `.004`；旧写法把
+             * “any piece path matches” 放在文件名匹配之前，于是 `FindOwnerTask` 返回了
+             * `aaa-L4.7.....mkwz.004`（Outcome=Skipped），链尾整组被跳过，包装源包永远不结算。
+             * 片路径只能证明“这一单手里有片”，不能证明“它是 owner”。
+             */
+            ArchiveTask? byEntry = snapshot.FirstOrDefault(candidate =>
                 candidate != null
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                && ((!string.IsNullOrWhiteSpace(unit.EntryPath)
-                     && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, unit.EntryPath))
-                    || unit.Pieces.Any(piece =>
-                        !string.IsNullOrWhiteSpace(piece.Path)
-                        && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path))));
+                && !string.IsNullOrWhiteSpace(unit.EntryPath)
+                && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, unit.EntryPath));
 
-            if (byPath != null)
+            if (byEntry != null)
             {
-                return byPath;
+                return byEntry;
             }
 
-            return snapshot.FirstOrDefault(candidate =>
+            ArchiveTask? byName = snapshot.FirstOrDefault(candidate =>
                 candidate != null
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
                 && string.Equals(
                     FileNameHelper.GetFileName(candidate.CurrentPath),
                     unit.OwnerTaskFileName,
                     StringComparison.OrdinalIgnoreCase));
+
+            if (byName != null)
+            {
+                return byName;
+            }
+
+            return snapshot.FirstOrDefault(candidate =>
+                candidate != null
+                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                && unit.Pieces.Any(piece =>
+                    !string.IsNullOrWhiteSpace(piece.Path)
+                    && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)));
         }
 
 
@@ -728,16 +746,29 @@ namespace ArchiveFixer.ViewModels
                 // 包装壳：它的产出片被这一组接手、组又可证完整 ⇒ 原包按同一档处理（⛔ 不是过程物）。
                 foreach (VolumeFacts piece in unit.Pieces)
                 {
-                    if (piece.Source == VolumeHandoffSource.UserImported
-                        || IsUserImportedSourcePath(piece.Path))
+                    if (string.IsNullOrWhiteSpace(piece.Path))
                     {
                         continue;
                     }
 
-                    ArchiveTask? producer = FindProducingTaskForPiece(tasks, piece.Path, owner);
+                    /*
+                     * 每一片都要找**产出它的那一单**，不能按 piece.Source 分叉：
+                     * 用户导入的外层包装（111-1.rar / 111-2.zip）解出的片，Source 可能仍是
+                     * UserImported，但产出的片路径在包装单的输出树里。老写法在这类片上
+                     * `continue`，于是包装单永远不走源包结算。
+                     *
+                     * 判据仍是链尾这一份组结论：组齐全 + owner 可证完整 + 内容校验通过；
+                     * 删除仍只走 PurgeLayerSourcePackage 唯一出口。
+                     */
+                    ArchiveTask? producer = FindProducingTaskForPiece(tasks, piece.Path, owner)
+                        ?? tasks.FirstOrDefault(candidate =>
+                            candidate != null
+                            && !ReferenceEquals(candidate, owner)
+                            && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                            && SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path));
 
                     if (producer == null
-                        || producer.IsContinuationTask
+                        || ReferenceEquals(producer, owner)
                         || producer.Outcome != TaskOutcome.Succeeded)
                     {
                         continue;
