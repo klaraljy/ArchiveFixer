@@ -123,6 +123,12 @@ namespace ArchiveFixer.Models
 
         public const string VolumeMissing = "分卷缺失";
 
+        /// <summary>第二大步最终内容组缺片；链失败，不是第一大步的交接跳过。</summary>
+        public const string FinalGroupIncomplete = "分卷组残缺";
+
+        /// <summary>第二大步最终内容组完整但数据损坏；链失败，不是密码错误。</summary>
+        public const string FinalGroupCorrupted = "分卷组损坏";
+
         /// <summary>分卷结构异常（数量/槽位/大小/混族矛盾）：只显示，不处理。</summary>
         public const string VolumeSizeAnomaly = "分卷结构异常";
 

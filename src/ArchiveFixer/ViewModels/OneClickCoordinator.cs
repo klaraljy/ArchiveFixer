@@ -1674,10 +1674,38 @@ namespace ArchiveFixer.ViewModels
                                 standardFamily: fastFamily);
 
                         if (preUnit != null
-                            && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
-                                || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
+                            && preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing)
+                        {
+                            /*
+                             * 组事实层落最终组失败：不点名、不链接、不解压、不删源包。
+                             * 缺片不是第一大步的交接跳过，而是第二大步最终组失败。
+                             */
+                            _extractionCoordinator.RecordFinalGroupFailure(
+                                preUnit,
+                                FinalGroupFailureKind.Incomplete,
+                                $"最终内容分卷组不完整：{preUnit.Verdict}",
+                                Tasks);
+
+                            AppendLog(
+                                "WARN",
+                                $"[第二大步·组] {group.BaseName}：Missing ⇒ Failed / FinalGroupIncomplete（不链接、不解压，源包不动）。");
+                            continue;
+                        }
+
+                        if (preUnit != null
+                            && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
                                 || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly))
                         {
+                            if (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly
+                                && preUnit.MissingNumbers.Count > 0)
+                            {
+                                _extractionCoordinator.RecordFinalGroupFailure(
+                                    preUnit,
+                                    FinalGroupFailureKind.Incomplete,
+                                    $"最终内容分卷组结构异常且缺片：{preUnit.Verdict}",
+                                    Tasks);
+                            }
+
                             AppendLog(
                                 "INFO",
                                 $"[第二大步·组] {group.BaseName}：{preUnit.State} ⇒ 不点名、不链接（{preUnit.Verdict}）。");
@@ -2243,6 +2271,12 @@ namespace ArchiveFixer.ViewModels
                 stopped || stopRequested,
                 hitRoundLimit,
                 runOptions);
+
+            /*
+             * 链尾解压/组终态已经全部落定，回填一次内容组最终事实。
+             * 只读组/任务已有事实，不扫 Pending、不按文件存在性猜。
+             */
+            _extractionCoordinator.FinalizeContentGroups(processed);
 
             /*
              * ===== 交界处批末对账（D 段，2026-10-24）=====

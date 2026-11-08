@@ -5,6 +5,28 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
+    /// <summary>最终内容分卷组的失败种类；只由组事实层写入。</summary>
+    public enum FinalGroupFailureKind
+    {
+        None = 0,
+
+        /// <summary>组不完整（缺片）：链失败，源包不删。</summary>
+        Incomplete = 1,
+
+        /// <summary>组完整但数据损坏：链失败，源包不删。</summary>
+        Corrupted = 2
+    }
+
+    /// <summary>最终层输入片的直接产出者（用户源包与程序过程物分开）。</summary>
+    public sealed class ContentGroupFinalLayerProducer
+    {
+        public string TaskFileName { get; init; } = string.Empty;
+
+        public string Path { get; init; } = string.Empty;
+
+        public bool IsSource { get; init; }
+    }
+
     /// <summary>内容组的最终内容结论；⛔ 任务级“解压成功”不能替代它。</summary>
     public enum FinalContentState
     {
@@ -71,6 +93,16 @@ namespace ArchiveFixer.Extraction
         public long FinalBytes { get; private set; }
 
         public string FinalContentEvidence { get; private set; } = string.Empty;
+
+        /// <summary>最终组失败种类；None = 还没判出/不是最终组失败。</summary>
+        public FinalGroupFailureKind FailureKind { get; private set; } = FinalGroupFailureKind.None;
+
+        public string FailureEvidence { get; private set; } = string.Empty;
+
+        private readonly List<ContentGroupFinalLayerProducer> _finalLayerProducers = new();
+
+        /// <summary>最终层输入片的直接产出者；源包与过程物分开由 IsSource 标记。</summary>
+        public IReadOnlyList<ContentGroupFinalLayerProducer> FinalLayerProducers => _finalLayerProducers;
 
         public IReadOnlyCollection<string> SourceRootIds => _sourceRootIds;
 
@@ -168,6 +200,52 @@ namespace ArchiveFixer.Extraction
                     PlacementRoot = keyParts[1];
                 }
             }
+        }
+
+        /// <summary>
+        /// 组事实层落最终组失败。只能在不完整/完整但损坏时调用；
+        /// 已 Verified 的组绝不降级。这里不读盘、不删源包。
+        /// </summary>
+        public bool MarkFinalGroupFailure(FinalGroupFailureKind kind, string? evidence)
+        {
+            if (kind == FinalGroupFailureKind.None || FinalState == FinalContentState.Verified)
+            {
+                return false;
+            }
+
+            bool changed = FailureKind != kind || FinalState != FinalContentState.Missing;
+            FailureKind = kind;
+            FailureEvidence = evidence ?? string.Empty;
+            FinalState = FinalContentState.Missing;
+            FinalFileCount = 0;
+            FinalBytes = 0;
+            FinalContentPath = string.Empty;
+            FinalContentEvidence = FailureEvidence;
+            return changed;
+        }
+
+        public void RecordFinalLayerProducer(
+            string? taskFileName,
+            string? path,
+            bool isSource)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            if (_finalLayerProducers.Any(item =>
+                    string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            _finalLayerProducers.Add(new ContentGroupFinalLayerProducer
+            {
+                TaskFileName = taskFileName ?? string.Empty,
+                Path = path,
+                IsSource = isSource
+            });
         }
 
         public void AttachOwner(string? ownerTaskFileName, string? ownerTaskPath = null)

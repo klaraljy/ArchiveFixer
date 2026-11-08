@@ -141,7 +141,11 @@ namespace ArchiveFixer.Extraction
                     return SizeAnomaly(
                         context.BaseName,
                         pieces,
-                        $"跨盘 ZIP 槽位 {slot.Value} 有两份不同文件");
+                        $"跨盘 ZIP 槽位 {slot.Value} 有两份不同文件",
+                        Enumerable.Range(1, total)
+                            .Except(slots.Keys)
+                            .OrderBy(number => number)
+                            .ToList());
                 }
 
                 slots[slot.Value] = entry;
@@ -171,7 +175,8 @@ namespace ArchiveFixer.Extraction
                 return SizeAnomaly(
                     context.BaseName,
                     pieces,
-                    $"跨盘 ZIP 自述 {total} 片：缺槽 {missing.Count} 个、未定槽 {unassigned.Count} 片");
+                    $"跨盘 ZIP 自述 {total} 片：缺槽 {missing.Count} 个、未定槽 {unassigned.Count} 片",
+                    missing);
             }
 
             if (missing.Count > 0)
@@ -321,7 +326,11 @@ namespace ArchiveFixer.Extraction
                     return SizeAnomaly(
                         context.BaseName,
                         pieces,
-                        $"通用 ZIP 槽位 {slot.Value} 有两份不同文件");
+                        $"通用 ZIP 槽位 {slot.Value} 有两份不同文件",
+                        Enumerable.Range(1, total)
+                            .Except(slots.Keys)
+                            .OrderBy(number => number)
+                            .ToList());
                 }
 
                 slots[slot.Value] = entry;
@@ -337,7 +346,8 @@ namespace ArchiveFixer.Extraction
                 return SizeAnomaly(
                     context.BaseName,
                     pieces,
-                    $"通用 ZIP：缺槽 {missing.Count} 个、未定槽 {unassigned.Count} 片");
+                    $"通用 ZIP：缺槽 {missing.Count} 个、未定槽 {unassigned.Count} 片",
+                    missing);
             }
 
             if (missing.Count == 1)
@@ -634,7 +644,8 @@ namespace ArchiveFixer.Extraction
         private static PreparedVolumeGroup SizeAnomaly(
             string baseName,
             IReadOnlyList<FirstStepFileLedgerEntry> entries,
-            string detail)
+            string detail,
+            IReadOnlyList<int>? missingNumbers = null)
         {
             return new PreparedVolumeGroup
             {
@@ -646,7 +657,14 @@ namespace ArchiveFixer.Extraction
                 OriginalEntryPath = FirstPath(entries),
                 State = PreparedGroupState.SizeAnomaly,
                 Evidence = detail,
-                SizeAnomalyDetail = detail
+                SizeAnomalyDetail = detail,
+                MissingNumbers = missingNumbers ?? Array.Empty<int>(),
+                Pieces = entries.Select(entry => new PreparedVolumePiece
+                {
+                    OriginalPath = entry.Path,
+                    Size = entry.Size,
+                    Source = entry.Source
+                }).ToArray()
             };
         }
 

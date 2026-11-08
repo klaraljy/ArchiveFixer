@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 
 namespace ArchiveFixer.ViewModels
@@ -14,6 +15,79 @@ namespace ArchiveFixer.ViewModels
         /// 从当前任务表回填每组最终内容。只读任务上的既有校验/定稿事实，
         /// ⛔ 不重算解压结果、⛔ 不把 Pending/Skipped 的 owner 判成失败。
         /// </summary>
+        /// <summary>
+        /// 组事实层登记最终组失败：不链接、不解压、不删源包；只把 Missing/Corrupted
+        /// 写进 ContentGroup，并把最终层输入片的直接产出者记成事实。
+        /// </summary>
+        internal bool RecordFinalGroupFailure(
+            VolumeGroupUnit? unit,
+            FinalGroupFailureKind kind,
+            string evidence,
+            IReadOnlyList<ArchiveTask>? tasks)
+        {
+            if (unit == null
+                || kind == FinalGroupFailureKind.None
+                || !_extractionContentGraph.TryGetContentGroup(
+                    unit.BaseName,
+                    unit.Family,
+                    unit.SourceLayer,
+                    out ContentGroup group))
+            {
+                return false;
+            }
+
+            bool changed = group.MarkFinalGroupFailure(kind, evidence);
+
+            foreach (VolumeFacts piece in unit.Pieces)
+            {
+                if (string.IsNullOrWhiteSpace(piece.Path))
+                {
+                    continue;
+                }
+
+                ArchiveTask? producer = tasks?.FirstOrDefault(candidate =>
+                    candidate != null
+                    && candidate.ProducedFiles.Any(path =>
+                        SafePathHelper.PathEquals(path, piece.Path)));
+
+                if (producer == null)
+                {
+                    continue;
+                }
+
+                bool isSource = string.IsNullOrWhiteSpace(producer.CurrentPath)
+                    || IsUserImportedSourcePath(producer.CurrentPath)
+                    || SafePathHelper.PathEquals(producer.CurrentPath, producer.OriginalPath);
+
+                group.RecordFinalLayerProducer(producer.FileName, producer.CurrentPath, isSource);
+            }
+
+            TaskReason reason = kind == FinalGroupFailureKind.Corrupted
+                ? TaskReason.FinalGroupCorrupted
+                : TaskReason.FinalGroupIncomplete;
+
+            string status = kind == FinalGroupFailureKind.Corrupted
+                ? StatusText.FinalGroupCorrupted
+                : StatusText.FinalGroupIncomplete;
+
+            ArchiveTask? representative = tasks?.FirstOrDefault(candidate =>
+                candidate != null
+                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
+                && (SafePathHelper.PathEquals(candidate.CurrentPath, unit.EntryPath)
+                    || unit.Pieces.Any(piece => SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path))));
+
+            if (representative != null)
+            {
+                representative.Outcome = TaskOutcome.Failed;
+                representative.Reason = reason;
+                representative.Status = status;
+                representative.ErrorMessage = evidence;
+                representative.EndTime ??= DateTime.Now;
+            }
+
+            return changed;
+        }
+
         internal int FinalizeContentGroups(IReadOnlyList<ArchiveTask>? tasks)
         {
             if (tasks == null || tasks.Count == 0)
@@ -49,6 +123,39 @@ namespace ArchiveFixer.ViewModels
                     : measuredFiles;
 
                 (FinalContentState state, string evidence) = ClassifyFinalContent(finalTask, fileCount);
+
+                /*
+                 * 组事实已经是 Complete，却解不出最终内容：这不是缺片，而是完整组的数据坏。
+                 * 只在组事实层做这个判断；⛔ 不按文件存在性/任务表猜。
+                 */
+                if (group.State == PreparedGroupState.Complete
+                    && state != FinalContentState.Verified
+                    && (owner.Status == StatusText.Corrupted
+                        || owner.Status == StatusText.VolumeMissing))
+                {
+                    group.MarkFinalGroupFailure(
+                        FinalGroupFailureKind.Corrupted,
+                        $"组事实 Complete，但引擎解不出最终内容：{owner.Status}");
+                    state = FinalContentState.Missing;
+                    evidence = group.FailureEvidence;
+                }
+
+                if (group.FailureKind != FinalGroupFailureKind.None)
+                {
+                    state = FinalContentState.Missing;
+                    evidence = group.FailureEvidence;
+
+                    if (owner.Reason != TaskReason.PasswordExhausted)
+                    {
+                        owner.Reason = group.FailureKind == FinalGroupFailureKind.Corrupted
+                            ? TaskReason.FinalGroupCorrupted
+                            : TaskReason.FinalGroupIncomplete;
+                        owner.Outcome = TaskOutcome.Failed;
+                        owner.Status = group.FailureKind == FinalGroupFailureKind.Corrupted
+                            ? StatusText.FinalGroupCorrupted
+                            : StatusText.FinalGroupIncomplete;
+                    }
+                }
 
                 bool changed = group.SetFinalOutput(
                     owner.OutputPath,

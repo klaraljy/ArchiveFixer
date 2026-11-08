@@ -57,7 +57,13 @@ namespace ArchiveFixer.Models
         SourceChanged = 6,
         Skipped = 7,
         Cancelled = 8,
-        Other = 9
+        Other = 9,
+
+        /// <summary>第二大步最终内容分卷组不完整；只用于最终组，不替代普通 VolumeMissing。</summary>
+        FinalGroupIncomplete = 10,
+
+        /// <summary>第二大步最终内容分卷组完整但数据损坏；与密码耗尽分开。</summary>
+        FinalGroupCorrupted = 11
     }
 
     /// <summary>

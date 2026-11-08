@@ -43,6 +43,8 @@ namespace ArchiveFixer.Models
              * （`IsExtractFailureStatus`）与①页配色都按用户口径把它挪走了。
              */
             StatusText.VolumeMissing or
+            StatusText.FinalGroupIncomplete or
+            StatusText.FinalGroupCorrupted or
             StatusText.PathTooLong or
             StatusText.SevenZipMissing or
             StatusText.NoEngineAvailable or
@@ -62,6 +64,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static bool IsExtractFailureStatus(string? status) => status is
             StatusText.ExtractFailed or
+            StatusText.FinalGroupIncomplete or
             StatusText.PasswordOrCorrupted or
             StatusText.AccessDenied or
             StatusText.OutputConflict or

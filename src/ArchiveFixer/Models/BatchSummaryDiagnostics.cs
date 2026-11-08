@@ -463,6 +463,16 @@ namespace ArchiveFixer.Models
              * ⚠ 这一支刻意排在"机器终态兜底"**之前**：状态能说出具体原因时就必须说具体原因，
              * 兜底只在状态说不出原因时才允许用（用户 2026-09-27：⛔ 不许出现"下一步：其他"这种废话兜底）。
              */
+            if (task.Reason == TaskReason.FinalGroupIncomplete)
+            {
+                return BatchProblemKind.MissingVolume;
+            }
+
+            if (task.Reason == TaskReason.FinalGroupCorrupted)
+            {
+                return BatchProblemKind.Corrupted;
+            }
+
             if (task.Reason == TaskReason.VolumeMissing)
             {
                 return BatchProblemKind.MissingVolume;
@@ -508,9 +518,11 @@ namespace ArchiveFixer.Models
                     return BatchProblemKind.Password;
 
                 case StatusText.VolumeMissing:
+                case StatusText.FinalGroupIncomplete:
                     return BatchProblemKind.MissingVolume;
 
                 case StatusText.Corrupted:
+                case StatusText.FinalGroupCorrupted:
                     return BatchProblemKind.Corrupted;
 
                 case StatusText.AccessDenied:

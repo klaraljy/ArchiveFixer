@@ -513,6 +513,23 @@ namespace ArchiveFixer.ViewModels
 
             if (!succeeded)
             {
+                bool groupWasComplete = unit.State is VolumeGroupState.Complete
+                    or VolumeGroupState.OwnerAssigned
+                    or VolumeGroupState.Linked
+                    or VolumeGroupState.Extracting;
+
+                if (task.Status == StatusText.Corrupted
+                    || (groupWasComplete && task.Status == StatusText.VolumeMissing))
+                {
+                    RecordFinalGroupFailure(
+                        unit,
+                        FinalGroupFailureKind.Corrupted,
+                        groupWasComplete
+                            ? "组事实完整，但引擎解不出最终内容：按数据损坏处理"
+                            : $"最终内容分卷组数据损坏：{task.Status}",
+                        Tasks);
+                }
+
                 _volumeGroupService.MarkState(
                     unit,
                     VolumeGroupState.Failed,

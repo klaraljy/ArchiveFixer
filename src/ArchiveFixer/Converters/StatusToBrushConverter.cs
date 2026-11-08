@@ -117,6 +117,8 @@ namespace ArchiveFixer.Converters
                 StatusText.PasswordOrCorrupted or
                 StatusText.AccessDenied or
                 StatusText.OutputConflict or
+                StatusText.FinalGroupIncomplete or
+                StatusText.FinalGroupCorrupted or
                 /*
                  * ⚠ 2026-10-08 用户拍板：**缺卷不再是"错误色"** —— 「最后一轮检测到了缺失分卷，这就是部分完成，
                  * 因为连完整的都没有，这就不是程序的错误」；失败只留给"完整却解不开"（密码 / 卷尾缺块）。
