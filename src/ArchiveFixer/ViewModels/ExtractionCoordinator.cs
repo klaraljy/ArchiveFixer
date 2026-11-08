@@ -317,6 +317,9 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private bool _spaceTightKeepSourceThisBatch;
 
+        /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
+        private SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
+
         public ExtractionCoordinator(
             MainViewModel vm,
             IArchiveEngine archiveEngine,

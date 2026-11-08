@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
 
@@ -73,6 +74,11 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>组入口在临时 group-entry 工作区的规范路径；失败时作为 CurrentProcessArtifact。</summary>
         public string CurrentProcessArtifactPath { get; private set; } = string.Empty;
+
+        private readonly List<string> _currentProcessArtifactPaths = new();
+
+        /// <summary>整组在入口层的当前过程物路径；失败时整组保留，不只入口。</summary>
+        public IReadOnlyList<string> CurrentProcessArtifactPaths => _currentProcessArtifactPaths;
 
         public PreparedGroupState State { get; private set; } = PreparedGroupState.Unknown;
 
@@ -157,6 +163,20 @@ namespace ArchiveFixer.Extraction
             if (!string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath))
             {
                 CurrentProcessArtifactPath = prepared.CanonicalEntryPath;
+            }
+
+            _currentProcessArtifactPaths.Clear();
+
+            if (!string.IsNullOrWhiteSpace(prepared.EntryLayer))
+            {
+                foreach (PreparedVolumePiece item in prepared.Pieces)
+                {
+                    if (!string.IsNullOrWhiteSpace(item.CanonicalName))
+                    {
+                        _currentProcessArtifactPaths.Add(
+                            Path.Combine(prepared.EntryLayer, item.CanonicalName));
+                    }
+                }
             }
 
             foreach (PreparedVolumePiece piece in prepared.Pieces)

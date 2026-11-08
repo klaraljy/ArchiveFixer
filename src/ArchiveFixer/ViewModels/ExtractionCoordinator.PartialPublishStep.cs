@@ -55,6 +55,9 @@ namespace ArchiveFixer.ViewModels
         private void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath) =>
             _partialPublishStep.PreserveCurrentProcessArtifact(task, artifactPath);
 
+        private void PreserveCurrentProcessArtifacts(ArchiveTask task, IReadOnlyList<string>? artifactPaths) =>
+            _partialPublishStep.PreserveCurrentProcessArtifacts(task, artifactPaths);
+
         private Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
             _partialPublishStep.TryPublishPartialProductsAsync(task, cancelled);
 
@@ -63,6 +66,8 @@ namespace ArchiveFixer.ViewModels
         AppSettings? IPartialPublishStepHost.Settings => Settings;
 
         bool IPartialPublishStepHost.SpaceTightThisBatch => _spaceTightThisBatch;
+
+        SpaceTightPolicy IPartialPublishStepHost.SpaceTightPolicy => _spaceTightPolicy;
 
         IArchiveEngine IPartialPublishStepHost.Engine => _archiveEngine;
 
@@ -76,3 +81,4 @@ namespace ArchiveFixer.ViewModels
             PurgeRestItemsExceptChainRootSource(task);
     }
 }
+

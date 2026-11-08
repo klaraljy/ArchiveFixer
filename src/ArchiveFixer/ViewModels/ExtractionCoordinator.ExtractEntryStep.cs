@@ -857,6 +857,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 _spaceTightThisBatch = false;
                 _spaceTightKeepSourceThisBatch = false;
+                _spaceTightPolicy = SpaceTightPolicy.Normal;
 
                 /*
                  * 「本批是不是一键档」同样只活这一批（它只服务于"中途空间不足要不要弹那一次纯提示"）：
@@ -1005,8 +1006,9 @@ namespace ArchiveFixer.ViewModels
              * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
              * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
              */
-            _spaceTightThisBatch = _vm.SpaceTightMode;
-            _spaceTightKeepSourceThisBatch = _spaceTightThisBatch && _vm.SpaceTightKeepSource;
+            _spaceTightPolicy = SpaceTightPolicy.ForBatch(_vm.SpaceTightMode, _vm.SpaceTightKeepSource);
+            _spaceTightThisBatch = _spaceTightPolicy.Enabled;
+            _spaceTightKeepSourceThisBatch = _spaceTightPolicy.KeepSource;
 
             /*
              * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：
@@ -1156,3 +1158,4 @@ namespace ArchiveFixer.ViewModels
         }
     }
 }
+

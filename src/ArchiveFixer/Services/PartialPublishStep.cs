@@ -21,6 +21,9 @@ namespace ArchiveFixer.Services
         /// <summary>本批是不是"空间不足"档（那一档与部分完成发布硬互斥）。</summary>
         bool SpaceTightThisBatch { get; }
 
+        /// <summary>批首 SpaceTightPolicy；LastProcessOnFailure 等都由它给出。</summary>
+        SpaceTightPolicy SpaceTightPolicy { get; }
+
         IArchiveEngine Engine { get; }
 
         void AppendLog(string level, string message);
@@ -231,6 +234,16 @@ namespace ArchiveFixer.Services
         /// 把“这一层正在解的当前过程物”按其它层同一口径留下/任其清理。
         /// 只接受工作区里的产物；源包/判不出位置一律不动。
         /// </summary>
+        internal void PreserveCurrentProcessArtifacts(ArchiveTask task, IEnumerable<string>? artifactPaths)
+        {
+            foreach (string path in (artifactPaths ?? Array.Empty<string>())
+                         .Where(item => !string.IsNullOrWhiteSpace(item))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                PreserveCurrentProcessArtifact(task, path);
+            }
+        }
+
         internal void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath)
         {
             if (task == null || string.IsNullOrWhiteSpace(artifactPath) || !File.Exists(artifactPath))
@@ -244,14 +257,6 @@ namespace ArchiveFixer.Services
                     "WARN",
                     $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」不在工作区里"
                     + "（可能是用户源包）—— 判不出位置，一个字节都不动。");
-                return;
-            }
-
-            if (_host.SpaceTightThisBatch)
-            {
-                _host.AppendLog(
-                    "INFO",
-                    $"{task.LogName}：空间不足模式 —— 当前过程物「{Path.GetFileName(artifactPath)}」不保留。");
                 return;
             }
 

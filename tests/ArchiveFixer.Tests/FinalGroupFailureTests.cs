@@ -29,6 +29,7 @@ namespace ArchiveFixer.Tests
         [InlineData("915000048", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
         [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
         [InlineData("915000050", "FinalGroupCorrupted", RestHandlingModes.Keep, false)]
+        [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Keep, true)]
         [InlineData("915000046", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
         [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
         public async Task Probe(string sample, string expectedReason, string restHandling, bool spaceTight)
@@ -65,7 +66,7 @@ namespace ArchiveFixer.Tests
                 new ClipboardService(), new DialogService(), useTextStore: true, encryptTextStore: false);
             var coordinator = new ExtractionCoordinator(vm, engine, pw, ps, new DialogService());
             vm.SpaceTightMode = spaceTight;
-            if (spaceTight) { coordinator.SpaceProbeOverride = _ => 1; coordinator.SpaceReserveOverride = 0; }
+            if (spaceTight) { coordinator.SpaceProbeOverride = _ => 40L * 1024 * 1024 * 1024; coordinator.SpaceReserveOverride = 64L * 1024 * 1024; }
             var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
             var one = new OneClickCoordinator(vm, scan, rename, coordinator, new DialogService());
@@ -93,11 +94,17 @@ namespace ArchiveFixer.Tests
             {
                 ArchiveTask failed = tasks.First(t => t.Reason == TaskReason.FinalGroupCorrupted);
 
-                if (spaceTight) { Assert.True(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath) || !File.Exists(failed.LastProcessArtifactPath), "空间不足不保留当前过程物"); }
+                if (spaceTight)
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "空间不足必须固定保留当前过程物");
+                    Assert.True(File.Exists(failed.LastProcessArtifactPath), "空间不足保底必须存在");
+                }
                 else if (restHandling == RestHandlingModes.Keep)
                 {
                     Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "Keep 必须落当前过程物路径");
                     Assert.True(File.Exists(failed.LastProcessArtifactPath), "Keep 当前过程物必须存在");
+                    Assert.True(Directory.Exists(failed.RestDirectoryPath), "Keep 其余物目录必须存在");
+                    Assert.True(Directory.GetFiles(failed.RestDirectoryPath).Length >= 5, "分卷组必须保留整组源片");
                 }
                 else
                 {
@@ -123,6 +130,8 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+
+
 
 
 

@@ -91,7 +91,7 @@ namespace ArchiveFixer.ViewModels
             if (processOwner != null
                 && !string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
             {
-                PreserveCurrentProcessArtifact(processOwner, group.CurrentProcessArtifactPath);
+                PreserveCurrentProcessArtifacts(processOwner, group.CurrentProcessArtifactPaths);
             }
 
             return changed;
@@ -169,7 +169,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (!string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
                     {
-                        PreserveCurrentProcessArtifact(owner, group.CurrentProcessArtifactPath);
+                        PreserveCurrentProcessArtifacts(owner, group.CurrentProcessArtifactPaths);
                     }
                 }
 
@@ -478,3 +478,4 @@ namespace ArchiveFixer.ViewModels
 
     }
 }
+
