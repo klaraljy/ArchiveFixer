@@ -766,7 +766,7 @@ namespace ArchiveFixer.Tests
 
             await harness.RunOneClickAsync();
 
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(task.Status == StatusText.ExtractSuccess, task.ErrorMessage);
             Assert.Equal("first", File.ReadAllText(
                 Assert.Single(Directory.GetFiles(harness.OutputRoot, "第一条.txt", SearchOption.AllDirectories))));
             Assert.Equal("second", File.ReadAllText(
@@ -779,7 +779,144 @@ namespace ArchiveFixer.Tests
                 x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// 未加密的 deflate 多条目也要能走直读；写出时 CRC32 必须通过。
+        /// </summary>
+        [Fact]
+        public async Task 未加密deflate多条目双面zip_递归首层走直读且CRC正确()
+        {
+            byte[] zip = BuildZipBytes(
+                ("压缩第一条.txt", Encoding.UTF8.GetBytes("first compressed payload"), CompressionLevel.Optimal),
+                ("压缩第二条.txt", Encoding.UTF8.GetBytes("second compressed payload"), CompressionLevel.Optimal));
+            string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "deflate-multi");
+
+            Harness harness = CreateHarness();
+            await harness.AddPathsAsync(source);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.True(task.EmbeddedArchiveOffset > 0, "应该识别出尾部有内嵌归档");
+
+            await harness.RunOneClickAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.Equal("first compressed payload", File.ReadAllText(
+                Assert.Single(Directory.GetFiles(harness.OutputRoot, "压缩第一条.txt", SearchOption.AllDirectories))));
+            Assert.Equal("second compressed payload", File.ReadAllText(
+                Assert.Single(Directory.GetFiles(harness.OutputRoot, "压缩第二条.txt", SearchOption.AllDirectories))));
+
+            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("直读", StringComparison.Ordinal));
+            Assert.DoesNotContain(harness.Log.Logs,
+                x => x.Message.Contains("按偏移取出归档副本", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 结构自洽但数据被改坏：直读必须在写出时发现 CRC 不一致，判损坏而不是成功。
+        /// </summary>
+        [Fact]
+        public async Task 双面zip数据CRC损坏_直读判损坏且不留产物()
+        {
+            byte[] payload = Encoding.UTF8.GetBytes("crc-must-match-payload");
+            byte[] zip = BuildZipBytes(("坏数据.txt", payload, CompressionLevel.NoCompression));
+            string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "bad-crc-direct");
+
+            byte[] all = File.ReadAllBytes(source);
+            int payloadAt = IndexOf(all, payload, BeyondSevenZipTolerancePrefixLength);
+            Assert.True(payloadAt >= 0, "测试样本里找不到 payload");
+            all[payloadAt] ^= 0x5A;
+            File.WriteAllBytes(source, all);
+
+            EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(
+                source,
+                BeyondSevenZipTolerancePrefixLength,
+                all.Length);
+            Assert.True(probe.Supported, probe.Reason);
+
+            string output = Path.Combine(_root, "crc-bad-output");
+            Directory.CreateDirectory(output);
+
+            EmbeddedZipExtractResult result = await Task.Run(() => EmbeddedZipStreamExtractor.Extract(
+                source,
+                BeyondSevenZipTolerancePrefixLength,
+                all.Length,
+                output));
+
+            Assert.False(result.Success);
+            Assert.False(result.Unsupported);
+            Assert.True(result.Corrupted, result.Message);
+            Assert.Empty(Directory.GetFiles(output, "*", SearchOption.AllDirectories));
+        }
+
+        /// <summary>
+        /// 递归首层遇到 CRC 损坏的直读 ZIP：按损坏收场，不回落去抠一份副本再交给 7z。
+        /// </summary>
+        [Fact]
+        public async Task 双面zip数据CRC损坏_递归首层不回落抠副本()
+        {
+            byte[] payload = Encoding.UTF8.GetBytes("recursive-crc-must-fail");
+            byte[] zip = BuildZipBytes(("坏数据.txt", payload, CompressionLevel.NoCompression));
+            string source = BuildPolyglot(zip, BeyondSevenZipTolerancePrefixLength, TailAfterEocdLength, "bad-crc-recursive");
+
+            byte[] all = File.ReadAllBytes(source);
+            int payloadAt = IndexOf(all, payload, BeyondSevenZipTolerancePrefixLength);
+            Assert.True(payloadAt >= 0, "测试样本里找不到 payload");
+            all[payloadAt] ^= 0x5A;
+            File.WriteAllBytes(source, all);
+
+            Harness harness = CreateHarness();
+            await harness.AddPathsAsync(source);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.True(task.EmbeddedArchiveOffset > 0, "应该识别出尾部有内嵌归档");
+
+            await harness.RunOneClickAsync();
+
+            Assert.Equal(StatusText.Corrupted, task.Status);
+            Assert.DoesNotContain(harness.Log.Logs,
+                x => x.Message.Contains("按偏移取出归档副本", StringComparison.Ordinal));
+        }
+
         // ================================================================ 样本构造
+
+        private static uint Crc32Of(byte[] data)
+        {
+            uint crc = uint.MaxValue;
+
+            foreach (byte value in data)
+            {
+                crc ^= value;
+
+                for (int bit = 0; bit < 8; bit++)
+                {
+                    crc = (crc & 1) != 0 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+                }
+            }
+
+            return ~crc;
+        }
+
+        private static int IndexOf(byte[] haystack, byte[] needle, int start)
+        {
+            for (int i = start; i <= haystack.Length - needle.Length; i++)
+            {
+                bool match = true;
+
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (haystack[i + j] != needle[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
 
         /// <summary>固定种子的随机字节（样本可复现，也不是全零 —— 全零会掩盖偏移写错）。</summary>
         private static byte[] BuildRandomPayload(int length, int seed)
@@ -854,7 +991,7 @@ namespace ArchiveFixer.Tests
         private static byte[] BuildZip64SizeZip(string name, byte[] payload)
         {
             byte[] nameBytes = Encoding.UTF8.GetBytes(name);
-            int localLength = 30 + nameBytes.Length;
+            uint crc = Crc32Of(payload);
             int extraLength = 4 + 16; // 头 4 字节 + [原始大小 8][压缩后大小 8]
 
             using var memory = new MemoryStream();
@@ -867,7 +1004,7 @@ namespace ArchiveFixer.Tests
             writer.Write((ushort)0);   // stored
             writer.Write((ushort)0);
             writer.Write((ushort)0);
-            writer.Write(0u);
+            writer.Write(crc);
             writer.Write(0u);
             writer.Write(0u);
             writer.Write((ushort)nameBytes.Length);
@@ -885,7 +1022,7 @@ namespace ArchiveFixer.Tests
             writer.Write((ushort)0);
             writer.Write((ushort)0);
             writer.Write((ushort)0);
-            writer.Write(0u);
+            writer.Write(crc);
             writer.Write(uint.MaxValue);
             writer.Write(uint.MaxValue);
             writer.Write((ushort)nameBytes.Length);
@@ -914,9 +1051,6 @@ namespace ArchiveFixer.Tests
             writer.Write((ushort)0);
 
             writer.Flush();
-
-            // 本地头长度得与 CD 里的偏移一致：这里本地头没有扩展字段，偏移就是 0。
-            _ = localLength;
 
             return memory.ToArray();
         }

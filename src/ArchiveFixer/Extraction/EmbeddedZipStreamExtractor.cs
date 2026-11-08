@@ -41,6 +41,12 @@ namespace ArchiveFixer.Extraction
         public long LocalHeaderOffset { get; init; }
 
         /// <summary>
+        /// 中央目录声明的 CRC32（<c>PK\x01\x02</c> 偏移 +16）。
+        /// 直读写入时逐条目计算并比对；AES 条目由认证码负责，不拿这个字段判损坏。
+        /// </summary>
+        public uint Crc32 { get; init; }
+
+        /// <summary>
         /// AES 强度字节（1/2/3 = AES-128/192/256）；0 = 不是 AES 条目。
         ///
         /// <para>为什么把"是不是 AES"记在条目上：读数据时要用它决定
@@ -144,6 +150,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>失败原因是"不支持"（调用方可以回落抠取）还是"真的失败了"。</summary>
         public bool Unsupported { get; init; }
 
+        /// <summary>
+        /// 数据层已确认损坏（目前是 ZIP 条目 CRC32 对不上）。
+        /// 调用方**不许**回落去再读一遍：那只会白费一次 10G I/O，结论仍然是损坏。
+        /// </summary>
+        public bool Corrupted { get; init; }
+
         /// <summary>失败原因 / 成功说明（中文，可直接进日志与任务状态）。</summary>
         public string Message { get; init; } = string.Empty;
 
@@ -190,6 +202,9 @@ namespace ArchiveFixer.Extraction
     /// <see cref="FileNameHelper"/> 清洗，落盘前再用 <see cref="ArchivePathGuard.IsInsideRoot"/> 复核，
     /// 越界一律拒绝整包；资源上限走既有的 <see cref="ResourceBudget"/>；
     /// 写文件一律"先写临时名 → 成功后改名落位"，取消/失败把本次写出去的东西全删掉。</para>
+    ///
+    /// <para>写出时逐条目计算 CRC32 并比对中央目录；不一致按**已确认损坏**收场，不再回落重复读一遍。
+    /// AES 条目由认证码负责完整性，中央目录的 CRC 字段可能是占位 0，不拿来判损坏。</para>
     ///
     /// <para>本类只做"解出条目"这一件事，不引用 WPF（AGENTS.md §4 分层铁律）。</para>
     /// </summary>
@@ -678,6 +693,7 @@ namespace ArchiveFixer.Extraction
 
                 int flags = BitConverter.ToUInt16(centralDirectory, index + 8);
                 int method = BitConverter.ToUInt16(centralDirectory, index + 10);
+                uint crc32 = BitConverter.ToUInt32(centralDirectory, index + 16);
                 long compressedSize = BitConverter.ToUInt32(centralDirectory, index + 20);
                 long uncompressedSize = BitConverter.ToUInt32(centralDirectory, index + 24);
                 long diskStart = BitConverter.ToUInt16(centralDirectory, index + 34);
@@ -812,6 +828,7 @@ namespace ArchiveFixer.Extraction
                     IsDirectory = isDirectory,
                     Method = method,
                     LocalHeaderOffset = localOffset,
+                    Crc32 = crc32,
                     AesStrength = isDirectory ? 0 : aesStrength,
                     IsEncrypted = isEncrypted
                 });
@@ -1210,6 +1227,7 @@ namespace ArchiveFixer.Extraction
                         IsDirectory = true,
                         Method = entry.Method,
                         LocalHeaderOffset = entry.LocalHeaderOffset,
+                        Crc32 = entry.Crc32,
                         AesStrength = 0,
                         IsEncrypted = entry.IsEncrypted
                     };
@@ -1244,6 +1262,7 @@ namespace ArchiveFixer.Extraction
                      * 2026-09-25 就漏过 AesStrength（新增字段），后果是"密码明明校验通过了，
                      * 解压时却按未加密路径去读密文" —— 报出来的错是"字节数与清单不符"，与真实原因毫不相干。
                      */
+                    Crc32 = entry.Crc32,
                     AesStrength = entry.AesStrength,
                     IsEncrypted = entry.IsEncrypted
                 };
@@ -1349,6 +1368,7 @@ namespace ArchiveFixer.Extraction
                         FileShare.None,
                         CopyBufferSize,
                         FileOptions.SequentialScan))
+                    using (var crcTarget = new Crc32WriteStream(target))
                     {
                         long entryWritten = WriteEntry(
                             source,
@@ -1356,7 +1376,7 @@ namespace ArchiveFixer.Extraction
                             entry,
                             resolvedPassword,
                             plan.ResolvedPasswordEncoding,
-                            target,
+                            crcTarget,
                             ref writtenBytes,
                             totalBytes,
                             stopwatch,
@@ -1368,6 +1388,16 @@ namespace ArchiveFixer.Extraction
                         {
                             throw new IOException(
                                 $"条目 {entry.Name} 解出的字节数与清单不符：清单 {entry.Size} 字节，实际 {entryWritten} 字节");
+                        }
+
+                        /*
+                         * AES 的完整性由认证码负责（中央目录里的 CRC 在 AES 包里可能是占位 0）；
+                         * 未加密条目必须逐条比对中央目录声明，防止“结构自洽但数据坏了”被当成成功。
+                         */
+                        if (entry.AesStrength == 0 && crcTarget.Value != entry.Crc32)
+                        {
+                            throw new Crc32MismatchException(
+                                $"条目 {entry.Name} 的 CRC32 对不上：清单 0x{entry.Crc32:X8}，实际 0x{crcTarget.Value:X8}");
                         }
                     }
 
@@ -1392,7 +1422,10 @@ namespace ArchiveFixer.Extraction
                     TryDeleteFile(tempPath);
                     Rollback(written, createdDirectories);
 
-                    return Failure($"{entry.Name} 解压失败：{ex.Message}", unsupported: false);
+                    return Failure(
+                        $"{entry.Name} 解压失败：{ex.Message}",
+                        unsupported: false,
+                        corrupted: ex is Crc32MismatchException);
                 }
                 catch
                 {
@@ -1441,7 +1474,7 @@ namespace ArchiveFixer.Extraction
             EmbeddedZipEntry entry,
             string resolvedPassword,
             ZipAesPasswordEncoding passwordEncoding,
-            FileStream target,
+            Stream target,
             ref long writtenBytes,
             long totalBytes,
             Stopwatch stopwatch,
@@ -1583,7 +1616,7 @@ namespace ArchiveFixer.Extraction
             EmbeddedZipEntry entry,
             string resolvedPassword,
             ZipAesPasswordEncoding passwordEncoding,
-            FileStream target,
+            Stream target,
             ref long writtenBytes,
             long totalBytes,
             Stopwatch stopwatch,
@@ -2102,14 +2135,106 @@ namespace ArchiveFixer.Extraction
             };
         }
 
-        private static EmbeddedZipExtractResult Failure(string message, bool unsupported)
+        private static EmbeddedZipExtractResult Failure(string message, bool unsupported, bool corrupted = false)
         {
             return new EmbeddedZipExtractResult
             {
                 Success = false,
                 Unsupported = unsupported,
+                Corrupted = corrupted,
                 Message = string.IsNullOrWhiteSpace(message) ? "直读失败" : message
             };
+        }
+
+        /// <summary>把写出的字节同时喂给 CRC32；不关闭内层流。</summary>
+        private sealed class Crc32WriteStream : Stream
+        {
+            private static readonly uint[] Table = BuildTable();
+
+            private readonly Stream _inner;
+            private uint _state = uint.MaxValue;
+
+            public Crc32WriteStream(Stream inner)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            }
+
+            public uint Value => ~_state;
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush() => _inner.Flush();
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                throw new NotSupportedException();
+
+            public override long Seek(long offset, SeekOrigin origin) =>
+                throw new NotSupportedException();
+
+            public override void SetLength(long value) =>
+                throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                if (count <= 0)
+                {
+                    return;
+                }
+
+                uint state = _state;
+
+                for (int i = 0; i < count; i++)
+                {
+                    state = Table[(state ^ buffer[offset + i]) & 0xFF] ^ (state >> 8);
+                }
+
+                _state = state;
+                _inner.Write(buffer, offset, count);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    _inner.Flush();
+                }
+
+                base.Dispose(disposing);
+            }
+
+            private static uint[] BuildTable()
+            {
+                var table = new uint[256];
+
+                for (int i = 0; i < table.Length; i++)
+                {
+                    uint value = (uint)i;
+
+                    for (int bit = 0; bit < 8; bit++)
+                    {
+                        value = (value & 1) != 0 ? 0xEDB88320u ^ (value >> 1) : value >> 1;
+                    }
+
+                    table[i] = value;
+                }
+
+                return table;
+            }
+        }
+
+        private sealed class Crc32MismatchException : IOException
+        {
+            public Crc32MismatchException(string message) : base(message)
+            {
+            }
         }
 
         /// <summary>内置读取器的版本 = 本程序集版本（它随程序一起发布，这就是它的真实版本）。</summary>

@@ -3717,10 +3717,11 @@ namespace ArchiveFixer.Extraction
         /// 外层 7z 里也可能恰好藏着一个自洽 ZIP，抢在引擎前面会误判。判据与既有直读同一个出口
         /// <see cref="EmbeddedZipStreamExtractor"/>；失败就返回 null，原样回落到 7-Zip/单条目近路。</para>
         ///
-        /// <para>⚠ 2026-11-07：未加密、且条目全是**原样存**的多条目 ZIP 也走这条直读。
-        /// 旧实现只给 AES 开，于是识别阶段已经说“可以 ZIP 直读”的双面文件，递归首层仍要抠
-        /// 一份等大副本再交给 7z（真机 4.06 GiB 的 P93 多花近 3 分钟）。压缩条目仍按老路走
-        /// （直读器不解压）；直读不支持 / 结构不自洽时行为也不变。</para>
+        /// <para>⚠ 2026-11-07：未加密的 stored / deflate 多条目 ZIP 也走这条直读。
+        /// 旧实现只给 AES / 单条目开，于是识别阶段已经说“可以 ZIP 直读”的双面文件，
+        /// 递归首层仍要抠一份等大副本再交给 7z（真机 4.06 GiB 的 P93 多花近 3 分钟）。
+        /// 直读器逐条目计算并校验 CRC32；CRC 不对按损坏收场，不回落再读一遍；
+        /// 不支持的方法 / 结构不自洽仍原样回落抠副本 + 引擎。</para>
         /// </summary>
         private async Task<LayerOutcome?> TryTakeEmbeddedZipDirectAsync(
             WorkItem item,
@@ -3761,15 +3762,9 @@ namespace ArchiveFixer.Extraction
                 }
 
                 /*
-                 * 未加密的条目只直读**原样存**的：直读器不解压、也不校验 CRC，压缩条目
-                 * 走回退老路（抠副本 + 7z）才和既有判据一致（真实机器 2026-10-05 的对照用例
-                 * 钉的就是这一档）。AES 条目已经由直读器解密并验认证码，不在这个限制里。
+                 * 直读器现在在流式写出时逐条目比对 CRC32；未加密的 stored/deflate 都可直读。
+                 * AES 条目由认证码负责完整性；其余不支持的方法由探针直接返回 Unsupported。
                  */
-                if (probe.ResolvedPasswordIndex <= 0
-                    && probe.Entries.Any(entry => entry.Method != 0))
-                {
-                    return null;
-                }
 
                 Log(
                     "INFO",
@@ -3808,6 +3803,24 @@ namespace ArchiveFixer.Extraction
 
                 if (!extract.Success)
                 {
+                    if (extract.Corrupted)
+                    {
+                        Log("ERROR", $"{layerLabel}：内置 ZIP 直读发现数据损坏 —— {extract.Message}");
+
+                        /*
+                         * CRC 对不上是**确定的损坏**，不是“这条路走不通”：回落再抠一份 10G 副本
+                         * 交给 7z 只会重复读一遍并得到同一个结论。直接按损坏收场，保留原包。
+                         */
+                        return LayerOutcome.Stop(
+                            BuildLayerReport(
+                                item,
+                                result: null,
+                                succeededPassword: null,
+                                overrideMessage: extract.Message,
+                                overrideStatus: StatusText.Corrupted),
+                            RecursionStopReason.Corrupted);
+                    }
+
                     Log(
                         "WARN",
                         $"{layerLabel}：内置 ZIP 直读没成功（{extract.Message}）—— 原样回落到引擎路径。");

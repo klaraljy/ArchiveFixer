@@ -137,14 +137,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// <b>对照 + T9</b>：同形状，但尾部归档里那个条目是**压缩存**的（不是原样存）
-        /// ⇒ 近路**不许**走（解出来还得解压），照旧"抠出副本 + 引擎"，而且抠取之前要有一行进度。
-        ///
-        /// <para>它同时钉住两件事：① 近路的判据没有放宽（压缩存的一律交回老路）；
-        /// ② 真机那 48–83 秒的抠取不再是一片空白。</para>
+        /// 同形状，但尾部归档里那个条目是**压缩存**的（不是原样存）⇒ 直读器解压并校验 CRC，
+        /// 仍然不抠副本、不调 7-Zip。内容必须与原始 payload 逐字节一致。
         /// </summary>
         [SevenZipFact]
-        public async Task 对照_尾部条目是压缩存的_照旧抠副本交给引擎_而且抠取前有一行进度()
+        public async Task 压缩存的尾部条目_现在也走直读并保持内容正确()
         {
             RequireSevenZip();
 
@@ -163,23 +160,18 @@ namespace ArchiveFixer.Tests
 
             Assert.True(result.Completed, result.Summary);
 
-            // 老路：抠出副本 + 引擎解（引擎至少被调过一次解压）。
             string mp4Name = Path.GetFileName(doubleFaced);
 
-            Assert.Contains(
+            // 压缩条目也走内置直读：不抠副本、不把 mp4 本身交给引擎。
+            Assert.DoesNotContain(
                 engine.ExtractCalls,
                 path => string.Equals(Path.GetFileName(path), mp4Name, StringComparison.OrdinalIgnoreCase));
             Assert.Contains(
                 log,
-                entry => entry.Message.Contains("已按偏移把归档那一段取出成副本", StringComparison.Ordinal));
+                entry => entry.Message.Contains("内置直读", StringComparison.Ordinal));
             Assert.DoesNotContain(
                 log,
-                entry => entry.Message.Contains("只有一个条目", StringComparison.Ordinal));
-
-            // T9：抠取之前那行进度（⛔ 不报百分比，只说清在做什么、大概多少量）。
-            Assert.Contains(
-                log,
-                entry => entry.Message.Contains("正在按偏移取出归档副本", StringComparison.Ordinal));
+                entry => entry.Message.Contains("按偏移取出归档副本", StringComparison.Ordinal));
 
             // T4：**我们那句结论**不许再报 ERROR（真机那三行假 ERROR 就是它）——
             // 引擎自己的原话（`7-Zip 原话：… Cannot open the file as archive`）照旧留一行，
