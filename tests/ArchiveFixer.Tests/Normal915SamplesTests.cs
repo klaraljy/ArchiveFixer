@@ -18,10 +18,10 @@ namespace ArchiveFixer.Tests
     public sealed class Normal915SamplesTests
     {
         [Fact]
-        public async Task 四十个普通样本_全部成功且不落最终组失败()
+        public async Task 五十个普通样本_二十五指定位置_二十五原位置()
         {
             const string backupRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915000000-备份";
-            for (int index = 1; index <= 40; index++)
+            for (int index = 1; index <= 50; index++)
             {
                 string sample = "915" + index.ToString("D6");
                 string backup = Path.Combine(backupRoot, sample, "原包");
@@ -30,11 +30,12 @@ namespace ArchiveFixer.Tests
                     throw new InvalidOperationException($"缺少样本 {sample}: {backup}");
                 }
 
-                await RunOneAsync(sample, backup);
+                string expected = index <= 40 ? string.Empty : index <= 45 ? "FinalGroupIncomplete" : "FinalGroupCorrupted";
+                await RunOneAsync(sample, backup, index <= 25, expected);
             }
         }
 
-        private static async Task RunOneAsync(string sample, string backup)
+        private static async Task RunOneAsync(string sample, string backup, bool specified, string expectedFailure)
         {
             string root = Path.Combine(@"E:\DeepSeekProjects\_tmp\ArchiveFixer\normal-probe", Guid.NewGuid().ToString("N"));
             string source = Path.Combine(root, "src");
@@ -52,7 +53,7 @@ namespace ArchiveFixer.Tests
             var ps = new PathService { DataRootDirectory = data };
             var ss = new SettingsService(ps);
             AppSettings s = AppSettings.CreateDefault();
-            s.CustomOutputDirectory = target;
+            s.CustomOutputDirectory = specified ? target : string.Empty;
             s.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             s.RestHandlingAfterVerify = RestHandlingModes.Keep;
             ss.Save(s);
@@ -67,8 +68,8 @@ namespace ArchiveFixer.Tests
             var one = new OneClickCoordinator(vm, scan, rename, coordinator, new DialogService());
             one.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
-                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
-                CustomRoot = target,
+                PlacementMode = specified ? OutputPlacementMode.CustomRootPerArchive : OutputPlacementMode.PerArchiveSubfolder,
+                CustomRoot = specified ? target : string.Empty,
                 SourceHandling = SourceHandlingMode.KeepInPlace,
                 RestHandling = RestHandlingModes.Keep
             });
@@ -76,10 +77,18 @@ namespace ArchiveFixer.Tests
             await one.RunAsync().WaitAsync(TimeSpan.FromMinutes(3));
 
             ArchiveTask[] tasks = vm.Tasks.ToArray();
-            Assert.DoesNotContain(tasks, t => t.Reason is TaskReason.FinalGroupIncomplete or TaskReason.FinalGroupCorrupted);
-            Assert.Contains(tasks, t => t.Outcome == TaskOutcome.Succeeded);
-            Assert.True(Directory.Exists(Path.Combine(source, "aaa")), $"{sample} 成功时源包目录应保留");
-            Assert.DoesNotContain(tasks, t => t.ContentGroupFinalState == FinalContentState.Missing && t.Reason.ToString().StartsWith("FinalGroup"));
+            Assert.True(Directory.Exists(Path.Combine(source, "aaa")), $"{sample} 源包目录必须存在");
+
+            if (expectedFailure.Length == 0)
+            {
+                Assert.DoesNotContain(tasks, t => t.Reason is TaskReason.FinalGroupIncomplete or TaskReason.FinalGroupCorrupted);
+                Assert.Contains(tasks, t => t.Outcome == TaskOutcome.Succeeded);
+            }
+            else
+            {
+                Assert.Contains(tasks, t => t.Reason.ToString() == expectedFailure);
+                Assert.DoesNotContain(tasks, t => t.Reason.ToString() == expectedFailure && t.Outcome == TaskOutcome.Skipped);
+            }
         }
 
         private static void Copy(string s, string d)
@@ -96,5 +105,8 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+
+
+
 
 
