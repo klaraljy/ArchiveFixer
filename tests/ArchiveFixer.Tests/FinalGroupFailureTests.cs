@@ -32,6 +32,7 @@ namespace ArchiveFixer.Tests
         [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Keep, true)]
         [InlineData("915000046", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
         [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Delete, false)]
+        [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Delete, true)]
         public async Task Probe(string sample, string expectedReason, string restHandling, bool spaceTight)
         {
             const string backupRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915000000-备份";
@@ -98,11 +99,13 @@ namespace ArchiveFixer.Tests
                 {
                     Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "空间不足必须固定保留当前过程物");
                     Assert.True(File.Exists(failed.LastProcessArtifactPath), "空间不足保底必须存在");
+                    Assert.EndsWith(".001", failed.LastProcessArtifactPath, StringComparison.OrdinalIgnoreCase);
                 }
                 else if (restHandling == RestHandlingModes.Keep)
                 {
                     Assert.False(string.IsNullOrWhiteSpace(failed.LastProcessArtifactPath), "Keep 必须落当前过程物路径");
                     Assert.True(File.Exists(failed.LastProcessArtifactPath), "Keep 当前过程物必须存在");
+                    Assert.EndsWith(".001", failed.LastProcessArtifactPath, StringComparison.OrdinalIgnoreCase);
                     Assert.True(Directory.Exists(failed.RestDirectoryPath), "Keep 其余物目录必须存在");
                     Assert.True(Directory.GetFiles(failed.RestDirectoryPath).Length >= 5, "分卷组必须保留整组源片");
                 }
@@ -130,6 +133,7 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+
 
 
 

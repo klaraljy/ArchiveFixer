@@ -234,21 +234,27 @@ namespace ArchiveFixer.Services
         /// 把“这一层正在解的当前过程物”按其它层同一口径留下/任其清理。
         /// 只接受工作区里的产物；源包/判不出位置一律不动。
         /// </summary>
-        internal void PreserveCurrentProcessArtifacts(ArchiveTask task, IEnumerable<string>? artifactPaths)
+        internal void PreserveCurrentProcessArtifacts(ArchiveTask task, IEnumerable<string>? artifactPaths, string? entryPath)
         {
+            bool pointerSet = false;
             foreach (string path in (artifactPaths ?? Array.Empty<string>())
                          .Where(item => !string.IsNullOrWhiteSpace(item))
                          .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                PreserveCurrentProcessArtifact(task, path);
+                bool isEntry = !pointerSet
+                    && string.Equals(path, entryPath, StringComparison.OrdinalIgnoreCase);
+                if (PreserveCurrentProcessArtifact(task, path, isEntry) && isEntry)
+                {
+                    pointerSet = true;
+                }
             }
         }
 
-        internal void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath)
+        internal bool PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath, bool setLastPointer = true)
         {
             if (task == null || string.IsNullOrWhiteSpace(artifactPath) || !File.Exists(artifactPath))
             {
-                return;
+                return false;
             }
 
             if (!_host.IsInsideRecursionWorkspace(artifactPath))
@@ -257,16 +263,21 @@ namespace ArchiveFixer.Services
                     "WARN",
                     $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」不在工作区里"
                     + "（可能是用户源包）—— 判不出位置，一个字节都不动。");
-                return;
+                return false;
             }
 
-            if (string.Equals(_host.RestHandlingThisBatch, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
+            bool spaceLastProcessKeep = _host.SpaceTightPolicy.Enabled
+                                      && _host.SpaceTightPolicy.LastProcessOnFailureKeeps
+                                      && _host.SpaceTightPolicy.RestOnFailureKeepsLastProcess;
+
+            if (!spaceLastProcessKeep
+                && string.Equals(_host.RestHandlingThisBatch, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
             {
                 _host.AppendLog(
                     "INFO",
                     $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」按「删除操作」处理，"
                     + "不另起名字，随工作区清理。");
-                return;
+                return false;
             }
 
             string? restDirectory = ResolveRecursionRestDirectory(task, artifactPath);
@@ -276,7 +287,7 @@ namespace ArchiveFixer.Services
                 _host.AppendLog(
                     "WARN",
                     $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」推不出其余物目录 —— 不动。");
-                return;
+                return false;
             }
 
             try
@@ -286,7 +297,7 @@ namespace ArchiveFixer.Services
             catch (Exception ex)
             {
                 _host.AppendLog("WARN", $"{task.LogName}：当前过程物其余物目录建不出来：{ex.Message}");
-                return;
+                return false;
             }
 
             string target = Path.Combine(restDirectory, Path.GetFileName(artifactPath));
@@ -307,15 +318,19 @@ namespace ArchiveFixer.Services
                     "WARN",
                     $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」没能留下第二个名字"
                     + "（硬链接建不出来）—— 留在原处，随工作区清理。");
-                return;
+                return false;
             }
 
             task.RestDirectoryPath = restDirectory;
-            task.LastProcessArtifactPath = target;
+            if (setLastPointer)
+            {
+                task.LastProcessArtifactPath = target;
+            }
 
             _host.AppendLog(
                 "INFO",
                 $"{task.LogName}：当前过程物「{Path.GetFileName(artifactPath)}」按「留下」在其余物里留了一个名字：{target}");
+            return true;
         }
 
         internal void PreserveStoppedLayerProcessArtifact(ArchiveTask task, RecursionResult? result)
@@ -783,7 +798,8 @@ namespace ArchiveFixer.Services
         /// "定稿 + 校验通过后当场删源包回收空间"，而部分完成**天然回收不了源包**（缺的那些条目只在源包里）
         /// ⇒ 两者目的正好相反。⛔ 只让行为失效，**绝不去改用户的设置**（勾还勾着，只是这一轮不生效）。</para>
         /// </summary>
-        internal bool PartialPublishActive => _host.Settings?.PartialPublishEnabled == true && !_host.SpaceTightThisBatch;
+        internal bool PartialPublishActive => _host.Settings?.PartialPublishEnabled == true
+            && !(_host.SpaceTightPolicy.Enabled && _host.SpaceTightPolicy.PartialContentOnFailureDrops);
 
         /// <summary>
         /// 部分完成发布的候选：**失败路径**填进来，收尾处（清工作区之前）真发布。
@@ -853,3 +869,8 @@ namespace ArchiveFixer.Services
         internal readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, PartialPublishCandidate> Candidates = new();
     }
 }
+
+
+
+
+

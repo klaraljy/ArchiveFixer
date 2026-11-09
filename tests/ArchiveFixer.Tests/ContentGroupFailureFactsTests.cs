@@ -37,6 +37,51 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void Merge_without_entry_clears_old_current_process_path()
+        {
+            var group = new ContentGroup
+            {
+                GroupId = "g3",
+                BaseName = "aaa-L4",
+                Family = VolumeNamingFamily.ZipNumbered,
+                SourceLayer = @"X:\src"
+            };
+
+            group.MergePrepared(new PreparedVolumeGroup
+            {
+                BaseName = "aaa-L4",
+                Family = VolumeNamingFamily.ZipNumbered,
+                OriginalSourceLayer = @"X:\src",
+                EntryLayer = @"X:\work\group-entry",
+                OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
+                EntryCanonicalName = "aaa-L4.zip.001",
+                State = PreparedGroupState.Complete,
+                Pieces = new[]
+                {
+                    new PreparedVolumePiece
+                    {
+                        CanonicalName = "aaa-L4.zip.001",
+                        OriginalPath = @"X:\src\aaa-L4.zip.001"
+                    }
+                }
+            }, ledger: null);
+
+            Assert.False(string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath));
+
+            group.MergePrepared(new PreparedVolumeGroup
+            {
+                BaseName = "aaa-L4",
+                Family = VolumeNamingFamily.ZipNumbered,
+                OriginalSourceLayer = @"X:\src",
+                OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
+                State = PreparedGroupState.Complete
+            }, ledger: null);
+
+            Assert.Equal(string.Empty, group.CurrentProcessArtifactPath);
+            Assert.Empty(group.CurrentProcessArtifactPaths);
+        }
+
+        [Fact]
         public void Source_and_process_producers_are_separated()
         {
             var group = new ContentGroup

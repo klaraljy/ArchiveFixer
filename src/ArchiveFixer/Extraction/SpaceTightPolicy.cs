@@ -14,7 +14,7 @@ namespace ArchiveFixer.Extraction
 
         public bool LastProcessOnFailureKeeps => true;
 
-        public bool PartialContentOnFailureDrops => true;
+        public bool PartialContentOnFailureDrops => Enabled;
 
         public bool RestOnFailureKeepsLastProcess => true;
 
@@ -35,3 +35,4 @@ namespace ArchiveFixer.Extraction
         }
     }
 }
+

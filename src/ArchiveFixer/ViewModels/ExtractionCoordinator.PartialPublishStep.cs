@@ -52,11 +52,11 @@ namespace ArchiveFixer.ViewModels
         private void PreserveStoppedLayerProcessArtifact(ArchiveTask task, RecursionResult? result) =>
             _partialPublishStep.PreserveStoppedLayerProcessArtifact(task, result);
 
-        private void PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath) =>
+        private bool PreserveCurrentProcessArtifact(ArchiveTask task, string? artifactPath) =>
             _partialPublishStep.PreserveCurrentProcessArtifact(task, artifactPath);
 
-        private void PreserveCurrentProcessArtifacts(ArchiveTask task, IReadOnlyList<string>? artifactPaths) =>
-            _partialPublishStep.PreserveCurrentProcessArtifacts(task, artifactPaths);
+        private void PreserveCurrentProcessArtifacts(ArchiveTask task, IReadOnlyList<string>? artifactPaths, string? entryPath) =>
+            _partialPublishStep.PreserveCurrentProcessArtifacts(task, artifactPaths, entryPath);
 
         private Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
             _partialPublishStep.TryPublishPartialProductsAsync(task, cancelled);
@@ -81,5 +81,6 @@ namespace ArchiveFixer.ViewModels
             PurgeRestItemsExceptChainRootSource(task);
     }
 }
+
 
 

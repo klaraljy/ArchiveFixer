@@ -345,7 +345,7 @@ namespace ArchiveFixer.ViewModels
              */
             string? sourceMoveFailure = null;
 
-            if (_spaceTightPolicy.Enabled && !_spaceTightPolicy.KeepSource)
+            if (_spaceTightPolicy.SourceOnLayerSuccessDeletes)
             {
                 /*
                  * 「空间不足」模式（用户 2026-09-27 拍板 + 2026-09-29 第 1/4 条收紧）：
@@ -1709,4 +1709,5 @@ namespace ArchiveFixer.ViewModels
 
     }
 }
+
 

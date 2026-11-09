@@ -160,10 +160,7 @@ namespace ArchiveFixer.Extraction
                 EntryPath = prepared.OriginalEntryPath;
             }
 
-            if (!string.IsNullOrWhiteSpace(prepared.CanonicalEntryPath))
-            {
-                CurrentProcessArtifactPath = prepared.CanonicalEntryPath;
-            }
+            CurrentProcessArtifactPath = prepared.CanonicalEntryPath ?? string.Empty;
 
             _currentProcessArtifactPaths.Clear();
 
