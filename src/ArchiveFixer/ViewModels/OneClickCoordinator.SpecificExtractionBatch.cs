@@ -28,8 +28,9 @@ namespace ArchiveFixer.ViewModels
             runOptions ??= snapshot.Options;
 
             _extractionCoordinator.BeginSpecificPasswordBatch();
-            // 空间不足模式：按源包体积从大到小；源包按用户接受风险处理（失败/预检不足也删）。
-            bool spaceTight = snapshot.SpaceTightMode;
+            // 空间不足模式：批首策略唯一来源；特定解压不另读 UI 开关。
+            SpaceTightPolicy spacePolicy = SpaceTightPolicy.ForBatch(snapshot.SpaceTightMode, snapshot.SpaceTightKeepSource);
+            bool spaceTight = spacePolicy.Enabled;
             // 预计耗时从大到小：长任务先占槽位，小任务随后补空；不再按包大小分档。
             IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets)
                 .OrderByDescending(unit => TaskDurationEstimator.EstimateSeconds(unit.SourceBytes, unit.Entry, unit.Followers.Count + 1, unit.Followers.Count > 0))
@@ -695,3 +696,4 @@ namespace ArchiveFixer.ViewModels
 
     }
 }
+
