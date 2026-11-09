@@ -413,9 +413,9 @@ namespace ArchiveFixer.ViewModels
                  * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
                  */
                 int userParallel = Math.Max(1, maxParallel);
-                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, userParallel, _spaceTightThisBatch);
+                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, userParallel, _spaceTightPolicy.Enabled);
 
-                if (_spaceTightThisBatch)
+                if (_spaceTightPolicy.Enabled)
                 {
                     _spaceLimit = ResolveSpaceTightParallelForBatch(plan);
                     maxParallel = Math.Min(_spaceLimit, userParallel);
@@ -456,7 +456,7 @@ namespace ArchiveFixer.ViewModels
                 var runningTaskMap = new Dictionary<Task, ArchiveTask>();
                 var startedTasks = new HashSet<ArchiveTask>();
 
-                if (_spaceTightThisBatch)
+                if (_spaceTightPolicy.Enabled)
                 {
                     _spaceLimit = ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
                     maxParallel = Math.Min(_spaceLimit, userParallel);
@@ -552,7 +552,7 @@ namespace ArchiveFixer.ViewModels
                             scheduler.MarkCompleted(completedSlotWork);
                         }
 
-                        if (_spaceTightThisBatch && !IsStopping)
+                        if (_spaceTightPolicy.Enabled && !IsStopping)
                         {
                             var pending = plan.Ordered
                                 .Where(candidate => !startedTasks.Contains(candidate.Task))
@@ -635,7 +635,7 @@ namespace ArchiveFixer.ViewModels
                          * 排序已经是从大到小；这个包此刻放不下，后面先跑小包。
                          * 源包一个字节都不动；用户清出空间后可以手动重试。
                          */
-                        if (_spaceTightThisBatch)
+                        if (_spaceTightPolicy.Enabled)
                         {
                             MarkSpaceBlocked(task, item, gate);
                             scheduler.MarkCompleted(scheduledWork);
@@ -855,8 +855,6 @@ namespace ArchiveFixer.ViewModels
                  * 单包重试、界面上的空间建议）继续按"删源包"那一套思考。
                  * 下一批开工时会重新 `= _vm.SpaceTightMode`，所以清掉不会丢任何东西。
                  */
-                _spaceTightThisBatch = false;
-                _spaceTightKeepSourceThisBatch = false;
                 _spaceTightPolicy = SpaceTightPolicy.Normal;
 
                 /*
@@ -892,7 +890,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 RemoveEmptyTargetShellIfWeCreatedIt();
 
-                // 批尾清掉这条批内状态（与 _spaceTightThisBatch / _oneClickThisBatch 同一口径）。
+                // 批尾清掉这条批内状态（与 _spaceTightPolicy.Enabled / _oneClickThisBatch 同一口径）。
                 BatchCreatedTargetDirectory = string.Empty;
 
                 UpdateSummary();
@@ -1002,13 +1000,11 @@ namespace ArchiveFixer.ViewModels
             _pathService.DiagnosticLog = message => AppendLog("WARN", message);
 
             /*
-             * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
+             * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightPolicy.Enabled）。
              * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
              * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
              */
             _spaceTightPolicy = SpaceTightPolicy.ForBatch(_vm.SpaceTightMode, _vm.SpaceTightKeepSource);
-            _spaceTightThisBatch = _spaceTightPolicy.Enabled;
-            _spaceTightKeepSourceThisBatch = _spaceTightPolicy.KeepSource;
 
             /*
              * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：
@@ -1019,7 +1015,7 @@ namespace ArchiveFixer.ViewModels
 
             maxParallel = ResolveMaxParallel(selectedTasks, out fullSpeed);
 
-            if (!_spaceTightThisBatch)
+            if (!_spaceTightPolicy.Enabled)
             {
                 AppendLog("INFO", $"并发：用户选择 {maxParallel} 个（1–4；普通解压按这个数）。");
             }
@@ -1158,4 +1154,5 @@ namespace ArchiveFixer.ViewModels
         }
     }
 }
+
 

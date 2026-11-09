@@ -70,3 +70,4 @@ namespace ArchiveFixer.ViewModels
             _taskRecursiveExtractors.TryRemove(task, out RecursiveExtractor? extractor) ? extractor : null;
     }
 }
+

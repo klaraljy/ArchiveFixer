@@ -65,7 +65,7 @@ namespace ArchiveFixer.ViewModels
 
         AppSettings? IPartialPublishStepHost.Settings => Settings;
 
-        bool IPartialPublishStepHost.SpaceTightThisBatch => _spaceTightThisBatch;
+        bool IPartialPublishStepHost.SpaceTightThisBatch => _spaceTightPolicy.Enabled;
 
         SpaceTightPolicy IPartialPublishStepHost.SpaceTightPolicy => _spaceTightPolicy;
 
@@ -81,4 +81,5 @@ namespace ArchiveFixer.ViewModels
             PurgeRestItemsExceptChainRootSource(task);
     }
 }
+
 

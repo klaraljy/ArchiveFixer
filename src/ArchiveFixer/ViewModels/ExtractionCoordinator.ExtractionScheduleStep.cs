@@ -594,7 +594,7 @@ namespace ArchiveFixer.ViewModels
                 "处理办法：清理「其余物」腾空间 / 换一个空间更大的输出盘 / "
                 + "开①页那个「空间不足」模式（边解边删源包，每解完一个就收回一份空间；"
                 + "⚠ 它会永久删除源包，只对这一次运行有效、不写设置）。"
-                + (_spaceTightThisBatch ? "本批已经开着那个模式了 —— 那说明连它也不够：请换盘或先清理。" : string.Empty));
+                + (_spaceTightPolicy.Enabled ? "本批已经开着那个模式了 —— 那说明连它也不够：请换盘或先清理。" : string.Empty));
         }
 
         /// <summary>
@@ -798,9 +798,9 @@ namespace ArchiveFixer.ViewModels
         /// ④ 删除操作（其余物 = 过程物，任务成功后彻底删除）。
         /// ⛔ 它**不动**任何设置：用户设置里的三档在这次运行里一个字节都不会被改写。</para>
         /// </summary>
-        private bool _spaceTightThisBatch;
 
         private int _spaceLimit = int.MaxValue;
 
     }
 }
+

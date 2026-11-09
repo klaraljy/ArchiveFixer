@@ -543,11 +543,11 @@ namespace ArchiveFixer.ViewModels
              * （同一批里 `111.zip` 那一单却搬了 4 个 —— 它走的是读 `RunOptions` 的那条路）。
              * 这就是"一处改动要落到每一条路径上"那条规矩的反面现场。
              */
-            SourceHandlingMode sourceHandling = _spaceTightThisBatch
+            SourceHandlingMode sourceHandling = _spaceTightPolicy.Enabled
                 ? SourceHandlingMode.DeleteInPlace
                 : RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 
-            if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
+            if (_spaceTightPolicy.Enabled && _spaceTightPolicy.KeepSource)
             {
                 logEntries.Add((
                     "INFO",
@@ -948,7 +948,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void SettleVerifiedGroupFollowers()
         {
-            SourceHandlingMode handling = _spaceTightThisBatch
+            SourceHandlingMode handling = _spaceTightPolicy.Enabled
                 ? SourceHandlingMode.DeleteInPlace
                 : RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 

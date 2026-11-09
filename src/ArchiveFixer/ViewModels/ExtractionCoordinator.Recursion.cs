@@ -381,11 +381,11 @@ namespace ArchiveFixer.ViewModels
             RecursionLimits limits = BuildRecursionLimits(
                 maxDepth,
                 manualSingleLayer: !oneClickRun,
-                spaceTight: _spaceTightThisBatch);
+                spaceTight: _spaceTightPolicy.Enabled);
             RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor(
                 maxDepth,
                 manualSingleLayer: !oneClickRun,
-                spaceTight: _spaceTightThisBatch);
+                spaceTight: _spaceTightPolicy.Enabled);
             recursiveExtractor.RetainedArtifactDirectory = task.OutputPath;
 
             /*
@@ -624,12 +624,12 @@ namespace ArchiveFixer.ViewModels
 
             ApplyRecursionResult(task, result);
 
-            if (_spaceTightThisBatch && !string.IsNullOrWhiteSpace(recursiveExtractor.RetainedProcessArtifactPath))
+            if (_spaceTightPolicy.Enabled && !string.IsNullOrWhiteSpace(recursiveExtractor.RetainedProcessArtifactPath))
             {
                 task.LastProcessArtifactPath = recursiveExtractor.RetainedProcessArtifactPath;
             }
 
-            if (_spaceTightThisBatch && result.Completed)
+            if (_spaceTightPolicy.Enabled && result.Completed)
             {
                 var deepestSuccess = result.Layers.LastOrDefault(layer => layer.Success && layer.Depth > 0);
 

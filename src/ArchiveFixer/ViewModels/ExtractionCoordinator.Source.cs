@@ -198,7 +198,7 @@ namespace ArchiveFixer.ViewModels
              * “失败只留最后一层过程物”，所以必须在 ExecuteFinalLayout 之前截断，
              * 连半成品都不写进最终目录。失败由 PostProcessFailureWriter 统一落终态，源包不动。
              */
-            if (_spaceTightThisBatch && !verification.Verified)
+            if (_spaceTightPolicy.Enabled && !verification.Verified)
             {
                 logEntries.Add((
                     "WARN",
@@ -345,7 +345,7 @@ namespace ArchiveFixer.ViewModels
              */
             string? sourceMoveFailure = null;
 
-            if (_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch)
+            if (_spaceTightPolicy.Enabled && !_spaceTightPolicy.KeepSource)
             {
                 /*
                  * 「空间不足」模式（用户 2026-09-27 拍板 + 2026-09-29 第 1/4 条收紧）：
@@ -402,7 +402,7 @@ namespace ArchiveFixer.ViewModels
                 sourceMoveFailure = PurgeLayerSourcePackage(
                     task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
             }
-            else if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
+            else if (_spaceTightPolicy.Enabled && _spaceTightPolicy.KeepSource)
             {
                 /*
                  * 「空间不足 + 不删原包」= **安全档**（用户 2026-09-27："所有测试的情况下弄一个设置
@@ -415,7 +415,7 @@ namespace ArchiveFixer.ViewModels
                  *
                  * ⚠ 2026-09-29 第 1/4 条之后，这一支排在上面那支后面：**只有"不删原包"才什么都不做**。
                  * 默认档（会删的那一档）已经被上面的第一支接走了 —— 它连内层包一起收，
-                 * 两个分支合起来才是"删的那一档"，所以这里不再重复判一次 `_spaceTightThisBatch`。
+                 * 两个分支合起来才是"删的那一档"，所以这里不再重复判一次 `_spaceTightPolicy.Enabled`。
                  */
                 logEntries.Add(("INFO", $"{task.LogName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
             }
@@ -752,7 +752,7 @@ namespace ArchiveFixer.ViewModels
 
             var sourceTargets = SourceCleanupService.BuildTargetList(
                 task,
-                _spaceTightThisBatch,
+                _spaceTightPolicy.Enabled,
                 groupSourcePaths);
 
             var sourcePlan = new DeletionPlan
@@ -770,7 +770,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     Evidence = evidence,
                     Note = verificationNoteForSourceRemoval,
-                    IncludeRestAliases = _spaceTightThisBatch,
+                    IncludeRestAliases = _spaceTightPolicy.Enabled,
                     Plan = sourcePlan
                 });
 
@@ -1709,3 +1709,4 @@ namespace ArchiveFixer.ViewModels
 
     }
 }
+

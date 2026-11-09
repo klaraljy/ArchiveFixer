@@ -705,7 +705,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            SourceHandlingMode handling = _spaceTightThisBatch
+            SourceHandlingMode handling = _spaceTightPolicy.Enabled
                 ? SourceHandlingMode.DeleteInPlace
                 : runOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 
@@ -855,3 +855,4 @@ namespace ArchiveFixer.ViewModels
         }
     }
 }
+

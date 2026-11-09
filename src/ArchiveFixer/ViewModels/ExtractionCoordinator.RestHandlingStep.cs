@@ -233,9 +233,9 @@ namespace ArchiveFixer.ViewModels
 
         PathService IRestHandlingStepHost.Paths => _pathService;
 
-        bool IRestHandlingStepHost.SpaceTightThisBatch => _spaceTightThisBatch;
+        bool IRestHandlingStepHost.SpaceTightThisBatch => _spaceTightPolicy.Enabled;
 
-        bool IRestHandlingStepHost.SpaceTightKeepSourceThisBatch => _spaceTightKeepSourceThisBatch;
+        bool IRestHandlingStepHost.SpaceTightKeepSourceThisBatch => _spaceTightPolicy.KeepSource;
 
         bool IRestHandlingStepHost.LayerReclaimThisBatch
         {
@@ -328,3 +328,4 @@ namespace ArchiveFixer.ViewModels
             DescribeChainVerificationGap(destinationDirectory, rootTask, chainTasks);
     }
 }
+

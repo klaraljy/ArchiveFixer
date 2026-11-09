@@ -17,3 +17,4 @@ namespace ArchiveFixer.ViewModels
         private Task ShowWarningOnUiThreadAsync(string message) => _uiThread.ShowWarningAsync(message);
     }
 }
+

@@ -24,3 +24,4 @@ namespace ArchiveFixer.ViewModels
         void IProgressHeartbeatHost.AppendHeartbeat(string message) => AppendHeartbeat(message);
     }
 }
+

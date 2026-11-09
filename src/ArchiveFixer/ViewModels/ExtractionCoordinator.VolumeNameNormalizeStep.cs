@@ -266,3 +266,4 @@ namespace ArchiveFixer.ViewModels
         internal static bool HasSiblingVolumeBeside(string? path) => VolumeSiblingProbe.HasSiblingVolumeBeside(path);
     }
 }
+

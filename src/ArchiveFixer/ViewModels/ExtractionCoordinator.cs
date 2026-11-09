@@ -315,7 +315,6 @@ namespace ArchiveFixer.ViewModels
         /// 并发、排序、其余物删除这三件事两档完全一致 —— 用户要的正是"先看清空间怎么变，
         /// 再决定要不要开那个会删源包的档"（他的原话：怕"没成功而且原包也没有了"）。</para>
         /// </summary>
-        private bool _spaceTightKeepSourceThisBatch;
 
         /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
         private SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
@@ -442,3 +441,4 @@ namespace ArchiveFixer.ViewModels
 
     }
 }
+

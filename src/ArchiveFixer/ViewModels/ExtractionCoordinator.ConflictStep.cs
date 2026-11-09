@@ -60,3 +60,4 @@ namespace ArchiveFixer.ViewModels
         void IConflictStepHost.CancelCurrentTask() => CancelCurrentTask();
     }
 }
+
