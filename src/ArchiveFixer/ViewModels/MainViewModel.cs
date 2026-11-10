@@ -2748,7 +2748,23 @@ namespace ArchiveFixer.ViewModels
             try
             {
                 // 文件日志开关跟着设置走（默认开）。用户关掉它时不该再产生新日志文件。
-                _logService.Initialize(Settings.EnableLog);
+                //
+                // ⚠ 启动期这一句会建三个文件并扫日志目录 —— 在坏盘上会卡在内核 I/O 里把窗口拖死
+                // （2026-11-10 真机）。改成有界等待：超时就**本次会话关掉文件日志**，
+                // 这样后面每条 AppendLog 都会被 `_currentLogFilePath` 为空挡掉，不会反复卡。
+                bool logReady = ArchiveFixer.Helpers.SafeIo.Run(
+                    () =>
+                    {
+                        _logService.Initialize(Settings.EnableLog);
+                        return true;
+                    },
+                    false,
+                    TimeSpan.FromMilliseconds(2000));
+
+                if (!logReady)
+                {
+                    _logService.EnableFileLog = false;
+                }
             }
             catch
             {

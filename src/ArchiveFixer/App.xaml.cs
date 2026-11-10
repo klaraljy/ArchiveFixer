@@ -152,7 +152,11 @@ namespace ArchiveFixer
 
             try
             {
-                lowProcessPriority = new ArchiveFixer.Services.SettingsService().Load().LowProcessPriority;
+                // 同样不在 UI 线程上直接读盘：读不到/超时就用默认的低优先级（保守那一侧）。
+                lowProcessPriority = Helpers.SafeIo.Run(
+                    () => new ArchiveFixer.Services.SettingsService().Load().LowProcessPriority,
+                    true,
+                    Helpers.SafeIo.DefaultTimeout);
             }
             catch
             {

@@ -19,10 +19,7 @@
         <viewModels:MainViewModel />
     </Window.DataContext>
 
-    <!-- 只使用任务栏进度，不启用缩略图/覆盖图标（Win11 上曾出现白块）。 -->
-    <Window.TaskbarItemInfo>
-        <TaskbarItemInfo x:Name="TaskbarProgressInfo" ProgressState="None" />
-    </Window.TaskbarItemInfo>
+
 
     <!--
         勾选的键盘入口（用户 2026-09-22 追加需求："像文件夹选中一样，有一个全选的选项"）。

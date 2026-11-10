@@ -113,7 +113,13 @@ namespace ArchiveFixer
 
         private void RestoreWindowPlacement()
         {
-            WindowPlacementService.Placement? placement = _windowPlacement.Load();
+            // 启动期不在 UI 线程上直接读盘：坏盘上这一句会把窗口拖死（2026-11-10 真机：
+            // 读 window-placement.json 卡在内核 I/O，窗口出现不了，连进程都杀不掉）。
+            // 超时就当没有位置记录，按默认位置显示。
+            WindowPlacementService.Placement? placement = ArchiveFixer.Helpers.SafeIo.Run(
+                () => _windowPlacement.Load(),
+                (WindowPlacementService.Placement?)null,
+                ArchiveFixer.Helpers.SafeIo.DefaultTimeout);
 
             if (placement == null || !WindowPlacementService.IsVisibleOnScreen(placement))
             {
@@ -217,9 +223,8 @@ namespace ArchiveFixer
         }
 
         /// <summary>
-        /// 同步托盘悬停文字和任务栏进度条。
-        /// 任务栏缩略图/覆盖图标仍不启用（Windows 11 某些 WPF 窗口会出白块）；
-        /// 只给 TaskbarItemInfo 设置 ProgressState/ProgressValue。
+        /// 同步托盘悬停文字和窗口底栏进度。
+        /// ⛔ 不碰任务栏：TaskbarItemInfo 会让缩略图下面多出一条空白（用户 2026-11-10 要求整块去掉）。
         /// </summary>
         private void RefreshShellProgress()
         {
@@ -254,12 +259,6 @@ namespace ArchiveFixer
                     active.ProgressPercent,
                     eta));
 
-                if (TaskbarProgressInfo != null)
-                {
-                    TaskbarProgressInfo.ProgressState = System.Windows.Shell.TaskbarItemProgressState.Normal;
-                    TaskbarProgressInfo.ProgressValue = Math.Clamp(active.ProgressPercent / 100.0, 0, 1);
-                }
-
                 if (BottomProgressText != null && BottomProgressBar != null)
                 {
                     string detail = string.IsNullOrWhiteSpace(active.ProgressEntry)
@@ -278,15 +277,6 @@ namespace ArchiveFixer
                 }
 
                 return;
-            }
-
-            if (TaskbarProgressInfo != null)
-            {
-                TaskbarProgressInfo.ProgressState = _watchedViewModel.IsBusy
-                    ? System.Windows.Shell.TaskbarItemProgressState.Indeterminate
-                    : System.Windows.Shell.TaskbarItemProgressState.None;
-
-                TaskbarProgressInfo.ProgressValue = 0;
             }
 
             if (BottomProgressText != null && BottomProgressBar != null)

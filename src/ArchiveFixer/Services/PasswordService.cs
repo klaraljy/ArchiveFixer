@@ -391,7 +391,12 @@ namespace ArchiveFixer.Services
                 }
             }
 
-            PasswordListLoadResult result = ListStore.Load();
+            // 启动期不在 UI 线程上直接读盘：坏盘上读密码列表会把窗口拖死（2026-11-10 真机）。
+            // 超时或失败一律当"没有记忆"：只管本次运行，不写回、不删原件。
+            PasswordListLoadResult result = ArchiveFixer.Helpers.SafeIo.Run(
+                () => ListStore.Load(),
+                new PasswordListLoadResult(PasswordListLoadStatus.NoFile, null, string.Empty),
+                ArchiveFixer.Helpers.SafeIo.DefaultTimeout);
 
             if (result.Status == PasswordListLoadStatus.NoFile)
             {
