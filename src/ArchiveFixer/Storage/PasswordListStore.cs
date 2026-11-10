@@ -257,6 +257,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 error = DescribeException(ex);
                 return false;
             }
@@ -293,6 +294,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 return new PasswordListLoadResult(
                     PasswordListLoadStatus.Unreadable,
                     null,
@@ -395,6 +397,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 // 走到这里说明是没预料到的异常（建目录失败、写 .tmp 失败……）。
                 // 一样：旧文件一个字节都没动过，如实返回原因（**不含路径、不含明文**）。
                 TryDeleteTemp(tempPath);
@@ -420,6 +423,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 error = DescribeException(ex);
             }
 
@@ -445,6 +449,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 error = DescribeException(ex);
                 return false;
             }
@@ -544,6 +549,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码记忆", "降级处理", ex);
                 reason = "记忆内容不是有效的 UTF-8 文本（" + ex.GetType().Name + "）";
                 return null;
             }

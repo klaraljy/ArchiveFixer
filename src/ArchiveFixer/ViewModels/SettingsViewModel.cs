@@ -904,6 +904,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 Message = "保存设置失败：" + ex.Message;
             }
         }
@@ -1030,6 +1031,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 Message = "选择输出目录失败：" + ex.Message;
             }
         }
@@ -1191,6 +1193,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 // 设置页不该因为"探测引擎"整个打不开：报一句就够，其余设置照常可改。
                 EngineSelectionSummary = "引擎检测失败：" + ex.Message;
             }
@@ -1216,6 +1219,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 // 设置页不该因为探测失败整个打不开：报一句就够，其余设置照常可改。
                 RarToolStatusText = StatusText.SettingsRarExePathStatusPrefix + "检测失败：" + ex.Message;
             }
@@ -1242,6 +1246,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 Message = "选择 Rar.exe 失败：" + ex.Message;
             }
         }
@@ -1270,6 +1275,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 Message = string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.SettingsWinRarDownloadFailedFormat,
@@ -1406,6 +1412,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("设置落盘", "降级处理", ex);
                 Message = "选择归集目录失败：" + ex.Message;
             }
         }

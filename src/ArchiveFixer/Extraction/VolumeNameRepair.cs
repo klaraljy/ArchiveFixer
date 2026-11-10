@@ -716,6 +716,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("分卷改名", "降级处理", ex);
                 return Cannot(path, string.Format(StatusText.VolumeRepairPlanFailedFormat, ex.Message));
             }
 
@@ -5302,6 +5303,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("分卷改名", "降级处理", ex);
                 return Failure(string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, ex.Message));
             }
 
@@ -5340,6 +5342,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("分卷改名", "降级处理", ex);
                 return Failure(string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, ex.Message));
             }
 
@@ -5392,6 +5395,7 @@ namespace ArchiveFixer.Extraction
                 }
                 catch (Exception ex)
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("分卷改名", "降级处理", ex);
                     return Undo(
                         applied,
                         string.Format(StatusText.VolumeRepairRenameFailedFormat, item.SuggestedFileName, ex.Message));

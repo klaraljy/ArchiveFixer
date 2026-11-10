@@ -273,6 +273,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                 return Skip($"{name}：读不了其余物目录（{ex.Message}），一个字节都不删");
             }
 
@@ -306,6 +307,7 @@ namespace ArchiveFixer.Storage
                     }
                     catch (Exception ex)
                     {
+                        ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                         return Skip(
                             $"{name}：其余物里剩下的全是空壳，但就地删空目录失败（{target}：{ex.Message}）"
                             + $" —— 已就地删掉 {removedCount} / {targets.Count} 个空目录，没有送进回收站，"
@@ -352,6 +354,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                 return Skip($"{name}：清理其余物里的过程物时出现意外错误（{ex.Message}），一个字节都没删");
             }
 
@@ -444,6 +447,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                 return $"其余物里有「内容物保留关键词」这一档，但这棵树扫不动（{ex.Message}）"
                        + " —— 判不出里面有没有命中项，所以一个字节都不删（宁可不动，也不误删）";
             }
@@ -705,6 +709,7 @@ namespace ArchiveFixer.Storage
                 }
                 catch (Exception ex)
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                     return Skip(
                         $"{name}：其余物里只剩下空壳（0 个文件），但就地删空目录失败（{ex.Message}）"
                         + " —— 没有送进回收站，盘上可能还剩一部分空目录");
@@ -749,6 +754,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
                 return Skip($"{name}：删除其余物时出现意外错误（{ex.Message}），源包与过程物都还在");
             }
 

@@ -402,6 +402,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                 // 发布跑在任务收尾阶段，任何意外都不能把已经解压好的产物带崩（AGENTS.md §6 第 9 条）。
                 return PublishFailure(destination, $"发布过程中出现意外错误：{ex.Message}");
             }
@@ -741,6 +742,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                 errors.Add($"{Path.GetFileName(publishedArchivePath)}（已解开，但原文件没能删掉：{ex.Message}）");
             }
         }
@@ -864,6 +866,7 @@ namespace ArchiveFixer.Extraction
                 }
                 catch (Exception ex)
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                     errors.Add($"{name}（同组分卷没能一起清掉：读不动父层产物那一层 {ex.Message}）");
                     return false;
                 }
@@ -932,6 +935,7 @@ namespace ArchiveFixer.Extraction
                 }
                 catch (Exception ex)
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                     errors.Add($"{Path.GetFileName(actual)}（同一分卷组，已解开，但没能删掉：{ex.Message}）");
                 }
             }
@@ -1174,6 +1178,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                 errors.Add($"无法读取产物目录（{ex.Message}）");
                 return 0;
             }
@@ -1287,6 +1292,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("工作区", "降级处理", ex);
                 errors.Add($"{fileName}（{ex.Message}）");
                 return false;
             }

@@ -186,6 +186,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (IsExpectedFileFailure(ex))
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 // 约束 ①：没有备份就绝不往下写。
                 return PasswordBookWriteBackResult.Failure(
                     target,
@@ -200,6 +201,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (IsExpectedFileFailure(ex))
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 string rollbackNote = TryRollback(target, plan.OriginalContent, out string rollbackFailure);
 
                 // 只读 / 被占用 / 权限不足 / 磁盘满都走到这里：**明确失败**，
@@ -454,6 +456,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or DecoderFallbackException)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 throw new InvalidDataException(
                     "密码本不是有效 UTF-8，也无法按 GB18030 解码；为不改写原编码，本次拒绝写入。",
                     ex);
@@ -638,6 +641,7 @@ namespace ArchiveFixer.Services
                 }
                 catch (Exception ex) when (IsExpectedFileFailure(ex))
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 }
             }
         }
@@ -660,6 +664,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (IsExpectedFileFailure(ex))
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 failure = Describe(ex);
                 return "原文件可能留下了半截内容（回滚失败）。";
             }
@@ -681,6 +686,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (IsExpectedFileFailure(ex))
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 return "重新解析失败（" + Describe(ex) + "）";
             }
 
@@ -731,6 +737,7 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex) when (IsExpectedFileFailure(ex))
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("密码本", "降级处理", ex);
                 return null;
             }
         }

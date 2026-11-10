@@ -2765,6 +2765,9 @@ namespace ArchiveFixer.ViewModels
                 {
                     _logService.EnableFileLog = false;
                 }
+                // 危险路径上被降级处理的失败，至少要在日志里留一句（⛔ 不改控制流）。
+                ArchiveFixer.Helpers.AppDiagnostics.ProblemSink = (where, ex) =>
+                    AppendLog("WARN", "已降级：" + where + " 失败（" + ex.GetType().Name + "：" + ex.Message + "）");
             }
             catch
             {

@@ -764,6 +764,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 reason = $"路径无法解析，无法判断回收站是否可用：{ex.Message}";
                 return false;
             }
@@ -798,6 +799,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 reason = $"无法确定目标所在卷（{ex.Message}），不能确认回收站可用";
                 return false;
             }
@@ -845,6 +847,7 @@ namespace ArchiveFixer.Storage
                 }
                 catch (Exception ex)
                 {
+                    ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                     reason = $"无法读取系统策略（{ex.Message}），不能确认回收站可用，已拒绝（不会改为永久删除）";
                     return false;
                 }
@@ -879,6 +882,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 reason = $"查询回收站状态失败（{ex.Message}），不能确认回收站可用";
                 return false;
             }
@@ -1300,6 +1304,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 return DeleteSafetyDecision.Block(
                     DeleteBlockReason.DeleteFailed,
                     $"安全检查时出现意外错误：{ex.Message}");
@@ -1338,6 +1343,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 return Failure(
                     request.Path,
                     string.IsNullOrWhiteSpace(request.Reason) ? options.Reason : request.Reason,
@@ -1398,6 +1404,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
+                ArchiveFixer.Helpers.AppDiagnostics.Problem("回收站", "降级处理", ex);
                 return Failure(
                     request.Path,
                     reason,
