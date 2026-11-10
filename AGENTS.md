@@ -198,6 +198,7 @@ Rar4Old：.rar=1，.r00=2，.r01=3
 ## 验证与已知坑
 
 - 构建 0 警告 0 错误；格式检查通过。
+- 分析器：csproj 已锁 AnalysisLevel=latest + TreatWarningsAsErrors（当前 0 警告）。⛔ 不要开 AnalysisMode=Recommended：实测 2500 条（CA1863 1020 / CA1305 400 / CA1822 384），是独立的一轮清理，不是顺手能开的。
 - 已知 flaky 用例单独确认，不先改断言。
 - 真样本跳过不等于验证通过，要写明跳过原因。
 - 仓库工作区是 CRLF；⛔ 不要用 PowerShell 整份重写 `.cs` 成 LF。
