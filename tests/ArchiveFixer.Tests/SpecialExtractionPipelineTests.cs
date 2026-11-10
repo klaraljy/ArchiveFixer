@@ -224,7 +224,7 @@ namespace ArchiveFixer.Tests
             if (!Directory.Exists(@"H:\"))
             {
                 FixtureGate.Skip("SpecialExtractionPipelineTests.cs", "前置条件不满足：夹具或运行环境缺失");
-                 return;
+                return;
             }
 
             Directory.CreateDirectory(eDir);

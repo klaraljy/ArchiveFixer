@@ -228,7 +228,7 @@ namespace ArchiveFixer.Tests
             if (!Directory.Exists(@"E:\"))
             {
                 FixtureGate.Skip("OneClickOptionsPanelTests.cs", "前置条件不满足：夹具或运行环境缺失");
-                 return;
+                return;
             }
 
             Harness harness = CreateHarness();

@@ -654,7 +654,7 @@ namespace ArchiveFixer.Tests
             if (_evidenceDirectory.Length == 0)
             {
                 FixtureGate.Skip("VolumeRenameRealEngineTests.cs", "前置条件不满足：夹具或运行环境缺失");
-                 return;
+                return;
             }
 
             try

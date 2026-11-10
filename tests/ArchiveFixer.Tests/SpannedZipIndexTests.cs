@@ -161,7 +161,7 @@ namespace ArchiveFixer.Tests
             if (!Directory.Exists(directory))
             {
                 FixtureGate.Skip("SpannedZipIndexTests.cs", "前置条件不满足：夹具或运行环境缺失");
-                 return;
+                return;
             }
 
             List<VolumeCandidate> candidates = CandidatesIn(directory);
@@ -238,7 +238,7 @@ namespace ArchiveFixer.Tests
             if (!Directory.Exists(directory))
             {
                 FixtureGate.Skip("SpannedZipIndexTests.cs", "前置条件不满足：夹具或运行环境缺失");
-                 return;
+                return;
             }
 
             Dictionary<string, DateTime> before = Directory
