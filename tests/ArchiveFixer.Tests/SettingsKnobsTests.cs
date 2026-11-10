@@ -12,7 +12,7 @@ namespace ArchiveFixer.Tests
     /// 本批新增的四个设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 对照表里标"采纳"的行）：
     ///
     /// <list type="number">
-    /// <item><description><c>LowProcessPriority</c>：低运行优先级升为设置项（**默认开**）——
+    /// <item><description><c>LowProcessPriority</c>：低运行优先级（**旧框架遗留，九页签界面已无开关**，运行时仍读配置，默认关）——
     /// 它以前是 <c>App.xaml.cs</c> 里的硬编码，用户觉得慢时**无从下手**。</description></item>
     /// <item><description><c>OpenOutputFolderWhenDone</c>：定稿完成后打开输出目录（**默认关**）——
     /// 这是"会动用户桌面"的行为，必须用户显式开启。</description></item>
