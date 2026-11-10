@@ -47,7 +47,8 @@ namespace ArchiveFixer.Tests
                 Path.Combine(TestPaths.BackupRoot, "914000000-备份", "914000014", "原包");
             if (!Directory.Exists(backup))
             {
-                return;
+                FixtureGate.Skip("ChainWrapperSourceSettlementTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             string sourceRoot = Path.Combine(_root, "src");

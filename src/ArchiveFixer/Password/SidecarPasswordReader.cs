@@ -399,7 +399,7 @@ namespace ArchiveFixer.Password
         {
             var result = new List<string>();
 
-            foreach (string file in Directory.GetFiles(directory))
+            foreach (string file in Directory.EnumerateFiles(directory))
             {
                 string fileName = Path.GetFileName(file);
 

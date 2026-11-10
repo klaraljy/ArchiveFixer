@@ -748,7 +748,8 @@ namespace ArchiveFixer.Tests
                 {
                     if (!Directory.Exists(_root))
                     {
-                        return;
+                        FixtureGate.Skip("ChainLayerReclaimTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                         return;
                     }
 
                     string[] packages = Directory.GetFiles(_root, "*.7z", SearchOption.AllDirectories);

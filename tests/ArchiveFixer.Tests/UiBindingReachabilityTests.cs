@@ -280,7 +280,8 @@ namespace ArchiveFixer.Tests
         {
             if (string.IsNullOrEmpty(text))
             {
-                return;
+                FixtureGate.Skip("UiBindingReachabilityTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             lock (_gate)

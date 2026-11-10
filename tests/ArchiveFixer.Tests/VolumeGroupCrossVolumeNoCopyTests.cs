@@ -37,7 +37,8 @@ namespace ArchiveFixer.Tests
         {
             if (!Directory.Exists(@"H:\"))
             {
-                return;
+                FixtureGate.Skip("VolumeGroupCrossVolumeNoCopyTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             string source = Path.Combine(_sourceRoot, "111.7z.001");
@@ -85,7 +86,8 @@ namespace ArchiveFixer.Tests
         {
             if (!Directory.Exists(@"H:\"))
             {
-                return;
+                FixtureGate.Skip("VolumeGroupCrossVolumeNoCopyTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             string source = Path.Combine(_sourceRoot, "111.7z.001");

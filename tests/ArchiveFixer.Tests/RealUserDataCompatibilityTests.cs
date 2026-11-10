@@ -37,7 +37,8 @@ namespace ArchiveFixer.Tests
 
             if (!File.Exists(realPasswords))
             {
-                return;
+                FixtureGate.Skip("RealUserDataCompatibilityTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             foreach (string name in new[]

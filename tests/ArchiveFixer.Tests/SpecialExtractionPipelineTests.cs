@@ -223,7 +223,8 @@ namespace ArchiveFixer.Tests
             string hDir = Path.Combine(TestPaths.TempRoot, "real-mixed-h");
             if (!Directory.Exists(@"H:\"))
             {
-                return;
+                FixtureGate.Skip("SpecialExtractionPipelineTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             Directory.CreateDirectory(eDir);

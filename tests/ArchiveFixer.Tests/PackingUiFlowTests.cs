@@ -227,7 +227,8 @@ namespace ArchiveFixer.Tests
 
             if (string.IsNullOrEmpty(sevenZip))
             {
-                return;
+                FixtureGate.Skip("PackingUiFlowTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             string source = BuildSourceFolder("素材");

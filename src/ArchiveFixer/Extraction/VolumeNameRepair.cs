@@ -193,7 +193,7 @@ namespace ArchiveFixer.Extraction
                     return Array.Empty<string?>();
                 }
 
-                return Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                return Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
                     .Select(Path.GetFileName)
                     .ToList();
             }

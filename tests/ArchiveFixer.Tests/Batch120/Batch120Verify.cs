@@ -376,7 +376,8 @@ namespace ArchiveFixer.Tests.Batch120
         {
             if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
             {
-                return;
+                FixtureGate.Skip("Batch120Verify.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             foreach (string file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))

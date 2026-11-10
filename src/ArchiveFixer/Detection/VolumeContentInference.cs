@@ -760,7 +760,7 @@ namespace ArchiveFixer.Detection
 
                 var candidates = new List<VolumeCandidate>();
 
-                foreach (string file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
                 {
                     long size;
 

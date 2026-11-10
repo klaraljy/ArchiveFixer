@@ -227,7 +227,8 @@ namespace ArchiveFixer.Tests.Batch120
         {
             if (!Directory.Exists(root))
             {
-                return;
+                FixtureGate.Skip("Batch120Operation.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             foreach (string file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
@@ -245,7 +246,8 @@ namespace ArchiveFixer.Tests.Batch120
         {
             if (!Directory.Exists(path))
             {
-                return;
+                FixtureGate.Skip("Batch120Operation.cs", "前置条件不满足：夹具或运行环境缺失");
+                 return;
             }
 
             string full = Path.GetFullPath(path);

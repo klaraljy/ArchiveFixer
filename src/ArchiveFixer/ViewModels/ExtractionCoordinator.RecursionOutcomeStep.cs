@@ -357,7 +357,7 @@ namespace ArchiveFixer.ViewModels
             {
                 return !string.IsNullOrWhiteSpace(directory) &&
                        Directory.Exists(directory) &&
-                       Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length == 0;
+                       !Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Any();
             }
             catch
             {

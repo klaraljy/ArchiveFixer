@@ -931,7 +931,7 @@ namespace ArchiveFixer.Services
                 .Select(FileNameHelper.GetFileName)
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
 
-            items.AddRange(Directory.GetFiles(directory)
+            items.AddRange(Directory.EnumerateFiles(directory)
                 .Select(FileNameHelper.GetFileName)
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
 

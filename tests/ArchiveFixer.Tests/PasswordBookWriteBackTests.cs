@@ -913,7 +913,8 @@ namespace ArchiveFixer.Tests
                 {
                     if (!Directory.Exists(Path))
                     {
-                        return;
+                        FixtureGate.Skip("PasswordBookWriteBackTests.cs", "前置条件不满足：夹具或运行环境缺失");
+                         return;
                     }
 
                     foreach (string file in Directory.GetFiles(Path, "*", SearchOption.AllDirectories))
