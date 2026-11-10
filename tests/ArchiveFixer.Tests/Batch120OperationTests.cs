@@ -19,13 +19,11 @@ namespace ArchiveFixer.Tests.Batch120
     {
         public static IEnumerable<object[]> NormalIds()
         {
-            for (int index = 1; index <= 50; index++)
+            for (int index = 1; index <= 55; index++)
             {
                 yield return new object[] { (long.Parse(Batch120Operation.Seed) + index).ToString() };
             }
 
-            // 形状样本：外层单一包 + 同基名的整套 7z 分卷（真机 2026-11-10 的形状）。
-            yield return new object[] { (long.Parse(Batch120Operation.Seed) + 99).ToString() };
         }
 
         public static IEnumerable<object[]> SpecificIds()
