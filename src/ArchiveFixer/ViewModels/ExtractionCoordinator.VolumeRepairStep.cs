@@ -76,7 +76,7 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            string directory = ShowFolderBrowserOnUiThread();
+            string directory = await ShowFolderBrowserOnUiThreadAsync();
 
             if (string.IsNullOrWhiteSpace(directory))
             {

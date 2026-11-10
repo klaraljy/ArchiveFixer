@@ -54,7 +54,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 只挑目录、不扫盘：真正的枚举在调用方丢给后台线程做（UI 线程纪律）。
         /// </summary>
-        private string ShowFolderBrowserOnUiThread()
+        private async Task<string> ShowFolderBrowserOnUiThreadAsync()
         {
             System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
 
@@ -68,7 +68,8 @@ namespace ArchiveFixer.ViewModels
                 return _dialogService.ShowFolderBrowserDialog();
             }
 
-            return dispatcher.InvokeAsync(() => _dialogService.ShowFolderBrowserDialog()).Result;
+            // ⛔ 这里原来是 .Result：在后台线程上阻塞等 UI 线程。改成 await 之后不再占着一个线程空转。
+            return await dispatcher.InvokeAsync(() => _dialogService.ShowFolderBrowserDialog());
         }
 
         /// <summary>
