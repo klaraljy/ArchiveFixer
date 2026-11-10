@@ -34,7 +34,7 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
    `ArchiveFixer-0.2.2-setup.exe`（**安装包**，双击一路下一步）、
-   `ArchiveFixer-0.2.2-standalone.zip`（**独立版**，什么都不用装，解压即用）；
+   `ArchiveFixer-0.2.2-独立.zip`（**独立版**，什么都不用装，解压即用；解压后根目录只有一个 `ArchiveFixer.exe`）；
    自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
    `ArchiveFixer-0.2.2-独立.zip` / `ArchiveFixer-0.2.2-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
@@ -146,7 +146,7 @@ pwsh -File scripts/verify-release.ps1                                  # 发布�
 - 环境：目标框架 **`net8.0-windows`**（用 .NET 8 或更高版本的 SDK 都能构建）、Windows 10/11。
 - 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
   **WinRAR 本体不随包分发**（共享软件），只检测与调用你自己装的那一份（见[引擎与外部工具](docs/引擎与外部工具.md)）。
-- 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用；用户数据固定走 `%LOCALAPPDATA%\ArchiveFixer`。
+- 绿色目录 = `bin\Release\net8.0-windows` 下的 exe/dll/pdb/json + `tools/`（本机构建形态）；**发行用独立版是单文件发布**，根目录只有 `ArchiveFixer.exe` + `docs/` + `tools/`。用户数据固定走 `%LOCALAPPDATA%\ArchiveFixer`。
   旧安装目录的 `data\` 只会被**只读补缺**，程序不会自动删；确认当前数据已覆盖、且旧密码已加密备份后，
   才可人工清理旧 `data\`，⛔ 不能盲删硬链接或用户文件。
 - 当前测试规模与已知的偶发假红见 [`AGENTS.md` §11](AGENTS.md)。
