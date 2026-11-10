@@ -304,6 +304,8 @@ namespace ArchiveFixer.ViewModels
                 + (removedEntryDirectory ? "；临时标准名目录已清理" : string.Empty)
                 + "。");
 
+            MarkVolumeGroupPiecesConsumed(work.Pieces);
+
             MarkVolumeHandoffVerdict(
                 work.Pieces,
                 $"解压成功，入口层收片 {deleted} 片（用户原件不删）");

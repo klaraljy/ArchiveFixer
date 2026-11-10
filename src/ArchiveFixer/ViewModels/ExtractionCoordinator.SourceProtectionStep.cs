@@ -216,11 +216,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                if (_keepSourceSnapshotDirectory.Length > 0
-                    && Directory.Exists(_keepSourceSnapshotDirectory))
-                {
-                    Directory.Delete(_keepSourceSnapshotDirectory, recursive: true);
-                }
+                DeleteSourceSnapshotDirectory(_keepSourceSnapshotDirectory);
             }
             catch
             {
@@ -231,6 +227,47 @@ namespace ArchiveFixer.ViewModels
             _keepSourceSnapshotDirectory = string.Empty;
         }
 
+        /// <summary>
+        /// 删掉保护快照目录；**归集把整棵工作区搬走**时按目录名到当前工作区里再找一次。
+        ///
+        /// <para>真机 125 批 926000055（归集 + 同基名形状，运行期事实）：快照建在
+        /// `原包\aaa\.ArchiveFixer.work\source-protect\<guid>`，归集把产物树搬到
+        /// `归集\aaa` 之后原路径已不在盘上 ⇒ 老写法只判 `Directory.Exists(旧路径)`，
+        /// 整个快照目录（含 4.1 MB 源包硬链接）留在归集目录里没清。</para>
+        ///
+        /// <para>判据只认"同一个快照目录名 + 当前工作区"这条路径事实；⛔ 不猜别的目录。</para>
+        /// </summary>
+        private void DeleteSourceSnapshotDirectory(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return;
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+                return;
+            }
+
+            string name = Path.GetFileName(directory);
+            string workspace = _vm.CurrentWorkspaceRoot;
+
+            if (name.Length == 0 || string.IsNullOrWhiteSpace(workspace))
+            {
+                return;
+            }
+
+            string relocated = Path.Combine(workspace, "source-protect", name);
+
+            if (Directory.Exists(relocated))
+            {
+                Directory.Delete(relocated, recursive: true);
+                AppendLog(
+                    "INFO",
+                    $"KeepInPlace 源文件保护：快照目录被归集搬走，已按当前工作区清理（{name}）");
+            }
+        }
         /// <summary>
         /// 后缀清洗把用户源名 <c>.001删</c> 改成标准名 <c>.001</c> 后，源包档=留下时收尾必须
         /// 把标准名**还回原名**，不能“恢复原名再留一个标准名硬链接”。

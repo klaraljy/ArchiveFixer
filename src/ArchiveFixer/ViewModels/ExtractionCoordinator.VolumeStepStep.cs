@@ -333,6 +333,22 @@ namespace ArchiveFixer.ViewModels
              */
             MarkFollowerTasksForGroup(unit, FindOwnerTask(unit));
 
+            /*
+             * 这一组已经解开 ⇒ 组里**每一片的原始路径**在唯一账本里记成「已消费源包」，
+             * 后续轮次的组分析不许再从这些留在盘上的用户原件重建同一组。
+             *
+             * <para>真机 125 批 926000008（运行期事实）：KeepInPlace 按设计留下用户原件；
+             * 组解开并收场之后，下一轮用剩下的 4 片又重建了一个 `SizeAnomaly` 组
+             * （`缺=1`、`通用 ZIP 槽位 4 有两份不同文件`），把已经收场的跟班任务刷成
+             * 「最终内容分卷组结构异常且缺片」⇒ 整单算失败。</para>
+             *
+             * <para>判据只认**路径事实**：这一片已经被某组消费并解开；⛔ 不看后缀、基名、内容格式。</para>
+             */
+            foreach (VolumeFacts piece in unit.Pieces)
+            {
+                _firstStepFileLedger.MarkConsumedByIdentity(piece.Path);
+            }
+
             var consumed = unit.Pieces
                 .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
                 .Select(piece => piece.Path)
@@ -357,6 +373,24 @@ namespace ArchiveFixer.ViewModels
         /// 组成功后按「源包操作」收本组用户源片：只在 `DeleteInPlace` 档、且组齐全、
         /// owner 内容可证完整时执行；把**组级事实**（而非单片“旁边还有一片”）喂给删除闸门。
         /// </summary>
+        /// <summary>
+        /// **组已经解开**的统一出口：把组里每一片的原始路径在唯一账本里记成「已消费源包」，
+        /// 后续轮次的组分析不许再从留在盘上的用户原件重建同一组。
+        ///
+        /// <para>真机 125 批 926000008（运行期事实）：KeepInPlace 留下用户原件；组解开收场之后，
+        /// 下一轮用剩下的 4 片又重建了一个 `SizeAnomaly` 组（`缺=1`、`通用 ZIP 槽位 4 有两份不同文件`），
+        /// 把已经收场的跟班任务刷成「最终内容分卷组结构异常且缺片」⇒ 整单算失败。</para>
+        ///
+        /// <para>按**物理身份**标（改名前后是同一条账本记录）；判据只认路径/身份事实，
+        /// ⛔ 不看后缀、基名、内容格式。</para>
+        /// </summary>
+        private void MarkVolumeGroupPiecesConsumed(IEnumerable<string>? piecePaths)
+        {
+            foreach (string path in piecePaths ?? Enumerable.Empty<string>())
+            {
+                _firstStepFileLedger.MarkConsumedByIdentity(path);
+            }
+        }
         private void ReclaimSucceededGroupSources(VolumeGroupUnit unit, ArchiveTask? ownerTask)
         {
             if (unit == null
@@ -637,6 +671,19 @@ namespace ArchiveFixer.ViewModels
 
             // 组成功这一层把组内其余片补标成跟班（含建组之前就以「跳过」收场的那几片）。
             MarkFollowerTasksForGroup(unit, task);
+
+            /*
+             * 这一组已经解开 ⇒ 组里**每一片的原始路径**在唯一账本里记成「已消费源包」，
+             * 后续轮次的组分析不许再从这些留在盘上的用户原件重建同一组。
+             *
+             * <para>真机 125 批 926000008（运行期事实）：场景是 KeepInPlace，用户原件按设计留在盘上；
+             * 组解开并收场之后，下一轮用剩下的 4 片（原本是被包装/伪装的那几片）又重建了一个
+             * `SizeAnomaly` 组（`缺=1`、`通用 ZIP 槽位 4 有两份不同文件`），把已经收场的跟班任务
+             * 刷成「最终内容分卷组结构异常且缺片」⇒ 整单算失败。</para>
+             *
+             * <para>判据只认**路径事实**：这一片已经被某组消费并解开；⛔ 不看后缀、不看基名、不看内容格式。</para>
+             */
+            MarkVolumeGroupPiecesConsumed(unit.Pieces.Select(piece => piece.Path));
 
             /*
              * 组成功 ⇒ 这一组每一片对应的任务按**跟班卷**收场（唯一出口

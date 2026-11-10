@@ -450,6 +450,45 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// <summary>
+        /// 把这一份**物理文件**在账本里的所有名字都标成「已消费源包」（路径 + 同一物理身份的所有改名副本）。
+        ///
+        /// <para>为什么需要：组里记的是**解开时那一刻**的路径，而改名之后账本里那一条已经换了名字
+        /// （真机 125 批 926000008：`aaa-W3-1.m删除p4` 改名成 `aaa-W3-1.rar`，按旧路径标不中）。
+        /// 判据只认物理身份（卷序列号 + 文件索引），⛔ 不看后缀/基名/内容格式。</para>
+        /// </summary>
+        public int MarkConsumedByIdentity(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return 0;
+            }
+
+            int marked = MarkConsumed(path) ? 1 : 0;
+
+            if (!FileIdentity.TryGetIdentity(path, out ulong volume, out ulong index))
+            {
+                return marked;
+            }
+
+            for (int position = 0; position < _entries.Count; position++)
+            {
+                FirstStepFileLedgerEntry entry = _entries[position];
+
+                if (entry.IsConsumedSource
+                    || !entry.HasIdentity
+                    || entry.VolumeSerial != volume
+                    || entry.FileIndex != index)
+                {
+                    continue;
+                }
+
+                _entries[position] = entry.WithConsumedSource();
+                marked++;
+            }
+
+            return marked;
+        }
         /// 把某个路径标成「**已解成功并定稿的源包**」：从此它不再进第二大步分卷候选。
         ///
         /// <para>判据只认**路径事实**（这个路径的任务已经解成功），⛔ 与后缀、基名、内容格式无关
