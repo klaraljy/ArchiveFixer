@@ -105,6 +105,30 @@ namespace ArchiveFixer.Tests
             Assert.Contains("af-license-page", installer, StringComparison.Ordinal);
             Assert.Contains("/DLICENSEFILE=$licensePagePath", installer, StringComparison.Ordinal);
         }
+        /// <summary>
+        /// 单文件发布：运行时被打进 exe，但 **tools\ 必须留在外面**（7z/UnRAR 要被当进程调起来），
+        /// 升级覆盖还要清掉旧多文件版遗留的根目录 DLL。缺任何一条都会退回「安装目录一堆 DLL」或引擎找不到。
+        /// </summary>
+        [Fact]
+        public void 独立版单文件_工具留在外面_升级会清旧运行时文件()
+        {
+            string repoRoot = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(FindInstallerScript())!, ".."));
+
+            string package = File.ReadAllText(Path.Combine(repoRoot, "scripts", "package.ps1"));
+            Assert.Contains("PublishSingleFile=true", package, StringComparison.Ordinal);
+            Assert.Contains("IncludeNativeLibrariesForSelfExtract=true", package, StringComparison.Ordinal);
+
+            string csproj = File.ReadAllText(Path.Combine(
+                repoRoot, "src", "ArchiveFixer", "ArchiveFixer.csproj"));
+            Assert.True(
+                csproj.Split("<ExcludeFromSingleFile>true</ExcludeFromSingleFile>").Length - 1 >= 6,
+                "tools 目录下的 7z.exe / 7z.dll / UnRAR.exe 与许可文本必须标 ExcludeFromSingleFile");
+
+            string nsi = File.ReadAllText(Path.Combine(repoRoot, "installer", "ArchiveFixer.nsi"));
+            Assert.Contains("Delete \"$INSTDIR\\*.dll\"", nsi, StringComparison.Ordinal);
+            Assert.Contains("Delete \"$INSTDIR\\createdump.exe\"", nsi, StringComparison.Ordinal);
+        }
         private static string FindInstallerScript()
         {
             DirectoryInfo? directory = new(AppContext.BaseDirectory);

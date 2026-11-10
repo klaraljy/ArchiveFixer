@@ -224,7 +224,15 @@ $publishArgs = @('publish', $projectPath, '-c', 'Release', '-o', $publishDir, '-
 # （编译期常量 Models\BuildEdition.cs）。⛔ 本机构建 / 测试不传这个参数。
 $publishArgs += @('-p:ArchiveFixerEdition=Release')
 if ($SelfContained) {
-    $publishArgs += @('-r', 'win-x64', '--self-contained', 'true')
+    # 独立版走**单文件**：安装目录根只留 ArchiveFixer.exe（运行时被打进 exe），
+    # ⛔ 不是把运行时 DLL 藏起来 —— 它们根本不落地；docs\ 与 tools\ 仍然是真实文件
+    # （程序按程序目录找说明、7z/UnRAR 要能被进程调用）。
+    $publishArgs += @(
+        '-r', 'win-x64', '--self-contained', 'true',
+        '-p:PublishSingleFile=true',
+        '-p:IncludeNativeLibrariesForSelfExtract=true',
+        '-p:EnableCompressionInSingleFile=false'
+    )
 } else {
     $publishArgs += @('--no-self-contained')
 }

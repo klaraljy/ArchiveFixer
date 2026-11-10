@@ -616,6 +616,40 @@ namespace ArchiveFixer.Services
         /// 日志环境头：OS / .NET / 进程 / 架构 / 启动时间 / 工作目录 / 程序版本。
         /// 以后用户只发日志时，这一条让读日志的人不必再问“什么系统、什么版本、什么时候跑的”。
         /// </summary>
+        /// <summary>
+        /// 日志环境头里的「文件版本」：单文件发布只能从**进程路径**读，开发期退回程序目录里的 DLL。
+        /// ⛔ 不用 `Assembly.Location`（单文件里恒为空，且会被 IL3000 判错）。
+        /// </summary>
+        private static string ResolveFileVersion()
+        {
+            foreach (string candidate in new[]
+                     {
+                         Environment.ProcessPath ?? string.Empty,
+                         Path.Combine(AppContext.BaseDirectory, "ArchiveFixer.dll")
+                     })
+            {
+                if (string.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    string? version = FileVersionInfo.GetVersionInfo(candidate).FileVersion;
+
+                    if (!string.IsNullOrWhiteSpace(version))
+                    {
+                        return version!;
+                    }
+                }
+                catch
+                {
+                    // 读不到就试下一个来源。
+                }
+            }
+
+            return string.Empty;
+        }
         private void WriteEnvironmentHeader()
         {
             try
@@ -625,7 +659,11 @@ namespace ArchiveFixer.Services
                 {
                     schema = "archivefixer.log.v2",
                     app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
-                    file_version = FileVersionInfo.GetVersionInfo(typeof(LogService).Assembly.Location).FileVersion ?? string.Empty,
+                    /*
+                     * 单文件发布里 `Assembly.Location` 恒为空（IL3000，会被当成错误）⇒ 以**进程路径**为准；
+                     * 开发期 `dotnet run` 时进程是 dotnet.exe，读不到本程序版本，再退回程序目录下的 dll。
+                     */
+                    file_version = ResolveFileVersion(),
                     os = RuntimeInformation.OSDescription,
                     os_arch = RuntimeInformation.OSArchitecture.ToString(),
                     process_arch = RuntimeInformation.ProcessArchitecture.ToString(),

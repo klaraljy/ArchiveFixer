@@ -81,6 +81,15 @@ SetCompressorDictSize 64
     RMDir /r "$INSTDIR\tr"
     RMDir /r "$INSTDIR\zh-Hans"
     RMDir /r "$INSTDIR\zh-Hant"
+
+    ; 从**旧的多文件版**升级到单文件版：根目录那些运行时 DLL / 程序 DLL / 随附 exe 必须清掉，
+    ; 否则升级完会残留几十个旧文件（用户 2026-11-10 现场：安装目录「怎么这么混乱」）。
+    ; ⛔ 只删后缀明确属于程序的文件；appsettings.json 随后会由新版重新拷贝。
+    Delete "$INSTDIR\*.dll"
+    Delete "$INSTDIR\*.pdb"
+    Delete "$INSTDIR\ArchiveFixer.deps.json"
+    Delete "$INSTDIR\ArchiveFixer.runtimeconfig.json"
+    Delete "$INSTDIR\createdump.exe"
 !macroend
 
 Name "${APP_NAME} ${APPVERSION}"
