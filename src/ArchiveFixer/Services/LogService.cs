@@ -205,7 +205,7 @@ namespace ArchiveFixer.Services
             _operationStartFileLine = TryCountLines(_currentLogFilePath) - 1;
             _operationStartUserFile = _currentUserLogFilePath;
             _operationStartUserFileLine = TryCountLines(_currentUserLogFilePath) - 1;
-            _operationStartTimestamp = FormatTimestamp(DateTime.Now);
+            _operationStartTimestamp = FormatTimestamp(ArchiveFixer.Helpers.Clock.Now);
         }
 
         /// <summary>把"本次操作开始"写进日志（屏幕 + 文件；关掉文件日志时只进屏幕日志）。</summary>
@@ -563,7 +563,7 @@ namespace ArchiveFixer.Services
             {
                 _pathService.EnsureBaseDirectories();
 
-                string fileName = $"ArchiveFixer_{FormatFileTimestamp(DateTime.Now)}.log";
+                string fileName = $"ArchiveFixer_{FormatFileTimestamp(ArchiveFixer.Helpers.Clock.Now)}.log";
                 _currentLogFilePath = Path.Combine(LogDirectory, fileName);
                 _currentUserLogFilePath = Path.ChangeExtension(_currentLogFilePath, ".user.log");
                 _currentJsonlFilePath = Path.ChangeExtension(_currentLogFilePath, ".jsonl");
@@ -577,7 +577,7 @@ namespace ArchiveFixer.Services
                      * ⚠ **两份都要写**（守门用例 `LogSchemaTests.人读行与机器读行一比一` 当场逮到过：
                      * 原来只有人读那一份被建出来 ⇒ 第一行就破坏了"一比一" ⇒ 后面按行对齐解析全错位）。
                      */
-                    DateTime started = DateTime.Now;
+                    DateTime started = ArchiveFixer.Helpers.Clock.Now;
                     string header = $"日志初始化";
 
                     File.WriteAllText(
@@ -735,7 +735,7 @@ namespace ArchiveFixer.Services
                 if (deleted > 0)
                 {
                     AppendBothFiles(
-                        DateTime.Now,
+                        ArchiveFixer.Helpers.Clock.Now,
                         "INFO",
                         $"已清理 {deleted} 份老日志（保留最近 {LogRetentionDays} 天 / "
                         + $"上限 {LogRetentionTotalBytes / 1024 / 1024} MB / 至少 {LogRetentionMinFiles} 份），释放 "
@@ -1409,7 +1409,7 @@ namespace ArchiveFixer.Services
             var builder = new StringBuilder();
 
             builder.AppendLine("ArchiveFixer 日志 —— 全部日志（本程序写过的每一份都在这里）");
-            builder.AppendLine($"导出时间：{FormatTimestamp(DateTime.Now)}");
+            builder.AppendLine($"导出时间：{FormatTimestamp(ArchiveFixer.Helpers.Clock.Now)}");
             builder.AppendLine($"日志目录：{LogDirectory}");
             builder.AppendLine();
 
