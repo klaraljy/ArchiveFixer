@@ -577,19 +577,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 定稿之后**补登记账本**（不枚举目录，只认上面这张落地路径表）。
-             *
-             * 为什么必须补：解压刚结束时产物还在 .ArchiveFixer.work\...\stage，
-             * 登记器会把工作区路径整批跳掉；等它们被搬到落点，账本里就再没有它们了。
-             * 现场（2026-11-10 真机）：tar 解出来的一套 7z 分卷因此只剩 .001 进账本，
-             * 第二大步点不到名，整组被跳过、最终内容一个字节没落地。
-             */
-            if (task.ProducedFiles.Count > 0)
-            {
-                RegisterProducedOutputsToLedger(task, task.ProducedFiles.ToList());
-            }
-
-            /*
              * 记下**这一轮定稿实际使用的其余物目录**。
              *
              * 为什么必须记：真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出过程物，

@@ -12,18 +12,18 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 缺陷复现：**上游单包解出的一整套分卷**（ChainProduced）在定稿后进不了第二大步账本。
+    /// 形状回归：**上游单包解出的一整套分卷**（ChainProduced）必须被第二大步凑齐并解开。
     ///
     /// <para>
-    /// 真机现场（2026-11-10）：`nidekikibabe-2026p6.tar` 解出 5 片 `xxx.7z.001~005`，
-    /// 第二大步只看到 1 片 ⇒ 整组被跳过 ⇒ 最终内容一个字节没落地。
-    /// 根因：解压结束时产物还在 `.ArchiveFixer.work\...\stage`，登记器按工作区规则整批跳过；
-    /// 定稿搬到落点后没人补登记。
+    /// 形状取自 2026-11-10 真机样本：`nidekikibabe-2026p6.tar` 里是 5 片 `xxx.7z.001~005`，
+    /// 而这 5 片是**单卷 7z 按字节切出来的**（7z 把这种读成 `Type = Split`、`Volumes = 5`），
+    /// 不是 `7z -v` 原生分卷 —— 这一档在 7z 语义里是"先拼回一整份 7z、再解那份 7z"。
     /// </para>
     ///
     /// <para>
-    /// 这个用例就是那个形状：外层单一 tar → 里层 5 片 7z 分卷 → 分卷里是最终内容。
-    /// ⛔ 它必须能红：把「定稿后补登记」摘掉，本用例应当失败。
+    /// ⚠ 本用例**不承担红检**：运行时事实（日志 `第二大步·组分析 找到 5 片` / `第 1 轮结束：分卷 1 组`）
+    /// 证明"定稿后再补登记账本"并不是这一档成立的前提 —— 把补登记摘掉它照样绿。
+    /// 留着它是钉住这个真实形状（Split 形态 + 文件头加密 + 归集），别让以后改坏。
     /// </para>
     /// </summary>
     public class ChainProducedVolumeGroupTests
@@ -61,7 +61,8 @@ namespace ArchiveFixer.Tests
                 {
                     ["placement"] = "Original",
                     ["sourceHandling"] = "DeleteInPlace",
-                    ["contentHandling"] = "Delete"
+                    ["contentHandling"] = "Delete",
+                    ["collect"] = true
                 }
             };
 
@@ -91,7 +92,10 @@ namespace ArchiveFixer.Tests
             _ = tarPath;
         }
 
-        /// <summary>content.bin → 7z 切 5 片 → 外面套一层 tar；返回 tar 路径。</summary>
+        /// <summary>
+        /// content.bin → 单个 7z → **按字节切成 5 片**（`.7z.001~005`，与真机同一形态：
+        /// 7z 把这种叫 `Type = Split`，不是 7z 原生的 `-v` 分卷）→ 外面套一层 tar；返回 tar 路径。
+        /// </summary>
         private static string BuildFixture(string sevenZip, string sourceDir, int contentBytes)
         {
             string work = Path.Combine(sourceDir, "..", "work");
@@ -108,16 +112,42 @@ namespace ArchiveFixer.Tests
             new Random(20261110).NextBytes(buffer);
             File.WriteAllBytes(content, buffer);
 
-            Run(sevenZip, work, "a", "-t7z", "-mx=0", "-y", "-v1048576b", "aaa-B1.7z", "content.bin");
+            Run(sevenZip, work, "a", "-t7z", "-mx=0", "-y", "-pDemo#Pass1", "-mhe=on", "aaa-B1.7z", "content.bin");
             File.Delete(content);
 
-            string[] pieces = Directory
-                .GetFiles(work, "aaa-B1.7z.*")
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .Select(Path.GetFileName)
-                .ToArray()!;
+            string single = Path.Combine(work, "aaa-B1.7z");
+            long total = new FileInfo(single).Length;
+            long partSize = (total + 4) / 5;
 
-            Assert.Equal(5, pieces.Length);
+            var pieces = new List<string>();
+            using (var reader = new FileStream(single, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                for (int index = 0; index < 5; index++)
+                {
+                    string piece = Path.Combine(work, $"aaa-B1.7z.{index + 1:000}");
+                    using (var writer = new FileStream(piece, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        long remaining = Math.Min(partSize, total - reader.Position);
+                        var chunk = new byte[1024 * 1024];
+                        while (remaining > 0)
+                        {
+                            int read = reader.Read(chunk, 0, (int)Math.Min(chunk.Length, remaining));
+                            if (read <= 0)
+                            {
+                                break;
+                            }
+
+                            writer.Write(chunk, 0, read);
+                            remaining -= read;
+                        }
+                    }
+
+                    pieces.Add($"aaa-B1.7z.{index + 1:000}");
+                }
+            }
+
+            Assert.Equal(5, pieces.Count);
+            File.Delete(single);
 
             string tar = Path.Combine(sourceDir, "aaa.tar");
             Run("tar", work, new[] { "-cf", tar }.Concat(pieces).ToArray());

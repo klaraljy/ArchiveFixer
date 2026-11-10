@@ -267,26 +267,6 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal void RegisterProducedOutputsToLedger(ArchiveTask task)
         {
-            RegisterProducedOutputsToLedger(task, publishedPaths: null);
-        }
-
-        /// <summary>
-        /// 按**给定路径**登记第一大步产物；<paramref name="publishedPaths"/> 为 null 时才回落到扫输出目录（老路径）。
-        ///
-        /// <para>
-        /// 为什么要有这个重载：解压刚结束时产物还在 <c>.ArchiveFixer.work\...\stage</c>，
-        /// 会被下面那条「工作区路径不登记」的闸门整批挡掉；等定稿把它们搬到落点之后，
-        /// 再拿**定稿给出的落地路径**（<c>StageCommitResult.ProducedFiles</c>）跑一遍，
-        /// 这些分卷片才进得了账本。
-        /// </para>
-        ///
-        /// <para>
-        /// ⛔ 传入路径时**不做任何目录枚举**：既不会误收用户预先放在落点目录里的文件，
-        /// 也不会因为目录里有几万个文件而变慢。
-        /// </para>
-        /// </summary>
-        internal void RegisterProducedOutputsToLedger(ArchiveTask task, IReadOnlyList<string>? publishedPaths)
-        {
             if (task == null || string.IsNullOrWhiteSpace(task.OutputPath))
             {
                 return;
@@ -304,20 +284,13 @@ namespace ArchiveFixer.ViewModels
 
             IEnumerable<string> files;
 
-            if (publishedPaths != null)
+            try
             {
-                files = publishedPaths;
+                files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories);
             }
-            else
+            catch
             {
-                try
-                {
-                    files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories);
-                }
-                catch
-                {
-                    return;
-                }
+                return;
             }
 
             foreach (string file in files)

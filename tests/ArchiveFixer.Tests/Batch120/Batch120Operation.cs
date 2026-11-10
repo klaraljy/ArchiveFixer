@@ -120,6 +120,17 @@ namespace ArchiveFixer.Tests.Batch120
                 settings.RestHandlingAfterVerify = contentHandling;
                 settings.UseSpecificExtraction = useSpecific;
                 settings.SkipOneClickConfirm = true;
+
+                /*
+                 * 归集开关（`scenario.collect = true`）：把产物整棵树**搬出**输出目录。
+                 * 判据只认配方，不动默认值。
+                 */
+                if (recipe["scenario"]?["collect"]?.GetValue<bool>() == true)
+                {
+                    settings.CollectResultsToDirectory = true;
+                    settings.CollectTargetDirectory = Path.Combine(workspace, "归集");
+                }
+
                 settingsService.Save(settings);
 
                 var engine = new SevenZipEngine();
@@ -173,6 +184,34 @@ namespace ArchiveFixer.Tests.Batch120
             {
                 record.FinishedAt = DateTimeOffset.Now;
                 record.After = Snapshot(workspace, specifiedRoot);
+
+                /*
+                 * 取证开关：`ARCHIVEFIXER_120_KEEP_LOGS=1` 时把这一次运行的日志留在
+                 * `E:\AF\120批操作\<seed>\logs-<sampleId>`（默认数据根随运行删掉，事后查不到）。
+                 */
+                if (Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS") == "1")
+                {
+                    try
+                    {
+                        string logSource = Path.Combine(dataRoot, "logs");
+                        string logTarget = Path.Combine(RecordRoot, "logs-" + sampleId);
+                        if (Directory.Exists(logSource))
+                        {
+                            Directory.CreateDirectory(RecordRoot);
+                            if (Directory.Exists(logTarget))
+                            {
+                                Directory.Delete(logTarget, recursive: true);
+                            }
+
+                            CopyDirectory(logSource, logTarget);
+                        }
+                    }
+                    catch
+                    {
+                        // 日志留档失败不影响结论。
+                    }
+                }
+
                 try
                 {
                     Directory.Delete(dataRoot, recursive: true);
