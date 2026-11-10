@@ -235,7 +235,7 @@ namespace ArchiveFixer.Helpers
                 };
 
                 psi.ArgumentList.Add(path);
-                Process.Start(psi);
+                using Process? opened = Process.Start(psi);
                 return true;
             }
             catch
@@ -265,7 +265,7 @@ namespace ArchiveFixer.Helpers
                 psi.ArgumentList.Add("/select,");
                 psi.ArgumentList.Add(filePath);
 
-                Process.Start(psi);
+                using Process? opened = Process.Start(psi);
                 return true;
             }
             catch
