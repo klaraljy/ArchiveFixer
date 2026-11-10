@@ -240,8 +240,9 @@ namespace ArchiveFixer.Models
              * 而成功的任务按口径一个字都不进任何组（见 Classify 的第一条）。
              */
             List<string> restKeptLines = BuildRestKeptLines(list);
+            List<string> leftBehindLines = BuildLeftBehindInnerPackageLines(list);
 
-            if (buckets.Count == 0 && restKeptLines.Count == 0)
+            if (buckets.Count == 0 && restKeptLines.Count == 0 && leftBehindLines.Count == 0)
             {
                 // 全成功（或空批）：**一个字都不写**，连标题都不许出现。
                 return new BatchSummaryReport { Severity = severity };
@@ -284,6 +285,16 @@ namespace ArchiveFixer.Models
              * 而成功的任务按口径一个字都不进任何组（见 Classify 的第一条）。
              */
             lines.AddRange(restKeptLines);
+            lines.AddRange(leftBehindLines);
+
+            /*
+             * "内层包没解开"不是失败，但这一批**确实有东西没做成**（内容还在里面）——
+             * 全成功时也不许显示成蓝色（用户 2026-11-10：「汇总好像没有」就是这一档）。
+             */
+            if (leftBehindLines.Count > 0 && severity == BatchSummarySeverity.Success)
+            {
+                severity = BatchSummarySeverity.Partial;
+            }
 
             string nextStep = BuildNextStepLine(groups);
 
@@ -307,6 +318,41 @@ namespace ArchiveFixer.Models
         /// <para>只读任务上那一句现成的话（<see cref="ArchiveTask.RestKeptReason"/>）——
         /// 判据与措辞的唯一出口在协调器（<c>DescribeRestKeptNote</c>），这里只负责摆出来。</para>
         /// </summary>
+        /// <summary>
+        /// 「成品目录里还留着内层包」逐条那一行（事实位 <see cref="ArchiveTask.LeftBehindInnerPackageNames"/>，
+        /// 唯一写入点在链尾清点；⛔ 这里不重新判、不重算路径）。
+        /// </summary>
+        private static List<string> BuildLeftBehindInnerPackageLines(List<ArchiveTask> tasks)
+        {
+            var lines = new List<string>();
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task.LeftBehindInnerPackageNames.Count == 0)
+                {
+                    continue;
+                }
+
+                string names = string.Join("、", task.LeftBehindInnerPackageNames.Take(5));
+
+                if (task.LeftBehindInnerPackageNames.Count > 5)
+                {
+                    names += string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.BatchDiagnosticsMoreFormat,
+                        task.LeftBehindInnerPackageNames.Count - 5);
+                }
+
+                lines.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsLeftBehindInnerPackagesLineFormat,
+                    Shorten(ResolveName(task)),
+                    task.LeftBehindInnerPackageNames.Count,
+                    names));
+            }
+
+            return lines;
+        }
         private static List<string> BuildRestKeptLines(List<ArchiveTask> tasks)
         {
             var lines = new List<string>();

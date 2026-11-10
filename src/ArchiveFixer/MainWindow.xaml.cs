@@ -400,11 +400,11 @@ namespace ArchiveFixer
                 /*
                  * WinRAR 式关闭（用户 2026-11-07 确认）：
                  * - 没有任务在跑：X = 正常退出；
-                 * - 有任务在跑：X = 收进托盘，任务继续，真正退出走托盘/菜单「退出」。
+                 * - 任务列表非空：X = 收进托盘（忙闲无关），真正退出走托盘/菜单「退出」。
                  * 这里只负责决定“不让这次关闭”，不替用户取消任务。
                  */
                 if (DataContext is MainViewModel viewModel
-                    && WindowClosePolicy.ShouldHideToTray(viewModel.IsBusy))
+                    && WindowClosePolicy.ShouldHideToTray(viewModel.Tasks.Count))
                 {
                     e.Cancel = true;
                     _trayIcon?.HideToTray();

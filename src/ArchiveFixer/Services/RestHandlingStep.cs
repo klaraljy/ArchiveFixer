@@ -458,6 +458,8 @@ namespace ArchiveFixer.Services
 
                 if (leftBehind.Count > 0)
                 {
+                    rootTask.RecordLeftBehindInnerPackages(leftBehind);
+
                     _host.AppendLog(
                         "WARN",
                         $"{rootTask.LogName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"

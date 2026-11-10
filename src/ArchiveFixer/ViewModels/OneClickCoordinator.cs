@@ -3988,6 +3988,24 @@ namespace ArchiveFixer.ViewModels
                     : $" 还有更深的内层包，但已达到 {RoundLimit} 轮上限，没有继续。";
             }
 
+            /*
+             * 「成品目录里还留着内层包、内容还没解出来」—— 用户 2026-11-10 真机口径：
+             * 汇总里一个字都没有就等于没说。事实位在任务上（唯一写入点在链尾清点），这里只摆出来。
+             */
+            int leftBehindInnerPackages = targets
+                .SelectMany(task => task.LeftBehindInnerPackageNames)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+
+            if (leftBehindInnerPackages > 0)
+            {
+                line += string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.OneClickLeftBehindInnerPackagesSuffixFormat,
+                    leftBehindInnerPackages);
+            }
+
             return line;
         }
 

@@ -2811,6 +2811,17 @@ namespace ArchiveFixer.Models
         /// <summary>批末诊断里那一行（<c>{0}</c> = 任务名，<c>{1}</c> = <see cref="RestKeptNoteFormat"/>）。</summary>
         public const string BatchDiagnosticsRestKeptLineFormat = "· {0} —— {1}";
 
+        /// <summary>
+        /// 批末诊断里"成品目录里还留着内层包、内容还没解出来"那一行
+        /// （<c>{0}</c> = 任务名，<c>{1}</c> = 个数，<c>{2}</c> = 点名；用户 2026-11-10：汇总里不许没有）。
+        /// </summary>
+        public const string BatchDiagnosticsLeftBehindInnerPackagesLineFormat =
+            "· {0} —— 成品目录里还留着 {1} 个内层包没解开：{2}（内容还在里面；要解就把它们加进任务列表）";
+
+        /// <summary>「一键处理完成」那一行后面补的一句（<c>{0}</c> = 去重后的个数）。</summary>
+        public const string OneClickLeftBehindInnerPackagesSuffixFormat =
+            " 另有 {0} 个内层包没解开（内容还在里面，见批末诊断）。";
+
         /// <summary>日志里逐组那一行的前缀（弹窗里是「·」，日志里带个来源标记更好搜）。</summary>
         public const string BatchDiagnosticsLogPrefix = "批末诊断：";
 

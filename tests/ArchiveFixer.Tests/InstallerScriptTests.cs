@@ -45,6 +45,45 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("FindFirst $R0 $R1 \"$INSTDIR\\*.*\"", text, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// 说明页那条红字（用户 2026-11-10 原文要求）：首句固定，且必须说清"空间不足模式"的边界。
+        /// </summary>
+        [Fact]
+        public void 说明页空间不足红字_首句固定且说清边界()
+        {
+            string hint = ArchiveFixer.Models.HelpContent.SpaceTightModeHint;
+
+            Assert.StartsWith(
+                "普通档位解压要 2–3 倍空间，若只有一半但能容纳最大资源，可开空间不足模式。",
+                hint,
+                StringComparison.Ordinal);
+            Assert.Contains("不删原包", hint, StringComparison.Ordinal);
+            Assert.Contains("源包一个字节都不动", hint, StringComparison.Ordinal);
+
+            string xaml = File.ReadAllText(FindHelpBodyPanel());
+
+            Assert.Contains("HelpContent.SpaceTightModeHint", xaml, StringComparison.Ordinal);
+            Assert.Contains("DangerTextBrush", xaml, StringComparison.Ordinal);
+        }
+
+        private static string FindHelpBodyPanel()
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+            while (directory != null)
+            {
+                string candidate = Path.Combine(directory.FullName, "src", "ArchiveFixer", "Views", "HelpBodyPanel.xaml");
+
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new DirectoryNotFoundException("往上找不到 src\\ArchiveFixer\\Views\\HelpBodyPanel.xaml");
+        }
         private static string FindInstallerScript()
         {
             DirectoryInfo? directory = new(AppContext.BaseDirectory);

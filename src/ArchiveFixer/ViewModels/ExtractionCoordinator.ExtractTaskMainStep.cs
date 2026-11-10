@@ -563,6 +563,9 @@ namespace ArchiveFixer.ViewModels
             // 同理：上一轮"其余物为什么留着"那句话也要清掉（这一轮它会重新写）。
             task.RestKeptReason = string.Empty;
 
+            // 同理：上一轮"成品目录里还留着的内层包"清单也要清掉（这一轮链尾会重新清点）。
+            task.LeftBehindInnerPackageNames.Clear();
+
             task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             // 选项构造收口在 BuildExtractOptions：确认框的"内容物会生成在…"必须与这里用**同一份字段**算。

@@ -1811,6 +1811,35 @@ namespace ArchiveFixer.Models
         public string RestKeptReason { get; set; } = string.Empty;
 
         /// <summary>
+        /// **成品目录里还留着、内容还没解出来的内层包**（只记文件名，隐私红线 §8）。
+        ///
+        /// <para>唯一写入点：<c>RestHandlingStep.ReportLeftBehindInnerPackages</c>（链尾那一站**无条件**调）。
+        /// 唯一读取点：批末诊断与「一键处理完成」那一行 —— 用户 2026-11-10 真机口径：
+        /// 「汇总里没有」是缺口，这种"内容还在里面、一个字节都没解出来"的事实必须被汇总说出来。</para>
+        /// </summary>
+        public List<string> LeftBehindInnerPackageNames { get; } = new();
+
+        /// <summary>记下这一轮"成品目录里还留着的内层包"（去重、只记文件名）。</summary>
+        public void RecordLeftBehindInnerPackages(IEnumerable<string>? names)
+        {
+            foreach (string name in names ?? Enumerable.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                string fileName = System.IO.Path.GetFileName(name);
+
+                if (!string.IsNullOrWhiteSpace(fileName)
+                    && !LeftBehindInnerPackageNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+                {
+                    LeftBehindInnerPackageNames.Add(fileName);
+                }
+            }
+        }
+
+        /// <summary>
         /// 引擎对"这到底是不是能解的容器"下的结论（例如"7-Zip 命令行 26.01 能打开：16 个文件"）。
         /// 魔数说不认识时，以引擎的结论为准 —— 这也是"结果可追溯"的一部分（不变量 14）。
         /// </summary>

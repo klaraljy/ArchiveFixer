@@ -26,6 +26,14 @@
                        AutomationProperties.Name="递归解压风险提示"
                        Margin="0,8,0,0" />
 
+            <!-- 空一行后，用红色补「空间不足模式」说明（用户 2026-11-10 原文要求） -->
+            <TextBlock Text="{x:Static models:HelpContent.SpaceTightModeHint}"
+                       Style="{StaticResource BodyTextStyle}"
+                       Foreground="{StaticResource DangerTextBrush}"
+                       TextWrapping="Wrap"
+                       AutomationProperties.Name="空间不足模式提示"
+                       Margin="0,16,0,0" />
+
             <ItemsControl ItemsSource="{x:Static models:HelpContent.Introduction}"
                           Margin="0,12,0,0">
                 <ItemsControl.ItemTemplate>

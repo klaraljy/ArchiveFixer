@@ -6,10 +6,11 @@ namespace ArchiveFixer.Tests
     public sealed class WindowClosePolicyTests
     {
         [Fact]
-        public void 空闲点X直接退出_有任务点X收托盘()
+        public void 任务列表空点X直接退出_列表非空点X收托盘()
         {
-            Assert.False(WindowClosePolicy.ShouldHideToTray(isBusy: false));
-            Assert.True(WindowClosePolicy.ShouldHideToTray(isBusy: true));
+            Assert.False(WindowClosePolicy.ShouldHideToTray(taskCount: 0));
+            Assert.True(WindowClosePolicy.ShouldHideToTray(taskCount: 1));
+            Assert.True(WindowClosePolicy.ShouldHideToTray(taskCount: 17));
         }
 
         [Fact]

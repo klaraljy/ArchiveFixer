@@ -1229,5 +1229,25 @@ namespace ArchiveFixer.Tests
                 DetectedErrorType = "None"
             };
         }
+        [Fact]
+        public void 成品目录还留着内层包_成功任务也要进汇总并降为橙色()
+        {
+            var task = new ArchiveTask(Path.Combine(_root, "root.7z"))
+            {
+                Status = StatusText.ExtractSuccess,
+                Outcome = TaskOutcome.Succeeded,
+                OutputVerification = OutputVerificationOutcome.Passed
+            };
+
+            task.RecordLeftBehindInnerPackages(new[] { "inner-a.7z.001", "inner-b.zip" });
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { task });
+
+            Assert.NotEmpty(report.Lines);
+            Assert.Equal(BatchSummarySeverity.Partial, report.Severity);
+            Assert.Contains("内层包没解开", report.Text, StringComparison.Ordinal);
+            Assert.Contains(report.Lines, line => line.Contains("内层包没解开", StringComparison.Ordinal));
+        }
     }
+
 }

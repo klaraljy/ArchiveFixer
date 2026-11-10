@@ -1,12 +1,12 @@
 namespace ArchiveFixer.Views
 {
     /// <summary>
-    /// 主窗口 X 的唯一判据（WinRAR 式，用户 2026-11-07 确认）：
-    /// 空闲 ⇒ 正常退出；有任务 ⇒ 收托盘，任务继续。
+    /// 主窗口 X 的唯一判据（用户 2026-11-10 口径：任务列表非空 ⇒ 收托盘；空 ⇒ 退出）：
+    /// 任务列表非空 ⇒ 收托盘（与忙闲无关）；列表为空 ⇒ 正常退出。
     /// </summary>
     internal static class WindowClosePolicy
     {
-        internal static bool ShouldHideToTray(bool isBusy) => isBusy;
+        internal static bool ShouldHideToTray(int taskCount) => taskCount > 0;
 
         /// <summary>
         /// 主窗口真正关闭后，生产宿主必须结束进程。
