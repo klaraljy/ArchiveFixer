@@ -32,6 +32,14 @@
     <Company>ArchiveFixer</Company>
     <Product>ArchiveFixer</Product>
     <Description>批量压缩包识别、伪装后缀修正、密码管理与 7-Zip 解压工具</Description>
+    <!--
+        分析器门闩（用户 2026-11-10：对外发布前收紧）。
+        AnalysisLevel=latest 在默认 AnalysisMode 下当前是 0 警告，所以直接把警告升成错误锁住。
+        ⛔ 不要再往上开到 AnalysisMode=Recommended：实测 2500 条（CA1863 1020 / CA1305 400 /
+        CA1822 384 / CA1859 216 …），那是独立的一轮清理，不属于发布前该动的东西。
+    -->
+    <AnalysisLevel>latest</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <!-- 只让 TrayIconService 显式 using WinForms/System.Drawing，禁止全局隐式导入污染 WPF 类型。 -->
