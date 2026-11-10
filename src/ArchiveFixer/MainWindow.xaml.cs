@@ -369,8 +369,17 @@ namespace ArchiveFixer
         {
             base.OnSourceInitialized(e);
 
-            _trayIcon = new TrayIconService(this);
-            _trayIcon.ExitRequested += ExitApplication;
+            /*
+             * 只有**生产宿主**才建真实托盘图标：测试用普通 Application 起窗口，
+             * 建了托盘就会在用户桌面上弹「程序仍在运行」气泡（实测：每次跑测试集都弹一次，
+             * 用户 2026-11-10：「老是出现这个弹窗」）。判据与 ShouldShutdownAfterClose 同一套：
+             * Application.Current is App 才是生产宿主。
+             */
+            if (Application.Current is App && WindowClosePolicy.IsProductionHost())
+            {
+                _trayIcon = new TrayIconService(this);
+                _trayIcon.ExitRequested += ExitApplication;
+            }
         }
 
         /// <summary>第二次启动 / 托盘左键 / 托盘菜单「打开」都走这里。</summary>
@@ -407,7 +416,7 @@ namespace ArchiveFixer
                     && WindowClosePolicy.ShouldHideToTray(viewModel.Tasks.Count))
                 {
                     e.Cancel = true;
-                    _trayIcon?.HideToTray();
+                    _trayIcon?.HideToTray(showHint: viewModel.IsBusy);
                     return;
                 }
 

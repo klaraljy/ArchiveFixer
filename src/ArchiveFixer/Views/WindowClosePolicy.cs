@@ -19,6 +19,27 @@ namespace ArchiveFixer.Views
         /// <para>测试探针用的是普通 <see cref="System.Windows.Application"/>，不是 ArchiveFixer.App，
         /// 所以这里仍能在测试里避免误杀 testhost。</para>
         /// </summary>
+        /// <summary>
+        /// 当前是不是**生产宿主**（真正的 ArchiveFixer.exe，而不是 dotnet test 的 testhost）。
+        ///
+        /// <para>判据只认入口程序集名：测试里虽然 `Application.Current` 是 `ArchiveFixer.App`
+        /// （为了加载资源），但入口程序集是 <c>testhost</c> —— 这种情况下**绝不建真实托盘图标**，
+        /// 否则每跑一次测试集就会在用户桌面上弹一条「程序仍在运行」气泡
+        /// （用户 2026-11-10 原话：「老是出现这个弹窗」）。</para>
+        /// </summary>
+        internal static bool IsProductionHost()
+        {
+            try
+            {
+                string? entry = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name;
+
+                return string.Equals(entry, "ArchiveFixer", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
         internal static bool ShouldShutdownAfterClose(bool allowClose, bool isProductionApplication)
             => allowClose && isProductionApplication;
     }

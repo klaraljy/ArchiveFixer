@@ -69,7 +69,7 @@ namespace ArchiveFixer.Services
             }
         }
 
-        public void HideToTray()
+        public void HideToTray(bool showHint = true)
         {
             if (_hidden)
             {
@@ -83,7 +83,7 @@ namespace ArchiveFixer.Services
             _window.ShowInTaskbar = false;
             _window.Hide();
 
-            if (!_hideHintShown)
+            if (showHint && !_hideHintShown)
             {
                 _hideHintShown = true;
 
