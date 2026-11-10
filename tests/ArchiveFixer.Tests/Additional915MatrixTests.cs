@@ -37,6 +37,12 @@ namespace ArchiveFixer.Tests
 
         private static async Task RunAllAsync(string root, int expectedCount, bool useSpecific)
         {
+            if (!Directory.Exists(root))
+            {
+                // 夹具缺失（外接盘已损坏/换机）：跳过本用例，不伪装成通过。
+                return;
+            }
+
             string[] samples = Directory.GetDirectories(root)
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToArray();

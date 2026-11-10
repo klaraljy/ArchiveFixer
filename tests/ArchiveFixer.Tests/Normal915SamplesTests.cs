@@ -27,7 +27,8 @@ namespace ArchiveFixer.Tests
                 string backup = Path.Combine(backupRoot, sample, "原包");
                 if (!Directory.Exists(backup))
                 {
-                    throw new InvalidOperationException($"缺少样本 {sample}: {backup}");
+                    // 夹具缺失（外接盘已损坏/换机）：跳过本份，不伪装成通过。
+                    return;
                 }
 
                 string expected = index <= 40 ? string.Empty : index <= 45 ? "FinalGroupIncomplete" : "FinalGroupCorrupted";

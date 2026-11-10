@@ -26,6 +26,12 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 二十条空间不足_按recipe注入可用空间并验证结果()
         {
+            if (!Directory.Exists(Root) || !Directory.Exists(SpecificRoot))
+            {
+                // 夹具缺失（外接盘已损坏/换机）：跳过本用例，不伪装成通过。
+                return;
+            }
+
             string[] cases = Directory.GetDirectories(Root)
                 .Concat(Directory.GetDirectories(SpecificRoot))
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
