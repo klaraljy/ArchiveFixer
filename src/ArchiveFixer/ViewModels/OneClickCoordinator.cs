@@ -1400,6 +1400,18 @@ namespace ArchiveFixer.ViewModels
                             }
                         }
 
+                        /*
+                         * 路径事实（2026-11-10 真机）：账本里标成「已消费源包」的路径 = 这一单自己的源包
+                         * 已经解成功并定稿 ⇒ ⛔ 不论后缀、不论基名、不论名字里有几个数字，都不许再当分卷候选/种子。
+                         * 真机现场：`D:\ArchiveFixer\logs\ArchiveFixer_20261110_161401.log` 719/794/801/852/853 行，
+                         * 外层 tar 与它解出的 5 片同基名，tar 被当成"中间片"收进组 ⇒ 整包字节和翻倍 ⇒ SizeAnomaly。
+                         */
+                        foreach (ArchiveFixer.Detection.FirstStepFileLedgerEntry consumedEntry
+                                 in ledgerByPath.Values.Where(entry => entry.IsConsumedSource))
+                        {
+                            nonVolumeRootSources.Add(consumedEntry.Path);
+                        }
+
                         UiActivity.Mark("第二大步组分析", string.Empty, "扫描交接单候选");
                         List<VolumeCandidateDiscovery.VolumeCandidate> analyzedGroups = await Task.Run(
                             () => VolumeCandidateDiscovery.Analyze(

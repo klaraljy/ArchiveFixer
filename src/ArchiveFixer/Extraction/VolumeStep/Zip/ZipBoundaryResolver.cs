@@ -34,7 +34,7 @@ namespace ArchiveFixer.Extraction
             }
 
             List<FirstStepFileLedgerEntry> candidates = context.Ledger
-                .SameBase(context.BaseName)
+                .SecondStepCandidates(context.BaseName)
                 .Where(entry => IsCandidate(entry))
                 .ToList();
 

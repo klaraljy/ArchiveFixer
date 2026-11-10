@@ -23,6 +23,9 @@ namespace ArchiveFixer.Tests.Batch120
             {
                 yield return new object[] { (long.Parse(Batch120Operation.Seed) + index).ToString() };
             }
+
+            // 形状样本：外层单一包 + 同基名的整套 7z 分卷（真机 2026-11-10 的形状）。
+            yield return new object[] { (long.Parse(Batch120Operation.Seed) + 99).ToString() };
         }
 
         public static IEnumerable<object[]> SpecificIds()

@@ -47,6 +47,9 @@ namespace ArchiveFixer.Tests.Batch120
 
         private const string PasswordBook = "2中！0@文#2删￥6除%\nDemo#Pass1\nDemo#Pass2\n";
 
+        /// <summary>最近一次运行用的第一大步账本（用例读「已消费源包」这类路径事实时用）。</summary>
+        internal static ArchiveFixer.Detection.FirstStepFileLedger? LastLedger { get; private set; }
+
         public static async Task<Batch120RunRecord> RunOneAsync(string sampleId)
         {
             string backupSample = Path.Combine(BackupBatchRoot, sampleId);
@@ -90,6 +93,8 @@ namespace ArchiveFixer.Tests.Batch120
             string dataRoot = Path.Combine(Path.GetTempPath(), "ArchiveFixerBatch120", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dataRoot);
             File.WriteAllText(Path.Combine(dataRoot, "passwords.txt"), PasswordBook, new UTF8Encoding(false));
+
+            LastLedger = null;
 
             var record = new Batch120RunRecord
             {
@@ -175,6 +180,8 @@ namespace ArchiveFixer.Tests.Batch120
                     Error = t.ErrorMessage,
                     ProducedFiles = t.ProducedFiles.ToArray()
                 }).ToArray();
+
+                LastLedger = extraction.FirstStepLedger;
             }
             catch (Exception ex)
             {

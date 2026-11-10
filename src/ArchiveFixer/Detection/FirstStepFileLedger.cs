@@ -104,6 +104,16 @@ namespace ArchiveFixer.Detection
         public ArtifactRole Role { get; init; } = ArtifactRole.Unknown;
 
         /// <summary>
+        /// 这个路径是**已经解成功并定稿的源包**（路径事实，与后缀/基名/内容格式无关）。
+        ///
+        /// <para>⛔ 已消费的源包不许再进第二大步分卷候选：真机 2026-11-10（
+        /// `D:\ArchiveFixer\logs\ArchiveFixer_20261110_161401.log` 794/801/852/853 行）外层 tar
+        /// 已在 16:42:06 定稿，第二大步仍把同基名的它当 7z 中间片收进组 ⇒ 整包字节和翻倍 ⇒
+        /// `SizeAnomaly` ⇒ 组建组被拒 ⇒ 5 片永不却解。</para>
+        /// </summary>
+        public bool IsConsumedSource { get; init; }
+
+        /// <summary>
         /// 交界前保护候选片的租约；空 = 没有租约。
         /// <para>⛔ 有租约的片，逐层回收/临时清理/失败清理都不得删除。</para>
         /// </summary>
@@ -241,6 +251,7 @@ namespace ArchiveFixer.Detection
                     ? ProducedByTaskId
                     : existing.ProducedByTaskId,
                 Role = Role != ArtifactRole.Unknown ? Role : existing.Role,
+                IsConsumedSource = IsConsumedSource || existing.IsConsumedSource,
                 CandidateLeaseId = !string.IsNullOrWhiteSpace(CandidateLeaseId)
                     ? CandidateLeaseId
                     : existing.CandidateLeaseId,
@@ -258,14 +269,15 @@ namespace ArchiveFixer.Detection
         /// 判不出且没有这些事实的内容物由 <c>extraGroupSeeds</c> 的脏名扫描另行补；⛔ 不在这里猜。</para>
         /// </summary>
         public bool HasSecondStepEvidence =>
-            BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
-            || Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
-            || FirstVolumeFlag
-            || NameSlot.HasValue
-            || ZipEndRecordMeansSplit
-            || HasZipLocalHeader
-            || HasCandidateLease
-            || Role == ArtifactRole.CandidateVolumePiece;
+            !IsConsumedSource
+            && (BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
+                || Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                || FirstVolumeFlag
+                || NameSlot.HasValue
+                || ZipEndRecordMeansSplit
+                || HasZipLocalHeader
+                || HasCandidateLease
+                || Role == ArtifactRole.CandidateVolumePiece);
 
         /// <summary>任务改名后只换路径/基名/源层，其它底层事实原样保留。</summary>
         public FirstStepFileLedgerEntry WithPath(string newPath)
@@ -310,6 +322,47 @@ namespace ArchiveFixer.Detection
                 OriginRootId = OriginRootId,
                 ProducedByTaskId = ProducedByTaskId,
                 Role = Role,
+                IsConsumedSource = IsConsumedSource,
+                CandidateLeaseId = CandidateLeaseId,
+                PlacementKey = PlacementKey,
+                IsGatePassed = IsGatePassed
+            };
+        }
+
+        /// <summary>把这一项标成「已解成功并定稿的源包」（只加这一条路径事实，其它字段原样保留）。</summary>
+        public FirstStepFileLedgerEntry WithConsumedSource()
+        {
+            return new FirstStepFileLedgerEntry
+            {
+                Path = Path,
+                BaseName = BaseName,
+                Size = Size,
+                Format = Format,
+                Membership = Membership,
+                BodyKind = BodyKind,
+                VolumeNumber = VolumeNumber,
+                FirstVolumeFlag = FirstVolumeFlag,
+                RawVolumeField = RawVolumeField,
+                DeclaredTotalBytes = DeclaredTotalBytes,
+                DeclaredVolumeCount = DeclaredVolumeCount,
+                HasZipEndRecord = HasZipEndRecord,
+                ZipEndRecordMeansSplit = ZipEndRecordMeansSplit,
+                HasZipLocalHeader = HasZipLocalHeader,
+                RarVariant = RarVariant,
+                ZipVariant = ZipVariant,
+                Encryption = Encryption,
+                NameSlot = NameSlot,
+                NameEvidence = NameEvidence,
+                Source = Source,
+                SourceLayer = SourceLayer,
+                HasIdentity = HasIdentity,
+                VolumeSerial = VolumeSerial,
+                FileIndex = FileIndex,
+                TaskLogName = TaskLogName,
+                OriginRootId = OriginRootId,
+                ProducedByTaskId = ProducedByTaskId,
+                Role = Role,
+                IsConsumedSource = true,
                 CandidateLeaseId = CandidateLeaseId,
                 PlacementKey = PlacementKey,
                 IsGatePassed = IsGatePassed
@@ -394,6 +447,56 @@ namespace ArchiveFixer.Detection
             _indexByPath[fullPath] = _entries.Count;
             _entries.Add(entry);
             return entry;
+        }
+
+        /// <summary>
+        /// 把某个路径标成「**已解成功并定稿的源包**」：从此它不再进第二大步分卷候选。
+        ///
+        /// <para>判据只认**路径事实**（这个路径的任务已经解成功），⛔ 与后缀、基名、内容格式无关
+        /// —— 真机 2026-11-10 那次就是外层包已定稿，却仍被同基名的 7z 分卷组当中间片收进去。</para>
+        ///
+        /// <para>路径不在账本里 ⇒ 什么都不做（判不出就不动）。</para>
+        /// </summary>
+        public bool MarkConsumed(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            string fullPath;
+
+            try
+            {
+                fullPath = System.IO.Path.GetFullPath(path);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (!_indexByPath.TryGetValue(fullPath, out int index)
+                || _entries[index].IsConsumedSource)
+            {
+                return false;
+            }
+
+            _entries[index] = _entries[index].WithConsumedSource();
+            return true;
+        }
+
+        /// <summary>
+        /// **第二大步候选池的唯一入口**：同基名里"有第二大步证据、且不是已消费源包"的那些项。
+        ///
+        /// <para>⛔ 族 resolver / 族仲裁只许从这里拿候选：老写法各自用
+        /// <see cref="SameBase"/> 再叠自己的过滤条件，于是"外层包已解成功"的账本项
+        /// 被 7z 那条 `Format == Unknown` 放进了组（真机 2026-11-10 的 SizeAnomaly 根因）。</para>
+        /// </summary>
+        public IReadOnlyList<FirstStepFileLedgerEntry> SecondStepCandidates(string? baseName)
+        {
+            return SameBase(baseName)
+                .Where(entry => entry.IsGatePassed && !entry.IsConsumedSource)
+                .ToList();
         }
 
         /// <summary>

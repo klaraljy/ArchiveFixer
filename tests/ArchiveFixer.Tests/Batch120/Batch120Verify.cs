@@ -211,6 +211,19 @@ namespace ArchiveFixer.Tests.Batch120
             bool failedTask = record.Tasks.Any(t => t.Outcome == "Failed");
             bool n6 = success ? record.Tasks.Any(t => t.Outcome == "Succeeded") : failedTask;
             add("N6", n6, success ? "至少一个成功" : "至少一个失败", string.Join(",", record.Tasks.Select(t => t.Outcome)), "");
+
+            /*
+             * N8（形状：外层单一包 + 同基名的整套 7z 分卷）：
+             * 组解开之后分卷片必须被回收，⛔ 不许留在成品目录里。
+             */
+            if (Str(recipe, "shape") == "同基名单包套分卷")
+            {
+                var leftover = disk.Keys
+                    .Where(k => k.StartsWith(outputRoot, StringComparison.Ordinal))
+                    .Where(k => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(k), @"\.7z\.\d{3}$"))
+                    .ToArray();
+                add("N8", leftover.Length == 0, "分卷片不得残留", $"{leftover.Length} 个残留", "");
+            }
         }
 
         // ------------------------------------------------------------ 特定

@@ -550,6 +550,24 @@ namespace ArchiveFixer.ViewModels
 
                 task.ProducedFiles.Clear();
 
+                /*
+                 * 定稿完成（内容物已经搬到落点、结果校验也过了）⇒ 把这个任务**自己的源包路径**
+                 * 在唯一账本里标成「已消费源包」，从此它不再进第二大步分卷候选。
+                 *
+                 * <para>判据只认这条**路径事实**：这一单的内容已经解出来并定稿了。
+                 * ⛔ 不看后缀（tar / 7z / rar / zip 一个样）、⛔ 不看基名是否与内层分卷相同、
+                 * ⛔ 不看内容卡能不能识别出格式。</para>
+                 *
+                 * <para>⚠ 必须在这里、不能等到「整条链成功」：外层包含内层分卷时，源包搬迁本来就要
+                 * 留到链尾（真机日志「源包先留在原地 —— 这一单所在的链还没跑完」），
+                 * 而第二大步正是在链尾之前就要用它。</para>
+                 *
+                 * <para>真机 2026-11-10（`D:\ArchiveFixer\logs\ArchiveFixer_20261110_161401.log`
+                 * 719/794/801/852/853 行）：`nidekikibabe-2026p6.tar` 16:42:06 已「定稿完成」，
+                 * 16:43:44 第二大步仍把它按同基名算进 7z 分卷组（`实际 42247939299` = 5 片 + 外层包）
+                 * ⇒ `SizeAnomaly` ⇒ 组建组被拒 ⇒ 5 片永远不解。</para>
+                 */
+
                 foreach (string produced in work.Commit.ProducedFiles)
                 {
                     if (string.IsNullOrWhiteSpace(produced))
@@ -574,6 +592,8 @@ namespace ArchiveFixer.ViewModels
 
                     task.ProducedFiles.Add(mapped);
                 }
+
+                MarkSourceConsumed(task);
             }
 
             /*
@@ -689,6 +709,7 @@ namespace ArchiveFixer.ViewModels
                 ? TaskOutcome.Succeeded
                 : TaskOutcome.PartiallyCompleted;
 
+
             /*
              * 收尾时把进度**补到 100% 并停表**（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，
              * 连一个 100% 的都没有"）。
@@ -712,6 +733,35 @@ namespace ArchiveFixer.ViewModels
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 把这一单的源包路径在唯一账本里标成「已消费源包」——**只认路径事实**：
+        /// 这个路径的任务已经解成功并定稿，所以它不再是第二大步的分卷候选。
+        ///
+        /// <para>⛔ 不按后缀、不按基名、不按内容格式判断；账本里没有这条路径就什么都不做
+        /// （判不出 ⇒ 一个字节都不改）。</para>
+        /// </summary>
+        private void MarkSourceConsumed(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            string original = task.OriginalPath;
+
+            if (!string.IsNullOrWhiteSpace(original))
+            {
+                _firstStepFileLedger.MarkConsumed(original);
+            }
+
+            string current = task.CurrentPath;
+
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                _firstStepFileLedger.MarkConsumed(current);
+            }
         }
 
     }

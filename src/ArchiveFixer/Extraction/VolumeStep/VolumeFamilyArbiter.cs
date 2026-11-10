@@ -36,9 +36,7 @@ namespace ArchiveFixer.Extraction
                 return new VolumeFamilySelection { Evidence = "账本/基名为空 ⇒ 判不出" };
             }
 
-            List<FirstStepFileLedgerEntry> entries = ledger.SameBase(baseName)
-                .Where(entry => entry.IsGatePassed)
-                .ToList();
+            IReadOnlyList<FirstStepFileLedgerEntry> entries = ledger.SecondStepCandidates(baseName);
 
             if (entries.Count == 0)
             {

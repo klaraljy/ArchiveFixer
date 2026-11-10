@@ -856,6 +856,26 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public async Task 七z_resolver_已消费源包不得再进第二大步候选_Complete()
+        {
+            var ledger = new FirstStepFileLedger();
+
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.001", size: 100, declaredBytes: 200, declaredCount: 2, first: true));
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.002", size: 100));
+
+            // 这一份已经解成功并定稿（路径事实），即使它带着名字槽也不再是候选。
+            ledger.AddOrReplace(SevenZipEntry(@"C:\in\111.7z.003", size: 100));
+            Assert.True(ledger.MarkConsumed(@"C:\in\111.7z.003"));
+
+            PreparedVolumeGroup? group = await new SevenZipBoundaryResolver().ResolveAsync(
+                new VolumeBoundaryContext { Ledger = ledger, BaseName = "111" });
+
+            Assert.NotNull(group);
+            Assert.Equal(PreparedGroupState.Complete, group!.State);
+            Assert.Equal(2, group.Pieces.Count);
+        }
+
         private static FirstStepFileLedger Ledger(params FirstStepFileLedgerEntry[] entries)
         {
             var ledger = new FirstStepFileLedger();

@@ -34,9 +34,8 @@ namespace ArchiveFixer.Extraction
             }
 
             List<FirstStepFileLedgerEntry> candidates = context.Ledger
-                .SameBase(context.BaseName)
-                .Where(entry => entry.IsGatePassed
-                    && entry.Format == VolumeContentFormat.Rar)
+                .SecondStepCandidates(context.BaseName)
+                .Where(entry => entry.Format == VolumeContentFormat.Rar)
                 .ToList();
 
             if (candidates.Count == 0)
