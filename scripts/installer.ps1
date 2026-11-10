@@ -1,4 +1,4 @@
-# 出 ArchiveFixer 的 .exe 安装包（NSIS）。
+﻿# 出 ArchiveFixer 的 .exe 安装包（NSIS）。
 #
 # 用法：
 #   pwsh scripts/installer.ps1                          # 拿 dist\ArchiveFixer-<版本>-独立 当内容，出 dist\ArchiveFixer-<版本>-setup.exe
@@ -30,6 +30,30 @@ $nsiPath = Join-Path $repoRoot 'installer\ArchiveFixer.nsi'
 $iconPath = Join-Path $repoRoot 'src\ArchiveFixer\Assets\ArchiveFixer.ico'
 $licensePath = Join-Path $repoRoot 'LICENSE'
 
+# ---------------------------------------------------------------- 许可页编码（⛔ 不许再踩）
+#
+# NSIS 的许可页按 **ANSI** 读取许可文件：0.2.2 实测整页中文乱码 —— 因为仓库 LICENSE 是
+# MIT 正文 + 「第三方组件」中文表格（UTF-8），后半段被当 GBK 解码成了「浣跨敤」那种乱码。
+# ⇒ 许可页只用 **ASCII 部分**：取 LICENSE 里第一个 `---` 分隔之前的 MIT 正文，再补一句
+#   英文指向（第三方组件与完整边界在 LICENSE 原文与 docs\引擎与外部工具.md 里）。
+#   中文解释继续由 .nsi 的 MUI_LICENSEPAGE_TEXT_TOP 承担（那一段由 Unicode 编译器保存，显示正常）。
+$licenseText = [IO.File]::ReadAllText($licensePath)
+$licenseSeparator = $licenseText.IndexOf("`n---", [StringComparison]::Ordinal)
+$licenseAsciiPart = if ($licenseSeparator -gt 0) { $licenseText.Substring(0, $licenseSeparator) } else { $licenseText }
+$licensePageNote = @(
+    "Third-party components (7-Zip / UnRAR) are NOT covered by this MIT license;",
+    "their license texts ship in the installation directory under tools\7zip and tools\unrar.",
+    "Full license boundaries: docs\engine-and-tools (Chinese) and this LICENSE file."
+) -join "`r`n"
+$licenseAsciiPart = $licenseAsciiPart.TrimEnd() + "`r`n`r`n" + $licensePageNote + "`r`n"
+$licensePagePath = Join-Path ([IO.Path]::GetTempPath()) ("af-license-page-" + [Guid]::NewGuid().ToString('N') + '.txt')
+$licensePageBytes = [System.Text.Encoding]::ASCII.GetBytes($licenseAsciiPart)
+$licensePageNonAscii = 0
+foreach ($byte in $licensePageBytes) { if ($byte -gt 0x7F) { $licensePageNonAscii++ } }
+if ($licensePageNonAscii -gt 0) {
+    Fail (("许可页 ASCII 化失败（剩 {0} 个非 ASCII 字节）：{1}" -f $licensePageNonAscii, $licensePath) + [Environment]::NewLine + "  NSIS 许可页按 ANSI 读取，含中文必定整页乱码。")
+}
+[IO.File]::WriteAllBytes($licensePagePath, $licensePageBytes)
 # ---------------------------------------------------------------- 版本号（唯一来源：csproj）
 if (-not $Version) {
     [xml]$csproj = Get-Content -LiteralPath (Join-Path $repoRoot 'src\ArchiveFixer\ArchiveFixer.csproj') -Raw
@@ -101,7 +125,7 @@ $args = @(
     "/DAPPVERSION=$Version",
     "/DOUTFILE=$Output",
     "/DICONFILE=$iconPath",
-    "/DLICENSEFILE=$licensePath",
+    "/DLICENSEFILE=$licensePagePath",
     $nsiPath
 )
 if (-not $Quiet) { Write-Detail ("makensis " + ($args -join ' ')) }
@@ -112,6 +136,7 @@ try {
     $exit = $LASTEXITCODE
 }
 finally {
+    if ($licensePagePath -and (Test-Path -LiteralPath $licensePagePath)) { Remove-Item -LiteralPath $licensePagePath -Force -ErrorAction SilentlyContinue }
     if ($sourceJunction -and (Test-Path -LiteralPath $sourceJunction)) {
         Remove-Item -LiteralPath $sourceJunction -Force -ErrorAction SilentlyContinue
     }

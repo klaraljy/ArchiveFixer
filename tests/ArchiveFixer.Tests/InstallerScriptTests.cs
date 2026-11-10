@@ -84,6 +84,27 @@ namespace ArchiveFixer.Tests
 
             throw new DirectoryNotFoundException("往上找不到 src\\ArchiveFixer\\Views\\HelpBodyPanel.xaml");
         }
+        /// <summary>
+        /// 许可页正文必须是 ASCII：NSIS 许可页按 ANSI 读取，UTF-8 中文会整页乱码
+        /// （0.2.2 实测：LICENSE 的「第三方组件」中文表格整段变乱码）。
+        /// ⇒ 构建脚本只把 LICENSE 里第一个 `---` 之前的 MIT 正文当许可页，中文部分留在 LICENSE 原文。
+        /// </summary>
+        [Fact]
+        public void 许可页正文必须是ASCII_MIT部分可独立成页()
+        {
+            string repoRoot = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(FindInstallerScript())!, ".."));
+
+            string license = File.ReadAllText(Path.Combine(repoRoot, "LICENSE"));
+            int separator = license.IndexOf("\n---", StringComparison.Ordinal);
+            string mitPart = separator > 0 ? license[..separator] : license;
+
+            Assert.DoesNotContain(mitPart, c => c > 0x7F);
+
+            string installer = File.ReadAllText(Path.Combine(repoRoot, "scripts", "installer.ps1"));
+            Assert.Contains("af-license-page", installer, StringComparison.Ordinal);
+            Assert.Contains("/DLICENSEFILE=$licensePagePath", installer, StringComparison.Ordinal);
+        }
         private static string FindInstallerScript()
         {
             DirectoryInfo? directory = new(AppContext.BaseDirectory);
