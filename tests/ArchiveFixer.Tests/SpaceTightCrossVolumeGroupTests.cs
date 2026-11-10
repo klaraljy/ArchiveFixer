@@ -33,8 +33,8 @@ namespace ArchiveFixer.Tests
         {
             string id = Guid.NewGuid().ToString("N");
             _sourceRoot = Path.Combine(@"E:\DeepSeekProjects\_tmp\af-space-cross-group", id);
-            _targetRoot = Path.Combine(@"H:\BaiduNetdiskDownload\困难大测试\_tmp-space-cross-group", id);
-            _dataRoot = Path.Combine(@"H:\BaiduNetdiskDownload\困难大测试\_tmp-space-cross-data", id);
+            _targetRoot = Path.Combine(TestPaths.TempRoot, "_tmp-space-cross-group", id);
+            _dataRoot = Path.Combine(TestPaths.TempRoot, "_tmp-space-cross-data", id);
             Directory.CreateDirectory(_sourceRoot);
             Directory.CreateDirectory(_targetRoot);
             Directory.CreateDirectory(_dataRoot);

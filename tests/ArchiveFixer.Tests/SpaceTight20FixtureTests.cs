@@ -30,8 +30,8 @@ namespace ArchiveFixer.Tests
     [Collection("ArchiveFixerGlobalState")]
     public sealed class SpaceTight20FixtureTests
     {
-        private const string FixtureRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试";
-        private const string ResultRoot = @"H:\BaiduNetdiskDownload\困难大测试\space-tight-20-results";
+        private static readonly string FixtureRoot = TestPaths.TestAreaRoot;
+        private static readonly string ResultRoot = Path.Combine(TestPaths.FixtureRoot, "space-tight-20-results");
         private const long Reserve = 64 * 1024;
 
         [Fact]

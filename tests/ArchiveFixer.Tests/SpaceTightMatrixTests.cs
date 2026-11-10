@@ -25,10 +25,10 @@ namespace ArchiveFixer.Tests
     [Collection("ArchiveFixerGlobalState")]
     public sealed class SpaceTightMatrixTests
     {
-        private const string FixtureRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试";
-        private const string NormalRoot = FixtureRoot + @"\913000000";
-        private const string SpecificRoot = FixtureRoot + @"\913100000";
-        private const string ResultRoot = @"H:\BaiduNetdiskDownload\困难大测试\913-space-matrix-results";
+        private static readonly string FixtureRoot = TestPaths.TestAreaRoot;
+        private static readonly string NormalRoot = FixtureRoot + @"\913000000";
+        private static readonly string SpecificRoot = FixtureRoot + @"\913100000";
+        private static readonly string ResultRoot = Path.Combine(TestPaths.FixtureRoot, "913-space-matrix-results");
         private const long Reserve = 64 * 1024;
 
         [Fact]

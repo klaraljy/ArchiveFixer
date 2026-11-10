@@ -220,7 +220,7 @@ namespace ArchiveFixer.Tests
         public async Task 真机混合盘_两个设备池补位()
         {
             string eDir = @"E:\DeepSeekProjects\_tmp\ArchiveFixer\real-mixed-e";
-            string hDir = @"H:\BaiduNetdiskDownload\困难大测试\real-mixed-h";
+            string hDir = Path.Combine(TestPaths.TempRoot, "real-mixed-h");
             if (!Directory.Exists(@"H:\"))
             {
                 return;

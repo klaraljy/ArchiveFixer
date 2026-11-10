@@ -20,8 +20,8 @@ namespace ArchiveFixer.Tests
     [Collection("ArchiveFixerGlobalState")]
     public sealed class SpaceTight915MatrixTests
     {
-        private const string Root = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915300000-空间不足-矩阵-备份";
-        private const string SpecificRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915400000-特定解压-矩阵-备份";
+        private static readonly string Root = Path.Combine(TestPaths.BackupRoot, "915300000-空间不足-矩阵-备份");
+        private static readonly string SpecificRoot = Path.Combine(TestPaths.BackupRoot, "915400000-特定解压-矩阵-备份");
 
         [Fact]
         public async Task 二十条空间不足_按recipe注入可用空间并验证结果()

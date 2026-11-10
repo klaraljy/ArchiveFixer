@@ -35,7 +35,7 @@ namespace ArchiveFixer.Tests
         [InlineData("915000049", "FinalGroupCorrupted", RestHandlingModes.Delete, true)]
         public async Task Probe(string sample, string expectedReason, string restHandling, bool spaceTight)
         {
-            const string backupRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915000000-备份";
+            string backupRoot = Path.Combine(TestPaths.BackupRoot, "915000000-备份");
             string backup = Path.Combine(backupRoot, sample, "原包");
             if (!Directory.Exists(backup)) return;
 

@@ -43,8 +43,8 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task Wrapper_sources_are_settled_after_group_content_is_verified()
         {
-            const string backup =
-                @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\914000000-备份\914000014\原包";
+            string backup =
+                Path.Combine(TestPaths.BackupRoot, "914000000-备份", "914000014", "原包");
             if (!Directory.Exists(backup))
             {
                 return;

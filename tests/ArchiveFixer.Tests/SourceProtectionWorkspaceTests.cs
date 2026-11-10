@@ -30,7 +30,7 @@ namespace ArchiveFixer.Tests
         {
             string id = Guid.NewGuid().ToString("N");
             _sourceRoot = Path.Combine(@"E:\DeepSeekProjects\_tmp\af-source-protect", id);
-            _targetRoot = Path.Combine(@"H:\BaiduNetdiskDownload\困难大测试\_tmp-source-protect", id);
+            _targetRoot = Path.Combine(TestPaths.TempRoot, "_tmp-source-protect", id);
             _dataRoot = Path.Combine(_targetRoot, "data");
             Directory.CreateDirectory(_sourceRoot);
             Directory.CreateDirectory(_targetRoot);

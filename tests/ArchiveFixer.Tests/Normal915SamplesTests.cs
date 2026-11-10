@@ -20,7 +20,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 五十个普通样本_二十五指定位置_二十五原位置()
         {
-            const string backupRoot = @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915000000-备份";
+            string backupRoot = Path.Combine(TestPaths.BackupRoot, "915000000-备份");
             for (int index = 1; index <= 50; index++)
             {
                 string sample = "915" + index.ToString("D6");

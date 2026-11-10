@@ -21,7 +21,7 @@ namespace ArchiveFixer.Tests
         public async Task 十条特定解压_全部跑完()
         {
             await RunAllAsync(
-                @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915100000-特定解压-备份",
+                Path.Combine(TestPaths.BackupRoot, "915100000-特定解压-备份"),
                 10,
                 useSpecific: true);
         }
@@ -30,7 +30,7 @@ namespace ArchiveFixer.Tests
         public async Task 二十条异常样本_失败或跳过且源包保留()
         {
             await RunAllAsync(
-                @"H:\BaiduNetdiskDownload\困难大测试\大测试备份位置\915200000-额外异常-备份",
+                Path.Combine(TestPaths.BackupRoot, "915200000-额外异常-备份"),
                 20,
                 useSpecific: false);
         }

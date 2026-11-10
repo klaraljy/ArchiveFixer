@@ -21,7 +21,7 @@ namespace ArchiveFixer.Tests
                 @"E:\DeepSeekProjects\_tmp\af-space-cross",
                 Guid.NewGuid().ToString("N"));
             _targetRoot = Path.Combine(
-                @"H:\BaiduNetdiskDownload\困难大测试\_tmp-space-cross",
+                Path.Combine(TestPaths.TempRoot, "_tmp-space-cross"),
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_sourceRoot);
         }
