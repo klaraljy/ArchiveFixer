@@ -240,7 +240,7 @@ namespace ArchiveFixer.Storage
                     return false;
                 }
 
-                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                string stamp = ArchiveFixer.Helpers.Clock.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
                 string backup = path + ".unreadable-" + stamp + ".bak";
 
                 for (int suffix = 1; File.Exists(backup) && suffix < 100; suffix++)

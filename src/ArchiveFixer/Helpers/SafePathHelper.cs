@@ -151,7 +151,7 @@ namespace ArchiveFixer.Helpers
                 }
             }
 
-            string randomName = $"{fileName}_{DateTime.Now:yyyyMMddHHmmssfff}{ext}";
+            string randomName = $"{fileName}_{ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmssfff}{ext}";
             return Path.Combine(dir, randomName);
         }
 
@@ -190,7 +190,7 @@ namespace ArchiveFixer.Helpers
                 }
             }
 
-            return Path.Combine(parent, $"{name}_{DateTime.Now:yyyyMMddHHmmssfff}");
+            return Path.Combine(parent, $"{name}_{ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmssfff}");
         }
 
         /// <summary>

@@ -122,7 +122,7 @@ namespace ArchiveFixer.Storage
 
             var sample = new SpaceTrendSample
             {
-                At = at ?? DateTime.Now,
+                At = at ?? ArchiveFixer.Helpers.Clock.Now,
                 FreeBytes = free ?? SpaceReservationLedger.UnknownAvailable,
                 Note = note ?? string.Empty
             };

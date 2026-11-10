@@ -11,7 +11,7 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class OperationLogItem : INotifyPropertyChanged
     {
-        private DateTime _time = DateTime.Now;
+        private DateTime _time = ArchiveFixer.Helpers.Clock.Now;
         private string _level = "INFO";
         private string _message = string.Empty;
         private string _taskPath = string.Empty;
@@ -99,7 +99,7 @@ namespace ArchiveFixer.Models
 
         public OperationLogItem(string level, string message, string taskPath = "")
         {
-            Time = DateTime.Now;
+            Time = ArchiveFixer.Helpers.Clock.Now;
             Level = string.IsNullOrWhiteSpace(level) ? "INFO" : level;
             Message = message ?? string.Empty;
             TaskPath = taskPath ?? string.Empty;

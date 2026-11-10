@@ -114,7 +114,7 @@ namespace ArchiveFixer.Services
         /// <para>做成可注入的：测试造不出"真正同一秒"的两次写回，只能从这里把时间钉住 ——
         /// 否则"同秒撞名要退到 <c>.1</c>/<c>.2</c>"这条分支永远只能靠读代码相信。</para>
         /// </summary>
-        public Func<DateTime> Clock { get; set; } = () => DateTime.Now;
+        public Func<DateTime> Clock { get; set; } = () => ArchiveFixer.Helpers.Clock.Now;
 
         /// <summary>
         /// 从一批候选里挑出"还没写回"的那些（纯查询，不碰文件）。

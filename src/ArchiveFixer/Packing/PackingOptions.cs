@@ -296,7 +296,7 @@ namespace ArchiveFixer.Packing
                 }
             }
 
-            return Path.Combine(parentDirectory, $"{baseName}({DateTime.Now:yyyyMMddHHmmss})");
+            return Path.Combine(parentDirectory, $"{baseName}({ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmss})");
         }
 
         /// <summary>
@@ -329,7 +329,7 @@ namespace ArchiveFixer.Packing
                 }
             }
 
-            return Path.Combine(directory, $"{baseName}({DateTime.Now:yyyyMMddHHmmss}){extension}");
+            return Path.Combine(directory, $"{baseName}({ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmss}){extension}");
         }
 
         private static bool Exists(string path) => File.Exists(path) || Directory.Exists(path);
@@ -555,7 +555,7 @@ namespace ArchiveFixer.Packing
                 }
             }
 
-            return Path.Combine(directory, $"{baseName}({DateTime.Now:yyyyMMddHHmmss}).7z");
+            return Path.Combine(directory, $"{baseName}({ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmss}).7z");
         }
 
         private static bool IsVolumeBaseTaken(string basePath) =>

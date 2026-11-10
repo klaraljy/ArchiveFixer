@@ -27,7 +27,7 @@ namespace ArchiveFixer.Extraction
             task.OutputOnlyZeroByteEntriesMissing = false;
             task.Outcome = TaskOutcome.Cancelled;
             task.Reason = TaskReason.Cancelled;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             log?.Invoke(
                 "INFO",

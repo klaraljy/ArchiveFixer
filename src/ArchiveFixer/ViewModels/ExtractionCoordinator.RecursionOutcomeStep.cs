@@ -173,8 +173,8 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("WARN", $"{task.LogName}：{RecursionFailureNotes.IdenticalResultsNote}");
                     }
                     ApplyLandingViolationNote(task, result);
-                    task.EndTime = DateTime.Now;
-                    task.LastUpdatedTime = DateTime.Now;
+                    task.EndTime = ArchiveFixer.Helpers.Clock.Now;
+                    task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
                     task.ClearProgress();
                     task.UpdateElapsedText();
 

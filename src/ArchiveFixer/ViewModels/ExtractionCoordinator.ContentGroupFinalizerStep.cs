@@ -82,7 +82,7 @@ namespace ArchiveFixer.ViewModels
                 representative.Reason = reason;
                 representative.Status = status;
                 representative.ErrorMessage = evidence;
-                representative.EndTime ??= DateTime.Now;
+                representative.EndTime ??= ArchiveFixer.Helpers.Clock.Now;
             }
 
             ArchiveTask? processOwner = representative

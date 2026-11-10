@@ -417,10 +417,10 @@ namespace ArchiveFixer
 
                 string logFile = Path.Combine(
                     LogsDirectory,
-                    $"fatal_{DateTime.Now:yyyyMMdd}.log");
+                    $"fatal_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd}.log");
 
                 string text =
-                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [FATAL]\r\n" +
+                    $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [FATAL]\r\n" +
                     ArchiveFixer.Password.PasswordMasker.Sanitize(ex.ToString()) + "\r\n\r\n";
 
                 File.AppendAllText(logFile, text);
@@ -458,10 +458,10 @@ namespace ArchiveFixer
 
                     string logFile = Path.Combine(
                         logDir,
-                        $"fatal_{DateTime.Now:yyyyMMdd}.log");
+                        $"fatal_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd}.log");
 
                     string text =
-                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [UNOBSERVED_TASK_EXCEPTION]\r\n" +
+                        $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [UNOBSERVED_TASK_EXCEPTION]\r\n" +
                         ArchiveFixer.Password.PasswordMasker.Sanitize(e.Exception.ToString()) + "\r\n\r\n";
 
                     File.AppendAllText(logFile, text);

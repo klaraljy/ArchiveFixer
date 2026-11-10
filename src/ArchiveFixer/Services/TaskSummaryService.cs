@@ -454,7 +454,7 @@ namespace ArchiveFixer.Services
             var builder = new StringBuilder();
 
             builder.AppendLine(FailedListTitle);
-            builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(DateTime.Now));
+            builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(ArchiveFixer.Helpers.Clock.Now));
             builder.AppendLine(EngineLabel + DescribeRunEngines(allTasks));
 
             if (failedTasks.Count == 0)

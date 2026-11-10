@@ -50,7 +50,7 @@ namespace ArchiveFixer.ViewModels
             task.Operation = StatusText.OpExtract;
             task.Status = StatusText.Extracting;
             task.ProgressText = StatusText.ProgressProcessing;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             AppendLog(
                 "INFO",
@@ -94,7 +94,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 task.Status = StatusText.ExtractFailed;
                 task.ErrorMessage = extract.Message;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("ERROR", $"{task.LogName}：ZIP 直读失败 —— {extract.Message}");
                 return;

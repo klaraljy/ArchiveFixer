@@ -443,7 +443,7 @@ namespace ArchiveFixer.ViewModels
 
             task.Status = StatusText.Extracting;
             task.ProgressText = StatusText.ProgressProcessing;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             /*
              * 递归核心（RecursiveExtractor）从 task.CurrentPath 取"第 0 层要解哪个归档"。

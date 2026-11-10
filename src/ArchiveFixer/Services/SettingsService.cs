@@ -187,7 +187,7 @@ namespace ArchiveFixer.Services
 
                 if (File.Exists(brokenPath))
                 {
-                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    string timestamp = ArchiveFixer.Helpers.Clock.Now.ToString("yyyyMMdd_HHmmss");
                     brokenPath = Path.Combine(directory, $"appsettings.broken.{timestamp}.json");
                 }
 

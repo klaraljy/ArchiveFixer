@@ -182,7 +182,7 @@ namespace ArchiveFixer.Storage
     /// </summary>
     public sealed class DeleteLogEntry
     {
-        public DateTime Time { get; init; } = DateTime.Now;
+        public DateTime Time { get; init; } = ArchiveFixer.Helpers.Clock.Now;
 
         public string Path { get; init; } = string.Empty;
 

@@ -833,7 +833,7 @@ namespace ArchiveFixer.Services
             task.Status = StatusText.Scanning;
             task.ProgressText = StatusText.ProgressProcessing;
             task.ErrorMessage = string.Empty;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             DetectResult result = await DetectAsync(task.CurrentPath, cancellationToken);
 
@@ -943,7 +943,7 @@ namespace ArchiveFixer.Services
                 }
             }
 
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             return result;
         }

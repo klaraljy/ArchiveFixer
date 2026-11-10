@@ -1280,7 +1280,7 @@ namespace ArchiveFixer.Services
         private static void LogFallback(string context, string message, string reason)
         {
             string line =
-                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{context}] {reason}｜" +
+                $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [{context}] {reason}｜" +
                 PasswordMasker.Sanitize(message);
 
             lock (FallbackLock)

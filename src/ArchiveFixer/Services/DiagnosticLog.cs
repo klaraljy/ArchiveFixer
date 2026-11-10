@@ -46,7 +46,7 @@ namespace ArchiveFixer.Services
                     batch,
                     source,
                     task_count = tasks?.Count ?? 0,
-                    generated_at = LogService.FormatTimestamp(DateTime.Now),
+                    generated_at = LogService.FormatTimestamp(ArchiveFixer.Helpers.Clock.Now),
                     tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(DescribeTaskCompact).ToList()
                 };
 
@@ -80,7 +80,7 @@ namespace ArchiveFixer.Services
                 var payload = new
                 {
                     batch,
-                    generated_at = LogService.FormatTimestamp(DateTime.Now),
+                    generated_at = LogService.FormatTimestamp(ArchiveFixer.Helpers.Clock.Now),
                     summary,
                     task_count = tasks?.Count ?? 0,
                     tasks = (tasks ?? Array.Empty<ArchiveTask>()).Select(DescribeTaskCompact).ToList()

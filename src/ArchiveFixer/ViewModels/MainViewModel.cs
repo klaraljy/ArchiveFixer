@@ -4072,7 +4072,7 @@ namespace ArchiveFixer.ViewModels
             {
                 Logs.Add(new OperationLogItem
                 {
-                    Time = DateTime.Now,
+                    Time = ArchiveFixer.Helpers.Clock.Now,
                     Level = level,
                     Message = safeMessage
                 });
@@ -4525,7 +4525,7 @@ namespace ArchiveFixer.ViewModels
             }
             else
             {
-                lines.Add($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                lines.Add($"导出时间：{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}");
             }
 
             /*
@@ -4961,7 +4961,7 @@ namespace ArchiveFixer.ViewModels
             string path = _dialogService.ShowSaveFileDialog(
                 "导出日志（本次操作）",
                 "日志文件 (*.log)|*.log|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-                $"ArchiveFixer-本次操作_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                $"ArchiveFixer-本次操作_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd_HHmmss}.txt",
                 ResolveLogExportInitialDirectory());
 
             if (string.IsNullOrWhiteSpace(path))
@@ -5004,7 +5004,7 @@ namespace ArchiveFixer.ViewModels
             string path = _dialogService.ShowSaveFileDialog(
                 "导出全部历史日志",
                 "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-                $"ArchiveFixer-全部历史日志_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                $"ArchiveFixer-全部历史日志_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd_HHmmss}.txt");
 
             if (string.IsNullOrWhiteSpace(path))
             {

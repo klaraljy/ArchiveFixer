@@ -860,7 +860,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 entry.ConsumedBy = by;
-                entry.ConsumedAt = DateTime.Now;
+                entry.ConsumedAt = ArchiveFixer.Helpers.Clock.Now;
             }
         }
 

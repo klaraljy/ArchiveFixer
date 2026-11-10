@@ -5589,7 +5589,7 @@ namespace ArchiveFixer.Extraction
              * 这里**不需要**自己做文件名清洗：ExtractionWorkspace 构造时会再清洗一遍，
              * 而且它才是"路径安全"的唯一责任方（清洗两次不冲突，但不能靠这里兜底）。
              */
-            string taskId = $"{sourceName}_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}";
+            string taskId = $"{sourceName}_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}";
 
             return new ExtractionWorkspace(WorkspaceRootDirectory, taskId);
         }

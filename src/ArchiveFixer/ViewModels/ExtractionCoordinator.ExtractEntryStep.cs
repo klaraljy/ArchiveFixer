@@ -510,7 +510,7 @@ namespace ArchiveFixer.ViewModels
 
                     // 每个任务各自的"已经在队列里等过"标记与开始等的时间（只有等得久才补一句，见下）。
                     bool queuedLogged = false;
-                    DateTime queuedSince = DateTime.Now;
+                    DateTime queuedSince = ArchiveFixer.Helpers.Clock.Now;
 
 
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
@@ -528,7 +528,7 @@ namespace ArchiveFixer.ViewModels
                         if (!queuedLogged)
                         {
                             queuedLogged = true;
-                            queuedSince = DateTime.Now;
+                            queuedSince = ArchiveFixer.Helpers.Clock.Now;
                         }
 
                         if (!throttleExplained)
@@ -602,7 +602,7 @@ namespace ArchiveFixer.ViewModels
                          * 74 条"并发已满 / 等到空位"同义反复就是噪声）。30 秒以内的等待不值得单独占一行，
                          * 批末那条汇总会把"有几个等过"说清。
                          */
-                        TimeSpan waited = DateTime.Now - queuedSince;
+                        TimeSpan waited = ArchiveFixer.Helpers.Clock.Now - queuedSince;
 
                         if (waited.TotalSeconds >= ThrottleNoticeThresholdSeconds)
                         {

@@ -175,8 +175,8 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.Skipped;
                     task.Outcome = TaskOutcome.Skipped;
                     task.ProgressText = StatusText.ProgressSkipped;
-                    task.EndTime = DateTime.Now;
-                    task.LastUpdatedTime = DateTime.Now;
+                    task.EndTime = ArchiveFixer.Helpers.Clock.Now;
+                    task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
                     task.ElapsedText = task.StartTime.HasValue
                         ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                         : "-";
@@ -258,11 +258,11 @@ namespace ArchiveFixer.ViewModels
                 task.Operation = StatusText.OpWaiting;
                 task.ProgressText = StatusText.Cancelled;
                 task.ErrorMessage = "任务已取消";
-                task.EndTime = DateTime.Now;
+                task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                 task.ElapsedText = task.StartTime.HasValue
                     ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                     : "-";
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("WARN", $"任务已取消：{task.FileName}");
             }
@@ -272,11 +272,11 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage = ex.Message;
                 task.Operation = StatusText.OpWaiting;
                 task.ProgressText = StatusText.ProgressFailed;
-                task.EndTime = DateTime.Now;
+                task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                 task.ElapsedText = task.StartTime.HasValue
                     ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                     : "-";
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("ERROR", $"任务失败：{task.FileName}，{ex.Message}");
             }
@@ -513,8 +513,8 @@ namespace ArchiveFixer.ViewModels
                          * （`ProgressText` 那一格是「完成」，改了会动显示口径），只补终态与结束时间。
                          */
                         task.Outcome = TaskOutcome.Skipped;
-                        task.EndTime = DateTime.Now;
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.EndTime = ArchiveFixer.Helpers.Clock.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("WARN", $"跳过：{task.FileName} —— {task.ErrorMessage}");
                         return;
@@ -535,7 +535,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            task.StartTime = DateTime.Now;
+            task.StartTime = ArchiveFixer.Helpers.Clock.Now;
             task.EndTime = null;
             task.ElapsedText = "-";
             task.Operation = StatusText.OpPrepare;
@@ -563,7 +563,7 @@ namespace ArchiveFixer.ViewModels
             // 同理：上一轮"其余物为什么留着"那句话也要清掉（这一轮它会重新写）。
             task.RestKeptReason = string.Empty;
 
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             // 选项构造收口在 BuildExtractOptions：确认框的"内容物会生成在…"必须与这里用**同一份字段**算。
             ExtractOptions extractOptions = BuildExtractOptions(tryExtractUnknown);
@@ -741,11 +741,11 @@ namespace ArchiveFixer.ViewModels
                         task.Operation = StatusText.OpSkip;
                         task.ProgressText = StatusText.ProgressSkipped;
                         task.ErrorMessage = $"输出目录已存在且非空，按你的选择跳过：{outputPath}";
-                        task.EndTime = DateTime.Now;
+                        task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                         task.ElapsedText = task.StartTime.HasValue
                             ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                             : "-";
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         /*
                          * ⚠ 2026-10-09：**用户自己选的"跳过"不许被算成失败**。
@@ -1074,7 +1074,7 @@ namespace ArchiveFixer.ViewModels
                          */
                         task.Status = StatusText.ExtractFailed;
                         task.ErrorMessage = directZip.Message;
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("ERROR", $"{task.LogName}：{directZip.Message}");
                         return;
@@ -1092,7 +1092,7 @@ namespace ArchiveFixer.ViewModels
                         task.Status = StatusText.WrongPassword;
                         task.PasswordStatus = StatusText.WrongPassword;
                         task.ErrorMessage = directZip.Message;
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("ERROR", $"{task.LogName}：{directZip.Message}");
                         return;
@@ -1128,7 +1128,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage =
                             $"取出内嵌归档需要约 {carveBytes / 1024 / 1024} MB 临时空间，" +
                             $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                         return;
@@ -1172,7 +1172,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = string.IsNullOrWhiteSpace(carve.Message)
                             ? "取出内嵌归档失败"
                             : "取出内嵌归档失败：" + carve.Message;
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                         return;
@@ -1809,7 +1809,7 @@ namespace ArchiveFixer.ViewModels
                 task.Operation = StatusText.OpTest;
                 task.Status = StatusText.Testing;
                 task.ProgressText = StatusText.ProgressProcessing;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("INFO", $"{task.LogName}：开始解压前测试。");
 
@@ -1846,7 +1846,7 @@ namespace ArchiveFixer.ViewModels
                         task.Status = StatusText.TestPassed;
                         task.PasswordStatus = string.IsNullOrEmpty(password) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
                         task.ErrorMessage = string.Empty;
-                        task.LastUpdatedTime = DateTime.Now;
+                        task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                         AppendLog("INFO", $"{task.LogName}：测试通过。");
                         break;
@@ -1891,7 +1891,7 @@ namespace ArchiveFixer.ViewModels
                     task.ErrorMessage = testResult.Message;
                     task.Operation = StatusText.OpWaiting;
                     task.ProgressText = StatusText.ProgressCompleted;
-                    task.LastUpdatedTime = DateTime.Now;
+                    task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                     AppendLog("ERROR", $"{task.LogName}：测试失败，原因：{testResult.Message}");
                     break;
@@ -1972,14 +1972,14 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = "没有可用密码或测试失败";
                     }
 
-                    task.EndTime = DateTime.Now;
+                    task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                     task.ElapsedText = task.StartTime.HasValue
                         ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                         : "-";
 
                     task.Operation = StatusText.OpWaiting;
                     task.ProgressText = StatusText.ProgressCompleted;
-                    task.LastUpdatedTime = DateTime.Now;
+                    task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                     AppendLog("ERROR", $"解压前测试失败：{task.FileName}，原因：{task.ErrorMessage}");
 
@@ -1998,7 +1998,7 @@ namespace ArchiveFixer.ViewModels
                 task.Operation = StatusText.OpExtract;
                 task.Status = StatusText.Extracting;
                 task.ProgressText = StatusText.ProgressProcessing;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("INFO", $"{task.LogName}：测试通过，开始正式解压。");
 
@@ -2312,7 +2312,7 @@ namespace ArchiveFixer.ViewModels
                     task.Operation = StatusText.OpExtract;
                     task.Status = StatusText.Extracting;
                     task.ProgressText = StatusText.ProgressProcessing;
-                    task.LastUpdatedTime = DateTime.Now;
+                    task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                     /*
                      * ===== 候选先过"最小条目"这一关，通过了才去解整包（第 37 条）=====
@@ -3028,7 +3028,7 @@ namespace ArchiveFixer.ViewModels
             // 密码类失败登记到本批，批次结束后合并成一次提示（不再在任务循环里逐个弹模态框）。
             RecordPasswordFailure(task);
 
-            task.EndTime = DateTime.Now;
+            task.EndTime = ArchiveFixer.Helpers.Clock.Now;
             task.ElapsedText = task.StartTime.HasValue
                 ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                 : "-";
@@ -3055,7 +3055,7 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressCompleted;
             }
 
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
 
         /// <summary>
@@ -3083,7 +3083,7 @@ namespace ArchiveFixer.ViewModels
 
             // 机器终态显式落（与"未识别 ⇒ 跳过"那条同一个口径：只补 EndTime 会让终态收口按失败接手）。
             task.Outcome = TaskOutcome.Skipped;
-            task.EndTime ??= DateTime.Now;
+            task.EndTime ??= ArchiveFixer.Helpers.Clock.Now;
 
             AppendLog(
                 "WARN",

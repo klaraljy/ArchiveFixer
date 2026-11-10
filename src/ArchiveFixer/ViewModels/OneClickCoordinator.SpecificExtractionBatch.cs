@@ -318,7 +318,7 @@ namespace ArchiveFixer.ViewModels
             follower.Status = StatusText.Skipped;
             follower.ProgressText = StatusText.ProgressSkipped;
             follower.Outcome = TaskOutcome.Skipped;
-            follower.EndTime = DateTime.Now;
+            follower.EndTime = ArchiveFixer.Helpers.Clock.Now;
             follower.ErrorMessage = entrySuccess
                 ? $"跟班卷：同组入口「{entry.LogName}」已处理"
                 : $"跟班卷：同组入口「{entry.LogName}」没有成功";
@@ -512,7 +512,7 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ExtractSuccess;
                 task.IsOutputVerified = true;
                 task.Outcome = TaskOutcome.Succeeded;
-                task.EndTime = DateTime.Now;
+                task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                 task.ApplyProgress(100, null);
 
                 /*
@@ -621,7 +621,7 @@ namespace ArchiveFixer.ViewModels
             task.ErrorMessage = string.IsNullOrWhiteSpace(message) ? "特定解压失败" : message;
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Failed;
-            task.EndTime = DateTime.Now;
+            task.EndTime = ArchiveFixer.Helpers.Clock.Now;
         }
 
         private static void MarkSpecificTaskCancelled(ArchiveTask task)
@@ -635,7 +635,7 @@ namespace ArchiveFixer.ViewModels
             task.IsOutputVerified = false;
             task.Outcome = TaskOutcome.Cancelled;
             task.Reason = TaskReason.Cancelled;
-            task.EndTime = DateTime.Now;
+            task.EndTime = ArchiveFixer.Helpers.Clock.Now;
             task.ClearProgress();
         }
 

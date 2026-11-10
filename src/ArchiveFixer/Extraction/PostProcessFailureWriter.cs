@@ -44,7 +44,7 @@ namespace ArchiveFixer.Extraction
 
             task.OutputVerification = OutputVerificationOutcome.Failed;
             task.Outcome = TaskOutcome.Failed;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             log?.Invoke(
                 "ERROR",

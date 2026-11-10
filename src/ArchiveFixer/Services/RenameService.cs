@@ -938,7 +938,7 @@ namespace ArchiveFixer.Services
 
             string fallback = Path.Combine(
                 directory,
-                $"{fileNameWithoutExtension}_{DateTime.Now:yyyyMMddHHmmssfff}{extension}");
+                $"{fileNameWithoutExtension}_{ArchiveFixer.Helpers.Clock.Now:yyyyMMddHHmmssfff}{extension}");
 
             return fallback;
         }
@@ -1636,7 +1636,7 @@ namespace ArchiveFixer.Services
             task.Operation = StatusText.OpRename;
             task.Status = StatusText.RenameSuccess;
             task.ErrorMessage = string.Empty;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             /*
              * **记下这一步变换**（唯一写入出口 `ArchiveTask.AppendTransformationStep`）：用的就是
@@ -1657,7 +1657,7 @@ namespace ArchiveFixer.Services
             task.Operation = StatusText.OpRename;
             task.Status = StatusText.RenameFailed;
             task.ErrorMessage = errorMessage ?? string.Empty;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
 
         private static void UpdateTaskSkipped(ArchiveTask? task, string message)
@@ -1670,7 +1670,7 @@ namespace ArchiveFixer.Services
             task.Operation = StatusText.OpSkip;
             task.Status = StatusText.Skipped;
             task.ErrorMessage = message ?? string.Empty;
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
     }
 }

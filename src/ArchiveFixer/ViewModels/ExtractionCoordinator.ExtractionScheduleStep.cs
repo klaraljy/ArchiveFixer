@@ -486,8 +486,8 @@ namespace ArchiveFixer.ViewModels
             task.ProgressText = StatusText.ProgressFailed;
             task.Operation = StatusText.OpExtract;
             task.ErrorMessage = message;
-            task.EndTime = DateTime.Now;
-            task.LastUpdatedTime = DateTime.Now;
+            task.EndTime = ArchiveFixer.Helpers.Clock.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             /*
              * 终态**显式落 Failed**（用户 2026-10-02 真机暴露出来的不一致）：这个方法过去只写 Status，

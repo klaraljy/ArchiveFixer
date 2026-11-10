@@ -385,7 +385,7 @@ namespace ArchiveFixer.ViewModels
                 // 结论不成立时不许在详情里显示"输出校验通过"。
                 task.IsOutputVerified = false;
                 task.Outcome = TaskOutcome.Failed;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 return false;
             }
@@ -398,7 +398,7 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage = work.CommitFailureMessage;
                 task.IsOutputVerified = false;
                 task.Outcome = TaskOutcome.Failed;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 /*
                  * 这一类失败的事实位（唯一写入点）：批末诊断靠它把"定稿搬运失败"单独点出来 ——
@@ -425,7 +425,7 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage = "同名冲突按你的选择跳过：产物仍留在暂存目录，未写入输出目录。";
                 task.IsOutputVerified = false;
                 task.Outcome = TaskOutcome.Skipped;
-                task.LastUpdatedTime = DateTime.Now;
+                task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 return false;
             }
@@ -707,7 +707,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!task.EndTime.HasValue)
             {
-                task.EndTime = DateTime.Now;
+                task.EndTime = ArchiveFixer.Helpers.Clock.Now;
                 task.UpdateElapsedText();
             }
 

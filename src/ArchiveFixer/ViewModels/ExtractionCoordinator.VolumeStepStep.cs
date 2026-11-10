@@ -298,7 +298,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 pieceTask.Outcome = TaskOutcome.Skipped;
-                pieceTask.EndTime = DateTime.Now;
+                pieceTask.EndTime = ArchiveFixer.Helpers.Clock.Now;
                 pieceTask.MarkSkipped(string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     "同组入口「{0}」没有成功，这一片没有单独解（源包原样保留）。",

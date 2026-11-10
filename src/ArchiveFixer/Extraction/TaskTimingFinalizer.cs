@@ -18,13 +18,13 @@ namespace ArchiveFixer.Extraction
                 return;
             }
 
-            task.EndTime ??= DateTime.Now;
+            task.EndTime ??= ArchiveFixer.Helpers.Clock.Now;
 
             task.ElapsedText = task.StartTime.HasValue
                 ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                 : task.ElapsedText;
 
-            task.LastUpdatedTime = DateTime.Now;
+            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
     }
 }

@@ -352,7 +352,7 @@ namespace ArchiveFixer.Services
                 StartTime = null,
                 EndTime = null,
                 ElapsedText = "-",
-                LastUpdatedTime = DateTime.Now
+                LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now
             };
 
             return task;

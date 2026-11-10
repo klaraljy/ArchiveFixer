@@ -154,7 +154,7 @@ namespace ArchiveFixer.Models
         private DateTime? _startTime;
         private DateTime? _endTime;
         private string _elapsedText = "-";
-        private DateTime _lastUpdatedTime = DateTime.Now;
+        private DateTime _lastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         private int _progressPercent = NoProgress;
         private string _progressEntry = string.Empty;
         private string _responsivenessHint = string.Empty;
@@ -2211,7 +2211,7 @@ namespace ArchiveFixer.Models
             PasswordStatus = StatusText.NotChecked;
             ExtensionStatus = StatusText.NotChecked;
             DetectedFormat = "Unknown";
-            LastUpdatedTime = DateTime.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
             // 单文件构造 = "用户选中的就是这个文件"（第 13 条四条规则的第 1 条）。
             // 「添加文件夹」扫出来的任务由 FileScanService 覆写成 Folder + 文件夹路径。
@@ -2230,14 +2230,14 @@ namespace ArchiveFixer.Models
             Status = status;
             ProgressText = StatusText.ProgressProcessing;
             ErrorMessage = string.Empty;
-            StartTime = DateTime.Now;
+            StartTime = ArchiveFixer.Helpers.Clock.Now;
             EndTime = null;
 
             // 重跑一个任务时，上一次留下的百分比与"长时间无响应"必须清干净，
             // 否则新的一轮会从"上一轮的 87%"开始显示。
             ClearProgress();
 
-            LastUpdatedTime = DateTime.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
 
         /// <summary>
@@ -2249,8 +2249,8 @@ namespace ArchiveFixer.Models
             Status = status;
             ProgressText = StatusText.ProgressCompleted;
             ErrorMessage = string.Empty;
-            EndTime = DateTime.Now;
-            LastUpdatedTime = DateTime.Now;
+            EndTime = ArchiveFixer.Helpers.Clock.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
             ClearProgress();
             UpdateElapsedText();
         }
@@ -2264,8 +2264,8 @@ namespace ArchiveFixer.Models
             Status = status;
             ProgressText = StatusText.ProgressFailed;
             ErrorMessage = errorMessage ?? string.Empty;
-            EndTime = DateTime.Now;
-            LastUpdatedTime = DateTime.Now;
+            EndTime = ArchiveFixer.Helpers.Clock.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
             ClearProgress();
             UpdateElapsedText();
         }
@@ -2279,8 +2279,8 @@ namespace ArchiveFixer.Models
             Status = StatusText.Skipped;
             ProgressText = StatusText.OpSkip;
             ErrorMessage = reason ?? string.Empty;
-            EndTime = DateTime.Now;
-            LastUpdatedTime = DateTime.Now;
+            EndTime = ArchiveFixer.Helpers.Clock.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
             ClearProgress();
             UpdateElapsedText();
         }
@@ -2295,8 +2295,8 @@ namespace ArchiveFixer.Models
             Reason = TaskReason.Cancelled;
             ProgressText = StatusText.Cancelled;
             ErrorMessage = reason;
-            EndTime = DateTime.Now;
-            LastUpdatedTime = DateTime.Now;
+            EndTime = ArchiveFixer.Helpers.Clock.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
             ClearProgress();
             UpdateElapsedText();
         }
@@ -2388,7 +2388,7 @@ namespace ArchiveFixer.Models
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
                 ProgressText = StatusText.ProgressCompleted;
-                LastUpdatedTime = DateTime.Now;
+                LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
                 return;
             }
 
@@ -2424,7 +2424,7 @@ namespace ArchiveFixer.Models
             Operation = StatusText.OpScan;
             ProgressText = StatusText.ProgressCompleted;
             ErrorMessage = result.Message ?? string.Empty;
-            LastUpdatedTime = DateTime.Now;
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
         }
 
         /// <summary>
@@ -2438,7 +2438,7 @@ namespace ArchiveFixer.Models
                 return;
             }
 
-            DateTime end = EndTime ?? DateTime.Now;
+            DateTime end = EndTime ?? ArchiveFixer.Helpers.Clock.Now;
             TimeSpan span = end - StartTime.Value;
 
             if (span.TotalMilliseconds < 0)
@@ -2465,7 +2465,7 @@ namespace ArchiveFixer.Models
 
             if (propertyName != nameof(LastUpdatedTime))
             {
-                _lastUpdatedTime = DateTime.Now;
+                _lastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
                 OnPropertyChanged(nameof(LastUpdatedTime));
             }
 

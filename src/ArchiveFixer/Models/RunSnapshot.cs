@@ -14,7 +14,7 @@ namespace ArchiveFixer.Models
     {
         public Guid RunId { get; init; } = Guid.NewGuid();
 
-        public DateTime StartedAt { get; init; } = DateTime.Now;
+        public DateTime StartedAt { get; init; } = ArchiveFixer.Helpers.Clock.Now;
 
         /// <summary>开跑时的目标清单（副本；之后任务列表变化不影响这里）。</summary>
         public IReadOnlyList<ArchiveTask> Targets { get; init; } = Array.Empty<ArchiveTask>();
