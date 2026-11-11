@@ -72,6 +72,13 @@ namespace ArchiveFixer.Tests.Batch120
             string placement = ReadPlacement(recipe);
             string sourceHandling = ReadSourceHandling(recipe);
             string contentHandling = ReadContentHandling(recipe);
+            if (BatchNormalSettings.TryGet(sampleId, Seed, out BatchNormalSettings.Choice normalChoice))
+            {
+                placement = normalChoice.Placement;
+                sourceHandling = normalChoice.SourceHandling;
+                contentHandling = normalChoice.RestHandling;
+            }
+
             bool useSpecific = category == "Specific" || kind == "SpecificBatch";
             bool spaceTight = category == "SpaceTight";
             long spaceFreeBytes = 0;

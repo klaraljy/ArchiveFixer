@@ -45,12 +45,22 @@ namespace ArchiveFixer.Tests.Batch120
             JsonNode recipe = JsonNode.Parse(File.ReadAllText(recipePath, Encoding.UTF8))!;
             Batch120RunRecord record = JsonSerializer.Deserialize<Batch120RunRecord>(File.ReadAllText(recordPath, Encoding.UTF8))!;
             string category = Str(recipe, "category");
-            string placement = ReadPlacement(recipe);
+            bool operationScenario = BatchNormalSettings.TryGet(sampleId, Batch120Operation.Seed, out BatchNormalSettings.Choice operationChoice);
+            string placement = operationScenario ? operationChoice.Placement : ReadPlacement(recipe);
 
             // ---------------- 通用 ----------------
             Add("G1", record.Error == null, "运行无异常", record.Error ?? "无异常");
-            Add("G2", record.Category == category && record.Placement == placement,
-                $"{category}/{placement}", $"{record.Category}/{record.Placement}");
+            bool g2 = record.Category == category && record.Placement == placement;
+            if (operationScenario)
+            {
+                g2 &= record.SourceHandling == operationChoice.SourceHandling
+                      && record.RestHandling == operationChoice.RestHandling;
+            }
+            Add("G2", g2,
+                operationScenario
+                    ? $"{category}/{placement}/{operationChoice.SourceHandling}/{operationChoice.RestHandling}"
+                    : $"{category}/{placement}",
+                $"{record.Category}/{record.Placement}/{record.SourceHandling}/{record.RestHandling}");
             Add("G3", record.Before.Count > 0, "跑前快照非空", $"{record.Before.Count} 个文件");
             Add("G4", record.Tasks.Length > 0, "任务非空", $"{record.Tasks.Length} 个任务");
 
@@ -97,7 +107,7 @@ namespace ArchiveFixer.Tests.Batch120
             // ---------------- 分类 ----------------
             if (category == "Normal")
             {
-                NormalChecks(Add, recipe, record, disk, placement);
+                NormalChecks(Add, recipe, record, disk, placement, operationScenario ? operationChoice : null);
             }
             else if (category == "Specific")
             {
@@ -122,7 +132,8 @@ namespace ArchiveFixer.Tests.Batch120
         // ------------------------------------------------------------ 普通
 
         private static void NormalChecks(Func<string, bool, string, string, string, CheckResult> add,
-            JsonNode recipe, Batch120RunRecord record, Dictionary<string, long> disk, string placement)
+            JsonNode recipe, Batch120RunRecord record, Dictionary<string, long> disk, string placement,
+            BatchNormalSettings.Choice? operationChoice)
         {
             bool success = Str(recipe, "expectedOutcome") == "Succeeded";
             string contentName = Str(recipe, "expectedFinalContentName");
@@ -167,7 +178,9 @@ namespace ArchiveFixer.Tests.Batch120
             var sources = files.Select(f => (Base: Str(f!, "baseName"), Bytes: Long(f!, "bytes"))).ToArray();
             var afterList = record.After.ToArray();
             int stillThere = sources.Count(s => afterList.Any(a => BaseName(a.Path) == s.Base && a.Bytes == s.Bytes));
-            bool sourceKeep = Bool(recipe, "expectedSourceKeep");
+            bool sourceKeep = operationChoice is { } applied
+                ? record.SourceHandling == "KeepInPlace"
+                : Bool(recipe, "expectedSourceKeep");
             bool n3 = success ? (sourceKeep ? stillThere == sources.Length : stillThere == 0) : stillThere == sources.Length;
             add("N3", n3, success ? (sourceKeep ? "源包全保留" : "源包全删除") : "失败必须保留源包",
                 $"{stillThere}/{sources.Length} 仍在", "按基名+字节认，产品会修正伪装后缀");
@@ -180,7 +193,9 @@ namespace ArchiveFixer.Tests.Batch120
                 && !string.Equals(Path.GetFileName(a.Path), "recipe.json", StringComparison.Ordinal)
                 && !sources.Any(s => BaseName(a.Path) == s.Base && a.Bytes == s.Bytes)
                 && !a.Path.Contains("\\部分完成\\", StringComparison.Ordinal));
-            bool processKeep = Bool(recipe, "expectedProcessKeep");
+            bool processKeep = operationChoice is { } processChoice
+                ? record.RestHandling == "Keep"
+                : Bool(recipe, "expectedProcessKeep");
             bool n4 = processKeep || artifacts == 0;
             add("N4", n4, processKeep ? "过程物允许保留" : "过程物必须清空", $"{artifacts} 个过程物",
                 "造包器记的 expectedProcessPaths 指源包片，这里按定义重算；部分完成不算过程物");
