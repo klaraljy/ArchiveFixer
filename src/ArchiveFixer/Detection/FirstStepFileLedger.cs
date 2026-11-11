@@ -539,6 +539,64 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// 这个基名在**第二大步里的代表层**：只在候选片里取（<see cref="SecondStepCandidates"/>），
+        /// 全部候选都没有层时才退回同基名的任意项。
+        ///
+        /// <para>⛔ 为什么不能直接用 <see cref="SameBase"/> 的第一条：外层包与它解出的分卷片
+        /// 常常同基名（`X.tar` 与 `X.7z.001` 都会被切成 `X`），外层包那一条的 `SourceLayer`
+        /// 是**源目录**，不是片所在的成品目录。用错层去拼"快通道键 / 原始源层"会让两把键永远对不上
+        /// （真机 2026-11-10：快通道明明 Ready，仍然落回 resolver 整组试开 21 GB）。</para>
+        /// </summary>
+        public string CandidateSourceLayer(string? baseName)
+        {
+            foreach (FirstStepFileLedgerEntry entry in SecondStepCandidates(baseName))
+            {
+                if (!string.IsNullOrWhiteSpace(entry.SourceLayer))
+                {
+                    return entry.SourceLayer;
+                }
+            }
+
+            return SameBase(baseName)
+                .Select(entry => entry.SourceLayer)
+                .FirstOrDefault(layer => !string.IsNullOrWhiteSpace(layer))
+                ?? string.Empty;
+        }
+
+        /// <summary>
+        /// 这个基名在第二大步里的**代表路径**：优先第 1 片（名字槽 1），再退任意候选片；
+        /// 没有候选片才退回同基名任意项。
+        ///
+        /// <para>用于"按这一组找密码 / 找同目录说明文件"这类只读定位 —— 必须是片，不能是外层包。</para>
+        /// </summary>
+        public string CandidateRepresentativePath(string? baseName)
+        {
+            IReadOnlyList<FirstStepFileLedgerEntry> candidates = SecondStepCandidates(baseName);
+            string? entryPath = candidates
+                .Where(entry => entry.NameSlot == 1)
+                .Select(entry => entry.Path)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+
+            if (!string.IsNullOrWhiteSpace(entryPath))
+            {
+                return entryPath!;
+            }
+
+            string? anyPath = candidates
+                .Select(entry => entry.Path)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+
+            if (!string.IsNullOrWhiteSpace(anyPath))
+            {
+                return anyPath!;
+            }
+
+            return SameBase(baseName)
+                .Select(entry => entry.Path)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path))
+                ?? string.Empty;
+        }
+        /// <summary>
         /// 任务改名/修后缀后，把旧路径那一条改成新路径。
         /// 只换路径与派生字段，底层身份/卷证据原样保留；旧路径不存在时不新增。
         /// </summary>

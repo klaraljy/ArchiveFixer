@@ -93,8 +93,12 @@ namespace ArchiveFixer.Extraction
             string? preferredWorkRoot = null,
             VolumeContentFormat family = VolumeContentFormat.Unknown,
             bool testVolumes = false,
-            IReadOnlyList<string>? passwordCandidates = null)
+            IReadOnlyList<string>? passwordCandidates = null,
+            IProgress<ArchiveProgress>? progress = null,
+            Action<ArchiveStallNotice>? stalled = null)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
             {
                 return Refuse(0, "第一卷不在了", attempted: false, VolumeTrialSkipReason.Other);
@@ -207,7 +211,9 @@ namespace ArchiveFixer.Extraction
                             cancellationToken,
                             family,
                             testVolumes,
-                            passwordCandidates)
+                            passwordCandidates,
+                            progress,
+                            stalled)
                         .ConfigureAwait(false);
 
                     if (trial.Failure == null)
@@ -866,7 +872,9 @@ namespace ArchiveFixer.Extraction
             CancellationToken cancellationToken,
             VolumeContentFormat family = VolumeContentFormat.Unknown,
             bool testVolumes = false,
-            IReadOnlyList<string>? passwordCandidates = null)
+            IReadOnlyList<string>? passwordCandidates = null,
+            IProgress<ArchiveProgress>? progress = null,
+            Action<ArchiveStallNotice>? stalled = null)
         {
             try
             {
@@ -907,8 +915,11 @@ namespace ArchiveFixer.Extraction
 
                 foreach (string password in candidates)
                 {
+                    ArchiveRequest testRequest = ArchiveRequest.For(firstLink, password);
+                    testRequest.Progress = progress;
+                    testRequest.Stalled = stalled;
                     ArchiveOperationResult test = await _engine
-                        .TestAsync(ArchiveRequest.For(firstLink, password), cancellationToken)
+                        .TestAsync(testRequest, cancellationToken)
                         .ConfigureAwait(false);
 
                     if (test.Success)
@@ -929,8 +940,11 @@ namespace ArchiveFixer.Extraction
                 return new TrialResult(lastFailure, false);
             }
 
+            ArchiveRequest listRequest = ArchiveRequest.For(firstLink, null);
+            listRequest.Progress = progress;
+            listRequest.Stalled = stalled;
             ArchiveListResult list = await _engine
-                .ListAsync(ArchiveRequest.For(firstLink, null), cancellationToken)
+                .ListAsync(listRequest, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!list.Success)

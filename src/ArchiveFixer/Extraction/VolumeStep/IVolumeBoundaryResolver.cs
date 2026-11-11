@@ -30,6 +30,12 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>日志回调（级别, 文案）；为空则不写。</summary>
         public Action<string, string>? Log { get; init; }
+
+        /// <summary>试开进度（引擎 -bsp1 百分比）；为空则上层看不到进度（真机 2026-11-10 的"零日志长窗"）。</summary>
+        public IProgress<ArchiveProgress>? Progress { get; init; }
+
+        /// <summary>"很久没有引擎输出"的提示；为空则不提示。</summary>
+        public Action<ArchiveStallNotice>? Stalled { get; init; }
     }
 
     /// <summary>

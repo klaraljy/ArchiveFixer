@@ -123,9 +123,7 @@ namespace ArchiveFixer.Extraction
 
                 if (unique.Count >= 2 && byteSum == first.DeclaredTotalBytes)
                 {
-                    PreparedVolumeGroup? nonUniform =
-                        await TryResolveNonUniformAsync(context, first, unique, cancellationToken)
-                            .ConfigureAwait(false);
+                    PreparedVolumeGroup? nonUniform = TryResolveNonUniformAsync(context, first, unique);
 
                     if (nonUniform != null)
                     {
@@ -221,9 +219,7 @@ namespace ArchiveFixer.Extraction
              */
             if (declaredTotal < 2 && unique.Count >= 2)
             {
-                PreparedVolumeGroup? nonUniform =
-                    await TryResolveNonUniformAsync(context, first, unique, cancellationToken)
-                        .ConfigureAwait(false);
+                PreparedVolumeGroup? nonUniform = TryResolveNonUniformAsync(context, first, unique);
 
                 if (nonUniform != null)
                 {
@@ -294,17 +290,25 @@ namespace ArchiveFixer.Extraction
         /// **非等大 7z 切分**：数量不等于公式 N、但字节和精确等于首卷自述整包。
         /// 用实际片数和名字槽建标准名，交给引擎试开；试开通过才 Complete。
         /// </summary>
-        private static async Task<PreparedVolumeGroup?> TryResolveNonUniformAsync(
+        /// <summary>
+        /// **非等大 7z 切分**：数量不等于公式 N、但字节和精确等于首卷自述整包。
+        ///
+        /// <para>判据只有两条，且都是账本事实：① 名字槽 1..N 唯一（顺序已经由名字确定，
+        /// ⛔ 不再"猜顺序"）；② 各片字节和精确等于首卷自述整包（片集与自述整包一致）。
+        /// 两条都成立 ⇒ 直接 Complete，⛔ 不整组 7z t（21 GB 读一遍是重复取证，不是新证据；
+        /// 真机 2026-11-10：同一份 21 GB 因此被整组测了两遍，白烧 8 分 26 秒）。</para>
+        ///
+        /// <para>真正"名字定不了序"的未定槽排列仍然走
+        /// <see cref="TryProbeUnassignedOrderAsync"/> 的试开 —— 那里才是必须读数据的场合。</para>
+        /// </summary>
+        private static PreparedVolumeGroup? TryResolveNonUniformAsync(
             VolumeBoundaryContext context,
             FirstStepFileLedgerEntry first,
-            IReadOnlyList<FirstStepFileLedgerEntry> pieces,
-            CancellationToken cancellationToken)
+            IReadOnlyList<FirstStepFileLedgerEntry> pieces)
         {
             int count = pieces.Count;
 
-            if (count < 2
-                || context.Engine == null
-                || string.IsNullOrWhiteSpace(context.WorkspaceRoot))
+            if (count < 2)
             {
                 return null;
             }
@@ -334,52 +338,14 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            var rest = new List<VolumeCandidate>();
+            long byteSum = 0;
 
-            for (int slot = 2; slot <= count; slot++)
+            foreach (FirstStepFileLedgerEntry entry in bySlot.Values)
             {
-                rest.Add(new VolumeCandidate
-                {
-                    Path = bySlot[slot].Path,
-                    Size = bySlot[slot].Size
-                });
+                byteSum += entry.Size;
             }
 
-            VolumeProbeOutcome outcome = await new VolumeProbeVerifier(context.Engine)
-                .VerifyAsync(
-                    first.Path,
-                    new List<IReadOnlyList<VolumeCandidate>> { rest },
-                    cancellationToken,
-                    context.WorkspaceRoot,
-                    VolumeContentFormat.SevenZip,
-                    testVolumes: true,
-                    passwordCandidates: context.PasswordCandidates)
-                .ConfigureAwait(false);
-
-            if (!outcome.Confirmed || outcome.OrderedVolumes.Count != count)
-            {
-                return null;
-            }
-
-            var ordered = new List<FirstStepFileLedgerEntry>(count);
-            var byPath = new Dictionary<string, FirstStepFileLedgerEntry>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (FirstStepFileLedgerEntry entry in pieces)
-            {
-                byPath[Path.GetFullPath(entry.Path)] = entry;
-            }
-
-            foreach (VolumeCandidate volume in outcome.OrderedVolumes)
-            {
-                if (!byPath.TryGetValue(Path.GetFullPath(volume.Path), out FirstStepFileLedgerEntry? entry))
-                {
-                    return null;
-                }
-
-                ordered.Add(entry);
-            }
-
-            if (ordered.Count != count || !ReferenceEquals(ordered[0], first))
+            if (byteSum != first.DeclaredTotalBytes)
             {
                 return null;
             }
@@ -394,16 +360,17 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            var prepared = new List<PreparedVolumePiece>();
+            var prepared = new List<PreparedVolumePiece>(count);
 
-            for (int index = 0; index < count; index++)
+            for (int slot = 1; slot <= count; slot++)
             {
+                FirstStepFileLedgerEntry entry = bySlot[slot];
                 prepared.Add(new PreparedVolumePiece
                 {
-                    CanonicalName = targets[index],
-                    OriginalPath = ordered[index].Path,
-                    Size = ordered[index].Size,
-                    Source = ordered[index].Source
+                    CanonicalName = targets[slot - 1],
+                    OriginalPath = entry.Path,
+                    Size = entry.Size,
+                    Source = entry.Source
                 });
             }
 
@@ -416,8 +383,9 @@ namespace ArchiveFixer.Extraction
                 EntryCanonicalName = targets[0],
                 Pieces = prepared,
                 State = PreparedGroupState.Complete,
-                Evidence = $"7z 自述 {first.DeclaredVolumeCount} 片，但实际 {count} 片字节和精确等于 "
-                    + $"{first.DeclaredTotalBytes} 字节；按非等大切分试开通过"
+                Evidence = $"7z 自述 {first.DeclaredVolumeCount} 片，但实际 {count} 片："
+                    + $"名字槽 1..{count} 唯一、字节和精确等于 {first.DeclaredTotalBytes} 字节 "
+                    + "⇒ 判 Complete（顺序已由名字确定，不整组试开）"
             };
         }
 
@@ -487,6 +455,16 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
+            /*
+             * 只有这里（名字定不了序的排列）才值得读整组数据：试开前把"要多久、为什么"写进日志，
+             * 引擎的 -bsp1 百分比通过 context.Progress 送去 UI/日志，不再出现"几分钟零输出"（真机 2026-11-10）。
+             */
+            var trialWatch = System.Diagnostics.Stopwatch.StartNew();
+            context.Log?.Invoke(
+                "INFO",
+                $"[第二大步·试开] {context.BaseName}：{total} 片里 {unassigned.Count} 片名字定不了序，"
+                + $"共 {orderings.Count} 种排列；整组约 {first.DeclaredTotalBytes} 字节，可能要读完整组。");
+
             VolumeProbeOutcome outcome = await new VolumeProbeVerifier(context.Engine)
                 .VerifyAsync(
                     first.Path,
@@ -495,8 +473,16 @@ namespace ArchiveFixer.Extraction
                     context.WorkspaceRoot,
                     VolumeContentFormat.SevenZip,
                     testVolumes: true,
-                    passwordCandidates: context.PasswordCandidates)
+                    passwordCandidates: context.PasswordCandidates,
+                    progress: context.Progress,
+                    stalled: context.Stalled)
                 .ConfigureAwait(false);
+
+            trialWatch.Stop();
+            context.Log?.Invoke(
+                outcome.Confirmed ? "INFO" : "WARN",
+                $"[第二大步·试开] {context.BaseName}：{(outcome.Confirmed ? "成立" : "不成立")}"
+                + $"（{outcome.Attempts} 次，{trialWatch.Elapsed.TotalSeconds:F1} 秒）。");
 
             if (!outcome.Confirmed
                 || outcome.OrderedVolumes.Count != total)

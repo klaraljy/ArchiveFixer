@@ -1068,6 +1068,7 @@ namespace ArchiveFixer.ViewModels
             int round = 0;
             int continuationLayers = 0;
             bool stopped = false;
+            string stoppedPhase = string.Empty;
             bool hitRoundLimit = false;
 
             // 撞到轮数上限时那几个"已经加进列表、这一批没解"的内层包（第 16 条追加：到顶要能一键继续）。
@@ -1254,6 +1255,12 @@ namespace ArchiveFixer.ViewModels
                      * 组分析实现从 `SecondStepResidue/VolumeCandidateDiscovery.cs` 挑回来的（只读纯函数）。
                      */
                     var handoffGroups = new List<VolumeCandidateDiscovery.VolumeCandidate>();
+
+                    /*
+                     * 第二大步"当前工作"句柄：解析 / 试开 / 命名 / 建入口根都归它。
+                     * 暂停或「停止当前任务」取消它 ⇒ 试开里的引擎进程立刻被取消，且不会再进下一批。
+                     */
+                    using SecondStepWorkScope secondStepWork = _extractionCoordinator.BeginSecondStepWork();
 
                     try
                     {
@@ -1448,24 +1455,55 @@ namespace ArchiveFixer.ViewModels
                         IReadOnlyList<PreparedVolumeGroup> preparedGroups =
                             await _extractionCoordinator.VolumeBoundaryPipeline.ResolveAllAsync(
                                     _extractionCoordinator.FirstStepLedger,
-                                    baseName => new VolumeBoundaryContext
+                                    baseName =>
                                     {
-                                        Ledger = _extractionCoordinator.FirstStepLedger,
-                                        BaseName = baseName,
-                                        Engine = _extractionCoordinator.ArchiveEngine,
-                                        WorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot,
-                                        PasswordCandidates = _extractionCoordinator.BuildVolumeProbePasswordCandidates(
-                                            _extractionCoordinator.FirstStepLedger
-                                                .SameBase(baseName)
-                                                .Select(entry => entry.Path)
-                                                .FirstOrDefault() ?? string.Empty),
-                                        OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
-                                            .SameBase(baseName)
-                                            .Select(entry => entry.SourceLayer)
-                                            .FirstOrDefault(layer => !string.IsNullOrWhiteSpace(layer))
-                                            ?? string.Empty
-                                    })
+                                        long trialLastTicks = 0;
+                                        int trialLastPercent = -1;
+
+                                        return new VolumeBoundaryContext
+                                        {
+                                            Ledger = _extractionCoordinator.FirstStepLedger,
+                                            BaseName = baseName,
+                                            Engine = _extractionCoordinator.ArchiveEngine,
+                                            WorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot,
+
+                                            /*
+                                             * 「代表路径 / 代表层」只从候选片取（SecondStepCandidates）：
+                                             * 同基名可能同时挂着外层包（X.tar 与 X.7z.001 都切成 X），
+                                             * 用外层包那条的路径/层会让密码探测和快通道键全偏（真机 2026-11-10）。
+                                             */
+                                            PasswordCandidates = _extractionCoordinator.BuildVolumeProbePasswordCandidates(
+                                                _extractionCoordinator.FirstStepLedger.CandidateRepresentativePath(baseName)),
+                                            OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
+                                                .CandidateSourceLayer(baseName),
+                                            Log = (level, message) => AppendLog(level, message),
+                                            Progress = new Progress<ArchiveFixer.Engines.ArchiveProgress>(progress =>
+                                            {
+                                                long now = Environment.TickCount64;
+
+                                                if (progress.Percent == trialLastPercent
+                                                    && now - trialLastTicks < 5000)
+                                                {
+                                                    return;
+                                                }
+
+                                                trialLastPercent = progress.Percent;
+                                                trialLastTicks = now;
+                                                AppendLog(
+                                                    "INFO",
+                                                    progress.Percent >= 0
+                                                        ? $"[第二大步·试开] {baseName}：{progress.Percent}%"
+                                                        : $"[第二大步·试开] {baseName}：引擎正在扫描（还没有百分比）");
+                                            }),
+                                            Stalled = notice => AppendLog(
+                                                "WARN",
+                                                $"[第二大步·试开] {baseName}：{notice}")
+                                        };
+                                    },
+                                    secondStepWork.Token)
                                 .ConfigureAwait(true);
+
+                        secondStepWork.Token.ThrowIfCancellationRequested();
 
                         /*
                          * ⛔ 2026-11-01 真机：字节补齐配对已在组分析层证完整（`风景01`），
@@ -1497,6 +1535,8 @@ namespace ArchiveFixer.ViewModels
 
                             foreach (PreparedVolumeGroup prepared in preparedGroups)
                             {
+                                secondStepWork.Token.ThrowIfCancellationRequested();
+
                                 if (prepared.State != PreparedGroupState.Complete)
                                 {
                                     materialized.Add(prepared);
@@ -1575,6 +1615,12 @@ namespace ArchiveFixer.ViewModels
                                 AppendLog("INFO", $"[第二大步·prepared] {group.Describe()}");
                             }
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        stopped = true;
+                        stoppedPhase = "第二大步解析/试开";
+                        break;
                     }
                     catch (Exception probeError)
                     {
@@ -2122,6 +2168,17 @@ namespace ArchiveFixer.ViewModels
                         }
                     }
 
+                    /*
+                     * 第二大步在当前这一轮已经干完（解析/试开/命名都结束），这是"暂停会不会又跑起来"的最后一道闸：
+                     * 用户在这段里按过暂停/停止当前 ⇒ 在这里停下，绝不再进下一批 21 GB 解压（真机 2026-11-10）。
+                     */
+                    if (stopToken.IsStopRequested || secondStepWork.Token.IsCancellationRequested)
+                    {
+                        stopped = true;
+                        stoppedPhase = "第二大步解析/试开/命名";
+                        break;
+                    }
+
                     if (innerArchives.Count == 0 && volumeEntryTasks.Count == 0)
                     {
                         /*
@@ -2259,6 +2316,7 @@ namespace ArchiveFixer.ViewModels
             finally
             {
                 _vm.PropertyChanged -= OnViewModelPropertyChanged;
+                stopToken.Dispose();
             }
 
             /*
@@ -2301,7 +2359,7 @@ namespace ArchiveFixer.ViewModels
 
             FinalizeBatch();
 
-            string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
+            string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count, stoppedPhase);
 
             AppendLog("INFO", summary);
 
@@ -3864,7 +3922,8 @@ namespace ArchiveFixer.ViewModels
             bool stopRequestedByUser = false,
             int continuationLayers = 0,
             bool hitRoundLimit = false,
-            int pendingContinuation = 0)
+            int pendingContinuation = 0,
+            string stoppedPhase = "")
         {
             /*
              * ===== 分项一律按**机器终态**算，而且**数法只有一份** =====
@@ -3961,9 +4020,16 @@ namespace ArchiveFixer.ViewModels
                  * "本轮有任务真的没轮到"（程序自己的判断）是两件事 —— 老代码一律写"已按「停止后续」中断"，
                  * 于是用户没按过也被告知"你按了"，还会误以为程序没错。
                  */
-                string reason = stopRequestedByUser
-                    ? "已按「停止后续」中断"
-                    : "本轮有任务没轮到，已停下（不是你按的「停止后续」）";
+                /*
+                 * 停在第二大步的解析/试开/命名阶段是**另一种停**：那时还没有开始解那一层，
+                 * ⛔ 不许套"已按停止后续中断（已完成续解 N 层）"那句话（真机 2026-11-10 00:14:28 就是这么写的，
+                 * 实际 21 GB 已经解完）。
+                 */
+                string reason = stoppedPhase.Length > 0
+                    ? $"已按「暂停所有操作」在{stoppedPhase}阶段停下（还没开始解那一层）"
+                    : stopRequestedByUser
+                        ? "已按「停止后续」中断"
+                        : "本轮有任务没轮到，已停下（不是你按的「停止后续」）";
 
                 line += continuationLayers > 0
                     ? $" {reason}（已完成续解 {continuationLayers} 层）。"
@@ -4153,38 +4219,15 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string? ResolvePreparedGroupTargetWorkRoot(PreparedVolumeGroup group)
         {
-            if (group == null)
-            {
-                return null;
-            }
-
-            string entry = group.OriginalEntryPath;
-
-            if (string.IsNullOrWhiteSpace(entry) && group.Pieces.Count > 0)
-            {
-                entry = group.Pieces[0].OriginalPath;
-            }
-
-            if (string.IsNullOrWhiteSpace(entry))
-            {
-                return null;
-            }
-
-            ArchiveTask? task = Tasks.FirstOrDefault(candidate =>
-            {
-                if (candidate == null)
-                {
-                    return false;
-                }
-
-                return PathsEqual(candidate.CurrentPath, entry)
-                       || PathsEqual(candidate.OriginalPath, entry)
-                       || candidate.VolumePaths.Any(path => PathsEqual(path, entry));
-            });
-
-            return string.IsNullOrWhiteSpace(task?.OutputPath)
-                ? null
-                : Path.Combine(task!.OutputPath, ".ArchiveFixer.work");
+            /*
+             * 唯一出口：入口任务 ⇒ 生产者任务（账本 ProducedByTaskId）⇒ 都没有就不猜。
+             * ⛔ 不在这里堆第二套路径比较；事实链在 SecondStepEntryRootResolver，测试直接钉它。
+             */
+            return SecondStepEntryRootResolver.Resolve(
+                group,
+                Tasks,
+                _extractionCoordinator.FirstStepLedger,
+                AppendLog);
         }
 
         private static bool PathsEqual(string? left, string? right)

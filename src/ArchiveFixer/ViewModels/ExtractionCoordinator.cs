@@ -126,6 +126,15 @@ namespace ArchiveFixer.ViewModels
 
 
         private CancellationTokenSource? _operationCts;
+
+        /// <summary>
+        /// **第二大步"当前工作"的取消源**：解析 / 试开 / 命名 / 建入口根这一整段。
+        ///
+        /// <para>它不在任务表里，所以旧的「停止当前任务」只看任务 CTS 时会报"没有正在执行的任务"，
+        /// 而实际上一组 21 GB 正在被整组试开（真机 2026-11-10 00:00:45）。现在这段工作也有句柄：
+        /// 「停止当前任务 / 暂停所有操作」先取消它，再取消任务；停止后续（只停后续）不碰它。</para>
+        /// </summary>
+        private readonly SecondStepWorkTracker _secondStepWorkTracker = new();
         /// <summary>
         /// 正在跑的任务各自的取消源。
         ///
@@ -389,16 +398,41 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 进入第二大步（解析 / 试开 / 命名）时挂上"当前工作"句柄；结束时 Dispose。
+        /// 一键处理的轮循环是串行的，所以同一时刻只允许一个句柄。
+        /// </summary>
+        internal SecondStepWorkScope BeginSecondStepWork()
+        {
+            return _secondStepWorkTracker.Begin();
+        }
+
+        private bool CancelSecondStepWork()
+        {
+            return _secondStepWorkTracker.Cancel();
+        }
+
         public void CancelCurrentTask(string operation = "停止当前任务")
         {
             try
             {
+                // 先取消"第二大步当前工作"（解析/试开/命名），再按任务取消；两者都是"当前正在执行"。
+                bool secondStepWorkCancelled = CancelSecondStepWork();
+
                 // 先取快照再逐个 Cancel：Cancel 会同步触发回调，不能拿着列表的锁做这件事。
                 List<CancellationTokenSource> running = SnapshotRunningTasks();
 
                 if (running.Count == 0)
                 {
-                    AppendLog("WARN", $"当前没有正在执行的任务可{operation}。");
+                    if (secondStepWorkCancelled)
+                    {
+                        AppendLog("INFO", $"{operation}：已取消正在进行的第二大步工作（解析 / 试开 / 命名）。");
+                    }
+                    else
+                    {
+                        AppendLog("WARN", $"当前没有正在执行的任务可{operation}。");
+                    }
+
                     return;
                 }
 
