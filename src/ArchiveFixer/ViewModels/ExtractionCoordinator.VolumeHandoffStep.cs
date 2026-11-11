@@ -337,6 +337,15 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                /*
+                 * 普通媒体内容物不是分卷候选：不登记进第二大步账本（⛔ 不靠后缀猜，
+                 * 只认"媒体结构正好占满整个文件且没有尾部归档"这条内容事实）。
+                 */
+                if (card.IsKnownNormalMedia)
+                {
+                    continue;
+                }
+
                 int? nameSlot = LegacyVolumeNames.TryGetIndex(
                     FileNameHelper.GetFileName(file));
 
@@ -794,6 +803,7 @@ namespace ArchiveFixer.ViewModels
                 Format = card.Format,
                 Size = card.Size,
                 BodyKind = card.BodyKind,
+                ContentKind = card.ContentKind,
                 Evidence = card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
                     || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                         ? VolumeHandoffEvidence.ContentProven

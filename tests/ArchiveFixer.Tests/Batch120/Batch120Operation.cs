@@ -50,8 +50,16 @@ namespace ArchiveFixer.Tests.Batch120
         /// <summary>最近一次运行用的第一大步账本（用例读「已消费源包」这类路径事实时用）。</summary>
         internal static ArchiveFixer.Detection.FirstStepFileLedger? LastLedger { get; private set; }
 
-        public static async Task<Batch120RunRecord> RunOneAsync(string sampleId)
+        public static async Task<Batch120RunRecord> RunOneAsync(string sampleId, bool? keepLogs = null)
         {
+            /*
+             * 日志留档开关在**调用开始时**定值：xUnit 并行跑多个 Batch120 用例时
+             * `ARCHIVEFIXER_120_KEEP_LOGS` 是进程环境变量，别的用例可能在本次运行中途把它恢复。
+             * 调用方需要日志时显式传 true（比依赖进程环境稳）。
+             */
+            bool keepLogsForThisRun = keepLogs
+                ?? Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS") == "1";
+
             string backupSample = Path.Combine(BackupBatchRoot, sampleId);
             string backupPackage = Path.Combine(backupSample, "原包");
             string recipePath = Path.Combine(backupSample, "recipe.json");
@@ -196,7 +204,7 @@ namespace ArchiveFixer.Tests.Batch120
                  * 取证开关：`ARCHIVEFIXER_120_KEEP_LOGS=1` 时把这一次运行的日志留在
                  * `E:\AF\120批操作\<seed>\logs-<sampleId>`（默认数据根随运行删掉，事后查不到）。
                  */
-                if (Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS") == "1")
+                if (keepLogsForThisRun)
                 {
                     try
                     {

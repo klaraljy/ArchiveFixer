@@ -43,7 +43,22 @@ namespace ArchiveFixer.Extraction
             /// </summary>
             public PreparedGroupState SuggestedVerdict { get; init; }
 
-            public string Evidence { get; init; } = string.Empty;
+            private string _evidence = string.Empty;
+
+            public string Evidence
+            {
+                get => _evidence;
+                init => _evidence = value;
+            }
+
+            /// <summary>给已有候选补一句"忽略了哪些候选"的说明（⛔ 不改判据，只补证据文本）。</summary>
+            internal void AppendEvidence(string note)
+            {
+                if (!string.IsNullOrWhiteSpace(note))
+                {
+                    _evidence += note;
+                }
+            }
 
             /// <summary>判不出时"缺口"是空的；判出缺卷时列出缺的卷号（1 起）。</summary>
             public IReadOnlyList<int> MissingNumbers { get; init; } = Array.Empty<int>();
@@ -264,6 +279,21 @@ namespace ArchiveFixer.Extraction
                  * 由交界处把"没有分卷证据的根任务源路径"传进来，这里一律不种、不收。
                  */
                 if (excluded.Contains(seed))
+                {
+                    continue;
+                }
+
+                /*
+                 * 普通媒体内容物不是分卷种子（用户 2026-11-11：媒体前缀只服务单一完整包）。
+                 * 只认内容事实；判不出（裸切续卷伪装成 .png）照旧进候选。
+                 */
+                if (IsKnownNormalMedia(handoffByPath, seed) || IsKnownNormalMediaOnDisk(seed))
+                {
+                    continue;
+                }
+
+                // 0 字节不可能是归档/分卷的一片（真机：0 字节 *.7z.001 曾被快通道当完整组解一层）。
+                if (FileSizeOf(seed) <= 0)
                 {
                     continue;
                 }
@@ -530,7 +560,8 @@ namespace ArchiveFixer.Extraction
             {
                 if (string.Equals(path, seed, StringComparison.OrdinalIgnoreCase)
                     || !File.Exists(path)
-                    || excluded.Contains(path))
+                    || excluded.Contains(path)
+                    || FileSizeOf(path) <= 0)
                 {
                     continue;
                 }
@@ -539,6 +570,17 @@ namespace ArchiveFixer.Extraction
                     ArchiveFixer.Helpers.FileNameHelper.SecondStepBaseName(path),
                     baseName,
                     StringComparison.OrdinalIgnoreCase);
+
+                /*
+                 * 同基名的普通媒体（例如 336.png 与 336.7z.001 同基名）不是这一组的一片。
+                 * ⛔ 判据只认内容事实：媒体结构正好占满整个文件且没有尾部归档；
+                 * 媒体前缀的完整单卷（EmbeddedOffset > 0）与裸切续卷伪装成 .png 都不在这一档。
+                 */
+                if (sameBase
+                    && (IsKnownNormalMedia(handoffByPath, path) || IsKnownNormalMediaOnDisk(path)))
+                {
+                    continue;
+                }
 
                 if (!sameBase)
                 {
@@ -687,13 +729,51 @@ namespace ArchiveFixer.Extraction
             return IsProvablySingleCompleteNonMember(item.Card, item.Path);
         }
 
+        /// <summary>普通媒体内容物：只是**否定证据**，不参与"是不是分卷"的结论。</summary>
+        private static bool IsKnownNormalMedia(ArchiveFixer.Detection.FileNatureCard? card)
+            => card?.ContentKind == ArchiveFixer.Detection.FileContentKind.NormalMedia;
+
+        private static bool IsKnownNormalMedia(ArchiveFixer.Detection.VolumeHandoffEntry? entry)
+            => entry?.ContentKind == ArchiveFixer.Detection.FileContentKind.NormalMedia;
+
+        private static bool IsKnownNormalMedia(
+            IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath,
+            string path)
+            => handoffByPath != null
+                && handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? entry)
+                && IsKnownNormalMedia(entry);
+
+        /// <summary>
+        /// 盘上这一份是不是普通媒体。只对媒体容器后缀做识别（⛔ 不对每个同基名文件做全量嗅探：
+        /// 正常视频识别一次就够了，而内容物树可能很大）。
+        /// </summary>
+        private static bool IsKnownNormalMediaOnDisk(string path)
+        {
+            if (!ArchiveFixer.Detection.EmbeddedArchiveLocator.IsMediaContainerName(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                return IsKnownNormalMedia(ArchiveFixer.Detection.FileNature.Inspect(path));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsKnownNormalMedia(PieceFacts item) => IsKnownNormalMedia(item.Card);
+
         /// <summary>
         /// 字节补齐配对里的尾片：账本里只能是"纯 Unknown"（没有卷号/名字槽/首卷标记/自述整包），
         /// 否则它属于别的组，⛔ 不许抢过来配对。
         /// </summary>
         private static bool IsByteFitTailCandidate(ArchiveFixer.Detection.VolumeHandoffEntry entry)
         {
-            return entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+            return entry.ContentKind != ArchiveFixer.Detection.FileContentKind.NormalMedia
+                && entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                 && entry.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                 && !entry.NameVolumeIndex.HasValue
                 && !entry.FirstVolumeFlag
@@ -782,7 +862,7 @@ namespace ArchiveFixer.Extraction
                          * 没有卷号/名字槽/首卷标记/自述整包，也不是可证完整单卷。
                          */
                         if (handoffByPath.TryGetValue(path, out ArchiveFixer.Detection.VolumeHandoffEntry? tailHandoff)
-                            && !IsByteFitTailCandidate(tailHandoff))
+                            && (!IsByteFitTailCandidate(tailHandoff) || IsKnownNormalMedia(tailHandoff)))
                         {
                             continue;
                         }
@@ -816,6 +896,7 @@ namespace ArchiveFixer.Extraction
 
                         if (card.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
                             || card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
+                            || IsKnownNormalMedia(card)
                             || IsProvablySingleCompleteNonMember(card, path)
                             || LegacyVolumeNames.TryGetIndex(
                                 FileNameHelper.GetFileName(path)).HasValue)
@@ -965,9 +1046,16 @@ namespace ArchiveFixer.Extraction
             List<string> pieces,
             IReadOnlyDictionary<string, ArchiveFixer.Detection.VolumeHandoffEntry>? handoffByPath)
         {
-            var items = pieces
+            /*
+             * 普通媒体内容物不是分卷组的一片（用户 2026-11-11：媒体前缀只服务单一完整包）。
+             * 先按内容事实剔掉，再谈几何；⛔ 不靠后缀/名字猜。
+             */
+            var allItems = pieces
                 .Select(path => BuildFacts(path, handoffByPath))
                 .ToList();
+
+            int contentDropped = allItems.RemoveAll(item => IsKnownNormalMedia(item));
+            List<PieceFacts> items = allItems;
 
             ArchiveFixer.Detection.VolumeContentFormat format = items
                 .Select(item => item.Format)
@@ -975,6 +1063,15 @@ namespace ArchiveFixer.Extraction
 
             int declaredPieceCount = items.Select(item => item.DeclaredPieceCount).DefaultIfEmpty(0).Max();
             long declaredTotalBytes = items.Select(item => item.DeclaredTotalBytes).DefaultIfEmpty(0).Max();
+
+            /*
+             * 几何过滤必须发生在**首片事实已知之后、字节求和之前**：
+             * 336 真机就是 PNG（53,418 字节）被算进已收字节，组报 636,790,140 > 自述 636,736,722
+             * ⇒ SizeAnomaly。这里只保留"有卷号/名字槽/首片/ZIP split 等身份证据"的片；
+             * 完全没有身份证据的候选，只有其字节和正好补齐自述整包时才留下（唯一的尾片那一档）。
+             */
+            (items, int geometryDropped) = FilterPiecesByGeometry(items, declaredTotalBytes);
+
             long receivedBytes = items.Sum(item => item.Size);
 
             List<VolumeFacts> publicFacts = items.Select(ToPublicFact).ToList();
@@ -984,6 +1081,14 @@ namespace ArchiveFixer.Extraction
             {
                 candidate.PieceFacts = publicFacts;
                 candidate.Cards = cards;
+
+                int dropped = contentDropped + geometryDropped;
+
+                if (dropped > 0)
+                {
+                    candidate.AppendEvidence($"；已忽略 {dropped} 份无法证明属于本组的候选（内容物/无关文件）");
+                }
+
                 return candidate;
             }
 
@@ -1171,6 +1276,88 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 首片事实已知后的几何过滤：只有"能证明自己是这一组的一片"的候选才无条件留下。
+        ///
+        /// <para>判据（⛔ 不猜）：有卷号 / 名字槽 / 首片标记 / 内容身份 / ZIP split 证据 ⇒ 保留；
+        /// 完全没有身份证据的候选，只有**全部无身份候选的字节和正好补齐自述整包**时才整批保留
+        /// （那就是"首片 + 唯一尾片"那一档）；否则整批忽略并记日志。</para>
+        ///
+        /// <para>为什么必须在求和之前：真机 336 的 PNG 被算进已收字节，组报
+        /// 636,790,140 &gt; 自述 636,736,722 ⇒ SizeAnomaly ⇒ 永不建组。</para>
+        /// </summary>
+        private static (List<PieceFacts> Kept, int Dropped) FilterPiecesByGeometry(
+            List<PieceFacts> items,
+            long declaredTotalBytes)
+        {
+            if (declaredTotalBytes <= 0 || items.Count <= 1)
+            {
+                return (items, 0);
+            }
+
+            var known = new List<PieceFacts>();
+            var unknown = new List<PieceFacts>();
+
+            foreach (PieceFacts item in items)
+            {
+                if (HasVolumeIdentityEvidence(item))
+                {
+                    known.Add(item);
+                }
+                else
+                {
+                    unknown.Add(item);
+                }
+            }
+
+            if (unknown.Count == 0)
+            {
+                return (items, 0);
+            }
+
+            long knownBytes = known.Sum(item => item.Size);
+            long unknownBytes = unknown.Sum(item => item.Size);
+            long remainder = declaredTotalBytes - knownBytes;
+
+            /*
+             * 无身份候选整批正好补齐 ⇒ 保留（首片 + 唯一尾片；此时无法用名字区分它们，
+             * 但字节自述对得上，属于既有"字节补齐配对"同一档证据）。
+             * 其余情况（多出来、少一点、正好为 0）⇒ 它们不是这一组的一部分。
+             */
+            if (remainder > 0 && unknownBytes == remainder && unknown.Count > 0)
+            {
+                return (items, 0);
+            }
+
+            return (known, unknown.Count);
+        }
+
+        private static bool HasVolumeIdentityEvidence(PieceFacts item)
+        {
+            if (item.VolumeNumber.HasValue
+                || item.IsFirstPiece
+                || item.Card.FirstVolumeFlag
+                || item.Card.BodyKind != ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                || item.Card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                || item.Card.HasZipLocalHeader
+                || item.Card.ZipEndRecordMeansSplit)
+            {
+                return true;
+            }
+
+            if (item.Handoff is { } handoff
+                && (handoff.BodyKind != ArchiveFixer.Detection.ArchiveBodyKind.Unknown
+                    || handoff.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    || handoff.FirstVolumeFlag
+                    || handoff.NameVolumeIndex.HasValue))
+            {
+                return true;
+            }
+
+            return ArchiveFixer.Detection.LegacyVolumeNames.TryGetIndex(
+                Path.GetFileName(item.Path)).HasValue;
+        }
+
+        /// <summary>
         /// 一片的证据：**已登记过交接单的片直接用交接单里的底层事实**（⛔ 不重读盘）；
         /// 只有盘上补进来的、没登记过的兄弟片才 `FileNature.Inspect` 一次。
         /// </summary>
@@ -1194,6 +1381,7 @@ namespace ArchiveFixer.Extraction
                     FirstVolumeFlag = handoff.FirstVolumeFlag,
                     ContentFail = handoff.ContentFail,
                     BodyKind = handoff.BodyKind,
+                    ContentKind = handoff.ContentKind,
                     DeclaredTotalBytes = handoff.DeclaredTotalBytes,
                     DeclaredVolumeCount = handoff.DeclaredVolumeCount,
                     RawVolumeField = handoff.RawVolumeField,

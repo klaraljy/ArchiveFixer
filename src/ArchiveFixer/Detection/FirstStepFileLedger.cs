@@ -53,6 +53,9 @@ namespace ArchiveFixer.Detection
 
         public ArchiveBodyKind BodyKind { get; init; }
 
+        /// <summary>内容物事实（普通媒体 = 否定证据；见 <see cref="FileContentKind"/>）。</summary>
+        public FileContentKind ContentKind { get; init; }
+
         public int? VolumeNumber { get; init; }
 
         public bool FirstVolumeFlag { get; init; }
@@ -167,6 +170,7 @@ namespace ArchiveFixer.Detection
                 Format = card.Format,
                 Membership = card.Membership,
                 BodyKind = card.BodyKind,
+                ContentKind = card.ContentKind,
                 VolumeNumber = card.VolumeNumber,
                 FirstVolumeFlag = card.FirstVolumeFlag,
                 RawVolumeField = card.RawVolumeField,
@@ -224,6 +228,7 @@ namespace ArchiveFixer.Detection
                     ? Membership
                     : existing.Membership,
                 BodyKind = BodyKind != ArchiveBodyKind.Unknown ? BodyKind : existing.BodyKind,
+                ContentKind = ContentKind != FileContentKind.Unknown ? ContentKind : existing.ContentKind,
                 VolumeNumber = VolumeNumber ?? existing.VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag || existing.FirstVolumeFlag,
                 RawVolumeField = RawVolumeField ?? existing.RawVolumeField,
@@ -270,6 +275,7 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public bool HasSecondStepEvidence =>
             !IsConsumedSource
+            && ContentKind != FileContentKind.NormalMedia
             && (BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
                 || Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                 || FirstVolumeFlag
@@ -300,6 +306,7 @@ namespace ArchiveFixer.Detection
                 Format = Format,
                 Membership = Membership,
                 BodyKind = BodyKind,
+                ContentKind = ContentKind,
                 VolumeNumber = VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag,
                 RawVolumeField = RawVolumeField,
@@ -340,6 +347,7 @@ namespace ArchiveFixer.Detection
                 Format = Format,
                 Membership = Membership,
                 BodyKind = BodyKind,
+                ContentKind = ContentKind,
                 VolumeNumber = VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag,
                 RawVolumeField = RawVolumeField,
@@ -525,7 +533,13 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// **第二大步候选池的唯一入口**：同基名里"有第二大步证据、且不是已消费源包"的那些项。
+        /// **第二大步候选池的唯一入口**：同基名里"过了闸门、不是已消费源包、内容也不是普通媒体"的那些项。
+        ///
+        /// <para>⛔ 这里只做**否定证据**的排除，不替族 resolver 判"这一份是不是分卷"：
+        /// 7z 中间片/裸切续卷名字丢了也能靠族算法定序；如果在这里要求"必须有卷号/名字槽"，
+        /// 合法但事实稀疏的片会被挡在组外（实测 2026-11-11 的 9 条骨架用例因此变红）。
+        /// 普通媒体有 <see cref="FileContentKind.NormalMedia"/> 这条内容事实，足以把 336.png
+        /// 这类内容物挡在候选池外。</para>
         ///
         /// <para>⛔ 族 resolver / 族仲裁只许从这里拿候选：老写法各自用
         /// <see cref="SameBase"/> 再叠自己的过滤条件，于是"外层包已解成功"的账本项
@@ -534,8 +548,27 @@ namespace ArchiveFixer.Detection
         public IReadOnlyList<FirstStepFileLedgerEntry> SecondStepCandidates(string? baseName)
         {
             return SameBase(baseName)
-                .Where(entry => entry.IsGatePassed && !entry.IsConsumedSource)
+                .Where(IsSecondStepCandidate)
                 .ToList();
+        }
+
+        /// <summary>
+        /// 全账本的第二大步候选（扁平）：判据与 <see cref="SecondStepCandidates(string?)"/> 完全相同，
+        /// 只服务"标准名快通道要对所有候选片一次定组"这种调用方 —— ⛔ 不许各自再写一遍过滤。
+        /// </summary>
+        public IReadOnlyList<FirstStepFileLedgerEntry> AllSecondStepCandidates()
+        {
+            return _entries
+                .Where(IsSecondStepCandidate)
+                .ToList();
+        }
+
+        private static bool IsSecondStepCandidate(FirstStepFileLedgerEntry entry)
+        {
+            return entry.IsGatePassed
+                && !entry.IsConsumedSource
+                && entry.Size > 0
+                && entry.ContentKind != FileContentKind.NormalMedia;
         }
 
         /// <summary>

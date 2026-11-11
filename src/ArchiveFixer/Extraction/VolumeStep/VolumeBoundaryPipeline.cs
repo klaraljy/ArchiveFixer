@@ -68,7 +68,7 @@ namespace ArchiveFixer.Extraction
              *   ③ 其余一律照走 resolver（不按后缀/名字猜）。
              */
             List<StandardNameFastPath.Decision> readyFastGroups = StandardNameFastPath
-                .Decide(ledger.Entries.Select(entry => entry.Path))
+                .Decide(ledger.AllSecondStepCandidates().Select(entry => entry.Path))
                 .Where(decision => decision.Kind == StandardNameFastPath.DecisionKind.Ready)
                 .ToList();
 

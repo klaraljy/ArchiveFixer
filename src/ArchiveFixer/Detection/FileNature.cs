@@ -37,6 +37,23 @@ namespace ArchiveFixer.Detection
     }
 
     /// <summary>
+    /// **内容物事实**（与"是不是分卷"分开记）：这一份的字节**按媒体容器自己的结构**正好是一段完整媒体、
+    /// 且里面没有可自洽的尾部归档。
+    ///
+    /// <para>⛔ 它只是**否定证据**（"这一份是普通媒体，不是分卷的一片"），不改变
+    /// <see cref="FileNatureCard.Membership"/> / <see cref="FileNatureCard.ParticipatesInVolumeHandling"/>：
+    /// 那两格回答的是"内容里有没有分卷身份"，媒体结构回答的是"这段字节是不是内容物"。</para>
+    /// </summary>
+    public enum FileContentKind
+    {
+        /// <summary>判不出（⛔ 不猜；带尾巴的媒体、裸切续卷伪装成 .png 都落这一档）。</summary>
+        Unknown = 0,
+
+        /// <summary>普通媒体内容物：媒体结构正好占满整个文件，且没有尾部归档。</summary>
+        NormalMedia = 1
+    }
+
+    /// <summary>
     /// **底层：一份文件"到底是什么"** —— 一张卡，四个来源的事实各就各位（用户 2026-10-11 口径：
     /// 「就是统筹到同一组上面去…我们就是先看看**底层能够识别到文件是什么东西**」）。
     ///
@@ -92,6 +109,15 @@ namespace ArchiveFixer.Detection
 
         /// <summary>内容自证"完整的单卷 / 某组的第一片 / 某组的一片"（见 <see cref="ArchiveBodyKind"/>）。</summary>
         public ArchiveBodyKind BodyKind { get; init; }
+
+        /// <summary>
+        /// 内容物事实（见 <see cref="FileContentKind"/>）：只有"媒体结构正好占满整个文件、
+        /// 且没有尾部归档"这一档才置 <see cref="FileContentKind.NormalMedia"/>；其余一律 Unknown。
+        /// </summary>
+        public FileContentKind ContentKind { get; init; }
+
+        /// <summary>是不是普通媒体内容物（⛔ 否定证据，不许拿来当"它一定是分卷/不是分卷"）。</summary>
+        public bool IsKnownNormalMedia => ContentKind == FileContentKind.NormalMedia;
 
         /// <summary>RAR 族内细分（RAR5 / RAR4 新 / RAR4 老 / 加密头）；判不出 = Unknown。</summary>
         public RarVariant RarVariant { get; init; }
@@ -198,7 +224,7 @@ namespace ArchiveFixer.Detection
 
             return $"「{System.IO.Path.GetFileName(Path)}」｜内容：格式={Format} 分卷身份={Membership}"
                 + $" 卷号={number} 首卷标志={FirstVolumeFlag} 原始卷号字段={(RawVolumeField.HasValue ? RawVolumeField.Value.ToString(CultureInfo.InvariantCulture) : "判不出")} 结论={ContentFail}"
-                + $" 专属算法：单卷/分卷={BodyKind} RAR变体={RarVariant} 加密={Encryption}"
+                + $" 专属算法：单卷/分卷={BodyKind} 内容物={ContentKind} RAR变体={RarVariant} 加密={Encryption}"
                 + (DeclaredTotalBytes > 0 ? $" 自述整包={DeclaredTotalBytes} 字节" : string.Empty)
                 + (DeclaredVolumeCount > 0 ? $" 按内容算的片数={DeclaredVolumeCount}" : string.Empty)
                 + $"｜名字：卷号={byName} 本族第1卷={FirstVolumeNameByName ?? "判不出"} 规范名={CanonicalVolumeName}"
@@ -428,7 +454,17 @@ namespace ArchiveFixer.Detection
             VolumeNumberFromContent.VolumeMembershipVerdict membership =
                 VolumeNumberFromContent.ClassifyMembership(path);
 
-            if (format == VolumeContentFormat.Unknown
+            /*
+             * ⚠ ZIP 这一族有一个坑：`VolumeNumberFromContent.Read` 会从**文件尾的 EOCD** 认出 ZIP，
+             * 于是"媒体前缀 + 尾部 ZIP"在走到这里时 format 已经是 Zip、不是 Unknown。
+             * 但文件头并不是 ZIP（没有本地文件头）⇒ 它仍然是"尾部归档"，必须让定位器给出偏移；
+             * 否则 `EmbeddedOffset` 永远是 0，下游按普通 ZIP 从文件头打开会失败。
+             * 普通 ZIP（开头就是 PK）不满足 `!HasZipLocalHeader`，不会被多扫一遍。
+             */
+            bool archiveMayStartAfterPrefix = format == VolumeContentFormat.Unknown
+                || (format == VolumeContentFormat.Zip && !reading.HasZipLocalHeader);
+
+            if (archiveMayStartAfterPrefix
                 && EmbeddedArchiveLocator.TryLocate(path) is { } embedded)
             {
                 format = embedded.Format;
@@ -437,6 +473,27 @@ namespace ArchiveFixer.Detection
                 embeddedLength = embedded.Length;
 
                 membership = VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
+            }
+
+            /*
+             * ===== 内容物事实：普通媒体（用户 2026-11-11 口径：媒体前缀只服务"单一完整压缩包"，
+             * 分卷不在这一版范围内）=====
+             *
+             * 只有下面三条同时成立才置 NormalMedia：
+             *   ① 文件头不是归档（format 仍是 Unknown —— 媒体前缀的完整单卷此时已经变成内层格式）；
+             *   ② 媒体容器按自己的结构走得通；
+             *   ③ 媒体结束位置 == 文件长度（媒体正好占满整个文件）。
+             *
+             * ⛔ 媒体结构后面还有数据（可能是损坏/未识别的尾部归档）⇒ 保持 Unknown：
+             * 那是"判不出"，不是"普通内容物"。裸切续卷伪装成 .png 时媒体签名本身就不成立，同样保持 Unknown。
+             */
+            FileContentKind contentKind = FileContentKind.Unknown;
+
+            if (format == VolumeContentFormat.Unknown
+                && EmbeddedArchiveLocator.TryGetMediaExtent(path, out long mediaEnd, out long mediaLength)
+                && mediaEnd == mediaLength)
+            {
+                contentKind = FileContentKind.NormalMedia;
             }
 
             ArchiveEncryptionState encryption = ArchiveEncryptionState.Unknown;
@@ -460,6 +517,7 @@ namespace ArchiveFixer.Detection
                 FirstVolumeFlag = reading.FirstVolumeFlag,
                 ContentFail = reading.Fail,
                 BodyKind = bodyKind,
+                ContentKind = contentKind,
                 RarVariant = reading.RarVariant,
                 Encryption = encryption,
                 DeclaredTotalBytes = declaredTotalBytes,

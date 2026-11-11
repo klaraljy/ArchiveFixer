@@ -67,12 +67,11 @@ namespace ArchiveFixer.Tests
                 recipe.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
                 new UTF8Encoding(false));
 
-            string? previousKeepLogs = Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS");
-            Environment.SetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS", "1");
+            bool keepFixture = Environment.GetEnvironmentVariable("ARCHIVEFIXER_KEEP_FIXTURE") == "1";
 
             try
             {
-                Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId);
+                Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId, keepLogs: true);
 
                 Assert.True(string.IsNullOrEmpty(record.Error), "一键处理报错：" + record.Error);
 
@@ -109,35 +108,36 @@ namespace ArchiveFixer.Tests
             }
             finally
             {
-                Environment.SetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS", previousKeepLogs);
-
-                try
+                if (!keepFixture)
                 {
-                    if (Directory.Exists(sampleDir))
+                    try
                     {
-                        Directory.Delete(sampleDir, recursive: true);
+                        if (Directory.Exists(sampleDir))
+                        {
+                            Directory.Delete(sampleDir, recursive: true);
+                        }
                     }
-                }
-                catch
-                {
-                }
-
-                try
-                {
-                    string recordPath = Path.Combine(Batch120Operation.RecordRoot, sampleId + ".json");
-                    if (File.Exists(recordPath))
+                    catch
                     {
-                        File.Delete(recordPath);
                     }
 
-                    string logDir = Path.Combine(Batch120Operation.RecordRoot, "logs-" + sampleId);
-                    if (Directory.Exists(logDir))
+                    try
                     {
-                        Directory.Delete(logDir, recursive: true);
+                        string recordPath = Path.Combine(Batch120Operation.RecordRoot, sampleId + ".json");
+                        if (File.Exists(recordPath))
+                        {
+                            File.Delete(recordPath);
+                        }
+
+                        string logDir = Path.Combine(Batch120Operation.RecordRoot, "logs-" + sampleId);
+                        if (Directory.Exists(logDir))
+                        {
+                            Directory.Delete(logDir, recursive: true);
+                        }
                     }
-                }
-                catch
-                {
+                    catch
+                    {
+                    }
                 }
             }
         }

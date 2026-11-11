@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
 
@@ -213,7 +214,14 @@ namespace ArchiveFixer.Extraction
             if (standardNameFastPath)
             {
                 unit.OrderedPieces = pieces.Select(piece => piece.Path).ToList();
-                unit.NamePlan = null;
+
+                /*
+                 * ⛔ 快通道也必须给**规范名计划**：收片/链接/入口覆盖都按它走。
+                 * 这里不判内容完整性，但名字仍然是同一套唯一口径（脏后缀也在这里被规范化）；
+                 * 计划为空会让成功后的 `TrySettleVolumeGroup` 直接跳过 ⇒ 过程物片永远不收
+                 * （2026-11-11 端到端实证：快通道解出内容后 6 片仍留在成品目录）。
+                 */
+                unit.NamePlan = BuildStandardNamePlan(pieces, entryPath);
                 unit.MissingNumbers = Array.Empty<int>();
                 unit.Verdict = "标准名快通道：按入口直接试解，不判内容完整性";
                 unit.State = VolumeGroupState.Complete;
@@ -248,6 +256,39 @@ namespace ArchiveFixer.Extraction
 
             _units[key] = unit;
             return unit;
+        }
+
+        /// <summary>
+        /// 快通道的规范名计划：片 → **标准文件名**（只规范化后缀杂质，不改基名/卷号），
+        /// 入口那一片标 <c>IsEntry</c>。⛔ 不判完整性、⛔ 不读盘。
+        /// </summary>
+        private static CanonicalNamePlan BuildStandardNamePlan(
+            IReadOnlyList<VolumeFacts> pieces,
+            string entryPath)
+        {
+            var items = new List<CanonicalNamePlanItem>(pieces.Count);
+
+            foreach (VolumeFacts piece in pieces)
+            {
+                string targetName = StandardNameFastPath.CanonicalFileName(
+                    Path.GetFileName(piece.Path));
+
+                if (string.IsNullOrWhiteSpace(targetName))
+                {
+                    targetName = Path.GetFileName(piece.Path);
+                }
+
+                items.Add(new CanonicalNamePlanItem(
+                    piece.Path,
+                    targetName,
+                    string.Equals(piece.Path, entryPath, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            return new CanonicalNamePlan
+            {
+                Items = items,
+                Evidence = "标准名快通道：按标准文件名建链接（脏后缀已规范化，不改基名/卷号）"
+            };
         }
 
         /// <summary>

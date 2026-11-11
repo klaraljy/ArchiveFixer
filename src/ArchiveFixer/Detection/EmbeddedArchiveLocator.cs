@@ -58,15 +58,48 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public static EmbeddedArchiveHit? TryLocate(string? path)
         {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return TryProbe(path, out ProbeResult probe) ? probe.Hit : null;
+        }
+
+        /// <summary>
+        /// **媒体结构量到哪为止**（只读事实，不猜）。前缀是媒体、且媒体段正好占满整个文件 ⇒
+        /// <paramref name="mediaEnd"/> == <paramref name="fileLength"/>；媒体结构后面还有数据、
+        /// 或根本不是媒体容器 ⇒ 调用方按"判不出"处理（⛔ 不把带尾巴的媒体当成普通内容物）。
+        /// </summary>
+        public static bool TryGetMediaExtent(string? path, out long mediaEnd, out long fileLength)
+        {
+            mediaEnd = 0;
+            fileLength = 0;
+
+            if (!TryProbe(path, out ProbeResult probe))
             {
-                return null;
+                return false;
             }
 
-            /*
-             * 这份扫描是 O(文件大小) 的（要搜签名），而 FileNature.Inspect 会在一批里被问很多次
-             * ⇒ 按「路径 + 字节数 + 修改时间」缓存结论（与 ArchiveDetectService 的缓存键同源）。
-             */
+            mediaEnd = probe.MediaEnd;
+            fileLength = probe.FileLength;
+
+            return mediaEnd > 0 && fileLength > 0;
+        }
+
+        private readonly record struct ProbeResult(
+            EmbeddedArchiveHit? Hit,
+            long MediaEnd,
+            long FileLength);
+
+        /// <summary>
+        /// 定位与媒体长度共用**同一次**扫描结果（缓存键 = 路径 + 字节数 + 修改时间）。
+        /// ⛔ 两个公开入口各自再扫一遍会把正常媒体读两次。
+        /// </summary>
+        private static bool TryProbe(string? path, out ProbeResult probe)
+        {
+            probe = default;
+
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return false;
+            }
+
             string cacheKey;
 
             try
@@ -79,30 +112,30 @@ namespace ArchiveFixer.Detection
             }
             catch
             {
-                return null;
+                return false;
             }
 
-            if (Cache.TryGetValue(cacheKey, out EmbeddedArchiveHit? cached))
+            if (Cache.TryGetValue(cacheKey, out probe))
             {
-                return cached;
+                return true;
             }
 
-            EmbeddedArchiveHit? located = TryLocateUncached(path);
+            probe = TryLocateUncached(path);
 
             if (Cache.Count > 512)
             {
                 Cache.Clear();
             }
 
-            Cache[cacheKey] = located;
+            Cache[cacheKey] = probe;
 
-            return located;
+            return true;
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, EmbeddedArchiveHit?> Cache =
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProbeResult> Cache =
             new(StringComparer.OrdinalIgnoreCase);
 
-        private static EmbeddedArchiveHit? TryLocateUncached(string path)
+        private static ProbeResult TryLocateUncached(string path)
         {
             long fileLength;
 
@@ -112,18 +145,18 @@ namespace ArchiveFixer.Detection
             }
             catch
             {
-                return null;
+                return default;
             }
 
             if (fileLength <= 0)
             {
-                return null;
+                return new ProbeResult(null, 0, fileLength);
             }
 
             // ① ZIP：既有那份唯一实现（EOCD 偏移自洽），⛔ 不重写第二份。
             if (TryLocateZip(path, out EmbeddedArchiveHit zipHit))
             {
-                return zipHit;
+                return new ProbeResult(zipHit, 0, fileLength);
             }
 
             /*
@@ -132,9 +165,10 @@ namespace ArchiveFixer.Detection
              * 锚点解析成功且媒体没占满整个文件 ⇒ 归档起点**已知**，⛔ 不再盲扫（省掉对普通大文件的整段扫描）。
              */
             bool mediaName = IsMediaFileName(path);
+            long mediaEnd = 0;
 
             if (mediaName
-                && TryFindMediaEnd(path, out long mediaEnd)
+                && TryFindMediaEnd(path, out mediaEnd)
                 && mediaEnd > 0)
             {
                 /*
@@ -143,34 +177,40 @@ namespace ArchiveFixer.Detection
                  */
                 if (mediaEnd >= fileLength)
                 {
-                    return null;
+                    return new ProbeResult(null, mediaEnd, fileLength);
                 }
 
                 if (TryValidateSevenZip(path, mediaEnd, fileLength, out long anchoredLength, out string anchoredEvidence))
                 {
-                    return new EmbeddedArchiveHit(
-                        mediaEnd, anchoredLength, VolumeContentFormat.SevenZip, anchoredEvidence);
+                    return new ProbeResult(
+                        new EmbeddedArchiveHit(
+                            mediaEnd, anchoredLength, VolumeContentFormat.SevenZip, anchoredEvidence),
+                        mediaEnd,
+                        fileLength);
                 }
 
                 if (TryValidateRar4SingleVolume(path, mediaEnd, fileLength, out string rarAnchoredEvidence))
                 {
-                    return new EmbeddedArchiveHit(
-                        mediaEnd, 0, VolumeContentFormat.Rar, rarAnchoredEvidence);
+                    return new ProbeResult(
+                        new EmbeddedArchiveHit(
+                            mediaEnd, 0, VolumeContentFormat.Rar, rarAnchoredEvidence),
+                        mediaEnd,
+                        fileLength);
                 }
 
                 // 前缀确实是媒体，但它后面既不是 7z 单卷也不是 RAR4 单卷 ⇒ 判不出（⛔ 不猜、不盲扫）。
-                return null;
+                return new ProbeResult(null, mediaEnd, fileLength);
             }
 
             // ③ 7z / RAR4：快扫（文件尾 4 MB）。
             if (TryLocateSevenZip(path, fileLength, deep: false, out EmbeddedArchiveHit sevenZipHit))
             {
-                return sevenZipHit;
+                return new ProbeResult(sevenZipHit, 0, fileLength);
             }
 
             if (TryLocateRar4(path, fileLength, deep: false, out EmbeddedArchiveHit rarHit))
             {
-                return rarHit;
+                return new ProbeResult(rarHit, 0, fileLength);
             }
 
             /*
@@ -181,16 +221,16 @@ namespace ArchiveFixer.Detection
             {
                 if (TryLocateSevenZip(path, fileLength, deep: true, out sevenZipHit))
                 {
-                    return sevenZipHit;
+                    return new ProbeResult(sevenZipHit, 0, fileLength);
                 }
 
                 if (TryLocateRar4(path, fileLength, deep: true, out rarHit))
                 {
-                    return rarHit;
+                    return new ProbeResult(rarHit, 0, fileLength);
                 }
             }
 
-            return null;
+            return new ProbeResult(null, 0, fileLength);
         }
 
         private static bool TryLocateZip(string path, out EmbeddedArchiveHit hit)
@@ -401,6 +441,12 @@ namespace ArchiveFixer.Detection
         /// 被每个"认不出格式"的文件触发一次（200 MB 的媒体文件扫一遍就白烧 200 MB 读）。
         /// 超过上限 ⇒ 判不出（保持 Unknown），⛔ 不猜、也不把整块盘读一遍。</para>
         /// </summary>
+        /// <summary>
+        /// 这个名字是不是**媒体容器后缀**（只决定"要不要按媒体结构去量"，⛔ 不是内容结论）。
+        /// </summary>
+        public static bool IsMediaContainerName(string? path)
+            => !string.IsNullOrWhiteSpace(path) && IsMediaFileName(path!);
+
         /// <summary>媒体容器的后缀白名单（用户 2026-10-22：「把加媒体前缀的情况就锁定在 MP4 和 png、jpg 等」）。</summary>
         private static bool IsMediaFileName(string path)
         {

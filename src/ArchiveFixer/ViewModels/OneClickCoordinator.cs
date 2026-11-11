@@ -1335,6 +1335,7 @@ namespace ArchiveFixer.ViewModels
                                     Format = entry.Format,
                                     Size = entry.Size,
                                     BodyKind = entry.BodyKind,
+                                    ContentKind = entry.ContentKind,
                                     Evidence = entry.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
                                             or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
                                         ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven
@@ -1654,7 +1655,9 @@ namespace ArchiveFixer.ViewModels
 
                     foreach (ArchiveFixer.Extraction.StandardNameFastPath.Decision decision
                              in ArchiveFixer.Extraction.StandardNameFastPath.Decide(
-                                 _extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.Path)))
+                                 _extractionCoordinator.FirstStepLedger
+                                     .AllSecondStepCandidates()
+                                     .Select(entry => entry.Path)))
                     {
                         if (decision.Kind == ArchiveFixer.Extraction.StandardNameFastPath.DecisionKind.Ready)
                         {

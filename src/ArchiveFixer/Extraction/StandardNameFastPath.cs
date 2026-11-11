@@ -235,7 +235,7 @@ namespace ArchiveFixer.Extraction
             index = 0;
 
             // 用户口径：标准名最多在后缀里夹中文字符；只清后缀，基名一个字符不动。
-            fileName = StripNonAsciiAfterFirstDot(fileName);
+            fileName = CanonicalFileName(fileName);
 
             Match match = RarPartPattern.Match(fileName);
 
@@ -309,6 +309,13 @@ namespace ArchiveFixer.Extraction
 
             return false;
         }
+
+        /// <summary>
+        /// **规范文件名**（快通道唯一口径）：只清后缀段的非 ASCII 杂质（含中文），保留基名原样。
+        /// 例：<c>小明.part1.rar删除</c> → <c>小明.part1.rar</c>。
+        /// </summary>
+        internal static string CanonicalFileName(string fileName)
+            => string.IsNullOrWhiteSpace(fileName) ? fileName : StripNonAsciiAfterFirstDot(fileName);
 
         /// <summary>
         /// 只清**后缀段**的非 ASCII 杂质（含中文），保留基名原样。
