@@ -202,7 +202,20 @@ namespace ArchiveFixer.Detection
                         fileLength);
                 }
 
-                // 前缀确实是媒体，但它后面既不是 7z 单卷也不是 RAR4 单卷 ⇒ 判不出（⛔ 不猜、不盲扫）。
+                /*
+                 * RAR5 主头的媒体前缀：批样本里的 `.jpg`/`.mp4` 外包装可能就是这种形状。
+                 * 只验主头 CRC/结构；⛔ 不在这里判卷号，后续仍走 RAR5 正常路。
+                 */
+                if (VolumeNumberFromContent.TryValidateRar5At(path, mediaEnd, out _))
+                {
+                    return new ProbeResult(
+                        new EmbeddedArchiveHit(
+                            mediaEnd, 0, VolumeContentFormat.Rar, "RAR5 主头自洽（媒体前缀）"),
+                        mediaEnd,
+                        fileLength);
+                }
+
+                // 前缀确实是媒体，但它后面既不是 7z 单卷也不是 RAR4/RAR5 单卷 ⇒ 判不出（⛔ 不猜、不盲扫）。
                 return new ProbeResult(null, mediaEnd, fileLength);
             }
 

@@ -3104,6 +3104,17 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            /*
+             * 用户明确导入的内容容器（docx/epub/jar/apk…）保留既有“源包手动只解压”语义：
+             * 它是用户点名要处理的文件，不按“自动扫到的内容物”跳过。
+             * 自动递归/产物里的同类文件仍由递归闸门与 OneClick 产物扫描挡住。
+             */
+            if (!task.IsContinuationTask
+                && ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(task.CurrentPath))
+            {
+                return false;
+            }
+
             ArchiveFixer.Detection.FileContentProbeResult content =
                 ArchiveFixer.Detection.FileContentProbe.Probe(task.CurrentPath, deep: true);
 

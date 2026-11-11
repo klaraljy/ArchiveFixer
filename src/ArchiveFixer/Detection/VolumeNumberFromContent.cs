@@ -733,6 +733,78 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **媒体前缀里的 RAR5 主头**（2026-11-11）：只验证“从 <paramref name="fileOffset"/> 起确实是
+        /// RAR5 主归档头”，供 <see cref="EmbeddedArchiveLocator"/> 的媒体前缀锚点使用。
+        /// ⛔ 不判卷号/不建组；卷号仍走正常 RAR5 那条。
+        /// </summary>
+        internal static bool TryValidateRar5At(
+            string filePath,
+            long fileOffset,
+            out bool singleComplete)
+        {
+            singleComplete = false;
+
+            byte[] raw = ReadBytes(filePath, fileOffset, 12 + Rar5ReadLimit);
+
+            if (raw.Length < 12 + 4
+                || raw[0] != 0x52 || raw[1] != 0x61 || raw[2] != 0x72 || raw[3] != 0x21
+                || raw[4] != 0x1A || raw[5] != 0x07 || raw[6] != 0x01 || raw[7] != 0x00)
+            {
+                return false;
+            }
+
+            uint storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(8, 4));
+            int offset = 12;
+
+            if (!TryReadVint(raw, ref offset, out ulong headerSize)
+                || headerSize == 0
+                || headerSize > Rar5MaxHeaderSize)
+            {
+                return false;
+            }
+
+            int headerEnd = offset + (int)headerSize;
+
+            if (headerEnd <= offset || headerEnd > raw.Length)
+            {
+                return false;
+            }
+
+            if (!CrcMatches(storedCrc, raw.AsSpan(12, headerEnd - 12)))
+            {
+                return false;
+            }
+
+            int p = offset;
+
+            if (!TryReadVint(raw, ref p, out ulong headerType)
+                || headerType != Rar5MainHeaderType
+                || !TryReadVint(raw, ref p, out ulong flags))
+            {
+                return false;
+            }
+
+            if ((flags & Rar5HeaderExtraArea) != 0 && !TryReadVint(raw, ref p, out _))
+            {
+                return false;
+            }
+
+            if ((flags & Rar5HeaderDataArea) != 0 && !TryReadVint(raw, ref p, out _))
+            {
+                return false;
+            }
+
+            if (!TryReadVint(raw, ref p, out ulong archiveFlags))
+            {
+                return false;
+            }
+
+            singleComplete = (archiveFlags & Rar5ArchiveVolume) == 0;
+
+            return true;
+        }
+
+        /// <summary>
         /// RAR 1.5–4.x（WinRAR 里叫 RAR4）：主头读编号族与"第 1 卷"标记，卷号从**卷尾归档结尾块**里取。
         /// </summary>
         private static VolumeNumberReading ReadRar4Legacy(string filePath)

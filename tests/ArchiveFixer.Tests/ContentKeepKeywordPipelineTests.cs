@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -202,38 +201,24 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// <b>用例 E（自动一键处理）</b>：真正的 `.docx` 作为源包直接导入，自动处理只跳过、
-        /// 不解开、不改名；它是内容物，不是压缩包。
+        /// <b>用例 E（自动一键处理）</b>：真正的普通图片作为源包直接导入，自动处理只跳过、
+        /// 不解开、不改名；它是非压缩文件，不是压缩包。内容容器（docx 源包）保留既有强制拆语义。
         /// </summary>
         [Fact]
-        public async Task 用例E_自动处理时源docx不碰()
+        public async Task 用例E_自动处理时源图片不碰()
         {
             Harness harness = CreateHarness(keepKeywords: Array.Empty<string>());
 
-            string docx = Path.Combine(_root, "自动源.docx");
-            WriteDocx(docx);
+            string jpeg = Path.Combine(_root, "自动源.jpg");
+            File.WriteAllBytes(jpeg, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
 
-            await harness.AddPathsAsync(docx);
+            await harness.AddPathsAsync(jpeg);
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
 
             ArchiveTask task = Assert.Single(harness.Vm.Tasks);
             Assert.Equal(TaskOutcome.Skipped, task.Outcome);
-            Assert.True(File.Exists(docx), "源 docx 必须原地不动");
-            Assert.Empty(FindFiles("document.xml"));
+            Assert.True(File.Exists(jpeg), "源图片必须原地不动");
             Assert.Equal(0, task.ContentFileCount);
-        }
-
-        private static void WriteDocx(string path)
-        {
-            using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-            using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
-
-            foreach (string entry in new[] { "[Content_Types].xml", "word/document.xml" })
-            {
-                ZipArchiveEntry item = zip.CreateEntry(entry);
-                using StreamWriter writer = new(item.Open(), new UTF8Encoding(false));
-                writer.Write("<?xml version=\"1.0\"?><root />");
-            }
         }
 
         // ================================================================ 夹具
