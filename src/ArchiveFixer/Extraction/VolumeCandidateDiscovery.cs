@@ -797,9 +797,24 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
+            /*
+             * 候选已经在同基名上下文里，才允许补一次内容事实：
+             * 浅探测能定案就直接用；ZIP 家族才深探测条目。
+             */
+            if (ContentAdmission.Probe(
+                    item.Path,
+                    ContentAdmissionScope.VolumeCandidate,
+                    deep: false).Class == FileContentClass.KnownContent)
+            {
+                return true;
+            }
+
             if (item.Card.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip)
             {
-                return FileContentProbe.Probe(item.Path, deep: true).Class == FileContentClass.KnownContent;
+                return ContentAdmission.Probe(
+                    item.Path,
+                    ContentAdmissionScope.VolumeCandidate,
+                    deep: true).Class == FileContentClass.KnownContent;
             }
 
             return false;
@@ -821,8 +836,19 @@ namespace ArchiveFixer.Extraction
                     return true;
                 }
 
+                if (ContentAdmission.Probe(
+                        path,
+                        ContentAdmissionScope.VolumeCandidate,
+                        deep: false).Class == FileContentClass.KnownContent)
+                {
+                    return true;
+                }
+
                 return card.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip
-                    && FileContentProbe.Probe(path, deep: true).Class == FileContentClass.KnownContent;
+                    && ContentAdmission.Probe(
+                        path,
+                        ContentAdmissionScope.VolumeCandidate,
+                        deep: true).Class == FileContentClass.KnownContent;
             }
             catch
             {
@@ -932,7 +958,10 @@ namespace ArchiveFixer.Extraction
                             continue;
                         }
 
-                        if (FileContentProbe.Probe(path, deep: true).Class == FileContentClass.KnownContent)
+                        if (ContentAdmission.Probe(
+                                path,
+                                ContentAdmissionScope.VolumeCandidate,
+                                deep: true).Class == FileContentClass.KnownContent)
                         {
                             continue;
                         }

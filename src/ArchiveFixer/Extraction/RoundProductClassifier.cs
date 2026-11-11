@@ -97,13 +97,12 @@ namespace ArchiveFixer.Extraction
                 /*
                  * **非压缩文件先判**：图片/视频/音频/文档/文本，以及 ZIP 家族里的
                  * docx/epub/apk/jar，都是用户要的内容物，自动处理不碰。
-                 * 这一步必须早于“名字像卷”的分支，否则内容物带数字后缀会被误当分卷。
+                 * 这里只做**已有的廉价事实**：媒体卡（`NormalMedia`）+ 内容容器后缀。
+                 * ⛔ 不在这里对每个候选做深 ZIP 条目探测 —— 候选数量少也不该把识别
+                 * 塞回“轮判定”这个 UI 线程上的全局出入口。
                  */
-                bool embeddedArchive = card.EmbeddedOffset > 0
-                    || card.ContentClass == FileContentClass.Archive;
-
-                if (!embeddedArchive
-                    && FileContentProbe.Probe(candidate, deep: true).Class == FileContentClass.KnownContent)
+                if (card.IsKnownNormalMedia
+                    || ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(candidate))
                 {
                     content++;
                     continue;

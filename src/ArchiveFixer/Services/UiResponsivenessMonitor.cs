@@ -10,20 +10,58 @@ namespace ArchiveFixer.Services
     /// </summary>
     public static class UiActivity
     {
+        private static readonly object Gate = new();
+
         private static string _phase = "空闲";
         private static string _task = string.Empty;
         private static string _detail = string.Empty;
+        private static long _markedAtTicks;
+        private static int _markedThreadId;
+
+        private static string _backgroundPhase = string.Empty;
+        private static string _backgroundTask = string.Empty;
+        private static string _backgroundDetail = string.Empty;
+
         private static int _stallCount;
 
+        /// <summary>UI 线程上的阶段标记（只有它参与“卡顿时在干什么”的归因）。</summary>
         public static void Mark(string phase, string task = "", string detail = "")
         {
-            _phase = phase ?? string.Empty;
-            _task = task ?? string.Empty;
-            _detail = detail ?? string.Empty;
+            lock (Gate)
+            {
+                _phase = phase ?? string.Empty;
+                _task = task ?? string.Empty;
+                _detail = detail ?? string.Empty;
+                _markedAtTicks = Environment.TickCount64;
+                _markedThreadId = Environment.CurrentManagedThreadId;
+            }
+        }
+
+        /// <summary>
+        /// 后台工作标记。⛔ 不覆盖 UI 阶段：后台清理/扫描可能比 UI 停顿更晚开始，
+        /// 覆盖后监控会把停顿错误归到后台任务头上（2026-11-11 真机 54 秒那条就是这么来的）。
+        /// </summary>
+        public static void MarkBackground(string phase, string task = "", string detail = "")
+        {
+            lock (Gate)
+            {
+                _backgroundPhase = phase ?? string.Empty;
+                _backgroundTask = task ?? string.Empty;
+                _backgroundDetail = detail ?? string.Empty;
+            }
         }
 
         /// <summary>当前没有实际任务在跑；空闲阶段的窗口停顿不是“卡死”。</summary>
-        public static bool IsIdle => string.Equals(_phase, "空闲", StringComparison.Ordinal);
+        public static bool IsIdle
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    return string.Equals(_phase, "空闲", StringComparison.Ordinal);
+                }
+            }
+        }
 
         /// <summary>记一次 UI 停顿（供自适应并发控制器读取；本身不改变任何行为）。</summary>
         public static void NoteUiStall() => System.Threading.Interlocked.Increment(ref _stallCount);
@@ -33,9 +71,26 @@ namespace ArchiveFixer.Services
 
         public static string Snapshot()
         {
-            string task = _task.Length > 0 ? $" ｜ 任务={_task}" : string.Empty;
-            string detail = _detail.Length > 0 ? $" ｜ 操作={_detail}" : string.Empty;
-            return $"阶段={_phase}{task}{detail}";
+            lock (Gate)
+            {
+                string task = _task.Length > 0 ? $" ｜ 任务={_task}" : string.Empty;
+                string detail = _detail.Length > 0 ? $" ｜ 操作={_detail}" : string.Empty;
+                long age = _markedAtTicks == 0
+                    ? -1
+                    : Environment.TickCount64 - _markedAtTicks;
+
+                string background = _backgroundPhase.Length == 0
+                    ? string.Empty
+                    : $" ｜ 后台={_backgroundPhase}"
+                      + (_backgroundTask.Length > 0 ? $"/{_backgroundTask}" : string.Empty)
+                      + (_backgroundDetail.Length > 0 ? $"/{_backgroundDetail}" : string.Empty);
+
+                return $"阶段={_phase}{task}{detail}"
+                       + (age >= 0
+                           ? $" ｜ 标记于 {age} 毫秒前（线程={_markedThreadId}）"
+                           : string.Empty)
+                       + background;
+            }
         }
     }
 

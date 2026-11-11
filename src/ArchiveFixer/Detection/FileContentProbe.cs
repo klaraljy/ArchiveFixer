@@ -49,8 +49,12 @@ namespace ArchiveFixer.Detection
     {
         private sealed record CacheEntry(long Length, long Ticks, bool Deep, FileContentProbeResult Result);
 
+        private const int MaxCacheEntries = 4096;
+
         private static readonly ConcurrentDictionary<string, CacheEntry> Cache =
             new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly ConcurrentQueue<string> CacheOrder = new();
 
         public static FileContentProbeResult Probe(string? path, bool deep = false)
         {
@@ -70,24 +74,46 @@ namespace ArchiveFixer.Detection
                 return FileContentProbeResult.Unknown;
             }
 
+            /*
+             * 浅探测已经能定案（KnownContent / Archive）时，深探测不会改结论：
+             * 只有 ZIP 这种浅层 Unknown 才必须再进条目看一次。
+             * 这样 4,000 个普通内容文件不会因为外层调了 deep 再读一遍头。
+             */
             if (Cache.TryGetValue(path, out CacheEntry? cached)
                 && cached.Length == info.Length
                 && cached.Ticks == info.LastWriteTimeUtc.Ticks
-                && (cached.Deep || !deep))
+                && (cached.Deep || !deep || cached.Result.Class != FileContentClass.Unknown))
             {
                 return cached.Result;
             }
 
             FileContentProbeResult result = ProbeCore(path, deep, info.Length);
 
-            if (Cache.Count > 1024)
+            var entry = new CacheEntry(info.Length, info.LastWriteTimeUtc.Ticks, deep, result);
+            bool firstTime = !Cache.ContainsKey(path);
+            Cache[path] = entry;
+
+            if (firstTime)
             {
-                Cache.Clear();
+                CacheOrder.Enqueue(path);
             }
 
-            Cache[path] = new CacheEntry(info.Length, info.LastWriteTimeUtc.Ticks, deep, result);
+            TrimCache();
 
             return result;
+        }
+
+        /// <summary>
+        /// 有界淘汰：超过上限只丢最旧的一批，⛔ 不再 `Clear()` 整表 ——
+        /// 4,000 个产物一轮扫下来，整表清空会让前面刚探测过的文件在下一轮重新读。
+        /// </summary>
+        private static void TrimCache()
+        {
+            while ((Cache.Count > MaxCacheEntries || CacheOrder.Count > MaxCacheEntries * 2)
+                && CacheOrder.TryDequeue(out string? old))
+            {
+                Cache.TryRemove(old, out _);
+            }
         }
 
         private static FileContentProbeResult ProbeCore(string path, bool deep, long length)

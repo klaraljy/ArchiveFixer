@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
 using ArchiveFixer.Helpers;
@@ -269,11 +270,44 @@ namespace ArchiveFixer.Detection
         /// </summary>
         private const long MaxSaneDeclaredVolumeCount = 1024;
 
+        private const int MaxCacheEntries = 4096;
+
+        /// <summary>
+        /// 同一路径 + 大小 + 修改时间的卡片缓存：一次扫描里同一个文件会被多条判据问到
+        /// （产物扫描、组分析、轮判定），不缓存就会重复读头/尾/卷号。
+        /// ⛔ 只缓存完整卡片；文件变化（大小或 mtime）立即失效。
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, (long Length, long Ticks, FileNatureCard Card)> Cache =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly ConcurrentQueue<string> CacheOrder = new();
+
         public static FileNatureCard Inspect(string? path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
                 return new FileNatureCard { Path = path ?? string.Empty };
+            }
+
+            long size;
+            long lastWriteTicks;
+
+            try
+            {
+                var info = new FileInfo(path);
+                size = info.Length;
+                lastWriteTicks = info.LastWriteTimeUtc.Ticks;
+            }
+            catch
+            {
+                return new FileNatureCard { Path = path };
+            }
+
+            if (Cache.TryGetValue(path, out (long Length, long Ticks, FileNatureCard Card) cached)
+                && cached.Length == size
+                && cached.Ticks == lastWriteTicks)
+            {
+                return cached.Card;
             }
 
             string name = FileNameHelper.GetFileName(path);
@@ -282,21 +316,6 @@ namespace ArchiveFixer.Detection
             bool hasIdentity = FileIdentity.TryGetIdentity(path, out ulong volumeSerial, out ulong fileIndex);
 
             LegacyVolumeNames.TryGetCanonicalName(name, out string canonical);
-
-            /*
-             * ⚠ 大小**直接问文件**（`reading.Size` 只在部分读取路径上被填 —— 实测 EEE 那几份 200 MB 的包
-             * 在卡上印成 `0 字节`；大小是盘上事实，不该借道"内容读出来的那一份"）。
-             */
-            long size = 0;
-
-            try
-            {
-                size = new FileInfo(path).Length;
-            }
-            catch
-            {
-                // 读不到大小 ⇒ 留 0（"判不出"那一档，⛔ 不猜）。
-            }
 
             /*
              * ===== ②b 专属算法：**单一 还是 分卷**（用户 2026-10-13 口径）=====
@@ -510,20 +529,17 @@ namespace ArchiveFixer.Detection
             }
 
             /*
-             * 内容物/归档分类（只做**便宜的浅探测**；ZIP 条目这种深探测留给准入点，
-             * 避免 FileNature 的 93 个调用点都去打开 ZIP）。
+             * ⛔ 内容物识别不在这里做（2026-11-11）：`FileNature.Inspect` 有大量调用点，
+             * 在这里探测会让每个普通图片/视频都读一次头，且会盖住“只有同基名/分卷候选才准探测”的口径。
+             * 普通文件保持 Unknown，由准入点按候选上下文显式调 `FileContentProbe`。
+             *
+             * 唯一可以在这里落的是**已经由 EmbeddedArchiveLocator 证明的媒体前缀归档**：
+             * 它首先是归档，不能被后续按“头部像媒体”当内容物。
              */
-            FileContentProbeResult contentProbe = FileContentProbe.Probe(path, deep: false);
-            FileContentClass contentClass = contentProbe.Class;
-
-            /*
-             * 媒体前缀的完整归档：文件头是媒体，但尾部已经由 EmbeddedArchiveLocator 证明有归档
-             * ⇒ 它首先是归档，⛔ 不能被“头部像媒体”误判成普通内容物。
-             */
-            if (embeddedOffset > 0)
-            {
-                contentClass = FileContentClass.Archive;
-            }
+            FileContentClass contentClass = embeddedOffset > 0
+                ? FileContentClass.Archive
+                : FileContentClass.Unknown;
+            string contentFormat = string.Empty;
 
             ArchiveEncryptionState encryption = ArchiveEncryptionState.Unknown;
 
@@ -536,7 +552,7 @@ namespace ArchiveFixer.Detection
                 encryption = RarEncryptionReader.Read(path).State;
             }
 
-            return new FileNatureCard
+            var card = new FileNatureCard
             {
                 Path = path!,
                 Size = size,
@@ -548,7 +564,7 @@ namespace ArchiveFixer.Detection
                 BodyKind = bodyKind,
                 ContentKind = contentKind,
                 ContentClass = contentClass,
-                ContentFormat = contentProbe.Format,
+                ContentFormat = contentFormat,
                 RarVariant = reading.RarVariant,
                 Encryption = encryption,
                 DeclaredTotalBytes = declaredTotalBytes,
@@ -567,6 +583,27 @@ namespace ArchiveFixer.Detection
                 VolumeSerial = volumeSerial,
                 FileIndex = fileIndex
             };
+
+            bool firstTime = !Cache.ContainsKey(path!);
+            Cache[path!] = (size, lastWriteTicks, card);
+
+            if (firstTime)
+            {
+                CacheOrder.Enqueue(path!);
+            }
+
+            TrimCache();
+
+            return card;
+        }
+
+        private static void TrimCache()
+        {
+            while ((Cache.Count > MaxCacheEntries || CacheOrder.Count > MaxCacheEntries * 2)
+                && CacheOrder.TryDequeue(out string? old))
+            {
+                Cache.TryRemove(old, out _);
+            }
         }
     }
 }

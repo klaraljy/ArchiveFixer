@@ -1194,8 +1194,31 @@ namespace ArchiveFixer.ViewModels
                      * 扫描的每一条判据都会写进日志（认出谁 / 跳过谁 / 为什么），
                      * 于是"只解了一层"这类问题**看日志就能定位**（用户 2026-09-25 明确要求）。
                      */
+                    /*
+                     * 产物扫描也在 UI 线程上串行做（目录枚举才在 Task.Run 里）。
+                     * 先落真实阶段，卡顿时监控才能指到“扫描”而不是恢复后的下一段。
+                     */
+                    ArchiveFixer.Services.UiActivity.Mark(
+                        "第一大步产物扫描",
+                        detail: $"第 {round} 轮，扫描新产物");
+
+                    /*
+                     * 产物扫描的正文全部是文件系统只读判定（不碰 UI 集合、不写任务状态），
+                     * 整段放后台：即使目录里有几千个新文件，UI 线程也不会被串行 I/O 钉住。
+                     * `CollectInnerLayersAsync` 自己只返回候选与日志；任务表由 await 回来后的
+                     * UI 线程继续 `AddInnerTasksAsync`。
+                     */
                     (List<InnerArchiveCandidate> innerArchives, List<string> scanLog) =
-                        await CollectInnerLayersAsync(round, roundTargets, existingFiles, unreadableDirectories, sourcePaths);
+                        await Task.Run(() => CollectInnerLayersAsync(
+                            round,
+                            roundTargets,
+                            existingFiles,
+                            unreadableDirectories,
+                            sourcePaths)).ConfigureAwait(true);
+
+                    ArchiveFixer.Services.UiActivity.Mark(
+                        "轮判定",
+                        detail: $"第 {round} 轮，分类扫描结果");
 
                     /*
                      * ===== 轮判定（用户 2026-10-11 定的轮次模型，本程序的基石）=====
@@ -3457,6 +3480,7 @@ namespace ArchiveFixer.ViewModels
                     if (keepsKeyword != null)
                     {
                         skippedLines.Add($"{file}（名字命中「内容物保留关键词」：{keepsKeyword} —— 按设置不解开也不改名）");
+                        RememberTerminalProducedContent(file, "内容物保留关键词");
                         continue;
                     }
 
@@ -3465,6 +3489,7 @@ namespace ArchiveFixer.ViewModels
                         skippedLines.Add(
                             $"{file}（{ArchiveFixer.Security.ContentContainerProtection.Describe(file)}"
                             + " —— 默认当内容物保留，不解开也不改名；要拆请单独选中它用「只解压」）");
+                        RememberTerminalProducedContent(file, "内容容器");
                         continue;
                     }
 
@@ -3538,7 +3563,14 @@ namespace ArchiveFixer.ViewModels
                      * 真机 19191919：`.0!601` 是首片，名字尾巴 601 被当成“后续卷”跳过，整组就永远缺卷。
                      * ⛔ 只认内容事实，不改名、不猜格式。
                      */
-                    if (!isArchive && ContentProvesFirstVolumePiece(file))
+                    /*
+                     * ⛔ 只有名字本身带卷槽时才允许做“内容自证首片”的 `FileNature`：
+                     * 普通图片/视频没有卷槽，不该为了这一条再读一遍头尾。
+                     * 同基名的内容物由第二大步候选层按基名上下文处理。
+                     */
+                    if (!isArchive
+                        && LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(file)).HasValue
+                        && ContentProvesFirstVolumePiece(file))
                     {
                         isArchive = true;
                         how = "按内容认出：分卷首片（起始头自述整包/片数），交给第二大步";

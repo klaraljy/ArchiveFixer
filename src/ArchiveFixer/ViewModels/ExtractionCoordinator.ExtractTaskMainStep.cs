@@ -3116,7 +3116,10 @@ namespace ArchiveFixer.ViewModels
             }
 
             ArchiveFixer.Detection.FileContentProbeResult content =
-                ArchiveFixer.Detection.FileContentProbe.Probe(task.CurrentPath, deep: true);
+                ArchiveFixer.Detection.ContentAdmission.Probe(
+                    task.CurrentPath,
+                    ArchiveFixer.Detection.ContentAdmissionScope.UserSource,
+                    deep: true);
 
             if (content.Class != ArchiveFixer.Detection.FileContentClass.KnownContent)
             {

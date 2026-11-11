@@ -604,7 +604,10 @@ namespace ArchiveFixer.Detection
              * 候选数很少，精确一次；⛔ 不在 HasSecondStepEvidence/FileNature 里给每个文件开 ZIP。
              */
             if (entry.Format == VolumeContentFormat.Zip
-                && FileContentProbe.Probe(entry.Path, deep: true).Class == FileContentClass.KnownContent)
+                && ContentAdmission.Probe(
+                    entry.Path,
+                    ContentAdmissionScope.VolumeCandidate,
+                    deep: true).Class == FileContentClass.KnownContent)
             {
                 return false;
             }

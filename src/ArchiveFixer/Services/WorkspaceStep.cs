@@ -381,7 +381,7 @@ namespace ArchiveFixer.Services
         /// </summary>
         public void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory)
         {
-            UiActivity.Mark("工作区清理", task?.LogName ?? string.Empty, "递归删除工作区");
+            UiActivity.MarkBackground("工作区清理", task?.LogName ?? string.Empty, "递归删除工作区");
 
             if (task == null)
             {

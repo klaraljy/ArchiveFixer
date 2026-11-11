@@ -37,6 +37,34 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 普通产物不探测_只有准入范围才探测()
+        {
+            string path = Write("普通.png", BuildWebp());
+
+            /*
+             * FileNature 只负责底层格式/分卷事实，不再替所有调用点做内容识别。
+             */
+            Assert.Equal(FileContentClass.Unknown, FileNature.Inspect(path).ContentClass);
+            Assert.Equal(
+                FileContentClass.Unknown,
+                ContentAdmission.Probe(path, ContentAdmissionScope.None, deep: true).Class);
+            Assert.Equal(
+                FileContentClass.KnownContent,
+                ContentAdmission.Probe(path, ContentAdmissionScope.UserSource, deep: true).Class);
+        }
+
+        [Fact]
+        public void FileNature同路径同版本复用同一张卡()
+        {
+            string path = Write("缓存.png", BuildWebp());
+
+            FileNatureCard first = FileNature.Inspect(path);
+            FileNatureCard second = FileNature.Inspect(path);
+
+            Assert.Same(first, second);
+        }
+
+        [Fact]
         public void 普通WebP_识别为内容物()
         {
             string path = Write("336.png", BuildWebp());
