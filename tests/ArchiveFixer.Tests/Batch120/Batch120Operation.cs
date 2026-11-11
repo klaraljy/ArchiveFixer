@@ -36,14 +36,15 @@ namespace ArchiveFixer.Tests.Batch120
         // 种子从环境变量来：ARCHIVEFIXER_120_SEED=918000000 就能换一批，缺省仍是 917000000。
         public static readonly string Seed =
             Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_SEED") is { Length: > 0 } fromEnv ? fromEnv : "917000000";
-        // 全部落在 E 盘：H 盘已确认有坏区，样本/测试区/指定位置都不再往那写。
-        public static readonly string BatchRoot = Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_ROOT") is { Length: > 0 } rootOverride
+        // 标准测试根：测试\备份位置 / 测试位置 / 指定位置 / 日志位置。
+        public static readonly string BatchRoot = Environment.GetEnvironmentVariable("ARCHIVEFIXER_125_ROOT") is { Length: > 0 } rootOverride
             ? rootOverride
-            : @"E:\DeepSeekProjects\ArchiveFixer\_tmp\困难大测试";
-        public static readonly string BackupBatchRoot = Path.Combine(BatchRoot, Seed + "-120批次-备份");
-        public static readonly string TestBatchRoot = Path.Combine(BatchRoot, "测试区", Seed);
-        public static readonly string SpecifiedBatchRoot = Path.Combine(BatchRoot, "测试区指定位置", Seed + "-指定位置");
-        public static readonly string RecordRoot = $@"E:\AF\120批操作\{Seed}";
+            : @"E:\DeepSeekProjects\ArchiveFixer\测试";
+        public static readonly string BackupBatchRoot = Path.Combine(BatchRoot, "备份位置", Seed + "-125批次-备份");
+        public static readonly string TestBatchRoot = Path.Combine(BatchRoot, "测试位置", Seed + "-125批次-测试未指定位置");
+        public static readonly string SpecifiedBatchRoot = Path.Combine(BatchRoot, "指定位置", Seed + "-125批次-测试指定位置");
+        public static readonly string LogRoot = Path.Combine(BatchRoot, "日志位置", Seed + "-125批次-日志");
+        public static readonly string RecordRoot = Path.Combine(LogRoot, "操作");
 
         private const string PasswordBook = "2中！0@文#2删￥6除%\nDemo#Pass1\nDemo#Pass2\n";
 
@@ -52,14 +53,6 @@ namespace ArchiveFixer.Tests.Batch120
 
         public static async Task<Batch120RunRecord> RunOneAsync(string sampleId, bool? keepLogs = null)
         {
-            /*
-             * 日志留档开关在**调用开始时**定值：xUnit 并行跑多个 Batch120 用例时
-             * `ARCHIVEFIXER_120_KEEP_LOGS` 是进程环境变量，别的用例可能在本次运行中途把它恢复。
-             * 调用方需要日志时显式传 true（比依赖进程环境稳）。
-             */
-            bool keepLogsForThisRun = keepLogs
-                ?? Environment.GetEnvironmentVariable("ARCHIVEFIXER_120_KEEP_LOGS") == "1";
-
             string backupSample = Path.Combine(BackupBatchRoot, sampleId);
             string backupPackage = Path.Combine(backupSample, "原包");
             string recipePath = Path.Combine(backupSample, "recipe.json");
@@ -201,10 +194,10 @@ namespace ArchiveFixer.Tests.Batch120
                 record.After = Snapshot(workspace, specifiedRoot);
 
                 /*
-                 * 取证开关：`ARCHIVEFIXER_120_KEEP_LOGS=1` 时把这一次运行的日志留在
-                 * `E:\AF\120批操作\<seed>\logs-<sampleId>`（默认数据根随运行删掉，事后查不到）。
+                 * 日志强制留档（不再依赖 keepLogs 可选开关）：每次操作都把日志复制到
+                 * `测试\日志位置\<seed>-125批次-日志\操作\logs-<sampleId>`。
                  */
-                if (keepLogsForThisRun)
+                _ = keepLogs;
                 {
                     try
                     {

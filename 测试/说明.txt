@@ -1,0 +1,9 @@
+1.每次造完包将包放在"E:\DeepSeekProjects\ArchiveFixer\测试\备份位置"，并且将子文件夹命名，例如，927000000-125批次-备份，备份是不要乱动的
+2.每次测试都要将备份复制到"E:\DeepSeekProjects\ArchiveFixer\测试\测试位置"，并且将子文件夹命名，例如，"E:\DeepSeekProjects\ArchiveFixer\测试\测试位置\927000000-125批次-测试未指定位置"，未指定就是解压到原位置，8个选项里面，8=2位置*2原包*2最后一层过程物，一半是在这里面
+3.每次测试的指定位置就在这里"E:\DeepSeekProjects\ArchiveFixer\测试\指定位置"，子文件夹按照标准命名，例如，"E:\DeepSeekProjects\ArchiveFixer\测试\指定位置\927000000-125批次-测试指定位置"
+4.每次测试的日志放在"E:\DeepSeekProjects\ArchiveFixer\测试\日志位置"，子文件夹为"E:\DeepSeekProjects\ArchiveFixer\测试\日志位置\927000000-125批次-日志"
+5."E:\DeepSeekProjects\ArchiveFixer\测试\修改测试位置"这个位置就是要放每次程序修改代码要验证的简单造包的存放位置
+6."E:\DeepSeekProjects\ArchiveFixer\测试\造包器"
+"E:\DeepSeekProjects\ArchiveFixer\测试\原物"
+这两个位置，顾名思义，一个是放造包器的，一个是放原物的
+7."E:\DeepSeekProjects\ArchiveFixer\测试\造包设计文档"这里面存放着造包设计的文档

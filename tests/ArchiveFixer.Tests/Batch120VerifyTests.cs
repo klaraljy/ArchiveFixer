@@ -14,12 +14,12 @@ namespace ArchiveFixer.Tests.Batch120
     /// 检测代码的入口：只读 recipe + 运行记录 + 磁盘，逐条判红绿。
     ///
     /// 一条样本红只影响它自己；每条结果同时落到
-    /// <c>E:\AF\120批检测\917000000\&lt;样本&gt;.json</c>，方便汇总。
+    /// <c>测试\日志位置\&lt;seed&gt;-125批次-日志\检测\&lt;样本&gt;.json</c>，方便汇总。
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
     public sealed class Batch120VerifyTests
     {
-        private static readonly string ReportRoot = $@"E:\AF\120批检测\{Batch120Operation.Seed}";
+        private static readonly string ReportRoot = Path.Combine(Batch120Operation.LogRoot, "检测");
 
         private readonly ITestOutputHelper _output;
 

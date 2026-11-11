@@ -122,7 +122,7 @@
     <None Include="..\..\docs\设置项.md" Link="docs\设置项.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\..\docs\人工测试清单.md" Link="docs\人工测试清单.md">
+    <None Include="..\..\docs\开发\人工测试清单.md" Link="docs\人工测试清单.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
