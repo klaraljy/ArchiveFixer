@@ -569,6 +569,12 @@ namespace ArchiveFixer.Detection
 
         private static bool IsSecondStepCandidate(FirstStepFileLedgerEntry entry)
         {
+            /*
+             * ⛔ 不能在这里再要求 `HasSecondStepEvidence`：族 resolver 需要“改名到没有卷标记”的
+             * 中间片也能进候选池，再由试开/顺序证据定序（`VolumeBoundarySkeletonTests`
+             * 的“中间片名字丢了_硬链接试开定序”就是这一档）。候选池只排除
+             * 已消费、0 字节与普通媒体这三条否定事实，其余交给族算法判。
+             */
             return entry.IsGatePassed
                 && !entry.IsConsumedSource
                 && entry.Size > 0
