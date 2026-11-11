@@ -804,6 +804,8 @@ namespace ArchiveFixer.ViewModels
                 Size = card.Size,
                 BodyKind = card.BodyKind,
                 ContentKind = card.ContentKind,
+                ContentClass = card.ContentClass,
+                ContentFormat = card.ContentFormat,
                 Evidence = card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
                     || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                         ? VolumeHandoffEvidence.ContentProven

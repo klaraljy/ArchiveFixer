@@ -1267,7 +1267,11 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        _extractionCoordinator.CleanupSuffixJunkAtSecondStep(Tasks);
+                        /*
+                         * ⛔ 第二大步不再物理改用户源名：`.001删 → .001` 由 StandardNameFastPath
+                         * 的逻辑规范名 + 入口层硬链接承担。物理改名会拆散任务/账本/prepared 三份路径
+                         * （真机 336 的 13:45/13:51 两次路径不一致就是这么来的）。
+                         */
 
                         List<string> groupRoots = _extractionCoordinator.VolumeHandoffEntries
                             .Select(entry => entry.SourceLayer)
@@ -1336,6 +1340,8 @@ namespace ArchiveFixer.ViewModels
                                     Size = entry.Size,
                                     BodyKind = entry.BodyKind,
                                     ContentKind = entry.ContentKind,
+                                    ContentClass = entry.ContentClass,
+                                    ContentFormat = entry.ContentFormat,
                                     Evidence = entry.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
                                             or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece
                                         ? ArchiveFixer.Detection.VolumeHandoffEvidence.ContentProven
@@ -1593,8 +1599,20 @@ namespace ArchiveFixer.ViewModels
                                 preparedGroups.Select(group => group.BaseName),
                                 StringComparer.OrdinalIgnoreCase);
 
+                            /*
+                             * `SizeAnomaly` 的 prepared 组按设计没有 Pieces，不能提交；
+                             * 同一基名的发现层组如果已经有完整候选，必须保留它作回退。
+                             */
+                            var zeroPieceSizeAnomalyBases = new HashSet<string>(
+                                preparedGroups
+                                    .Where(group => group.State == PreparedGroupState.SizeAnomaly
+                                                    && group.Pieces.Count == 0)
+                                    .Select(group => group.BaseName),
+                                StringComparer.OrdinalIgnoreCase);
+
                             handoffGroups.RemoveAll(group =>
                                 preparedBaseNames.Contains(group.BaseName)
+                                && !zeroPieceSizeAnomalyBases.Contains(group.BaseName)
                                 && group.PreparedGroup == null
                                 && !group.ByteFitPaired);
 
@@ -3439,6 +3457,20 @@ namespace ArchiveFixer.ViewModels
                     if (keepsKeyword != null)
                     {
                         skippedLines.Add($"{file}（名字命中「内容物保留关键词」：{keepsKeyword} —— 按设置不解开也不改名）");
+                        continue;
+                    }
+
+                    /*
+                     * 非压缩文件（图片/视频/音频/文档/文本）不进“下一轮内层包”名单。
+                     * 媒体前缀的完整归档（文件头是媒体、尾部有归档）例外 —— 它首先是归档。
+                     */
+                    FileNatureCard producedCard = FileNature.Inspect(file);
+
+                    if (producedCard.EmbeddedOffset == 0
+                        && producedCard.ContentClass != FileContentClass.Archive
+                        && FileContentProbe.Probe(file, deep: true).Class == FileContentClass.KnownContent)
+                    {
+                        skippedLines.Add($"{file}（识别为非压缩文件：{producedCard.ContentFormat} —— 不碰）");
                         continue;
                     }
 

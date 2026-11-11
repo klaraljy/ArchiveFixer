@@ -72,6 +72,17 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 伪装成png的WebP_媒体结构占满整个文件_记成NormalMedia()
+        {
+            string path = Create("336.png", BuildWebp());
+
+            FileNatureCard card = FileNature.Inspect(path);
+
+            Assert.Equal(FileContentKind.NormalMedia, card.ContentKind);
+            Assert.True(card.IsKnownNormalMedia);
+        }
+
+        [Fact]
         public void 裸切续卷伪装成png_没有媒体魔数_不算内容物()
         {
             var bytes = new byte[128];
@@ -175,6 +186,29 @@ namespace ArchiveFixer.Tests
             buffer[offset + 1] = (byte)(value >> 16);
             buffer[offset + 2] = (byte)(value >> 8);
             buffer[offset + 3] = (byte)value;
+        }
+
+        /// <summary>最小 WebP：RIFF 头 + 一个 `VP8 ` 块（大小字段按 RFC 9649：从偏移 8 起算）。</summary>
+        private static byte[] BuildWebp()
+        {
+            var bytes = new byte[24];
+
+            byte[] signature = { (byte)'R', (byte)'I', (byte)'F', (byte)'F' };
+            signature.CopyTo(bytes, 0);
+
+            // 整个文件 24 字节，RIFF File Size = 24 - 8 = 16。
+            bytes[4] = 16;
+            bytes[8] = (byte)'W';
+            bytes[9] = (byte)'E';
+            bytes[10] = (byte)'B';
+            bytes[11] = (byte)'P';
+            bytes[12] = (byte)'V';
+            bytes[13] = (byte)'P';
+            bytes[14] = (byte)'8';
+            bytes[15] = (byte)' ';
+            bytes[16] = 4;
+
+            return bytes;
         }
 
         private static byte[] BuildZip()

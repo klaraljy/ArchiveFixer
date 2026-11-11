@@ -119,6 +119,19 @@ namespace ArchiveFixer.Detection
         /// <summary>是不是普通媒体内容物（⛔ 否定证据，不许拿来当"它一定是分卷/不是分卷"）。</summary>
         public bool IsKnownNormalMedia => ContentKind == FileContentKind.NormalMedia;
 
+        /// <summary>
+        /// 内容物/归档的分类事实（唯一出口 <see cref="FileContentProbe"/>）：
+        /// `KnownContent` = 非压缩文件，自动处理不碰；`Archive` = 已证明的归档；
+        /// `Unknown` = 判不出（没有卷证据时也不碰）。
+        /// </summary>
+        public FileContentClass ContentClass { get; init; }
+
+        /// <summary>内容格式名（PNG/WebP/MP4/PDF/OOXML…；判不出 = 空串）。</summary>
+        public string ContentFormat { get; init; } = string.Empty;
+
+        /// <summary>是不是已证明的非压缩文件。</summary>
+        public bool IsKnownContent => ContentClass == FileContentClass.KnownContent;
+
         /// <summary>RAR 族内细分（RAR5 / RAR4 新 / RAR4 老 / 加密头）；判不出 = Unknown。</summary>
         public RarVariant RarVariant { get; init; }
 
@@ -496,6 +509,22 @@ namespace ArchiveFixer.Detection
                 contentKind = FileContentKind.NormalMedia;
             }
 
+            /*
+             * 内容物/归档分类（只做**便宜的浅探测**；ZIP 条目这种深探测留给准入点，
+             * 避免 FileNature 的 93 个调用点都去打开 ZIP）。
+             */
+            FileContentProbeResult contentProbe = FileContentProbe.Probe(path, deep: false);
+            FileContentClass contentClass = contentProbe.Class;
+
+            /*
+             * 媒体前缀的完整归档：文件头是媒体，但尾部已经由 EmbeddedArchiveLocator 证明有归档
+             * ⇒ 它首先是归档，⛔ 不能被“头部像媒体”误判成普通内容物。
+             */
+            if (embeddedOffset > 0)
+            {
+                contentClass = FileContentClass.Archive;
+            }
+
             ArchiveEncryptionState encryption = ArchiveEncryptionState.Unknown;
 
             if (format == VolumeContentFormat.Rar)
@@ -518,6 +547,8 @@ namespace ArchiveFixer.Detection
                 ContentFail = reading.Fail,
                 BodyKind = bodyKind,
                 ContentKind = contentKind,
+                ContentClass = contentClass,
+                ContentFormat = contentProbe.Format,
                 RarVariant = reading.RarVariant,
                 Encryption = encryption,
                 DeclaredTotalBytes = declaredTotalBytes,

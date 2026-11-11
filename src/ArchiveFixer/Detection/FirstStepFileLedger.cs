@@ -56,6 +56,12 @@ namespace ArchiveFixer.Detection
         /// <summary>内容物事实（普通媒体 = 否定证据；见 <see cref="FileContentKind"/>）。</summary>
         public FileContentKind ContentKind { get; init; }
 
+        /// <summary>内容物/归档分类（唯一出口 <see cref="FileContentProbe"/>）。</summary>
+        public FileContentClass ContentClass { get; init; }
+
+        /// <summary>内容格式名（PNG/WebP/PDF/OOXML…）。</summary>
+        public string ContentFormat { get; init; } = string.Empty;
+
         public int? VolumeNumber { get; init; }
 
         public bool FirstVolumeFlag { get; init; }
@@ -171,6 +177,8 @@ namespace ArchiveFixer.Detection
                 Membership = card.Membership,
                 BodyKind = card.BodyKind,
                 ContentKind = card.ContentKind,
+                ContentClass = card.ContentClass,
+                ContentFormat = card.ContentFormat,
                 VolumeNumber = card.VolumeNumber,
                 FirstVolumeFlag = card.FirstVolumeFlag,
                 RawVolumeField = card.RawVolumeField,
@@ -229,6 +237,8 @@ namespace ArchiveFixer.Detection
                     : existing.Membership,
                 BodyKind = BodyKind != ArchiveBodyKind.Unknown ? BodyKind : existing.BodyKind,
                 ContentKind = ContentKind != FileContentKind.Unknown ? ContentKind : existing.ContentKind,
+                ContentClass = ContentClass != FileContentClass.Unknown ? ContentClass : existing.ContentClass,
+                ContentFormat = !string.IsNullOrWhiteSpace(ContentFormat) ? ContentFormat : existing.ContentFormat,
                 VolumeNumber = VolumeNumber ?? existing.VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag || existing.FirstVolumeFlag,
                 RawVolumeField = RawVolumeField ?? existing.RawVolumeField,
@@ -280,6 +290,7 @@ namespace ArchiveFixer.Detection
         public bool HasSecondStepEvidence =>
             !IsConsumedSource
             && ContentKind != FileContentKind.NormalMedia
+            && ContentClass != FileContentClass.KnownContent
             && (BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece
                 || Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                 || FirstVolumeFlag
@@ -311,6 +322,8 @@ namespace ArchiveFixer.Detection
                 Membership = Membership,
                 BodyKind = BodyKind,
                 ContentKind = ContentKind,
+                ContentClass = ContentClass,
+                ContentFormat = ContentFormat,
                 VolumeNumber = VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag,
                 RawVolumeField = RawVolumeField,
@@ -352,6 +365,8 @@ namespace ArchiveFixer.Detection
                 Membership = Membership,
                 BodyKind = BodyKind,
                 ContentKind = ContentKind,
+                ContentClass = ContentClass,
+                ContentFormat = ContentFormat,
                 VolumeNumber = VolumeNumber,
                 FirstVolumeFlag = FirstVolumeFlag,
                 RawVolumeField = RawVolumeField,
@@ -575,10 +590,26 @@ namespace ArchiveFixer.Detection
              * 的“中间片名字丢了_硬链接试开定序”就是这一档）。候选池只排除
              * 已消费、0 字节与普通媒体这三条否定事实，其余交给族算法判。
              */
-            return entry.IsGatePassed
-                && !entry.IsConsumedSource
-                && entry.Size > 0
-                && entry.ContentKind != FileContentKind.NormalMedia;
+            if (!entry.IsGatePassed
+                || entry.IsConsumedSource
+                || entry.Size <= 0
+                || entry.ContentKind == FileContentKind.NormalMedia
+                || entry.ContentClass == FileContentClass.KnownContent)
+            {
+                return false;
+            }
+
+            /*
+             * ZIP 家族的内容物只有深探测才能认出来（docx/epub/apk/jar）。
+             * 候选数很少，精确一次；⛔ 不在 HasSecondStepEvidence/FileNature 里给每个文件开 ZIP。
+             */
+            if (entry.Format == VolumeContentFormat.Zip
+                && FileContentProbe.Probe(entry.Path, deep: true).Class == FileContentClass.KnownContent)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>

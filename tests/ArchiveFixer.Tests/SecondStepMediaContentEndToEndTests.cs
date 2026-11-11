@@ -12,16 +12,16 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 端到端：**脏后缀 7z 首片 + 同目录普通 PNG**（2026-11-11 真机 336 形状的缩小版）。
+    /// 端到端：**脏后缀 7z 首片 + 同目录普通 WebP 改名 .png**（2026-11-11 真机 336 形状的缩小版）。
     ///
-    /// <para>钉三件事：① 普通 PNG 不撑大分卷组的已收字节；② 快通道仍按标准名
+    /// <para>钉三件事：① WebP 内容物不撑大分卷组的已收字节；② 快通道仍按标准名
     /// （`.001删` → `.001`）建链接并解出内容；③ 成功后过程物/工作区按既有收片账清理，
     /// 不留下"解出来了但按 Pending 收场"的尾巴。</para>
     /// </summary>
     public sealed class SecondStepMediaContentEndToEndTests
     {
         [Fact]
-        public async Task 脏后缀首片加同基名PNG_快通道能解出内容且不判Pending()
+        public async Task 脏后缀首片加同基名WebP_快通道能解出内容且不判Pending()
         {
             string? sevenZip = LocateFirst(
                 @"E:\ArchiveFixer\tools\7zip\7z.exe",
@@ -82,8 +82,17 @@ namespace ArchiveFixer.Tests
                     task.Name.Contains("336.7z.001", StringComparison.OrdinalIgnoreCase));
 
                 Assert.True(entryTask != null, "任务表里没有 336.7z.001 这一单");
-                Assert.NotEqual("Pending", entryTask!.Outcome);
+                Assert.Equal("336.7z.001删", entryTask!.Name);
+                Assert.NotEqual("Pending", entryTask.Outcome);
                 Assert.NotEqual("Failed", entryTask.Outcome);
+
+                /*
+                 * 第二大步不再物理改名：源片仍叫 `.001删`，标准名只活在入口层/链接里。
+                 */
+                Assert.NotEmpty(
+                    Directory.GetFiles(record.Workspace, "336.7z.001删", SearchOption.AllDirectories));
+                Assert.Empty(
+                    Directory.GetFiles(record.Workspace, "336.7z.001", SearchOption.AllDirectories));
 
                 string[] workspaceShells = Directory.GetDirectories(
                     record.Workspace,
@@ -163,7 +172,7 @@ namespace ArchiveFixer.Tests
             CopyRange(archive, Path.Combine(sourceDir, "336.7z.002"), firstLength, total - firstLength);
 
             File.Delete(archive);
-            File.WriteAllBytes(Path.Combine(sourceDir, "336.png"), BuildPng());
+            File.WriteAllBytes(Path.Combine(sourceDir, "336.png"), BuildWebp());
             Directory.Delete(work, recursive: true);
         }
 
@@ -191,25 +200,24 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        private static byte[] BuildPng()
+        /// <summary>最小 WebP：RIFF 头 + 一个 `VP8 ` 块；文件名叫 `.png`，模拟 336 真机。</summary>
+        private static byte[] BuildWebp()
         {
-            var bytes = new byte[45];
+            var bytes = new byte[24];
 
-            byte[] signature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+            byte[] signature = { (byte)'R', (byte)'I', (byte)'F', (byte)'F' };
             signature.CopyTo(bytes, 0);
 
-            int position = 8;
-            bytes[position + 3] = 13;
-            bytes[position + 4] = (byte)'I';
-            bytes[position + 5] = (byte)'H';
-            bytes[position + 6] = (byte)'D';
-            bytes[position + 7] = (byte)'R';
-            position += 12 + 13;
-
-            bytes[position + 4] = (byte)'I';
-            bytes[position + 5] = (byte)'E';
-            bytes[position + 6] = (byte)'N';
-            bytes[position + 7] = (byte)'D';
+            bytes[4] = 16;
+            bytes[8] = (byte)'W';
+            bytes[9] = (byte)'E';
+            bytes[10] = (byte)'B';
+            bytes[11] = (byte)'P';
+            bytes[12] = (byte)'V';
+            bytes[13] = (byte)'P';
+            bytes[14] = (byte)'8';
+            bytes[15] = (byte)' ';
+            bytes[16] = 4;
 
             return bytes;
         }

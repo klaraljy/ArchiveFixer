@@ -95,6 +95,21 @@ namespace ArchiveFixer.Extraction
                 FileNatureCard card = FileNature.Inspect(candidate);
 
                 /*
+                 * **非压缩文件先判**：图片/视频/音频/文档/文本，以及 ZIP 家族里的
+                 * docx/epub/apk/jar，都是用户要的内容物，自动处理不碰。
+                 * 这一步必须早于“名字像卷”的分支，否则内容物带数字后缀会被误当分卷。
+                 */
+                bool embeddedArchive = card.EmbeddedOffset > 0
+                    || card.ContentClass == FileContentClass.Archive;
+
+                if (!embeddedArchive
+                    && FileContentProbe.Probe(candidate, deep: true).Class == FileContentClass.KnownContent)
+                {
+                    content++;
+                    continue;
+                }
+
+                /*
                  * 分卷那一支的判据 = 卡上那句：内容**可证不是**分卷成员 ⇒ 不参与（它就是一份普通的单卷归档 / 别的文件）；
                  * 是分卷 / **判不出** ⇒ 参与（判不出照旧按名字 —— ⛔ 不许把"判不出"当"不是"）。
                  */

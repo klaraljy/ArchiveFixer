@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -197,6 +198,41 @@ namespace ArchiveFixer.Tests
             finally
             {
                 RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+        }
+
+        /// <summary>
+        /// <b>用例 E（自动一键处理）</b>：真正的 `.docx` 作为源包直接导入，自动处理只跳过、
+        /// 不解开、不改名；它是内容物，不是压缩包。
+        /// </summary>
+        [Fact]
+        public async Task 用例E_自动处理时源docx不碰()
+        {
+            Harness harness = CreateHarness(keepKeywords: Array.Empty<string>());
+
+            string docx = Path.Combine(_root, "自动源.docx");
+            WriteDocx(docx);
+
+            await harness.AddPathsAsync(docx);
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.Equal(TaskOutcome.Skipped, task.Outcome);
+            Assert.True(File.Exists(docx), "源 docx 必须原地不动");
+            Assert.Empty(FindFiles("document.xml"));
+            Assert.Equal(0, task.ContentFileCount);
+        }
+
+        private static void WriteDocx(string path)
+        {
+            using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+            using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
+
+            foreach (string entry in new[] { "[Content_Types].xml", "word/document.xml" })
+            {
+                ZipArchiveEntry item = zip.CreateEntry(entry);
+                using StreamWriter writer = new(item.Open(), new UTF8Encoding(false));
+                writer.Write("<?xml version=\"1.0\"?><root />");
             }
         }
 

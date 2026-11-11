@@ -4633,6 +4633,27 @@ namespace ArchiveFixer.Extraction
                      * 分卷片同样认得出 ⇒ 第一大步会越界把整组开掉（实测 `24242424` 两份内容物的机制）。</para>
                      */
                     FileNatureCard nature = FileNature.Inspect(entry);
+
+                    /*
+                     * 非压缩文件不碰：图片/视频/音频/文档/文本，以及 ZIP 家族的
+                     * docx/epub/apk/jar。判据只此一个出口（媒体/文档事实在探测层收口）。
+                     */
+                    FileContentProbeResult contentProbe = FileContentProbe.Probe(entry, deep: true);
+
+                    if (nature.EmbeddedOffset == 0
+                        && contentProbe.Class == FileContentClass.KnownContent)
+                    {
+                        if (contentProbe.IsContentContainer)
+                        {
+                            Log(
+                                "INFO",
+                                $"{layerLabel}：{Path.GetFileName(entry)} 是内容容器（{contentProbe.Format}）"
+                                + " —— 默认当内容物保留，不递归也不改名；要拆请单独选中它用「只解压」。");
+                        }
+
+                        continue;
+                    }
+
                     bool isSingleComplete = nature.BodyKind == ArchiveBodyKind.SingleComplete;
 
                     /*

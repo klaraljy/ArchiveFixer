@@ -48,6 +48,12 @@ namespace ArchiveFixer.Detection
         /// <summary>内容物事实：普通媒体 = 否定证据（见 <see cref="FileContentKind"/>）。</summary>
         public FileContentKind ContentKind { get; init; }
 
+        /// <summary>内容物/归档分类（唯一出口 <see cref="FileContentProbe"/>）。</summary>
+        public FileContentClass ContentClass { get; init; }
+
+        /// <summary>内容格式名（PNG/WebP/PDF/OOXML…）。</summary>
+        public string ContentFormat { get; init; } = string.Empty;
+
         /// <summary>交接登记理由：内容可证 / 名字槽位 / 判不出。</summary>
         public VolumeHandoffEvidence Evidence { get; init; }
 
@@ -110,6 +116,7 @@ namespace ArchiveFixer.Detection
         /// <summary>给人看的一行（日志与判据输入共用；⛔ 不猜，判不出的字段如实写"判不出"）。</summary>
         public string Describe() =>
             $"{BaseName} ｜ 族={Format} ｜ {Size} 字节 ｜ 交接证据={Evidence} ｜ 内容身份={BodyKind} ｜ 内容物={ContentKind}"
+            + $" ｜ 内容分类={ContentClass}/{ContentFormat}"
             + $" ｜ 成员判定={Membership}"
             + $" ｜ 卷号={(VolumeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"
             + $"（原始字段={(RawVolumeField?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出")}"

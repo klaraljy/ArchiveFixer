@@ -178,6 +178,15 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                /*
+                 * SizeAnomaly 的 prepared 组按设计不填 Pieces（它只描述“结构异常”）。
+                 * 这种组不可提交，不能变成 0 片候选去替换发现层已经算对的那一组。
+                 */
+                if (group.State == PreparedGroupState.SizeAnomaly && group.Pieces.Count == 0)
+                {
+                    continue;
+                }
+
                 List<string> pieces = group.Pieces
                     .Select(piece => string.IsNullOrWhiteSpace(group.EntryLayer)
                         ? piece.OriginalPath
@@ -287,7 +296,7 @@ namespace ArchiveFixer.Extraction
                  * 普通媒体内容物不是分卷种子（用户 2026-11-11：媒体前缀只服务单一完整包）。
                  * 只认内容事实；判不出（裸切续卷伪装成 .png）照旧进候选。
                  */
-                if (IsKnownNormalMedia(handoffByPath, seed) || IsKnownNormalMediaOnDisk(seed))
+                if (IsKnownNormalMedia(handoffByPath, seed) || IsKnownContentOnDisk(seed))
                 {
                     continue;
                 }
@@ -577,7 +586,7 @@ namespace ArchiveFixer.Extraction
                  * 媒体前缀的完整单卷（EmbeddedOffset > 0）与裸切续卷伪装成 .png 都不在这一档。
                  */
                 if (sameBase
-                    && (IsKnownNormalMedia(handoffByPath, path) || IsKnownNormalMediaOnDisk(path)))
+                    && (IsKnownNormalMedia(handoffByPath, path) || IsKnownContentOnDisk(path)))
                 {
                     continue;
                 }
@@ -767,12 +776,68 @@ namespace ArchiveFixer.Extraction
         private static bool IsKnownNormalMedia(PieceFacts item) => IsKnownNormalMedia(item.Card);
 
         /// <summary>
+        /// 内容物（图片/视频/音频/文档）事实：浅卡已经能证明就用浅卡；
+        /// ZIP 家族需要深探测看条目（只在候选准入点调用，不在每个 FileNature.Inspect 里打开 ZIP）。
+        /// </summary>
+        private static bool IsKnownContent(PieceFacts item)
+        {
+            if (IsKnownNormalMedia(item))
+            {
+                return true;
+            }
+
+            if (item.Card.EmbeddedOffset > 0)
+            {
+                return false;
+            }
+
+            if (item.Card.ContentClass == FileContentClass.KnownContent
+                || item.Handoff?.ContentClass == FileContentClass.KnownContent)
+            {
+                return true;
+            }
+
+            if (item.Card.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip)
+            {
+                return FileContentProbe.Probe(item.Path, deep: true).Class == FileContentClass.KnownContent;
+            }
+
+            return false;
+        }
+
+        private static bool IsKnownContentOnDisk(string path)
+        {
+            try
+            {
+                FileNatureCard card = FileNature.Inspect(path);
+
+                if (card.EmbeddedOffset > 0)
+                {
+                    return false;
+                }
+
+                if (card.IsKnownContent || card.IsKnownNormalMedia)
+                {
+                    return true;
+                }
+
+                return card.Format == ArchiveFixer.Detection.VolumeContentFormat.Zip
+                    && FileContentProbe.Probe(path, deep: true).Class == FileContentClass.KnownContent;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 字节补齐配对里的尾片：账本里只能是"纯 Unknown"（没有卷号/名字槽/首卷标记/自述整包），
         /// 否则它属于别的组，⛔ 不许抢过来配对。
         /// </summary>
         private static bool IsByteFitTailCandidate(ArchiveFixer.Detection.VolumeHandoffEntry entry)
         {
             return entry.ContentKind != ArchiveFixer.Detection.FileContentKind.NormalMedia
+                && entry.ContentClass != ArchiveFixer.Detection.FileContentClass.KnownContent
                 && entry.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                 && entry.Membership != ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
                 && !entry.NameVolumeIndex.HasValue
@@ -867,6 +932,11 @@ namespace ArchiveFixer.Extraction
                             continue;
                         }
 
+                        if (FileContentProbe.Probe(path, deep: true).Class == FileContentClass.KnownContent)
+                        {
+                            continue;
+                        }
+
                         long size;
 
                         try
@@ -897,6 +967,7 @@ namespace ArchiveFixer.Extraction
                         if (card.Format != ArchiveFixer.Detection.VolumeContentFormat.Unknown
                             || card.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.SingleComplete
                             || IsKnownNormalMedia(card)
+                            || card.IsKnownContent
                             || IsProvablySingleCompleteNonMember(card, path)
                             || LegacyVolumeNames.TryGetIndex(
                                 FileNameHelper.GetFileName(path)).HasValue)
@@ -1054,7 +1125,7 @@ namespace ArchiveFixer.Extraction
                 .Select(path => BuildFacts(path, handoffByPath))
                 .ToList();
 
-            int contentDropped = allItems.RemoveAll(item => IsKnownNormalMedia(item));
+            int contentDropped = allItems.RemoveAll(item => IsKnownContent(item));
             List<PieceFacts> items = allItems;
 
             ArchiveFixer.Detection.VolumeContentFormat format = items

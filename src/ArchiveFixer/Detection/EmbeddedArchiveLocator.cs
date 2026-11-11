@@ -167,9 +167,13 @@ namespace ArchiveFixer.Detection
             bool mediaName = IsMediaFileName(path);
             long mediaEnd = 0;
 
-            if (mediaName
-                && TryFindMediaEnd(path, out mediaEnd)
-                && mediaEnd > 0)
+            /*
+             * 媒体身份**按魔数**，后缀只是兜底：`336.png` 实际是 RIFF/WEBP，
+             * 按 `.png` 交给 PNG 解析器会直接失败，整份文件就被当成“认不出”的内容物。
+             */
+            bool mediaContainer = TryFindMediaEnd(path, out mediaEnd) && mediaEnd > 0;
+
+            if (mediaContainer)
             {
                 /*
                  * 媒体段自己就占满整个文件 ⇒ 后面根本没有归档（普通 mp4/jpg/png）⇒ 当场判"没有"，
@@ -455,6 +459,7 @@ namespace ArchiveFixer.Detection
             return extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".m4v", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".mov", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
@@ -478,9 +483,33 @@ namespace ArchiveFixer.Detection
                 long length = stream.Length;
                 string extension = Path.GetExtension(path);
 
+                /*
+                 * 先按文件头认容器，再按后缀兜底。这样 `.png` 实际是 WEBP 也能量出媒体终点；
+                 * 反过来，后缀是媒体但文件头已经被截断/伪装时，仍退回原来的后缀解析器。
+                 */
+                if (HasPngSignature(stream))
+                {
+                    return TryFindPngEnd(stream, length, out end);
+                }
+
+                if (HasWebpSignature(stream))
+                {
+                    return TryFindWebpEnd(stream, length, out end);
+                }
+
+                if (HasJpegSignature(stream))
+                {
+                    return TryFindJpegEnd(stream, length, out end);
+                }
+
                 if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
                 {
                     return TryFindPngEnd(stream, length, out end);
+                }
+
+                if (extension.Equals(".webp", StringComparison.OrdinalIgnoreCase))
+                {
+                    return TryFindWebpEnd(stream, length, out end);
                 }
 
                 if (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
@@ -502,6 +531,81 @@ namespace ArchiveFixer.Detection
             {
                 return false;
             }
+        }
+
+        private static bool HasPngSignature(FileStream stream)
+        {
+            Span<byte> signature = stackalloc byte[8];
+
+            return TryReadFromStream(stream, 0, signature)
+                && signature.SequenceEqual(PngSignature);
+        }
+
+        private static bool HasJpegSignature(FileStream stream)
+        {
+            Span<byte> soi = stackalloc byte[2];
+
+            return TryReadFromStream(stream, 0, soi)
+                && soi[0] == 0xFF
+                && soi[1] == 0xD8;
+        }
+
+        /// <summary>RIFF 头 + 第 8–11 字节的 `WEBP`（见 RFC 9649：文件大小字段从偏移 8 起算）。</summary>
+        private static bool HasWebpSignature(FileStream stream)
+        {
+            Span<byte> header = stackalloc byte[12];
+
+            return TryReadFromStream(stream, 0, header)
+                && header[0] == (byte)'R'
+                && header[1] == (byte)'I'
+                && header[2] == (byte)'F'
+                && header[3] == (byte)'F'
+                && header[8] == (byte)'W'
+                && header[9] == (byte)'E'
+                && header[10] == (byte)'B'
+                && header[11] == (byte)'P';
+        }
+
+        /// <summary>
+        /// WebP：`RIFF` + 小端 32 位 File Size + `WEBP`；媒体结束 = 8 + File Size。
+        /// 末尾允许有非规范数据（RFC 9649 允许读入方忽略），但这里只报告到 RIFF 声明的终点。
+        /// </summary>
+        private static bool TryFindWebpEnd(FileStream stream, long length, out long end)
+        {
+            end = 0;
+
+            Span<byte> header = stackalloc byte[12];
+
+            if (!TryReadFromStream(stream, 0, header)
+                || header[0] != (byte)'R'
+                || header[1] != (byte)'I'
+                || header[2] != (byte)'F'
+                || header[3] != (byte)'F'
+                || header[8] != (byte)'W'
+                || header[9] != (byte)'E'
+                || header[10] != (byte)'B'
+                || header[11] != (byte)'P')
+            {
+                return false;
+            }
+
+            uint fileSize = BinaryPrimitives.ReadUInt32LittleEndian(header[4..8]);
+
+            if (fileSize < 4)
+            {
+                return false;
+            }
+
+            long total = 8L + fileSize;
+
+            if (total < 12 || total > length)
+            {
+                return false;
+            }
+
+            end = total;
+
+            return true;
         }
 
         /// <summary>PNG：8 字节签名 + 块链（长度 4 + 类型 4 + 数据 + CRC 4），走到 IEND 块末尾。</summary>

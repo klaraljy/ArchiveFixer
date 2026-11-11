@@ -81,6 +81,15 @@ namespace ArchiveFixer.ViewModels
                     ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath ?? string.Empty);
 
                 /*
+                 * ⛔ 自动一键处理不碰非压缩文件：图片/视频/音频/文档/文本，以及 ZIP 家族的
+                 * docx/epub/apk/jar。手动「只解压」不走这里（oneClickRun=false），保留既有强制拆语义。
+                 */
+                if (TrySkipKnownContent(task, oneClickRun, entryCard))
+                {
+                    return;
+                }
+
+                /*
                  * 共用骨架：第一大步**每一份闸门通过的文件**都进账本，包括内容 Unknown 的中间片。
                  * 这一步只登记事实，⛔ 不判分卷、不碰盘、不改变任何既有分支。
                  */
@@ -3071,6 +3080,63 @@ namespace ArchiveFixer.ViewModels
         /// 唯一出口 <c>AndroidPackageDetector</c>；判不出 ⇒ 照旧照常处理。
         /// </summary>
         /// <returns>true = 这一单到此为止（状态与终态已经写好）。</returns>
+        private bool TrySkipKnownContent(
+            ArchiveTask task,
+            bool oneClickRun,
+            ArchiveFixer.Detection.FileNatureCard card)
+        {
+            if (!oneClickRun
+                || string.IsNullOrWhiteSpace(task.CurrentPath)
+                || !File.Exists(task.CurrentPath))
+            {
+                return false;
+            }
+
+            /*
+             * 媒体前缀的完整归档 / 已证明的归档：头部像媒体也不能按内容物跳过。
+             * 这里用 entryCard 已经取到的底层事实，避免对媒体前缀再猜一次。
+             */
+            if (card.ContentClass == ArchiveFixer.Detection.FileContentClass.Archive
+                || card.EmbeddedOffset > 0
+                || card.BodyKind is ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    or ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
+            {
+                return false;
+            }
+
+            ArchiveFixer.Detection.FileContentProbeResult content =
+                ArchiveFixer.Detection.FileContentProbe.Probe(task.CurrentPath, deep: true);
+
+            if (content.Class != ArchiveFixer.Detection.FileContentClass.KnownContent)
+            {
+                return false;
+            }
+
+            /*
+             * APK 走已有的专用闸门（它有自己的文案/终态/守门用例），
+             * 这里不要用“普通非压缩文件”把它抢先收掉。
+             */
+            if (ArchiveFixer.Detection.AndroidPackageDetector.IsAndroidPackage(task.CurrentPath))
+            {
+                return false;
+            }
+
+            task.IsArchive = false;
+            task.Status = StatusText.Skipped;
+            task.Operation = StatusText.OpSkip;
+            task.ProgressText = StatusText.ProgressCompleted;
+            task.ErrorMessage = $"这是非压缩文件（{content.Format}）—— 按设置不解压、不递归、不改名，源文件一个字节都不动。";
+            task.Outcome = TaskOutcome.Skipped;
+            task.EndTime ??= ArchiveFixer.Helpers.Clock.Now;
+
+            AppendLog(
+                "INFO",
+                $"{task.LogName}：识别为非压缩文件（{content.Format}；{content.Evidence}）"
+                + " —— 自动处理不碰，源文件原地不动。要拆请手动选中后用「只解压」。");
+
+            return true;
+        }
+
         private bool TrySkipAndroidPackage(ArchiveTask task)
         {
             if (!AndroidPackageDetector.IsAndroidPackage(task.CurrentPath))
