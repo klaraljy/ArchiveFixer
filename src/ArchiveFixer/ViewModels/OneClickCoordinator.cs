@@ -3460,20 +3460,6 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    /*
-                     * 非压缩文件（图片/视频/音频/文档/文本）不进“下一轮内层包”名单。
-                     * 媒体前缀的完整归档（文件头是媒体、尾部有归档）例外 —— 它首先是归档。
-                     */
-                    FileNatureCard producedCard = FileNature.Inspect(file);
-
-                    if (producedCard.EmbeddedOffset == 0
-                        && producedCard.ContentClass != FileContentClass.Archive
-                        && FileContentProbe.Probe(file, deep: true).Class == FileContentClass.KnownContent)
-                    {
-                        skippedLines.Add($"{file}（识别为非压缩文件：{producedCard.ContentFormat} —— 不碰）");
-                        continue;
-                    }
-
                     if (ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(file))
                     {
                         skippedLines.Add(
