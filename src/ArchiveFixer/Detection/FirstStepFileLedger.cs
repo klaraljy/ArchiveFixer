@@ -266,12 +266,16 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 这一项有没有资格进入第二大步候选池。
+        /// 这一项有没有资格作为**第二大步交接候选**（`OneClickCoordinator` 的 `ledgerHandoff` 读它）。
         ///
         /// <para>账本会收所有已发布产物（含 MP4/TXT/PNG 等内容物，见
         /// <c>RegisterProducedOutputsToLedger</c>），而组分析不能把每个内容物都当成“1 片候选”。
         /// 这里只认底层分卷事实：内容身份、卷号/首卷、名字槽、ZIP split 证据、交界前租约或候选角色。
         /// 判不出且没有这些事实的内容物由 <c>extraGroupSeeds</c> 的脏名扫描另行补；⛔ 不在这里猜。</para>
+        ///
+        /// <para>⚠ 它**不是** `<see cref="SecondStepCandidates(string?)"/>` 的过滤器：候选池只排除
+        /// 已消费、0 字节与普通媒体，事实稀疏的分卷片仍要交给族 resolver 定序。
+        /// 内容物事实（<see cref="FileContentKind.NormalMedia"/>）在这里也会否决。</para>
         /// </summary>
         public bool HasSecondStepEvidence =>
             !IsConsumedSource
