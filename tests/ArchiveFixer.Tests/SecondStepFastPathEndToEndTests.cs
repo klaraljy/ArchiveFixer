@@ -89,6 +89,11 @@ namespace ArchiveFixer.Tests
 
                 Assert.Equal(0, leftoverPieces);
 
+                string[] workspaceShells = Directory.GetDirectories(record.Workspace, ".ArchiveFixer.work", SearchOption.AllDirectories);
+                Assert.True(
+                    workspaceShells.Length == 0,
+                    "成功链结束后工作区壳没清掉：" + string.Join("；", workspaceShells));
+
                 string logDir = Path.Combine(Batch120Operation.RecordRoot, "logs-" + sampleId);
                 string? logFile = Directory.Exists(logDir)
                     ? Directory.GetFiles(logDir, "*.log").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
@@ -100,6 +105,7 @@ namespace ArchiveFixer.Tests
 
                 Assert.Contains("[第二大步", log, StringComparison.Ordinal);
                 Assert.DoesNotContain("[第二大步·试开]", log, StringComparison.Ordinal);
+                Assert.DoesNotContain("上次没跑完的残留", log, StringComparison.Ordinal);
             }
             finally
             {

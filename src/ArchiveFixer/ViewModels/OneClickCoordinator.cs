@@ -1095,6 +1095,9 @@ namespace ArchiveFixer.ViewModels
 
             _vm.PropertyChanged += OnViewModelPropertyChanged;
 
+            // 这一趟的工作区跟踪从零开始：一键处理一条链会跨多轮，链尾统一收空壳。
+            _extractionCoordinator.BeginWorkspaceRun();
+
             try
             {
                 while (round < RoundLimit)
@@ -3900,6 +3903,9 @@ namespace ArchiveFixer.ViewModels
             _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
             _extractionCoordinator.RestoreKeepInPlaceSourceNames();
             _extractionCoordinator.PurgeRedundantPieceAliases();
+
+            // 源快照删完、片名收完，再把这一趟用过的每个工作区根收一遍空壳（根下无文件才删）。
+            _extractionCoordinator.CleanupRunWorkspaceShells();
         }
 
         /// <summary>

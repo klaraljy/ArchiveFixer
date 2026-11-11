@@ -58,14 +58,25 @@ namespace ArchiveFixer.ViewModels
         /// 同名文件/文件夹按当前冲突档处理 —— 摊平会更容易撞名，这个代价用户 2026-09-27 明确接受。
         /// </para>
         /// </param>
-        public Task StartExtractAsync(
+        public async Task StartExtractAsync(
             bool extractIntoSourceFolder = false,
-            IReadOnlyList<ArchiveTask>? targetTasks = null) =>
-            StartExtractCoreAsync(
-                oneClickRun: false,
-                runOptions: null,
-                extractIntoSourceFolder: extractIntoSourceFolder,
-                targetTasks: targetTasks);
+            IReadOnlyList<ArchiveTask>? targetTasks = null)
+        {
+            BeginWorkspaceRun();
+
+            try
+            {
+                await StartExtractCoreAsync(
+                    oneClickRun: false,
+                    runOptions: null,
+                    extractIntoSourceFolder: extractIntoSourceFolder,
+                    targetTasks: targetTasks);
+            }
+            finally
+            {
+                CleanupRunWorkspaceShells();
+            }
+        }
 
         /// <summary>
         /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，

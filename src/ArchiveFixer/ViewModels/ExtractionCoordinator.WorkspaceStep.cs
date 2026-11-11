@@ -23,6 +23,12 @@ namespace ArchiveFixer.ViewModels
 
         private void RemoveEmptyTargetShellIfWeCreatedIt() => _workspaceStep.RemoveEmptyTargetShellIfWeCreatedIt();
 
+        /// <summary>新的一趟开始：清掉上一趟的工作区跟踪（一键处理一次 / 手动一批各算一趟）。</summary>
+        internal void BeginWorkspaceRun() => _workspaceStep.ResetRunTracking();
+
+        /// <summary>链尾：把这一趟用过的每一个工作区根都收一遍空壳（判据仍是"根下无文件才删"）。</summary>
+        internal void CleanupRunWorkspaceShells() => _workspaceStep.CleanupRunWorkspaceShells();
+
         private void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory) =>
             _workspaceStep.CleanupTaskWorkspaceDirectory(task, stageDirectory);
 

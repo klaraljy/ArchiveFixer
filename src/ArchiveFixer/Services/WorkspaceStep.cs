@@ -45,6 +45,49 @@ namespace ArchiveFixer.Services
         {
             _host = host;
         }
+        /// <summary>这一趟（一键一次 / 手动一批）用过的全部工作区根与目标目录。链尾统一收空壳用。</summary>
+        private readonly HashSet<string> _runWorkspaceRoots = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>这一趟已经落过产物的目标目录：第二轮起不再把它们当成"上次没跑完的残留"。</summary>
+        private readonly HashSet<string> _runTargetDirectories = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>新的一趟开始：清掉上一趟的跟踪（⛔ 不清盘，只清记录）。</summary>
+        internal void ResetRunTracking()
+        {
+            _runWorkspaceRoots.Clear();
+            _runTargetDirectories.Clear();
+        }
+
+        /// <summary>
+        /// 链尾：把这一趟用过的**每一个**工作区根都收一遍空壳。
+        /// 判据仍是 <see cref="RemoveEmptyWorkspaceShells"/>（根下还有任何文件就一个字节都不动）。
+        /// </summary>
+        internal void CleanupRunWorkspaceShells()
+        {
+            foreach (string root in _runWorkspaceRoots.ToList())
+            {
+                RemoveEmptyWorkspaceShells(root);
+            }
+        }
+
+        private static string NormalizeDirectory(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.GetFullPath(path);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+
         public WorkspaceRootResolution ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks)
         {
             ExtractOptions options = _host.BuildExtractOptions(tryExtractUnknownFormat: false);
@@ -122,9 +165,36 @@ namespace ArchiveFixer.Services
              * 不递归、不看兄弟目录、更不做全盘扫描；判据一条都不在这里写（唯一出口
              * `Storage/WorkspaceLeftoverShellCleaner.ReclaimAll`：除了那个空工作区什么都没有才删）。
              */
-            foreach (WorkspaceLeftoverShellOutcome leftover in WorkspaceLeftoverShellCleaner.ReclaimAll(destinations))
+
+            var priorShellCandidates = new List<string>();
+
+            foreach (string destination in destinations)
+            {
+                string full = NormalizeDirectory(destination);
+
+                // 这一趟前面几轮已经往这个目录里落过产物 ⇒ 它不是"上次没跑完的残留"，
+                // 不许再拿"除了空工作区什么都没有"那把尺子去量它（真机 2026-11-11 的误报）。
+                if (full.Length == 0 || _runTargetDirectories.Contains(full))
+                {
+                    continue;
+                }
+
+                priorShellCandidates.Add(destination);
+            }
+
+            foreach (WorkspaceLeftoverShellOutcome leftover in WorkspaceLeftoverShellCleaner.ReclaimAll(priorShellCandidates))
             {
                 _host.AppendLog(leftover.LogLevel, leftover.Message);
+            }
+
+            foreach (string destination in destinations)
+            {
+                string full = NormalizeDirectory(destination);
+
+                if (full.Length > 0)
+                {
+                    _runTargetDirectories.Add(full);
+                }
             }
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
@@ -165,6 +235,7 @@ namespace ArchiveFixer.Services
              */
 
             WorkspaceRootIndex.Remember(resolution.RootDirectory);
+            _runWorkspaceRoots.Add(resolution.RootDirectory);
 
             return resolution;
         }
@@ -172,11 +243,11 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 收掉**空的工作区壳**（用户 2026-09-27：真机跑完 <c>…\.ArchiveFixer.work\recursive</c> 会留一个空壳）。
         /// </summary>
-        public void RemoveEmptyWorkspaceShells()
+        public void RemoveEmptyWorkspaceShells(string? root = null)
         {
             try
             {
-                string root = _host.PathService.WorkDirectory;
+                root ??= _host.PathService.WorkDirectory;
 
                 if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 {
