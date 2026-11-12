@@ -41,7 +41,7 @@
     "Services/RestHandlingStep.cs": 2346,
     "Services/TaskSummaryService.cs": 838,
     "Storage/PasswordListStore.cs": 855,
-    "Storage/RecycleBinService.cs": 1639,
+    "Storage/RecycleBinService.cs": 466,
     "Storage/RestItemPurger.cs": 998,
     "ViewModels/ExtractionCoordinator.BatchReminderStep.cs": 830,
     "ViewModels/ExtractionCoordinator.ConsumedSettlementStep.cs": 1404,
