@@ -147,7 +147,7 @@
     "Models/ExtractOptions.cs": 3,
     "Models/HelpContent.cs": 4,
     "Packing/PackingCleanup.cs": 2,
-    "Packing/PackingOptions.cs": 12,
+    "Packing/PackingOptions.cs": 1,
     "Packing/PackingPlan.cs": 2,
     "Packing/PackingRequest.cs": 4,
     "Packing/PackingResult.cs": 4,
