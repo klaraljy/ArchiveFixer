@@ -157,6 +157,15 @@ namespace ArchiveFixer.Tests
             Assert.Contains("extra/summary.json", names);
             Assert.Contains("extra/tasks.json", names);
             Assert.Contains("extra/failed-tasks.json", names);
+
+            ZipArchiveEntry summaryEntry = archive.GetEntry("extra/summary.json")!;
+            using Stream summaryStream = summaryEntry.Open();
+            using var summaryReader = new StreamReader(summaryStream);
+            using JsonDocument summary = JsonDocument.Parse(summaryReader.ReadToEnd());
+            JsonElement summaryRoot = summary.RootElement;
+            Assert.Equal(log.CurrentRunId, summaryRoot.GetProperty("run_id").GetString());
+            Assert.Equal(log.CurrentOperationId, summaryRoot.GetProperty("operation_id").GetString());
+            Assert.NotEqual(summaryRoot.GetProperty("run_id").GetString(), summaryRoot.GetProperty("operation_id").GetString());
             Assert.Contains("extra/settings.redacted.json", names);
             Assert.Contains("extra/error-codes.json", names);
             Assert.DoesNotContain(names, n => n.EndsWith("passwords.txt", StringComparison.OrdinalIgnoreCase));

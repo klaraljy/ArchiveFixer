@@ -142,6 +142,9 @@ namespace ArchiveFixer.Services
         /// </summary>
         public string CurrentLogFilePath => _currentLogFilePath;
 
+        /// <summary>本次运行 ID（整个进程一套）。</summary>
+        public string CurrentRunId => _runId;
+
         /// <summary>本次运行目录（logs 根下唯一文件夹）。</summary>
         public string CurrentRunDirectory => _currentRunDirectory;
 
@@ -1640,7 +1643,16 @@ namespace ArchiveFixer.Services
             AppendJsonField(builder, "event_id", evidence?.EventId ?? string.Empty);
             AppendJsonField(builder, "error_code", evidence?.ErrorCode ?? string.Empty);
             AppendJsonField(builder, "component", evidence?.Component ?? string.Empty);
-            AppendJsonField(builder, "span_id", string.IsNullOrWhiteSpace(evidence?.SpanId) ? DiagnosticSpan.CurrentSpanId : evidence!.SpanId);
+            string effectiveSpanId = string.IsNullOrWhiteSpace(evidence?.SpanId)
+                ? DiagnosticSpan.CurrentSpanId
+                : evidence!.SpanId;
+
+            if (string.IsNullOrWhiteSpace(effectiveSpanId))
+            {
+                effectiveSpanId = operationId;
+            }
+
+            AppendJsonField(builder, "span_id", effectiveSpanId);
             AppendJsonField(builder, "parent_span_id", string.IsNullOrWhiteSpace(evidence?.ParentSpanId) ? DiagnosticSpan.CurrentParentSpanId : evidence!.ParentSpanId);
             AppendJsonField(builder, "task_id", string.IsNullOrWhiteSpace(evidence?.TaskId) ? DiagnosticSpan.CurrentTaskId : evidence!.TaskId);
             AppendJsonNumber(builder, "pid", processId);

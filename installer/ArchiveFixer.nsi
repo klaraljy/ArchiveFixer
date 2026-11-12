@@ -126,17 +126,9 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
 VIAddVersionKey /LANG=1033 "Comments" "${APP_URL}"
 
 ; ---------------------------------------------------------------- 变量
-Var StartMenuFolder
 Var ForceShortcuts
 Var InstalledDir
 Var InstalledVersion
-Var UpgradeChoice
-Var UpgradeAlreadyHandled
-Var UpgradeDialog
-Var UpgradeLabel
-Var UpgradeRadioOverwrite
-Var UpgradeRadioUninstall
-Var UpgradeRadioCancel
 Var DefaultOnSystemDrive
 Var ExplicitInstallDir
 Var UnDataChoice
@@ -149,34 +141,22 @@ Var UnDataRadioDelete
 !define MUI_ICON "${ICONFILE}"
 !define MUI_UNICON "${ICONFILE}"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TITLE "${APP_NAME} ${APPVERSION} 安装向导"
-!define MUI_WELCOMEPAGE_TEXT "这一版把「批量识别 + 解压 + 整理」这套工具装到你指定的目录。$\r$\n$\r$\n· 程序自带 .NET 运行时，目标机器什么都不用装；$\r$\n· 设置与密码列表固定写在 $\r$\n  ${USER_DATA_DIR}（C 盘用户目录）；日志写在程序安装目录下的 logs 子目录；升级或换安装目录都不会丢；$\r$\n· 卸载时会问你一次「保留用户数据还是全部删除」，默认保留。$\r$\n$\r$\n点「下一步」继续。"
 
-; ⚠ 页面回调（WelcomePagePre / WelcomePageCustom / UpgradePage*）的函数体一律写在文件末尾：
-;   `$mui.WelcomePage.*` 这些变量由 MUI_PAGE_WELCOME 展开时才 Var 出来，
-;   函数体写在它前面 makensis 会报 warning 6000「unknown variable」（实测踩到过，语句会被整句忽略）。
 
-; 欢迎页：本机没有第二个固定盘时，标题与正文都要明说"数据会落在 C 盘"
-!define MUI_PAGE_CUSTOMFUNCTION_PRE WelcomePagePre
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomePageCustom
+
+!define MUI_WELCOMEPAGE_TITLE "ArchiveFixer 安装向导"
+!define MUI_WELCOMEPAGE_TEXT "ArchiveFixer 用于批量识别、解压和整理各类压缩包。$\r$\n$\r$\n支持后缀损坏、加密、分卷和多层嵌套。$\r$\n$\r$\n点「下一步」继续。"
 !insertmacro MUI_PAGE_WELCOME
-
 !ifdef LICENSEFILE
     !define MUI_LICENSEPAGE_TEXT_TOP "ArchiveFixer 本体是 MIT 许可；随包分发的 7-Zip（LGPL）与 UnRAR（RARLAB freeware）许可原文在安装目录的 tools\ 下。"
     !insertmacro MUI_PAGE_LICENSE "${LICENSEFILE}"
 !endif
 
 ; 已装过旧版时先插一页"升级怎么走"（装没装过由 .onInit 判定，没装过就在 PRE 里 Abort 跳过）
-!define MUI_PAGE_CUSTOMFUNCTION_PRE UpgradePagePre
-Page custom UpgradePage UpgradePageLeave
+!define MUI_DIRECTORYPAGE_TEXT_TOP "选择程序安装位置。设置与密码不在这里，升级或卸载时可以保留。"
 !insertmacro MUI_PAGE_DIRECTORY
 ; 组件选择页：让用户决定要不要桌面快捷方式（2026-10-29）。
 !insertmacro MUI_PAGE_COMPONENTS
-!define MUI_STARTMENUPAGE_REGISTRY_ROOT "HKCU"
-!define MUI_STARTMENUPAGE_REGISTRY_KEY "${APP_KEY}"
-!define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "StartMenuFolder"
-!define MUI_STARTMENUPAGE_DEFAULTFOLDER "${APP_NAME}"
-!insertmacro MUI_PAGE_STARTMENU Application $StartMenuFolder
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即运行 ${APP_NAME}"
@@ -240,8 +220,6 @@ Page custom UpgradePage UpgradePageLeave
 ;   （实测把"没传开关"当成"传了"，静默装也去建快捷方式，把用户自己那个桌面快捷方式覆盖掉了）。
 Function .onInit
     StrCpy $ForceShortcuts "0"
-    StrCpy $UpgradeChoice "overwrite"
-    StrCpy $UpgradeAlreadyHandled "0"
     StrCpy $InstalledDir ""
     StrCpy $InstalledVersion ""
     StrCpy $ExplicitInstallDir "0"
@@ -315,23 +293,6 @@ FunctionEnd
 Section "主程序（必需）" SecMain
     SectionIn RO
 
-    ; ① 升级：用户选了"先卸载旧版再装" ⇒ 在这里静默卸载旧版
-    ;    （Uninstall.exe /S = 静默卸载，按设计**保留 data\**；它只删自己装的那些文件）
-    ;    $UpgradeAlreadyHandled 是"从卸载里回来"的标记，防第二次重启时又问一遍。
-    StrCmp $UpgradeChoice "cancel" 0 upgrade_do_uninstall
-    Abort "用户取消了安装"
-    upgrade_do_uninstall:
-    StrCmp $UpgradeChoice "uninstall" 0 upgrade_install
-    StrCmp $UpgradeAlreadyHandled "1" upgrade_install
-    IfFileExists "$InstalledDir\Uninstall.exe" 0 upgrade_install
-    DetailPrint "先静默卸载旧版本：$InstalledDir（保留 data\）"
-    StrCpy $UpgradeAlreadyHandled "1"
-    ClearErrors
-    ExecWait '"$InstalledDir\Uninstall.exe" /S' $R4
-    IfErrors 0 upgrade_install
-        MessageBox MB_ICONEXCLAMATION "旧版本的卸载程序没能跑起来（可能正被占用）。$\r$\n可以继续装；装完记得自己去控制面板把旧版本那一项卸掉。"
-    upgrade_install:
-
     ; 覆盖升级：先清掉上一版自己的工具 / 文档 / 运行时目录，避免旧 DLL 残留。
     ; 用户数据不在 $INSTDIR 下，这里不碰它；只在这确实是一个已有安装时才清。
     IfFileExists "$INSTDIR\${APP_EXE}" 0 upgrade_copy
@@ -365,19 +326,16 @@ Section "主程序（必需）" SecMain
     ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
     IntFmt $0 "0x%08X" $0
     WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
-SectionEnd
 
-Section "开始菜单快捷方式" SecStartMenu
+    ; 开始菜单快捷方式固定创建，不再单开组件/页面询问。
     StrCmp $ForceShortcuts "1" SecStartMenu_make
     IfSilent SecStartMenu_done
 
     SecStartMenu_make:
-    !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
-        CreateDirectory "$SMPROGRAMS\$StartMenuFolder"
-        CreateShortCut "$SMPROGRAMS\$StartMenuFolder\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-        CreateShortCut "$SMPROGRAMS\$StartMenuFolder\使用说明.lnk" "$INSTDIR\docs\使用说明.md" "" "$INSTDIR\${APP_EXE}" 0
-        CreateShortCut "$SMPROGRAMS\$StartMenuFolder\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-    !insertmacro MUI_STARTMENU_WRITE_END
+        CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+        CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
+        CreateShortCut "$SMPROGRAMS\${APP_NAME}\使用说明.lnk" "$INSTDIR\docs\使用说明.md" "" "$INSTDIR\${APP_EXE}" 0
+        CreateShortCut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
     WriteRegDWORD HKCU "${APP_KEY}" "StartMenuShortcuts" 1
 
     SecStartMenu_done:
@@ -436,11 +394,10 @@ Section "Uninstall"
     Delete "$DESKTOP\${APP_NAME}.lnk"
     uninst_keep_desktop_lnk:
     StrCmp $R3 "1" 0 uninst_keep_sm_lnk
-    !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
-    Delete "$SMPROGRAMS\$StartMenuFolder\${APP_NAME}.lnk"
-    Delete "$SMPROGRAMS\$StartMenuFolder\使用说明.lnk"
-    Delete "$SMPROGRAMS\$StartMenuFolder\卸载 ${APP_NAME}.lnk"
-    RMDir "$SMPROGRAMS\$StartMenuFolder"
+        Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+    Delete "$SMPROGRAMS\${APP_NAME}\使用说明.lnk"
+    Delete "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk"
+    RMDir "$SMPROGRAMS\${APP_NAME}"
     uninst_keep_sm_lnk:
     DeleteRegKey HKCU "${UNINST_KEY}"
     DeleteRegKey HKCU "${APP_KEY}"
@@ -469,60 +426,3 @@ FunctionEnd
 ; ================================================================
 
 ; 欢迎页没有 PRE 回调也要求必须给一个（MUI2 的页面声明一律带 PRE/SHOW/LEAVE 三个槽）
-Function WelcomePagePre
-FunctionEnd
-
-; 本机没有第二个固定盘时，欢迎页标题与正文都要明说"数据会落在 C 盘"。
-; ⚠ 欢迎页是 MUI 的"整窗页"：正文控件是 $mui.WelcomePage.Text、标题是 $mui.WelcomePage.Title，
-;   而带小标题栏的那套 $mui.Header.* 在整窗页上是隐藏的（改它等于没改）。
-Function WelcomePageCustom
-    StrCmp $DefaultOnSystemDrive "1" 0 welcome_custom_done
-    SendMessage $mui.WelcomePage.Title ${WM_SETTEXT} 0 "STR:${APP_NAME} ${APPVERSION} 安装向导（本机没有其它盘）"
-    SendMessage $mui.WelcomePage.Text ${WM_SETTEXT} 0 "STR:本机没有第二个固定盘，只能装到 C 盘。$\r$\n$\r$\n· 程序目录：$INSTDIR$\r$\n· 你的密码本、设置固定写在：${USER_DATA_DIR}$\r$\n（日志在程序安装目录的 logs\，随程序升级/卸载处理）$\r$\n$\r$\n如果你有别的盘（移动硬盘 / 第二块盘），点「下一步」后可以在目录页自己改到那个盘上；$\r$\n用户数据仍然在 ${USER_DATA_DIR}，不会跟着程序搬家。$\r$\n$\r$\n点「下一步」继续。"
-    welcome_custom_done:
-FunctionEnd
-
-Function UpgradePagePre
-    ; 静默档不问（走默认的"覆盖安装 + 保留 data\"）
-    IfSilent upgrade_pre_skip
-    ; 刚跑完"先卸载旧版"回来的那一趟不再问
-    StrCmp $UpgradeAlreadyHandled "1" upgrade_pre_skip
-    StrCmp $InstalledDir "" upgrade_pre_skip
-    Abort
-    upgrade_pre_skip:
-FunctionEnd
-
-Function UpgradePage
-    !insertmacro MUI_HEADER_TEXT "已经装过 ${APP_NAME}" "选一种装法，然后点「下一步」"
-    nsDialogs::Create 1018
-    Pop $UpgradeDialog
-    StrCmp $UpgradeDialog "error" upgrade_page_done
-
-    ${NSD_CreateLabel} 0 0 100% 54u "检测到本机已经装过旧版本：$\r$\n$InstalledDir（旧版本：$InstalledVersion）$\r$\n$\r$\n当前安装包版本：${APPVERSION}$\r$\n默认就是第一项：旧程序文件被新版本换掉，设置与密码固定在 ${USER_DATA_DIR}，原样保留。"
-    Pop $UpgradeLabel
-
-    ${NSD_CreateRadioButton} 0 62u 100% 14u "升级覆盖（推荐）：卸载旧版本 $InstalledVersion，安装新版本 ${APPVERSION}，保留设置与密码"
-    Pop $UpgradeRadioOverwrite
-    ${NSD_CreateRadioButton} 0 82u 100% 14u "先卸载旧版本 $InstalledVersion，再安装 ${APPVERSION}（同样保留设置与密码）"
-    Pop $UpgradeRadioUninstall
-    ${NSD_CreateRadioButton} 0 102u 100% 14u "取消安装"
-    Pop $UpgradeRadioCancel
-
-    SendMessage $UpgradeRadioOverwrite ${BM_SETCHECK} ${BST_CHECKED} 0
-    ${NSD_SetFocus} $UpgradeRadioOverwrite
-
-    nsDialogs::Show
-    upgrade_page_done:
-FunctionEnd
-
-Function UpgradePageLeave
-    ${NSD_GetState} $UpgradeRadioUninstall $0
-    StrCmp $0 ${BST_CHECKED} 0 upgrade_leave_cancel
-    StrCpy $UpgradeChoice "uninstall"
-    Goto upgrade_leave_done
-    upgrade_leave_cancel:
-    ${NSD_GetState} $UpgradeRadioCancel $0
-    StrCmp $0 ${BST_CHECKED} 0 upgrade_leave_done
-    StrCpy $UpgradeChoice "cancel"
-    upgrade_leave_done:
-FunctionEnd

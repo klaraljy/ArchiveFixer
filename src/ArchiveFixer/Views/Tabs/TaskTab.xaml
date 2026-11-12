@@ -645,6 +645,12 @@
                                 ToolTip="只导出「最近一次操作」的日志（从日志里那行「本次操作开始」起），排查时一眼到底，不用翻历史"
                                 Command="{Binding ExportLogCommand}" />
 
+                        <Button Content="导出诊断包"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="8,0,0,0"
+                                ToolTip="把本次操作的完整日志、任务事实和环境打成一个 zip，可直接发给开发者"
+                                Command="{Binding ExportDiagnosticBundleCommand}" />
+
                         <Button Content="打开输出目录"
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Margin="8,0,0,0"

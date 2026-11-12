@@ -134,7 +134,8 @@ namespace ArchiveFixer.Services
             builder.AppendLine("ArchiveFixer 诊断包");
             builder.AppendLine("===================");
             builder.AppendLine();
-            builder.AppendLine("运行 ID：" + log.CurrentOperationId);
+            builder.AppendLine("运行 ID：" + log.CurrentRunId);
+            builder.AppendLine("操作 ID：" + log.CurrentOperationId);
             builder.AppendLine("操作：" + log.CurrentOperationName);
             builder.AppendLine("操作目录：" + log.CurrentOperationDirectory);
             builder.AppendLine("任务数：" + (tasks?.Count ?? 0));
@@ -165,7 +166,7 @@ namespace ArchiveFixer.Services
             return new
             {
                 schema = "archivefixer.diagnostic.summary.v1",
-                run_id = log.CurrentOperationId,
+                run_id = log.CurrentRunId,
                 operation_id = log.CurrentOperationId,
                 operation_name = log.CurrentOperationName,
                 generated_at = LogService.FormatTimestamp(Helpers.Clock.Now),
@@ -270,6 +271,7 @@ namespace ArchiveFixer.Services
         private static object BuildTools()
         {
             var seven = ToolLocator.Default.SevenZipExePath;
+            var unrar = ToolLocator.Default.UnRarExePath;
 
             return new
             {
@@ -277,6 +279,9 @@ namespace ArchiveFixer.Services
                 app_version = typeof(DiagnosticBundleService).Assembly.GetName().Version?.ToString() ?? string.Empty,
                 seven_zip = seven,
                 seven_zip_exists = File.Exists(seven),
+                seven_zip_version = ToolLocator.Default.SevenZipVersion,
+                unrar = unrar,
+                unrar_exists = File.Exists(unrar),
                 tools_directory = ToolLocator.Default.BundledDirectory
             };
         }
