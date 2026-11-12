@@ -266,35 +266,63 @@ namespace ArchiveFixer.ViewModels
         /// 把这一单产出的全部文件登记进唯一第一大步账本。
         /// 这是“文件产物产生时”的登记点，覆盖包装/递归产出的 Unknown 与中间片。
         /// </summary>
+        private static long _producedCardLookups;
+        private static long _producedCardHits;
+        private static long _producedCardMisses;
+        private static long _producedCardFileInfoCalls;
+        private static long _producedCardRemembered;
+
+        internal static (long Lookups, long Hits, long Misses, long FileInfoCalls, long Remembered) ProducedCardDiagnostics =>
+            (System.Threading.Interlocked.Read(ref _producedCardLookups),
+             System.Threading.Interlocked.Read(ref _producedCardHits),
+             System.Threading.Interlocked.Read(ref _producedCardMisses),
+             System.Threading.Interlocked.Read(ref _producedCardFileInfoCalls),
+             System.Threading.Interlocked.Read(ref _producedCardRemembered));
+
+        internal static void ResetProducedCardDiagnostics()
+        {
+            System.Threading.Interlocked.Exchange(ref _producedCardLookups, 0);
+            System.Threading.Interlocked.Exchange(ref _producedCardHits, 0);
+            System.Threading.Interlocked.Exchange(ref _producedCardMisses, 0);
+            System.Threading.Interlocked.Exchange(ref _producedCardFileInfoCalls, 0);
+            System.Threading.Interlocked.Exchange(ref _producedCardRemembered, 0);
+        }
+
         private readonly ConcurrentDictionary<string, (long Length, long Ticks, FileNatureCard Card)> _producedCardCache =
             new(StringComparer.OrdinalIgnoreCase);
 
         internal bool TryGetProducedCard(string path, out FileNatureCard card)
         {
             card = null!;
+            System.Threading.Interlocked.Increment(ref _producedCardLookups);
 
             if (string.IsNullOrWhiteSpace(path)
                 || !_producedCardCache.TryGetValue(path, out (long Length, long Ticks, FileNatureCard Card) cached))
             {
+                System.Threading.Interlocked.Increment(ref _producedCardMisses);
                 return false;
             }
 
             try
             {
+                System.Threading.Interlocked.Increment(ref _producedCardFileInfoCalls);
                 var info = new FileInfo(path);
 
                 if (!info.Exists || info.Length != cached.Length || info.LastWriteTimeUtc.Ticks != cached.Ticks)
                 {
                     _producedCardCache.TryRemove(path, out _);
+                    System.Threading.Interlocked.Increment(ref _producedCardMisses);
                     return false;
                 }
             }
             catch
             {
+                System.Threading.Interlocked.Increment(ref _producedCardMisses);
                 return false;
             }
 
             card = cached.Card;
+            System.Threading.Interlocked.Increment(ref _producedCardHits);
             return true;
         }
 
@@ -302,11 +330,13 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
+                System.Threading.Interlocked.Increment(ref _producedCardFileInfoCalls);
                 var info = new FileInfo(path);
 
                 if (info.Exists)
                 {
                     _producedCardCache[path] = (info.Length, info.LastWriteTimeUtc.Ticks, card);
+                    System.Threading.Interlocked.Increment(ref _producedCardRemembered);
                 }
             }
             catch
