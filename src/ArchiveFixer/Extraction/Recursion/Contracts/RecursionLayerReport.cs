@@ -15,9 +15,9 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>
-    /// 一层的执行报告。"失败定位到层"（AGENTS.md §6 第 14 条）靠的就是它。
-    /// 注意：本类**不得**出现明文密码，只有 <see cref="UsedPasswordMasked"/> 这个脱敏占位符。
-    /// </summary>
+     /// 一层的执行报告。"失败定位到层"（AGENTS.md §6 第 14 条）靠的就是它。
+     /// 注意：本类**不得**出现明文密码，只有 <see cref="UsedPasswordMasked"/> 这个脱敏占位符。
+     /// </summary>
     public sealed class RecursionLayerReport
     {
         public int Depth { get; init; }

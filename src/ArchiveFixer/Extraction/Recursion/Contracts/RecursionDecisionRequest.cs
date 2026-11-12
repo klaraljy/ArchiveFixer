@@ -15,8 +15,8 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>
-    /// 需要用户拍板的多分支询问。字段是给 GUI 直接用的：<see cref="Prompt"/> 就是弹窗正文。
-    /// </summary>
+     /// 需要用户拍板的多分支询问。字段是给 GUI 直接用的：<see cref="Prompt"/> 就是弹窗正文。
+     /// </summary>
     public sealed class RecursionDecisionRequest
     {
         public string CurrentArchivePath { get; init; } = string.Empty;

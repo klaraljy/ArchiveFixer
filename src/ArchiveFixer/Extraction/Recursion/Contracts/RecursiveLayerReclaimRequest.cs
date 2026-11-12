@@ -15,16 +15,16 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>
-    /// **递归路「逐层回收」的一次请求**（用户 2026-10-05：「这个我不是说了要同步吗」）。
-    ///
-    /// <para><b>它是什么</b>：一条递归链里，**上一层交出来的那个内层包**——它已经被这一层
-    /// 真的解开、这一层也已经证明是完整的（<see cref="Verdict"/>），所以它对本层就是
-    /// "解出这一层内容所消耗掉的那份源"，用完了就该当场还回去（AGENTS.md §11.3 的口径）。</para>
-    ///
-    /// <para>⛔ 递归核心**不删任何东西**：它只把"哪几个文件 + 这一层的完整性结论"交给调用方
-    /// （<see cref="RecursiveExtractor.LayerReclaim"/>），删除判据与执行体仍然只有既有那一套
-    /// （<c>ExtractionCoordinator.PurgeLayerSourcePackage</c> → <c>SourceCleanupService</c>）。</para>
-    /// </summary>
+     /// **递归路「逐层回收」的一次请求**（用户 2026-10-05：「这个我不是说了要同步吗」）。
+     ///
+     /// <para><b>它是什么</b>：一条递归链里，**上一层交出来的那个内层包**——它已经被这一层
+     /// 真的解开、这一层也已经证明是完整的（<see cref="Verdict"/>），所以它对本层就是
+     /// "解出这一层内容所消耗掉的那份源"，用完了就该当场还回去（AGENTS.md §11.3 的口径）。</para>
+     ///
+     /// <para>⛔ 递归核心**不删任何东西**：它只把"哪几个文件 + 这一层的完整性结论"交给调用方
+     /// （<see cref="RecursiveExtractor.LayerReclaim"/>），删除判据与执行体仍然只有既有那一套
+     /// （<c>ExtractionCoordinator.PurgeLayerSourcePackage</c> → <c>SourceCleanupService</c>）。</para>
+     /// </summary>
     public sealed class RecursiveLayerReclaimRequest
     {
         /// <summary>动这一层的时候用来说话（唯一出口 <c>RecursiveExtractor.DescribeProbeLabel</c>）。</summary>

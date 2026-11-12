@@ -15,11 +15,11 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>
-    /// 递归的硬上限（AGENTS.md §6 第 8 条：层数 / 文件数 / 总大小 / 展开比 / 密码尝试次数）。
-    ///
-    /// 这些值是"安全阀"而不是"性能参数"：命中任何一个都必须**停下并报告**，
-    /// 不允许"再试一层看看"。压缩炸弹靠的就是把其中某一条顶穿。
-    /// </summary>
+     /// 递归的硬上限（AGENTS.md §6 第 8 条：层数 / 文件数 / 总大小 / 展开比 / 密码尝试次数）。
+     ///
+     /// 这些值是"安全阀"而不是"性能参数"：命中任何一个都必须**停下并报告**，
+     /// 不允许"再试一层看看"。压缩炸弹靠的就是把其中某一条顶穿。
+     /// </summary>
     public sealed class RecursionLimits
     {
         /// <summary>最多解几层（含第 0 层）。3 层足够覆盖 外层.zip → 内层.7z → data.tar 这种真实包。</summary>
