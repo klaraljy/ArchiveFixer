@@ -86,6 +86,7 @@ namespace ArchiveFixer.Extraction
         private readonly IArchiveEngine _engine;
         private readonly IArchiveProber _prober;
         private readonly Func<string, IReadOnlyList<string>> _passwordProvider;
+        private readonly RecursiveLayerPlanner _layerPlanner;
         private readonly RecursionLimits _limits;
 
         /// <summary>
@@ -593,6 +594,7 @@ namespace ArchiveFixer.Extraction
             _limits = limits ?? RecursionLimits.Default;
             _log = log;
             _sourceCheck = sourceCheck;
+            _layerPlanner = new RecursiveLayerPlanner(BuildPasswordCandidates, Log);
         }
 
         private async Task<LayerOutcome> ExtractLayerAsync(
@@ -622,59 +624,10 @@ namespace ArchiveFixer.Extraction
              * <see cref="TryCarveEmbeddedInnerArchiveAsync"/> 抠出副本，再带这个参数重跑一次本方法。
              * ⛔ 抠出来的只是**副本**，原文件一个字节都不动；⛔ 判不出是不是双面文件 ⇒ 什么都不做（照旧失败）。
              */
-            string archivePath = string.IsNullOrWhiteSpace(carvedSource) ? item.ArchivePath : carvedSource!;
-
-            /*
-             * ⚠ 2026-10-16（真机 `21212121` / `24242424` 的判据输入逐字）：这一组的**入口那一份自己的名字**
-             * 可能是伪装名（`aaa-L2.part0788839中文1.rar` / `111-L2.part020745382.rar`），而同一目录里
-             * 躺着**同一个物理文件**的规范卷名（`aaa-L2.part1.rar` / `111-L2.part1.rar`，同一个 File ID）
-             * —— 引擎按伪装名去找兄弟卷必然失败（它按"打开的那份的名字"推兄弟卷名）。
-             * ⇒ **只读地**把交给引擎的那一份换成规范名那一份（⛔ 只在"同一物理文件"时换；
-             * ⛔ 不改任务账 `task.CurrentPath`、⛔ 不动源包档 —— 那两处仍用原来的名字）。
-             */
-            archivePath = PreferCanonicalSiblingName(archivePath);
-
-            var options = new ExtractOptions
-            {
-                // 每层都是全新目录，正常情况下不会撞名；万一撞上（归档内有重复条目）
-                // 一律"跳过 + 保留先落地的那个"，绝不覆盖：改名属于改名模块的事，递归核心不越权。
-                OverwriteMode = "SkipExisting",
-                KeepArchiveNameFolder = false
-            };
-
-            options.Normalize();
-
-            /*
-             * ===== 每一层开头先报一帧"本层 0%"（用户 2026-10-02 真机）=====
-             *
-             * 现场：`P.7z.001` 第 0 层到 100% 之后，界面**停在 100% 一动不动**，
-             * 直到 4 分 34 秒后整条链才结束 —— 那 4 分半其实是在解内层包（`P.ra` → 2735 个文件）。
-             * 用户的原话是"解压完成到真正的解释有个 8 分钟的差距，这个会比较影响用户使用"。
-             *
-             * 成因：进度条记的是"引擎最后一次报的百分比"，而第 0 层结束时它是 100%；
-             * 第 1 层从头开始时没有任何一帧把基准拉回来，于是那一层跑多久、界面就停在 100% 多久。
-             * 所以每一层进来先合成一帧 Percent = 0（当前条目换成本层的说明）：
-             * 进度条从这一层重新起算，日志里也会多一行「进度 0%（当前：第 N 层 …）」。
-             * ⛔ 只补这一帧，引擎报的进度一个数都不改。
-             */
-            progress?.Report(new ArchiveProgress
-            {
-                Percent = 0,
-                Layer = item.Depth,
-                CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(archivePath)}"
-            });
-
-            /*
-             * ===== 双面文件 + 尾部只有一个原样存的条目 ⇒ 直接取那一段（2026-10-05 真机第六批）=====
-             *
-             * ⛔ 挂点在**引擎列不出清单之后**（见候选循环里那一段），不在这里先试：
-             * 只有"引擎读不动这一份"才轮得到近路 —— 反例当场就有（真机同形夹具的外层 7z：
-             * 它内部**存着**那些 mp4 的尾部 ZIP，`EmbeddedArchiveDetector` 会在它的数据流里
-             * 找到一个自洽的 ZIP，先试近路就会"抢在引擎前面"把外层 7z 当成双面文件、
-             * 只取出那一个条目并判这一层成功）。
-             */
-
-            IReadOnlyList<string> candidates = BuildPasswordCandidates(archivePath);
+            LayerPlan plan = _layerPlanner.Prepare(item.Depth, item.ArchivePath, carvedSource, progress, VerboseLog);
+            string archivePath = plan.ArchivePath;
+            ExtractOptions options = plan.Options;
+            IReadOnlyList<string> candidates = plan.Candidates;
 
             PasswordAttemptLedger passwordLedger = new(_limits.MaxPasswordAttemptsPerLayer);
             bool triedAny = false;
@@ -783,26 +736,7 @@ namespace ArchiveFixer.Extraction
             /* 引擎在列目录那一步的原话（加密头那一档要带进结论里，与单层路径同一句文案）。 */
             string encryptedHeadersListMessage = string.Empty;
 
-            /*
-             * 日志里的任务标签：**只写文件名 + 层号**（§8 隐私红线：完整路径不进日志）。
-             * 层号是排查多层嵌套时唯一能对号入座的信息，既有日志的行首形状就是它。
-             */
-            string layerLabel = string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.RecursionLayerLogPrefixFormat,
-                item.Depth) + Path.GetFileName(archivePath);
-
-            if (VerboseLog)
-            {
-                Log(
-                    "INFO",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.RecursionLayerAttemptLogFormat,
-                        layerLabel,
-                        item.Depth,
-                        Path.GetFileName(archivePath)));
-            }
+            string layerLabel = plan.LayerLabel;
 
             /*
              * ===== 跨层收卷 + 凑不齐就别试（用户 2026-10-05 真机）=====
