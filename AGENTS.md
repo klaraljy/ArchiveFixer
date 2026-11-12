@@ -1,6 +1,6 @@
 # ArchiveFixer 项目规则
 
-> 适用版本：v0.2.2（代码 HEAD `23acb074`，2026-11-11）。代码是事实，文档是声明；文档与代码冲突时以代码为准并修正文档。
+> 适用版本：v0.2.2（代码 HEAD 以 `git log -1 --oneline` 为准）。代码是事实，文档是声明；文档与代码冲突时以代码为准并修正文档。
 > 全局规则见 `D:\DSH-Data\AGENTS.md`；详细历史只放 `docs/历史/`，不把历史结论当现行判据。
 
 ## 用途
@@ -16,6 +16,11 @@
 - C# 12 / WPF / net8.0-windows；xUnit；不升级 net9/net10。
 - 不新增 NuGet 运行时依赖；不用第三方 MVVM 框架。
 - Domain/Detection/Engines/Password/Extraction/Security/Storage 不得引用 WPF。
+
+## 编码规范
+
+- 唯一编码规范：[`编码规范性.md`](编码规范性.md)；结构基线：[`docs/开发/结构基线.json`](docs/开发/结构基线.json)。
+- 新代码按该文件执行；结构守卫 `CodeStructureGuardTests` 只允许基线缩小，不允许新增巨型/多类型文件。
 
 ## 常用命令
 

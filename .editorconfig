@@ -1,0 +1,53 @@
+root = true
+
+# ArchiveFixer 现行风格：4 空格、Allman、using 在 namespace 外、block-scoped namespace。
+# 不切换 file-scoped namespace，不强制全仓换行，避免纯风格大 diff。
+
+[*]
+charset = utf-8
+insert_final_newline = unset
+trim_trailing_whitespace = false
+
+[*.cs]
+indent_style = space
+indent_size = 4
+tab_width = 4
+
+# 现有代码统一 block-scoped namespace
+csharp_style_namespace_declarations = block_scoped:suggestion
+
+# 大括号/换行
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_prefer_braces = true:suggestion
+
+# using 与类型关键字
+csharp_using_directive_placement = outside_namespace:suggestion
+dotnet_style_predefined_type_for_locals_parameters_members = true:suggestion
+dotnet_style_predefined_type_for_member_access = true:suggestion
+
+# 命名（先 suggestion，避免一次性制造大量构建错误）
+dotnet_naming_rule.interfaces_should_begin_with_i.severity = suggestion
+dotnet_naming_rule.interfaces_should_begin_with_i.symbols = interfaces
+dotnet_naming_rule.interfaces_should_begin_with_i.style = begins_with_i
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_symbols.interfaces.applicable_accessibilities = *
+dotnet_naming_style.begins_with_i.required_prefix = I
+dotnet_naming_style.begins_with_i.capitalization = pascal_case
+
+dotnet_naming_rule.types_should_be_pascal_case.severity = suggestion
+dotnet_naming_rule.types_should_be_pascal_case.symbols = types
+dotnet_naming_rule.types_should_be_pascal_case.style = pascal_case
+dotnet_naming_symbols.types.applicable_kinds = class, struct, enum, delegate
+dotnet_naming_symbols.types.applicable_accessibilities = *
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.severity = suggestion
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.style = underscore_camel_case
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
