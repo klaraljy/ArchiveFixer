@@ -8,13 +8,15 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using static ArchiveFixer.Extraction.VolumeNamePlanner;
 using static ArchiveFixer.Extraction.VolumeNameRepair;
 
 namespace ArchiveFixer.Extraction
 {
     /// <summary>伪装名恢复：把被改坏/夹了杂质的卷名恢复成可打开的标准名；执行仍只走 <see cref="VolumeNameRepair.TryApply"/>。</summary>
     public static class VolumeNameRestorer
-    {        public static IReadOnlyList<string> RestoreDisguisedInnerPackageNames(
+    {
+        public static IReadOnlyList<string> RestoreDisguisedInnerPackageNames(
             IReadOnlyList<string>? candidatePaths,
             Action<string, string>? log = null)
         {

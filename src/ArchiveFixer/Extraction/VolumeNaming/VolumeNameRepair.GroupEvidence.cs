@@ -8,6 +8,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using static ArchiveFixer.Extraction.VolumeNamePlanner;
+using static ArchiveFixer.Extraction.VolumeNameRestorer;
 
 namespace ArchiveFixer.Extraction
 {

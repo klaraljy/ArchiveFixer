@@ -21,7 +21,7 @@
     "Extraction/RecursiveExtractor.cs": 2557,
     "Extraction/ResultFinalizer.cs": 1510,
     "Extraction/VolumeCandidateDiscovery.cs": 1782,
-    "Extraction/VolumeNameRepair.cs": 3788,
+    "Extraction/VolumeNameRepair.cs": 375,
     "Extraction/VolumeProbeVerifier.cs": 1040,
     "Helpers/ExtensionHelper.cs": 2353,
     "Models/AppSettings.cs": 1414,
