@@ -54,11 +54,21 @@ namespace ArchiveFixer.Services
             {
                 try
                 {
-                    string? location = AppAssembly.Location;
-
-                    if (!string.IsNullOrWhiteSpace(location) && File.Exists(location))
+                    /*
+                     * 单文件发布里 Assembly.Location 恒为空（IL3000，开了 TreatWarningsAsErrors 会直接编译失败）。
+                     * 先读程序目录里的 ArchiveFixer.dll（框架依赖/开发期），读不到再退回进程路径（单文件 exe）。
+                     */
+                    foreach (string candidate in new[]
+                             {
+                                 Path.Combine(AppContext.BaseDirectory, "ArchiveFixer.dll"),
+                                 Environment.ProcessPath ?? string.Empty
+                             })
                     {
-                        return File.GetLastWriteTimeUtc(location).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+                        if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+                        {
+                            return File.GetLastWriteTimeUtc(candidate)
+                                .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+                        }
                     }
                 }
                 catch
