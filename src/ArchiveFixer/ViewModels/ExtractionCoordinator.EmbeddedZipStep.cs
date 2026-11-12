@@ -96,7 +96,7 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage = extract.Message;
                 task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
-                AppendLog("ERROR", $"{task.LogName}：ZIP 直读失败 —— {extract.Message}");
+                AppendLog("ERROR", $"{task.LogName}：ZIP 直读失败 —— {extract.Message}", DiagnosticCodes.EngineFailed, "EmbeddedZipStreamExtractor");
                 return;
             }
 

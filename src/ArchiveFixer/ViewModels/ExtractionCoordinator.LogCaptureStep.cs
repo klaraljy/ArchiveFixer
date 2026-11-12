@@ -331,8 +331,16 @@ namespace ArchiveFixer.ViewModels
             AppendLog(level, $"{task.LogName}：{message}");
         }
 
-        private void AppendLog(string level, string message)
+        private void AppendLog(string level, string message) => AppendLog(level, message, string.Empty, string.Empty);
+
+        private void AppendLog(string level, string message, string errorCode, string component)
         {
+            if (!string.IsNullOrWhiteSpace(errorCode))
+            {
+                _vm.AppendDiagnosticLog(level, message, errorCode, component);
+                return;
+            }
+
             TaskLogCapture? capture = _currentTaskLog.Value;
 
             /*

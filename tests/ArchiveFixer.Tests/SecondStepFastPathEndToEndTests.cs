@@ -95,7 +95,7 @@ namespace ArchiveFixer.Tests
 
                 string logDir = Path.Combine(Batch120Operation.RecordRoot, "logs-" + sampleId);
                 string? logFile = Directory.Exists(logDir)
-                    ? Directory.GetFiles(logDir, "*.log").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                    ? Directory.GetFiles(logDir, "*.log", SearchOption.AllDirectories).Where(path => !path.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase)).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
                     : null;
 
                 Assert.True(logFile != null, "没有拿到这次运行的日志（KEEP_LOGS 没生效）");

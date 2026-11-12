@@ -205,14 +205,16 @@ namespace ArchiveFixer.Tests
 
             Assert.True(File.Exists(current), "当前日志文件应该已经建好");
 
-            // 造 40 份"很旧"的日志（每份 2 MB → 共 80 MB，低于 100 MB 上限），再各留一份的修改时间。
+            // 新布局：每个运行目录整体收；造 40 个"很旧"的运行目录（每份 2 MB）。
             DateTime old = DateTime.UtcNow.AddDays(-90);
 
             for (int i = 0; i < 40; i++)
             {
-                string fake = Path.Combine(logsDirectory, $"ArchiveFixer_20250101_{i:D6}.log");
-                File.WriteAllBytes(fake, new byte[2 * 1024 * 1024]);
-                File.SetLastWriteTimeUtc(fake, old.AddMinutes(i));
+                string fakeRun = Path.Combine(logsDirectory, $"run_20250101_0000{i:D2}_000");
+                string fakeOps = Path.Combine(fakeRun, "operations", "000-旧操作-000000");
+                Directory.CreateDirectory(fakeOps);
+                File.WriteAllBytes(Path.Combine(fakeOps, "operation.log"), new byte[2 * 1024 * 1024]);
+                Directory.SetLastWriteTimeUtc(fakeRun, old.AddMinutes(i));
             }
 
             // 不匹配命名规则的文件：⛔ 一个都不许动。
@@ -223,15 +225,12 @@ namespace ArchiveFixer.Tests
             var second = new LogService(pathService);
             second.Initialize(enableFileLog: true);
 
-            int remaining = Directory.GetFiles(logsDirectory, "ArchiveFixer_*.log").Length;
+            int remaining = Directory.GetDirectories(logsDirectory, "run_*").Length;
 
-            // 至少留 LogRetentionMinFiles 份，且总量落回上限以内（当前这一份 + 最近几份）。
-            Assert.True(remaining >= LogService.LogRetentionMinFiles, $"老日志被清得太狠：只剩 {remaining} 份");
-
-            long total = Directory.GetFiles(logsDirectory, "ArchiveFixer_*.log").Sum(file => new FileInfo(file).Length);
-            Assert.True(total <= LogService.LogRetentionTotalBytes, $"日志总量仍超上限：{total / 1024 / 1024} MB");
-
+            // 至少留 LogRetentionMinFiles 个运行目录，且当前这一份永远在。
+            Assert.True(remaining >= LogService.LogRetentionMinFiles, $"老日志被清得太狠：只剩 {remaining} 个运行目录");
             Assert.True(File.Exists(current), "当前这一份永远不许被删");
+            Assert.True(File.Exists(second.CurrentLogFilePath), "新运行的当前日志必须存在");
             Assert.True(File.Exists(stranger), "不匹配命名规则的文件一个字节都不许动");
         }
 

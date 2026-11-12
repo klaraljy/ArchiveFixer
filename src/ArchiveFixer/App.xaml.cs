@@ -304,7 +304,7 @@ namespace ArchiveFixer
         private static void EnsureApplicationDirectories()
         {
             SafeCreateDirectory(DataRootDirectory);
-            SafeCreateDirectory(LogsDirectory);
+            SafeCreateDirectory(string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? LogsDirectory : LogService.Current.CurrentOperationDirectory);
             SafeCreateDirectory(TempDirectory);
             SafeCreateDirectory(ToolsDirectory);
             SafeCreateDirectory(SevenZipDirectory);
@@ -413,7 +413,20 @@ namespace ArchiveFixer
         {
             try
             {
-                SafeCreateDirectory(LogsDirectory);
+                LogService.Current?.Exception(
+                    "未处理异常",
+                    ex,
+                    errorCode: DiagnosticCodes.Unhandled,
+                    component: "App");
+            }
+            catch
+            {
+                // 诊断写失败不能阻止 fatal 文件。
+            }
+
+            try
+            {
+                SafeCreateDirectory(string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? LogsDirectory : LogService.Current.CurrentOperationDirectory);
 
                 string logFile = Path.Combine(
                     LogsDirectory,
@@ -449,7 +462,19 @@ namespace ArchiveFixer
             {
                 try
                 {
-                    string logDir = App.LogsDirectory;
+                    LogService.Current?.Exception(
+                        "未观察任务异常",
+                        e.Exception,
+                        errorCode: DiagnosticCodes.Unhandled,
+                        component: "TaskScheduler");
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    string logDir = string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? App.LogsDirectory : LogService.Current.CurrentOperationDirectory;
 
                     if (!Directory.Exists(logDir))
                     {

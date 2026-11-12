@@ -147,7 +147,7 @@ namespace ArchiveFixer.ViewModels
                  * 两条期望路径与当前优先级顺序都由 ToolLocator 给出（外部工具路径只有它一个来源）。
                  */
                 _dialogService.ShowError(ToolLocator.Default.DescribeNoEngineAvailable());
-                AppendLog("ERROR", StatusText.SevenZipMissing);
+                AppendLog("ERROR", StatusText.SevenZipMissing, DiagnosticCodes.EngineFailed, "ToolLocator");
                 AppendLog("ERROR", ToolLocator.Default.DescribeAvailability());
                 return;
             }

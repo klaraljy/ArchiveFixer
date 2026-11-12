@@ -484,7 +484,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 // 这一支整族搬进唯一出口 `Extraction/PostProcessFailureWriter`（一次只搬这一个功能族）。
-                PostProcessFailureWriter.Write(task, work.Verification.FailureMessage, AppendLog);
+                PostProcessFailureWriter.Write(task, work.Verification.FailureMessage, AppendLog, AppendLog);
                 return false;
             }
 

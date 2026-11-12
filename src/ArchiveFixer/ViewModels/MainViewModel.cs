@@ -2116,6 +2116,9 @@ namespace ArchiveFixer.ViewModels
         public ICommand ImportPasswordBookCommand { get; }
         public ICommand ExportLogCommand { get; }
 
+        /// <summary>导出当前操作的完整诊断包（zip，给开发者排查）。</summary>
+        public ICommand ExportDiagnosticBundleCommand { get; }
+
         /// <summary>导出**全部历史日志**（日志目录里每一份；用户 2026-09-25 第 38 条降级成显式入口）。</summary>
         public ICommand ExportAllLogsCommand { get; }
         public ICommand CopyFailedListCommand { get; }
@@ -2568,6 +2571,7 @@ namespace ArchiveFixer.ViewModels
 
             ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
+            ExportDiagnosticBundleCommand = new RelayCommand(ExportDiagnosticBundle);
             ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
             ExportFailedListCommand = new RelayCommand(ExportFailedList);
@@ -4017,6 +4021,15 @@ namespace ArchiveFixer.ViewModels
             WriteLogCore(level, message, fileOnly: false);
         }
 
+        public void AppendDiagnosticLog(string level, string message, string errorCode, string component)
+        {
+            _logService.WriteWithCode(level, message, errorCode: errorCode, component: component);
+            string display = string.IsNullOrWhiteSpace(errorCode)
+                ? message
+                : message + "（错误码 " + errorCode + "）";
+            Logs.Add(new OperationLogItem(level, display, string.Empty));
+        }
+
         /// <summary>
         /// 只写内部详细日志（`.log` / `.jsonl`），不进屏幕、不进普通档 `.user.log`。
         /// 用于用户选择普通档时仍然保留排查细节；导出普通档不会看到这些行。
@@ -4948,6 +4961,38 @@ namespace ArchiveFixer.ViewModels
             catch
             {
                 // 记不住只是下次少一点方便，⛔ 不许因为它把导出本身搞失败。
+            }
+        }
+
+        private void ExportDiagnosticBundle()
+        {
+            string path = _dialogService.ShowSaveFileDialog(
+                "导出诊断包",
+                "诊断包 (*.zip)|*.zip|所有文件 (*.*)|*.*",
+                $"ArchiveFixer-诊断包_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd_HHmmss}.zip",
+                ResolveLogExportInitialDirectory());
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                string exported = DiagnosticBundleService.Export(
+                    _logService,
+                    path,
+                    Tasks.ToList(),
+                    Settings);
+
+                AppendLog("INFO", $"诊断包已导出：{exported}");
+                _dialogService.ShowInfo(
+                    "诊断包已导出，可直接发给开发者：" + Environment.NewLine + exported);
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception("导出诊断包失败", ex, errorCode: DiagnosticCodes.LogWrite);
+                _dialogService.ShowError("导出诊断包失败：" + ex.Message);
             }
         }
 

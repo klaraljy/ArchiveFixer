@@ -81,6 +81,8 @@ namespace ArchiveFixer.ViewModels
 
             BeginTaskLogCapture(task);
 
+            using IDisposable taskSpan = ArchiveFixer.Services.DiagnosticSpan.BeginTask(task.TaskId, task.LogName);
+
             try
             {
                 /*
@@ -299,7 +301,7 @@ namespace ArchiveFixer.ViewModels
                     : "-";
                 task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
-                AppendLog("ERROR", $"任务失败：{task.FileName}，{ex.Message}");
+                AppendLog("ERROR", $"任务失败：{task.FileName}，{ex.Message}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
             }
             finally
             {
@@ -703,7 +705,7 @@ namespace ArchiveFixer.ViewModels
                     StatusText.ExtractFailed,
                     "输出目录无效（未设置或不可用），请在设置里选择输出目录后重试");
 
-                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                 return;
             }
 
@@ -1184,7 +1186,7 @@ namespace ArchiveFixer.ViewModels
                             $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
                         task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
-                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                         return;
                     }
 
@@ -1228,7 +1230,7 @@ namespace ArchiveFixer.ViewModels
                             : "取出内嵌归档失败：" + carve.Message;
                         task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
-                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                         return;
                     }
 
@@ -1452,7 +1454,7 @@ namespace ArchiveFixer.ViewModels
                     MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, volumeMissingMessage, TaskReason.VolumeMissing);
                     FinalizeOutcomeIfPending(task);
 
-                    AppendLog("ERROR", $"{task.LogName}：{volumeMissingMessage}");
+                    AppendLog("ERROR", $"{task.LogName}：{volumeMissingMessage}", DiagnosticCodes.VolumeIncomplete, "ExtractionCoordinator.VolumePreflight");
                     return;
                 }
 
@@ -1478,7 +1480,7 @@ namespace ArchiveFixer.ViewModels
                     MarkStoppedBeforeExtract(task, StatusText.ExtractFailed, unsafeMessage);
                     FinalizeOutcomeIfPending(task);
 
-                    AppendLog("ERROR", $"{task.LogName}：路径预检未通过 —— {pathReport.Summary}");
+                    AppendLog("ERROR", $"{task.LogName}：路径预检未通过 —— {pathReport.Summary}", DiagnosticCodes.FileIo, "ArchivePathGuard");
                     return;
                 }
 
@@ -1561,7 +1563,7 @@ namespace ArchiveFixer.ViewModels
                         "资源预算未通过：" + budget.Reason);
                     FinalizeOutcomeIfPending(task);
 
-                    AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}");
+                    AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}", DiagnosticCodes.TaskFailed, "SpaceBudget");
                     return;
                 }
 
@@ -2134,7 +2136,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = task.ErrorMessage + " " + volumeHint;
                     }
 
-                    AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                    AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                 }
             }
             else
@@ -2715,7 +2717,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = task.ErrorMessage + " " + volumeHint;
                     }
 
-                    AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                    AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
 
                     break;
                 }
@@ -2893,7 +2895,7 @@ namespace ArchiveFixer.ViewModels
                         task.VerifyMessage = failedVerification.FailureMessage;
                         task.Outcome = TaskOutcome.Failed;
 
-                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                     }
                     else if (task.Outcome is TaskOutcome.Failed or TaskOutcome.Skipped or TaskOutcome.PartiallyCompleted)
                     {
@@ -2972,7 +2974,7 @@ namespace ArchiveFixer.ViewModels
                             task.PasswordStatus = StatusText.PasswordNeed;
                             task.ErrorMessage = ambiguousResult.Message;
 
-                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                         }
                         else if (hasWrongPassword)
                         {
@@ -2992,7 +2994,7 @@ namespace ArchiveFixer.ViewModels
                                 "整包已加密，但这次没有任何可用密码（空密码对已加密的包不可能成立，已跳过，"
                                 + "没有浪费一次整包解压）。";
 
-                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                         }
                         else if (lastResult != null)
                         {
@@ -3022,7 +3024,7 @@ namespace ArchiveFixer.ViewModels
 
                         if (task.Status == StatusText.WrongPassword || task.Status == StatusText.PasswordAttemptLimitReached)
                         {
-                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                         }
                     }
                 }
@@ -3303,7 +3305,7 @@ namespace ArchiveFixer.ViewModels
                 task.Status = StatusText.ExtractFailed;
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = "无法确定暂存目录（工作区不可用）";
-                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
                 return (false, string.Empty, string.Empty);
             }
 

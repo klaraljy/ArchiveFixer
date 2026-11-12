@@ -55,7 +55,15 @@ namespace ArchiveFixer.Services
         private readonly PathService _pathService;
         private readonly object _lockObj = new();
 
+        /// <summary>当前进程的日志入口；全局未处理异常用它写入当前操作 trace。</summary>
+        public static LogService? Current { get; private set; }
+
         private string _currentLogFilePath = string.Empty;
+        private string _currentRunDirectory = string.Empty;
+        private string _currentOperationDirectory = string.Empty;
+        private string _currentOperationId = string.Empty;
+        private string _currentOperationName = string.Empty;
+        private int _operationIndex;
 
         /// <summary>
         /// 普通档（用户看到的/导出的）日志文件：只写普通行，不含详细探针。
@@ -115,6 +123,7 @@ namespace ArchiveFixer.Services
         public LogService(PathService pathService)
         {
             _pathService = pathService;
+            Current = this;
         }
 
         /// <summary>
@@ -132,6 +141,16 @@ namespace ArchiveFixer.Services
         /// 当前日志文件路径。
         /// </summary>
         public string CurrentLogFilePath => _currentLogFilePath;
+
+        /// <summary>本次运行目录（logs 根下唯一文件夹）。</summary>
+        public string CurrentRunDirectory => _currentRunDirectory;
+
+        /// <summary>当前操作目录（每次操作一个子文件夹）。</summary>
+        public string CurrentOperationDirectory => _currentOperationDirectory;
+
+        public string CurrentOperationId => _currentOperationId;
+
+        public string CurrentOperationName => _currentOperationName;
 
         /// <summary>
         /// 当前**机器读**的那一份（`.jsonl`：一行一个 JSON 对象）—— 与人读的 `.log` **一比一**（同一处写入）。
@@ -198,6 +217,7 @@ namespace ArchiveFixer.Services
         /// </summary>
         public void MarkOperationStart(string operationName)
         {
+            BeginOperationFolder(operationName);
             AppendOperationSeparator(operationName);
 
             _operationStartIndex = Math.Max(0, Logs.Count - 1);
@@ -562,53 +582,255 @@ namespace ArchiveFixer.Services
             try
             {
                 _pathService.EnsureBaseDirectories();
+                MigrateLegacyFlatLogs();
 
-                string fileName = $"ArchiveFixer_{FormatFileTimestamp(ArchiveFixer.Helpers.Clock.Now)}.log";
-                _currentLogFilePath = Path.Combine(LogDirectory, fileName);
-                _currentUserLogFilePath = Path.ChangeExtension(_currentLogFilePath, ".user.log");
-                _currentJsonlFilePath = Path.ChangeExtension(_currentLogFilePath, ".jsonl");
-                _currentTraceFilePath = Path.ChangeExtension(_currentLogFilePath, ".trace.jsonl");
+                DateTime started = ArchiveFixer.Helpers.Clock.Now;
+                _currentRunDirectory = Path.Combine(
+                    LogDirectory,
+                    "run_" + started.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(_currentRunDirectory);
+
+                BeginOperationFolder("启动");
 
                 if (_enableFileLog)
                 {
-                    /*
-                     * 首行时间戳同样走固定格式：这一行是既有日志解析的锚点，别让它随区域设置漂。
-                     *
-                     * ⚠ **两份都要写**（守门用例 `LogSchemaTests.人读行与机器读行一比一` 当场逮到过：
-                     * 原来只有人读那一份被建出来 ⇒ 第一行就破坏了"一比一" ⇒ 后面按行对齐解析全错位）。
-                     */
-                    DateTime started = ArchiveFixer.Helpers.Clock.Now;
-                    string header = $"日志初始化";
+                    string header = "日志初始化";
 
                     File.WriteAllText(
                         _currentLogFilePath,
                         FormatLogLine(started, "INFO", header) + Environment.NewLine,
                         Encoding.UTF8);
 
-                    if (_currentJsonlFilePath.Length > 0)
-                    {
-                        File.WriteAllText(
-                            _currentJsonlFilePath,
-                            BuildJsonRecord(new OperationLogItem("INFO", header, string.Empty), RunContext, null)
-                            + Environment.NewLine,
-                            Encoding.UTF8);
-                    }
+                    File.WriteAllText(
+                        _currentJsonlFilePath,
+                        BuildJsonRecord(new OperationLogItem("INFO", header, string.Empty), RunContext, null, null, 0, _runId, Environment.ProcessId, Environment.CurrentManagedThreadId, _currentOperationId)
+                        + Environment.NewLine,
+                        Encoding.UTF8);
 
-                    if (_currentTraceFilePath.Length > 0)
-                    {
-                        File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
-                    }
+                    File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
 
                     WriteEnvironmentHeader();
-
-                    // 顺手把老日志收一收（第 44 条追加）：不清理的话日志目录只增不减。
-                    CleanupOldLogs();
+                    CleanupOldRunDirectories();
                 }
             }
             catch
             {
                 _enableFileLog = false;
                 _currentLogFilePath = string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 开启一次操作日志：在本次运行目录下新建 operations\NNN-名称-时间，
+        /// 四份日志与 manifest/summary 全部落在同一个操作文件夹里。
+        /// </summary>
+        private void BeginOperationFolder(string operationName)
+        {
+            if (string.IsNullOrWhiteSpace(_currentRunDirectory))
+            {
+                return;
+            }
+
+            DateTime started = ArchiveFixer.Helpers.Clock.Now;
+            _operationIndex++;
+            _currentOperationName = string.IsNullOrWhiteSpace(operationName) ? "操作" : operationName.Trim();
+            _currentOperationId = $"{_runId}-{_operationIndex:D3}";
+            string safeName = SanitizeFolderName(_currentOperationName);
+            string operationFolder = Path.Combine(
+                _currentRunDirectory,
+                "operations",
+                $"{_operationIndex:D3}-{safeName}-{started.ToString("HHmmss", CultureInfo.InvariantCulture)}");
+
+            int suffix = 1;
+            string candidate = operationFolder;
+
+            while (Directory.Exists(candidate))
+            {
+                candidate = operationFolder + "-" + suffix.ToString(CultureInfo.InvariantCulture);
+                suffix++;
+            }
+
+            _currentOperationDirectory = candidate;
+            Directory.CreateDirectory(_currentOperationDirectory);
+            DiagnosticSpan.StartOperation(_currentOperationId, _currentOperationName);
+            _sequence = 0;
+            _traceSequence = 0;
+
+            _currentLogFilePath = Path.Combine(_currentOperationDirectory, "operation.log");
+            _currentUserLogFilePath = Path.Combine(_currentOperationDirectory, "operation.user.log");
+            _currentJsonlFilePath = Path.Combine(_currentOperationDirectory, "operation.jsonl");
+            _currentTraceFilePath = Path.Combine(_currentOperationDirectory, "operation.trace.jsonl");
+
+            File.WriteAllText(_currentLogFilePath, string.Empty, Encoding.UTF8);
+            File.WriteAllText(_currentUserLogFilePath, string.Empty, Encoding.UTF8);
+            File.WriteAllText(_currentJsonlFilePath, string.Empty, Encoding.UTF8);
+            File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
+            WriteOperationManifest(started);
+            File.WriteAllText(
+                Path.Combine(_currentOperationDirectory, "summary.json"),
+                "{\"status\":\"running\",\"note\":\"导出诊断包时更新\"}" + Environment.NewLine,
+                Encoding.UTF8);
+        }
+
+        private void WriteOperationManifest(DateTime started)
+        {
+            try
+            {
+                var manifest = new
+                {
+                    schema = "archivefixer.operation.v1",
+                    run_id = _runId,
+                    operation_id = _currentOperationId,
+                    operation_name = _currentOperationName,
+                    started_at = FormatTimestamp(started),
+                    app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
+                    file_version = ResolveFileVersion(),
+                    os = RuntimeInformation.OSDescription,
+                    framework = RuntimeInformation.FrameworkDescription,
+                    process_id = Environment.ProcessId,
+                    operation_directory = _currentOperationDirectory,
+                    log_files = new[]
+                    {
+                        "operation.user.log",
+                        "operation.log",
+                        "operation.jsonl",
+                        "operation.trace.jsonl",
+                        "manifest.json",
+                        "summary.json"
+                    }
+                };
+
+                File.WriteAllText(
+                    Path.Combine(_currentOperationDirectory, "manifest.json"),
+                    JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
+                    Encoding.UTF8);
+            }
+            catch
+            {
+                // 清单写失败不影响日志主流程。
+            }
+        }
+
+        private static string SanitizeFolderName(string name)
+        {
+            var invalid = Path.GetInvalidFileNameChars();
+            var builder = new StringBuilder();
+
+            foreach (char ch in name)
+            {
+                builder.Append(invalid.Contains(ch) || char.IsWhiteSpace(ch) ? '-' : ch);
+            }
+
+            string result = builder.ToString().Trim('-', '.');
+
+            if (result.Length == 0)
+            {
+                result = "操作";
+            }
+
+            return result.Length > 40 ? result[..40] : result;
+        }
+
+        /// <summary>
+        /// 旧版 logs 根下的平铺文件移到 legacy\；只移动，不删除。
+        /// </summary>
+        private void MigrateLegacyFlatLogs()
+        {
+            try
+            {
+                string legacy = Path.Combine(LogDirectory, "legacy");
+                Directory.CreateDirectory(legacy);
+                string[] patterns =
+                {
+                    "ArchiveFixer_*.log",
+                    "ArchiveFixer_*.user.log",
+                    "ArchiveFixer_*.jsonl",
+                    "ArchiveFixer_*.trace.jsonl",
+                    "fatal_*.log"
+                };
+
+                foreach (string pattern in patterns)
+                {
+                    foreach (string source in Directory.GetFiles(LogDirectory, pattern, SearchOption.TopDirectoryOnly))
+                    {
+                        try
+                        {
+                            string destination = Path.Combine(legacy, Path.GetFileName(source));
+                            int suffix = 1;
+                            string candidate = destination;
+
+                            while (File.Exists(candidate))
+                            {
+                                candidate = Path.Combine(
+                                    legacy,
+                                    Path.GetFileNameWithoutExtension(destination)
+                                    + "-" + suffix.ToString(CultureInfo.InvariantCulture)
+                                    + Path.GetExtension(destination));
+                                suffix++;
+                            }
+
+                            File.Move(source, candidate);
+                        }
+                        catch
+                        {
+                            // 被占用/权限不足：留给下一次启动。
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // 迁移失败不能阻止程序启动。
+            }
+        }
+
+        /// <summary>按运行目录清理，旧目录整体删除；当前运行和 legacy 永不删。</summary>
+        private void CleanupOldRunDirectories()
+        {
+            try
+            {
+                var directories = new DirectoryInfo(LogDirectory)
+                    .GetDirectories("run_*", SearchOption.TopDirectoryOnly)
+                    .Where(dir => !string.Equals(
+                        dir.FullName,
+                        _currentRunDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(dir => dir.LastWriteTimeUtc)
+                    .ToList();
+
+                if (directories.Count <= LogRetentionMinFiles)
+                {
+                    return;
+                }
+
+                int deleted = 0;
+                long freedBytes = 0;
+
+                foreach (DirectoryInfo directory in directories.Skip(LogRetentionMinFiles))
+                {
+                    try
+                    {
+                        long size = directory.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+                        directory.Delete(recursive: true);
+                        deleted++;
+                        freedBytes += size;
+                    }
+                    catch
+                    {
+                        // 被占用：下次再收。
+                    }
+                }
+
+                if (deleted > 0)
+                {
+                    Write(
+                        "INFO",
+                        $"已清理 {deleted} 个旧运行日志文件夹（至少保留最近 {LogRetentionMinFiles} 个），释放 {freedBytes / 1024.0 / 1024.0:0.0} MB");
+                }
+            }
+            catch
+            {
+                // 清理失败不影响启动。
             }
         }
 
@@ -842,6 +1064,30 @@ namespace ArchiveFixer.Services
             Write("INFO", message);
         }
 
+        /// <summary>带稳定错误码/组件的日志行（失败、异常、判据否定必须走这里或 Exception）。</summary>
+        public void WriteWithCode(
+            string level,
+            string message,
+            string taskPath = "",
+            string errorCode = DiagnosticCodes.AppUnknown,
+            string component = "",
+            string eventId = "")
+        {
+            WriteInternal(
+                level,
+                message,
+                taskPath,
+                criterion: null,
+                new LogEventFields(
+                    Event: "log.event",
+                    EventId: string.IsNullOrWhiteSpace(eventId) ? errorCode : eventId,
+                    ErrorCode: string.IsNullOrWhiteSpace(errorCode) ? DiagnosticCodes.AppUnknown : errorCode,
+                    Component: string.IsNullOrWhiteSpace(component)
+                        ? DiagnosticCodes.ComponentFor(errorCode)
+                        : component,
+                    TaskId: DiagnosticSpan.CurrentTaskId));
+        }
+
         /// <summary>
         /// 写入 WARN 日志。
         /// </summary>
@@ -937,7 +1183,18 @@ namespace ArchiveFixer.Services
         /// </summary>
         public void Write(string level, string message, string taskPath = "")
         {
-            WriteInternal(level, message, taskPath, criterion: null);
+            LogEventFields? evidence = null;
+
+            if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                evidence = new LogEventFields(
+                    Event: "log.error",
+                    EventId: DiagnosticCodes.AppUnknown,
+                    ErrorCode: DiagnosticCodes.AppUnknown,
+                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown));
+            }
+
+            WriteInternal(level, message, taskPath, criterion: null, evidence);
         }
 
         /// <summary>
@@ -961,13 +1218,26 @@ namespace ArchiveFixer.Services
             long? bytes = null,
             long? durationMs = null,
             string group = "",
-            string identity = "")
+            string identity = "",
+            string errorCode = "",
+            string component = "",
+            string eventId = "",
+            string spanId = "",
+            string taskId = "")
         {
+            string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
+                ? (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase) ? DiagnosticCodes.AppUnknown : string.Empty)
+                : errorCode.Trim();
+            string normalizedComponent = string.IsNullOrWhiteSpace(component)
+                ? DiagnosticCodes.ComponentFor(normalizedCode)
+                : component;
+            string normalizedEventId = string.IsNullOrWhiteSpace(eventId) ? eventName : eventId;
             string human = $"事件「{eventName}」：{message}"
                 + (source.Length > 0 || target.Length > 0
                     ? $"（{source} → {target}）"
                     : string.Empty)
-                + (result.Length > 0 ? $" ⇒ {result}" : string.Empty);
+                + (result.Length > 0 ? $" ⇒ {result}" : string.Empty)
+                + (normalizedCode.Length > 0 ? $"（错误码 {normalizedCode}）" : string.Empty);
 
             level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
             var item = new OperationLogItem(level, Sanitize(human), file);
@@ -1004,11 +1274,17 @@ namespace ArchiveFixer.Services
                                 Bytes: bytes,
                                 DurationMs: durationMs,
                                 Group: Sanitize(group),
-                                Identity: Sanitize(identity)),
+                                Identity: Sanitize(identity),
+                                EventId: normalizedEventId,
+                                ErrorCode: normalizedCode,
+                                Component: normalizedComponent,
+                                SpanId: string.IsNullOrWhiteSpace(spanId) ? DiagnosticSpan.CurrentSpanId : spanId,
+                                ParentSpanId: DiagnosticSpan.CurrentParentSpanId,
+                                TaskId: string.IsNullOrWhiteSpace(taskId) ? DiagnosticSpan.CurrentTaskId : taskId),
                             ++_traceSequence,
                             _runId,
                             Environment.ProcessId,
-                            Environment.CurrentManagedThreadId)
+                            Environment.CurrentManagedThreadId, _currentOperationId)
                         + Environment.NewLine,
                         Encoding.UTF8);
                 }
@@ -1020,12 +1296,24 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>写一条异常事件（异常类型/消息进人读行，完整 ToString 进机器读的 stack）。</summary>
-        public void Exception(string context, Exception exception, string taskPath = "")
+        public void Exception(
+            string context,
+            Exception exception,
+            string taskPath = "",
+            string errorCode = DiagnosticCodes.Unhandled,
+            string component = "")
         {
             if (exception == null)
             {
                 return;
             }
+
+            string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
+                ? DiagnosticCodes.Unhandled
+                : errorCode;
+            string normalizedComponent = string.IsNullOrWhiteSpace(component)
+                ? DiagnosticCodes.ComponentFor(normalizedCode)
+                : component;
 
             string detail = JsonSerializer.Serialize(new
             {
@@ -1043,7 +1331,11 @@ namespace ArchiveFixer.Services
                 detail: detail,
                 level: "ERROR",
                 file: taskPath,
-                stack: exception.ToString());
+                stack: exception.ToString(),
+                errorCode: normalizedCode,
+                component: normalizedComponent,
+                eventId: normalizedCode,
+                taskId: DiagnosticSpan.CurrentTaskId);
         }
 
         /// <summary>
@@ -1062,16 +1354,37 @@ namespace ArchiveFixer.Services
             string action = "",
             string file = "",
             string identity = "",
-            string level = "INFO")
+            string level = "INFO",
+            string errorCode = "",
+            string component = "")
         {
             string human = $"判据「{criterion}」｜输入：{inputs} ⇒ 结论：{verdict}"
                 + (action.Length > 0 ? $"（动作：{action}）" : string.Empty);
+            bool negative = level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)
+                || level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
+                || verdict.Contains("失败", StringComparison.Ordinal)
+                || verdict.Contains("未通过", StringComparison.Ordinal)
+                || verdict.Contains("不完整", StringComparison.Ordinal)
+                || verdict.Contains("缺", StringComparison.Ordinal)
+                || verdict.Contains("判不出", StringComparison.Ordinal);
+            string code = string.IsNullOrWhiteSpace(errorCode)
+                ? (negative ? DiagnosticCodes.Decision : string.Empty)
+                : errorCode;
+            string normalizedComponent = string.IsNullOrWhiteSpace(component)
+                ? DiagnosticCodes.ComponentFor(code)
+                : component;
 
             WriteInternal(
                 level,
                 human,
                 file,
-                new CriterionFields(criterion, inputs, verdict, action, file, identity));
+                new CriterionFields(criterion, inputs, verdict, action, file, identity),
+                new LogEventFields(
+                    Event: "criterion",
+                    EventId: criterion,
+                    ErrorCode: code,
+                    Component: normalizedComponent,
+                    TaskId: DiagnosticSpan.CurrentTaskId));
         }
 
         /// <summary><see cref="Write"/> 与 <see cref="Criterion"/> 的**唯一**收口（屏幕 + 人读文件 + 机器读文件）。</summary>
@@ -1084,6 +1397,21 @@ namespace ArchiveFixer.Services
         {
             level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
             message = Sanitize(message);
+
+            if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase)
+                && (evidence == null || string.IsNullOrWhiteSpace(evidence.ErrorCode)))
+            {
+                evidence = new LogEventFields(
+                    Event: "log.error",
+                    EventId: DiagnosticCodes.AppUnknown,
+                    ErrorCode: DiagnosticCodes.AppUnknown,
+                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown));
+            }
+
+            if (evidence != null && !string.IsNullOrWhiteSpace(evidence.ErrorCode))
+            {
+                message = message + "（错误码 " + evidence.ErrorCode + "）";
+            }
 
             var item = new OperationLogItem(level, message, taskPath);
 
@@ -1219,7 +1547,7 @@ namespace ArchiveFixer.Services
                             ++_sequence,
                             _runId,
                             Environment.ProcessId,
-                            Environment.CurrentManagedThreadId)
+                            Environment.CurrentManagedThreadId, _currentOperationId)
                         + Environment.NewLine,
                         Encoding.UTF8);
                 }
@@ -1255,7 +1583,14 @@ namespace ArchiveFixer.Services
             long? Bytes = null,
             long? DurationMs = null,
             string Group = "",
-            string Identity = "");
+            string Identity = "",
+            string EventId = "",
+            string ErrorCode = "",
+            string Component = "",
+            string SpanId = "",
+            string ParentSpanId = "",
+            string TaskId = "",
+            string OperationName = "");
 
         /// <summary>这一行的来源上下文（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）。</summary>
         public sealed record LogRunContext
@@ -1289,16 +1624,25 @@ namespace ArchiveFixer.Services
             long sequence = 0,
             string runId = "",
             int processId = 0,
-            int threadId = 0)
+            int threadId = 0,
+            string operationId = "")
         {
             var builder = new StringBuilder(256);
 
             builder.Append('{');
-            AppendJsonField(builder, "schema", "archivefixer.log.v2", first: true);
+            AppendJsonField(builder, "schema", "archivefixer.log.v3", first: true);
             AppendJsonField(builder, "ts", FormatTimestamp(item.Time));
             AppendJsonField(builder, "level", item.Level);
             AppendJsonNumber(builder, "seq", sequence);
             AppendJsonField(builder, "run", runId);
+            AppendJsonField(builder, "operation_id", operationId);
+            AppendJsonField(builder, "operation_name", string.IsNullOrWhiteSpace(evidence?.OperationName) ? DiagnosticSpan.CurrentOperationName : evidence!.OperationName);
+            AppendJsonField(builder, "event_id", evidence?.EventId ?? string.Empty);
+            AppendJsonField(builder, "error_code", evidence?.ErrorCode ?? string.Empty);
+            AppendJsonField(builder, "component", evidence?.Component ?? string.Empty);
+            AppendJsonField(builder, "span_id", string.IsNullOrWhiteSpace(evidence?.SpanId) ? DiagnosticSpan.CurrentSpanId : evidence!.SpanId);
+            AppendJsonField(builder, "parent_span_id", string.IsNullOrWhiteSpace(evidence?.ParentSpanId) ? DiagnosticSpan.CurrentParentSpanId : evidence!.ParentSpanId);
+            AppendJsonField(builder, "task_id", string.IsNullOrWhiteSpace(evidence?.TaskId) ? DiagnosticSpan.CurrentTaskId : evidence!.TaskId);
             AppendJsonNumber(builder, "pid", processId);
             AppendJsonNumber(builder, "thread", threadId);
             AppendJsonField(builder, "batch", context.Batch);
@@ -1547,9 +1891,10 @@ namespace ArchiveFixer.Services
                     return Array.Empty<string>();
                 }
 
-                return Directory.EnumerateFiles(LogDirectory, "ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
-                    .Where(file => !file.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(x => Path.GetFileName(x), StringComparer.OrdinalIgnoreCase)
+                return Directory.EnumerateFiles(LogDirectory, "operation.log", SearchOption.AllDirectories)
+                    .Concat(Directory.EnumerateFiles(LogDirectory, "ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
+                        .Where(file => !file.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase)))
+                    .OrderBy(file => File.GetLastWriteTimeUtc(file))
                     .ToList();
             }
             catch

@@ -13,7 +13,13 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class PostProcessFailureWriter
     {
-        public static void Write(ArchiveTask task, string failureMessage, Action<string, string>? log = null)
+        public static void Write(
+            ArchiveTask task,
+            string failureMessage,
+            Action<string, string>? log = null,
+            Action<string, string, string, string>? logWithCode = null,
+            string errorCode = ArchiveFixer.Services.DiagnosticCodes.VerifyFailed,
+            string component = "OutputVerifier")
         {
             if (task == null)
             {
@@ -46,9 +52,16 @@ namespace ArchiveFixer.Extraction
             task.Outcome = TaskOutcome.Failed;
             task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
-            log?.Invoke(
-                "ERROR",
-                $"{task.LogName}：{failureMessage}；不落「解压成功」，源包一个字节都不动。");
+            string message = $"{task.LogName}：{failureMessage}；不落「解压成功」，源包一个字节都不动。";
+
+            if (logWithCode != null)
+            {
+                logWithCode("ERROR", message, errorCode, component);
+            }
+            else
+            {
+                log?.Invoke("ERROR", message);
+            }
         }
     }
 }
