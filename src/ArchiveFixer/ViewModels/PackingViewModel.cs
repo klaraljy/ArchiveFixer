@@ -868,9 +868,9 @@ namespace ArchiveFixer.ViewModels
                 $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个条目读不到大小）" : string.Empty)
                 + Environment.NewLine
-                + plan.DescribeVolumePlan()
+                + $"内层 7z 分卷：{plan.DescribeVolumePlan()}"
                 + Environment.NewLine
-                + $"外层容器：{outer.Effective.ShortName()}{outerNote}"
+                + $"外层：1 个 {outer.Effective.ShortName()} 文件{outerNote}"
                 + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}";
 
             PlacementText = outer.Effective.HasOuterArtifact()
@@ -1198,19 +1198,19 @@ namespace ArchiveFixer.ViewModels
 
             if (result.CleanupNote.Contains("已彻底删除", StringComparison.Ordinal))
             {
-                volumesLine = "装分卷的文件夹（其余物）：已按你选的档彻底删除（不再占空间）。";
+                volumesLine = "其余物（分卷文件）：已按你选的档彻底删除（不再占空间）。";
             }
             else if (result.CleanupNote.Contains("已移入回收站", StringComparison.Ordinal))
             {
-                volumesLine = "装分卷的文件夹（其余物）：已按你选的档移入回收站（可还原）。";
+                volumesLine = "其余物（分卷文件）：已按你选的档移入回收站（可还原）。";
             }
             else if (result.Success && Directory.Exists(plan.OutputFolder))
             {
-                volumesLine = $"装分卷的文件夹（其余物）：{plan.OutputFolder}（{result.Volumes.Count} 个分卷）";
+                volumesLine = $"其余物（分卷文件）：{plan.OutputFolder}（{result.Volumes.Count} 个分卷）";
             }
             else if (Directory.Exists(plan.OutputFolder))
             {
-                volumesLine = $"分卷在：{plan.OutputFolder}（{result.Volumes.Count} 个）"
+                volumesLine = $"未完成的分卷文件还在：{plan.OutputFolder}（{result.Volumes.Count} 个）"
                             + "—— 这次中途停下了，这些分卷可能不完整；重试前请先清空它。";
             }
             else

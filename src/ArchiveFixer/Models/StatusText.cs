@@ -1727,7 +1727,7 @@ namespace ArchiveFixer.Models
         //    B 压成带密码的 rar → 结果 = 压缩包 B。设计见 docs/打包功能.md。
 
         /// <summary>功能名（菜单项、窗口标题、日志里都用它）。</summary>
-        public const string PackName = "打包文件夹为加密分卷";
+        public const string PackName = "打包为加密压缩包";
 
         /// <summary>第一步之前的那一步：校验落点、算空间。</summary>
         public const string PackStepPreparing = "准备：校验落点、核算空间";
@@ -1774,15 +1774,15 @@ namespace ArchiveFixer.Models
 
         /// <summary>外层容器 = rar 的完整说法（含许可边界）。</summary>
         public const string PackOuterRarText =
-            "外层容器 rar：把那个装分卷的文件夹压成一个带密码的 .rar（需要本机已安装的 WinRAR：程序只检测与调用它，绝不随包分发）";
+            "外层容器 rar：把这几个 7z 分卷压成一个带密码的 .rar（需要本机已安装的 WinRAR：程序只检测与调用它，绝不随包分发）";
 
         /// <summary>外层容器 = 7z 的完整说法（**无需额外安装**这句是关键信息）。</summary>
         public const string PackOuterSevenZipText =
-            "外层容器 7z：把那个装分卷的文件夹压成一个带密码的 .7z（-mhe 连文件名一起加密）—— 无需额外安装（7-Zip 是 LGPL，随程序分发）";
+            "外层容器 7z：把这几个 7z 分卷压成一个带密码的 .7z（-mhe 连文件名一起加密）—— 无需额外安装（7-Zip 是 LGPL，随程序分发）";
 
         /// <summary>外层容器 = 不做。</summary>
         public const string PackOuterNoneText =
-            "不做外层容器：结果就是那个装分卷的文件夹里的 7z 加密分卷（不需要 Rar.exe，也不需要多一份空间）";
+            "不做外层容器：结果就是落点目录里的那几个 7z 加密分卷（不需要 Rar.exe，也不需要多一份空间）";
 
         /// <summary>外层容器 rar 的短名（日志 / 摘要行）。</summary>
         public const string PackOuterRarShort = "rar";
@@ -1795,7 +1795,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>结果区提醒：那个装分卷的文件夹还在时，用户可以自己看、也可以自己删。</summary>
         public const string PackKeepFolderHint =
-            "「其余物」（装 7z 分卷的那个文件夹）按你选的档留着了 —— 可以先检查分卷，确认没问题之后自己删掉它就行。";
+            "「其余物」（落点目录里的那几个 7z 分卷文件）按你选的档留着了 —— 可以先检查分卷，确认没问题之后自己删掉它们就行。";
 
         // ── 设置界面：自选 Rar.exe 路径（用户 2026-09-23 决定） ──
 
@@ -3523,7 +3523,7 @@ namespace ArchiveFixer.Models
             + "需要下次继续使用，请在打包前到④「密码」页添加；「从密码列表选…」只是把列表里的一条复制到这个框。";
 
         /// <summary>⑤ 打包步骤那一框的展示框标题。</summary>
-        public const string BoxDetailPackingStepsHeader = "详细说明：打包的四步分别做了什么";
+        public const string BoxDetailPackingStepsHeader = "详细说明：打包流程分哪几步";
 
         /// <summary>⑤ 打包：四步走法 + 每步的产物与校验（原先是常驻的那段）。</summary>
         public const string BoxDetailPackingStepsDetail =

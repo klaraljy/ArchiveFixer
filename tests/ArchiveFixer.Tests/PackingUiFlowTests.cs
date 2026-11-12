@@ -46,6 +46,55 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        [Fact]
+        public void 确认窗_XAML使用新布局且保留原控件()
+        {
+            string xaml = ReadRepositoryFile(Path.Combine(
+                "src", "ArchiveFixer", "Views", "PackingConfirmWindow.xaml"));
+
+            Assert.Contains("AppWindowStyle", xaml, StringComparison.Ordinal);
+            Assert.Contains("CardStyle", xaml, StringComparison.Ordinal);
+            Assert.Contains("PrimaryButtonStyle", xaml, StringComparison.Ordinal);
+            Assert.Contains("WarningBannerStyle", xaml, StringComparison.Ordinal);
+            Assert.Contains("最终压缩包落在", xaml, StringComparison.Ordinal);
+            Assert.Contains("源包处理", xaml, StringComparison.Ordinal);
+            Assert.Contains("其余物（分卷文件）处理", xaml, StringComparison.Ordinal);
+
+            foreach (string name in new[]
+                     {
+                         "HeadList", "PlacementText", "SourceExplanationText", "RestExplanationText",
+                         "SourceKeep", "SourceMove", "RestDelete", "RestRecycle", "RestKeep",
+                         "DangerBox", "DangerText"
+                     })
+            {
+                Assert.Contains($"x:Name=\"{name}\"", xaml, StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain("#F7F7F7", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("ConfirmCardStyle", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("移入其余物（程序建一个以源名命名的文件夹把它搬进去）", xaml, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 确认窗抬头_把内层七压卷和外层一个文件说清楚()
+        {
+            string source = BuildSourceFolder("素材");
+
+            Assert.True(PackingPlan.TryCreate(
+                new PackingRequest { SourceFolder = source, Password = SamplePassword },
+                out PackingPlan? plan,
+                out string error), error);
+
+            PackingConfirmRequest request = PackingConfirmRequest.FromPlan(
+                plan!,
+                new PackingRunOptions(),
+                PackOuterContainer.Rar);
+
+            Assert.Contains("内层 7z 分卷", request.VolumeRuleText, StringComparison.Ordinal);
+            Assert.Contains("外层：1 个 rar 文件", request.VolumeRuleText, StringComparison.Ordinal);
+            Assert.Contains("按 2 卷切", request.VolumeRuleText, StringComparison.Ordinal);
+        }
+
         // ================================================================ 弹窗抬头（纯逻辑）
 
         [Fact]
@@ -455,6 +504,23 @@ namespace ArchiveFixer.Tests
             File.WriteAllBytes(Path.Combine(folder, "a.bin"), new byte[4096]);
 
             return folder;
+        }
+
+        private static string ReadRepositoryFile(string relativePath)
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+            while (directory != null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
+                {
+                    return File.ReadAllText(Path.Combine(directory.FullName, relativePath));
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new InvalidOperationException("找不到仓库根目录");
         }
 
         private Harness BuildHarness(string source, CountingRunner runner, PackingRunOptions? confirmed)

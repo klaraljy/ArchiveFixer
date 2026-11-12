@@ -212,7 +212,7 @@
                         用户 2026-09-26 追加："选择还是得放在页面"；默认那一档的意思是
                         "跟①页「输出位置」走，没设过就是源旁边"。
                     -->
-                    <TextBlock Text="最终压缩包放在哪" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+                    <TextBlock Text="最终压缩包落在哪" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
 
                     <StackPanel Margin="0,4,0,0">
                         <RadioButton x:Name="PlacementFollow"
@@ -279,7 +279,7 @@
                                     Padding="10,8"
                                     Margin="0,10,0,0">
                                 <StackPanel>
-                                    <TextBlock Text="压缩流程（点「打包…」并确认之后，程序按这四步走）"
+                                    <TextBlock Text="打包流程（点「打包…」并确认之后，程序按这几步走）"
                                                FontWeight="SemiBold"
                                                Margin="0,0,0,6" />
 

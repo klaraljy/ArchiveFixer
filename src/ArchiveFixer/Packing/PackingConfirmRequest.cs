@@ -83,7 +83,8 @@ namespace ArchiveFixer.Packing
                 EffectiveContainer = effectiveContainer,
                 ContentSummary = $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
                                  + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个文件读不到大小）" : string.Empty),
-                VolumeRuleText = plan.DescribeVolumePlan(),
+                VolumeRuleText = "内层 7z 分卷：" + plan.DescribeVolumePlan()
+                                 + $"；外层：1 个 {effectiveContainer.ShortName()} 文件",
                 SpaceText = $"需要空余空间约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}",
                 Initial = initial ?? new PackingRunOptions()
             };

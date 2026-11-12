@@ -2,6 +2,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using ArchiveFixer.Packing;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
@@ -218,6 +219,7 @@ namespace ArchiveFixer.Tests
             PasswordListWindowName,
             TaskDetailWindowName,
             OneClickOptionsWindowName,
+            PackingConfirmWindowName,
             AppDialogWindowName,
             LogWindowName
         };
@@ -249,6 +251,8 @@ namespace ArchiveFixer.Tests
         public const string TaskDetailWindowName = "任务详情窗口 TaskDetailWindow";
 
         public const string OneClickOptionsWindowName = "本次选项面板 OneClickOptionsWindow";
+
+        public const string PackingConfirmWindowName = "打包确认窗口 PackingConfirmWindow";
 
         public const string AppDialogWindowName = "自绘对话框 AppDialogWindow";
 
@@ -460,6 +464,23 @@ namespace ArchiveFixer.Tests
                     ShowAndRecord(
                         new OneClickOptionsWindow(AppSettings.CreateDefault(), null),
                         OneClickOptionsWindowName,
+                        report,
+                        main);
+
+                    ShowAndRecord(
+                        new PackingConfirmWindow(new PackingConfirmRequest
+                        {
+                            SourceName = "素材",
+                            SourcePath = Path.Combine(workRoot, "素材"),
+                            SourceKind = PackingSourceKind.Folder,
+                            EffectiveContainer = PackOuterContainer.Rar,
+                            OuterPath = Path.Combine(workRoot, "素材.rar"),
+                            ContentSummary = "内容：2 个文件，1 MiB",
+                            VolumeRuleText = "内层 7z 分卷：按 2 卷切；外层：1 个 rar 文件",
+                            SpaceText = "需要空余空间约 2 MiB",
+                            Initial = new PackingRunOptions()
+                        }),
+                        PackingConfirmWindowName,
                         report,
                         main);
 
