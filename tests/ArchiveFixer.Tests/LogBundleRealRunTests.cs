@@ -141,6 +141,7 @@ namespace ArchiveFixer.Tests
                 // 这个样本是真加密头/错密码：诊断包必须给密码类码，不能落泛化 AF-TASK-001。
                 using JsonDocument summaryDocument = JsonDocument.Parse(summary);
                 JsonElement summaryRoot = summaryDocument.RootElement;
+                Assert.False(string.IsNullOrWhiteSpace(summaryRoot.GetProperty("build_commit").GetString()));
                 Assert.Contains("AF-PASSWORD-010", summaryRoot.GetProperty("error_codes").EnumerateArray().Select(x => x.GetString()));
                 JsonElement failedTask = summaryRoot.GetProperty("failed_tasks")[0];
                 Assert.Equal("AF-PASSWORD-010", failedTask.GetProperty("error_code").GetString());
