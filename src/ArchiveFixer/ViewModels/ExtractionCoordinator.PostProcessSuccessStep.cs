@@ -662,21 +662,6 @@ namespace ArchiveFixer.ViewModels
              * （零字节、不改名、不搬、不覆盖）；判据与执行体仍然只有一份
              * （<see cref="TryAdoptUnresolvedVolumePiece"/>，与递归路**同一份**）。
              */
-            if (work.Verification.Verified)
-            {
-                UiActivity.Mark("收尾", task.LogName, "跨链收片");
-                var adoptWatch = Stopwatch.StartNew();
-                AdoptPublishedVolumePieces(task);
-                adoptWatch.Stop();
-
-                if (adoptWatch.ElapsedMilliseconds >= 1000)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"[性能] {task.LogName}：跨链收片耗时 {adoptWatch.ElapsedMilliseconds:N0} 毫秒");
-                }
-            }
-
             /*
              * 中间工作区清理（P1，端到端验收实测一次成功就留下近 1 GB 垃圾）。
              *

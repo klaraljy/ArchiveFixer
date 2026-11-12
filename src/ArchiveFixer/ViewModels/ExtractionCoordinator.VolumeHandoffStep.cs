@@ -10,6 +10,7 @@ using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -265,6 +266,53 @@ namespace ArchiveFixer.ViewModels
         /// 把这一单产出的全部文件登记进唯一第一大步账本。
         /// 这是“文件产物产生时”的登记点，覆盖包装/递归产出的 Unknown 与中间片。
         /// </summary>
+        private readonly ConcurrentDictionary<string, (long Length, long Ticks, FileNatureCard Card)> _producedCardCache =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal bool TryGetProducedCard(string path, out FileNatureCard card)
+        {
+            card = null!;
+
+            if (string.IsNullOrWhiteSpace(path)
+                || !_producedCardCache.TryGetValue(path, out (long Length, long Ticks, FileNatureCard Card) cached))
+            {
+                return false;
+            }
+
+            try
+            {
+                var info = new FileInfo(path);
+
+                if (!info.Exists || info.Length != cached.Length || info.LastWriteTimeUtc.Ticks != cached.Ticks)
+                {
+                    _producedCardCache.TryRemove(path, out _);
+                    return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            card = cached.Card;
+            return true;
+        }
+
+        private void RememberProducedCard(string path, FileNatureCard card)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+
+                if (info.Exists)
+                {
+                    _producedCardCache[path] = (info.Length, info.LastWriteTimeUtc.Ticks, card);
+                }
+            }
+            catch
+            {
+            }
+        }
         private sealed class ProducedOutputFact
         {
             public string File { get; init; } = string.Empty;
@@ -336,6 +384,8 @@ namespace ArchiveFixer.ViewModels
                     {
                         continue;
                     }
+
+                    RememberProducedCard(file, card);
 
                     if (!card.HasIdentity || card.IsKnownNormalMedia)
                     {
@@ -857,6 +907,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal void ClearVolumeHandoffLedger()
         {
+            _producedCardCache.Clear();
             _volumeHandoffEntries.Clear();
             _firstStepFileLedger.Clear();
             _extractionContentGraph.Clear();

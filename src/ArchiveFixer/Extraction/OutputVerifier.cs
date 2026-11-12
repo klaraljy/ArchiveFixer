@@ -120,88 +120,8 @@ namespace ArchiveFixer.Extraction
         /// <summary>递归统计目录下的文件数与总字节数。目录不存在返回 (0,0)，不抛。</summary>
         public static (int FileCount, long TotalSize) Measure(string? directory)
         {
-            if (string.IsNullOrWhiteSpace(directory))
-            {
-                return (0, 0);
-            }
-
-            if (!SafeDirectoryExists(directory))
-            {
-                return (0, 0);
-            }
-
-            /*
-             * 输出目录自身就是符号链接 / 联接点时直接按"没有产物"处理。
-             * 理由：跟着链接统计到的字节数完全不能代表本次解压的结果（可能落在别的盘、别的目录），
-             * 而这种误判的后果是"校验通过 → 删源包"，属于不可逆错误，必须往保守一侧倒。
-             */
-            if (!TryGetAttributes(directory, out FileAttributes rootAttributes) ||
-                (rootAttributes & FileAttributes.ReparsePoint) != 0)
-            {
-                return (0, 0);
-            }
-
-            int fileCount = 0;
-            long totalSize = 0;
-
-            // 用显式栈而不是递归：解压产物可能有很深的目录层级，递归写法有栈溢出风险。
-            var pending = new Stack<string>();
-            pending.Push(directory);
-
-            while (pending.Count > 0)
-            {
-                string currentDirectory = pending.Pop();
-                string[] entries;
-
-                try
-                {
-                    entries = Directory.GetFileSystemEntries(currentDirectory);
-                }
-                catch
-                {
-                    // 权限不足、目录刚好被删掉等等：跳过这一层继续统计。
-                    // 单个目录读不了不能把整次校验变成"一个文件都没有"。
-                    continue;
-                }
-
-                foreach (string entry in entries)
-                {
-                    if (!TryGetAttributes(entry, out FileAttributes attributes))
-                    {
-                        continue;
-                    }
-
-                    /*
-                     * 不跟随符号链接 / 目录联接点：
-                     * 跟随可能绕圈（链接指回祖先目录 → 死循环），
-                     * 也可能把链接目标位置的无关文件算进本次产物。
-                     */
-                    if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    {
-                        continue;
-                    }
-
-                    if ((attributes & FileAttributes.Directory) != 0)
-                    {
-                        pending.Push(entry);
-                        continue;
-                    }
-
-                    fileCount++;
-
-                    try
-                    {
-                        totalSize += new FileInfo(entry).Length;
-                    }
-                    catch
-                    {
-                        // 大小读不出来时仍然算作一个文件、字节按 0 记：
-                        // 校验用 >= 比较，少算字节只会更保守，不会把"缺文件"误判成通过。
-                    }
-                }
-            }
-
-            return (fileCount, totalSize);
+            OutputTreeSnapshot snapshot = OutputTreeSnapshot.Capture(directory);
+            return (snapshot.FileCount, snapshot.TotalSize);
         }
 
         /// <summary>
@@ -210,7 +130,8 @@ namespace ArchiveFixer.Extraction
         public static OutputVerificationResult Verify(
             string? outputDirectory,
             ArchiveListResult? expected,
-            string? expectedRootPath = null)
+            string? expectedRootPath = null,
+            OutputTreeSnapshot? snapshot = null)
         {
             /*
              * ===== 预期数必须按"仅大小写去重"折算（2026-09-27 真机铁证）=====
@@ -235,7 +156,9 @@ namespace ArchiveFixer.Extraction
                 : string.Empty;
 
             bool directoryExists = SafeDirectoryExists(outputDirectory);
-            (int actualFileCount, long actualTotalSize) = Measure(outputDirectory);
+            snapshot ??= OutputTreeSnapshot.Capture(outputDirectory);
+            int actualFileCount = snapshot.FileCount;
+            long actualTotalSize = snapshot.TotalSize;
 
             bool hasExpectedEntries =
                 expected is { Success: true } &&
@@ -245,7 +168,7 @@ namespace ArchiveFixer.Extraction
 
             (List<ArchiveEntry> missingEntries, int sizeMismatchCount, string? effectiveRoot, bool suffixFallback) =
                 hasExpectedEntries
-                    ? CompareExpectedEntries(outputDirectory, expected!, expectedRootRelative)
+                    ? CompareExpectedEntries(snapshot, expected!, expectedRootRelative)
                     : (new List<ArchiveEntry>(), 0, expectedRootRelative, false);
 
             /*
@@ -418,7 +341,7 @@ namespace ArchiveFixer.Extraction
             string surplusNote = verified
                 && !onlyZeroByteEntriesMissing
                 && (actualFileCount > expectedFileCount || actualTotalSize > expectedTotalSize)
-                    ? DescribeSurplus(outputDirectory, expected, actualFileCount - expectedFileCount, effectiveRoot)
+                    ? DescribeSurplus(snapshot, expected, actualFileCount - expectedFileCount, effectiveRoot)
                     : string.Empty;
 
             return new OutputVerificationResult
@@ -463,7 +386,7 @@ namespace ArchiveFixer.Extraction
         /// <para>只在"确实多出来"这一档才走这一遍目录：正常情况下一个字节都不多读。</para>
         /// </summary>
         private static string DescribeSurplus(
-            string? outputDirectory,
+            OutputTreeSnapshot snapshot,
             ArchiveListResult? expected,
             int extraFileCount,
             string? expectedRootRelative = null)
@@ -482,10 +405,8 @@ namespace ArchiveFixer.Extraction
 
             var names = new List<string>();
 
-            foreach (string file in EnumerateFilesSafe(outputDirectory))
+            foreach (string relative in snapshot.FilesByRelativePath.Keys)
             {
-                string relative = NormalizeRelativePath(Path.GetRelativePath(outputDirectory!, file));
-
                 if (known.Contains(relative))
                 {
                     continue;
@@ -521,24 +442,11 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static (List<ArchiveEntry> Missing, int SizeMismatchCount, string? EffectiveRoot, bool SuffixFallback)
             CompareExpectedEntries(
-                string? outputDirectory,
+                OutputTreeSnapshot snapshot,
                 ArchiveListResult expected,
                 string? expectedRootRelative)
         {
-            var actualByPath = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (string file in EnumerateFilesSafe(outputDirectory))
-            {
-                try
-                {
-                    actualByPath[NormalizeRelativePath(Path.GetRelativePath(outputDirectory!, file))] =
-                        new FileInfo(file).Length;
-                }
-                catch
-                {
-                    // 读不到大小：按“不存在”参与缺件判定，偏保守，不会把缺件当通过。
-                }
-            }
+            IReadOnlyDictionary<string, long> actualByPath = snapshot.FilesByRelativePath;
 
             var lastExpectedByPath = new Dictionary<string, ArchiveEntry>(StringComparer.OrdinalIgnoreCase);
 

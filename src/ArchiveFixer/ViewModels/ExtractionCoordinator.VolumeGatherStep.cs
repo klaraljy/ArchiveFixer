@@ -523,85 +523,12 @@ namespace ArchiveFixer.ViewModels
         /// 只在"那一组的目录里还没有这个规范卷名 + 同一个盘"时才建一个零字节硬链接，
         /// 所以那一组已经齐的时候这一档是**空操作**。</para>
         /// </summary>
-        private void AdoptPublishedVolumePieces(ArchiveTask task)
-        {
-            if (task == null)
-            {
-                return;
-            }
-
-            /*
-             * 两处都要看（真机 CCCC 单层路实测）：
-             * · **成品那一层**（`ContentDirectoryPath`）—— 内容物里的片；
-             * · **过程物那一层**（`RestDirectoryPath`）—— 单层路把"内层包"当过程物放进其余物，
-             *   而这一组的片**恰恰就是内层包**（`111.zip` 就是在那儿被下一轮当新任务又解了一次）。
-             * 这些片由 `TryAdoptUnresolvedVolumePiece` 按"过程物目录里的用移动"那一条接走。
-             */
-            foreach (string directory in new[] { task.ContentDirectoryPath, task.RestDirectoryPath })
-            {
-                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    foreach (string file in Directory.EnumerateFiles(directory))
-                    {
-                        string name = Path.GetFileName(file);
-
-                        /*
-                         * ⛔ **用户导入的原包自己 —— 这一档一个都不接**（2026-10-11 调试器 + 环台定案）。
-                         *
-                         * <para><b>运行期事实（`batch_evaluate` 打在 `TryAdoptUnresolvedVolumePiece` 的日志行上，
-                         * 逐字）</b>：`piecePath=…\in\111\111\111\其余物\111.rar`、`canonical=111.rar`、
-                         * `owner.FileName=111.part1.rar`、`layerOverride=null`、`renamedInPlace=true`
-                         * —— 即：**用户那份源包**（先按「源包 → 其余物」搬进过程物目录）被这条扫描当成"像分卷片"，
-                         * 又按"过程物目录里的用移动"搬进了产出层 `…\in\111\111\111`。它的字节级身份 = 与
-                         * `H:\…\测试\EEE\111\111.rar` 的 SHA-256 完全相同（`472D3B50…BE7D8`）。
-                         * 后果：它已经不在其余物里 ⇒ 其余物那一档再也删不到它 ⇒ 判据 ③ 永远剩这一个
-                         * （它**不是**这一组的片：老式族 `111.rar` 与本层那一组的新式/ZIP 族只是同基名）。</para>
-                         *
-                         * <para>⛔ 这一条**只收窄这一档**：用户的原包**按用户选的那一档处理**（其余物 / 删除），
-                         * 不在这里被改名、更不许被搬走。真正需要把一个用户的原包接进某一组时，走的是
-                         * <see cref="TryGatherGroupPiecesInto"/>（它自带"族 + 基名"那把尺子，且只在批末
-                         * "这一组该拼到哪一层"算出来之后才跑）—— 那一条路一个字没动。</para>
-                         */
-                        if (IsUserImportedSourcePath(file))
-                        {
-                            continue;
-                        }
-
-                        /*
-                         * 只挑"像分卷片"的：名字带卷标记（`.z01` / `.001` / `part1` …），
-                         * 或者它自己自述是跨盘 ZIP 的末片（末片的 EOCD 是明文 ⇒ 这一条是**硬证据**）。
-                         *
-                         * ⛔ **再加一道底层识别**（用户口径：「统筹到同一组上面去…先看看底层能够识别到文件是什么东西」）：
-                         * 走 <see cref="FileNature.Inspect"/> 那张卡 —— 内容**可证"不是分卷组的一员"** 就**不接**
-                         * （第 125 轮那个真凶就是"名字像分卷片"的单卷包；那道红线原来只挡"用户的原包"这一档，
-                         * 这一道把它**推广到任何来源**的同一形状，包括我们自己产出的单卷包）。
-                         */
-                        FileNatureCard nature = FileNature.Inspect(file);
-
-                        bool plausible = nature.ParticipatesInVolumeHandling
-                            && (nature.VolumeIndexByName != null
-                                || nature.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
-                                || Detection.SpannedZipIndex.TryRead(file) != null);
-
-                        if (!plausible)
-                        {
-                            continue;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // 加法：判不出来一律退回"照旧"（这一片就留在原地当内容物 / 过程物）。
-                    AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
-                }
-            }
-        }
-
+        /*
+         * 旧 AdoptPublishedVolumePieces 只枚举 + FileNature 过滤，没有调用任何接片执行体；
+         * 它是纯空转扫描（1~12 实测 1,979 个文件）。真正接片由递归链的
+         * PublishUnresolvedVolumePieces / AdoptUnresolvedVolumePieces 负责；单层路若以后需要接片，
+         * 应新增有执行体、可测的后台接片计划，不再恢复这段无动作扫描。
+         */
         /// <summary>
         /// **链因「分卷缺失」停下时，把它已经解出来、下一步要用的产物搬回它自己那条链的家**
         /// （用户 2026-10-06 口径：「第一步就让你将能解压的统统解压了」「这个根本就不是部分完成，
