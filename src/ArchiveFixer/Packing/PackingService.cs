@@ -795,19 +795,18 @@ namespace ArchiveFixer.Packing
                 (plan.OutputFolder ?? string.Empty).TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
-            return string.IsNullOrWhiteSpace(name) ? "装分卷的文件夹" : name;
+            return string.IsNullOrWhiteSpace(name) ? "落点目录" : name;
         }
 
         /// <summary>
-        /// 中途停下时如实报"现在切出来几个卷、重试前该清哪个文件夹"。
+        /// 中途停下时如实报"现在切出来几个卷、重试前该清哪些文件"。
         ///
-        /// <para>⛔ 第 46 条之前这里写的是"B 里现有 N 个分卷……重试前请先清空 B" —— 那是旧模型的说法
-        /// （用户要填一个叫 B 的输出文件夹），现在界面上没有 B 了，只有"那个装分卷的文件夹"（其余物），
-        /// 所以必须点名它**实际叫什么**，否则他拿着日志去找一个不存在的 "B"。</para>
+        /// <para>⛔ 这里以前写"重试前请先清空这个文件夹" —— 分卷现在直接落在落点目录里，
+        /// 清整个目录会把用户自己放在那里的文件一起删掉。只能点名清掉本次生成的未完成分卷。</para>
         /// </summary>
         internal static string DescribePartialVolumes(int count, PackingPlan plan) =>
-            $"分卷情况：「{FolderName(plan)}」里现在有 {count} 个分卷（可能不完整）；"
-            + "重试前请先清空这个文件夹（它就在落点目录里，也就是「其余物」）。";
+            $"分卷情况：落点目录里现在有 {count} 个分卷（可能不完整）；"
+            + "重试前请先删掉这几个未完成的分卷文件，落点目录里的其他文件不要动。";
 
         /// <summary>按 <c>&lt;源名&gt;.7z.NNN</c> 从那个装分卷的文件夹里数出实际切出来的分卷（不自己拼名字）。</summary>
         internal static List<PackingVolume> CollectVolumes(PackingPlan plan)

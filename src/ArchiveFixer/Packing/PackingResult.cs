@@ -141,7 +141,7 @@ namespace ArchiveFixer.Packing
             {
                 if (string.IsNullOrWhiteSpace(VolumesFolder))
                 {
-                    return "装分卷的文件夹";
+                    return "落点目录";
                 }
 
                 try
@@ -149,11 +149,11 @@ namespace ArchiveFixer.Packing
                     string name = Path.GetFileName(
                         VolumesFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
-                    return string.IsNullOrWhiteSpace(name) ? "装分卷的文件夹" : name;
+                    return string.IsNullOrWhiteSpace(name) ? "落点目录" : name;
                 }
                 catch
                 {
-                    return "装分卷的文件夹";
+                    return "落点目录";
                 }
             }
         }

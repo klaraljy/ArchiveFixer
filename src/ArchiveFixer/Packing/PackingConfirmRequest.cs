@@ -150,7 +150,7 @@ namespace ArchiveFixer.Packing
                 EffectiveContainer == PackOuterContainer.SevenZip
                     ? $"最终产物：{artifact}（本机没有 Rar.exe，外层自动用 7z —— 无需额外安装）"
                     : EffectiveContainer == PackOuterContainer.None
-                        ? "最终产物：不做外层容器（结果就是那个装分卷的文件夹里的分卷）"
+                        ? "最终产物：不做外层容器（结果就是落点目录里的那几个 7z 分卷）"
                         : $"最终产物：{artifact}");
 
             return lines;
