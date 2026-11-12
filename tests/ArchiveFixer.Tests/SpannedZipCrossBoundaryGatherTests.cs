@@ -68,7 +68,7 @@ namespace ArchiveFixer.Tests
                 sources.Add((name, path, new FileInfo(path).Length));
             }
 
-            VolumeNameRepair.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
+            VolumeGatherPlanner.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
                 tail,
                 sources.Select(s => new VolumeCandidate { Path = s.Path, Size = s.Size }).ToList());
 
@@ -121,7 +121,7 @@ namespace ArchiveFixer.Tests
                 sources.Add(path);
             }
 
-            VolumeNameRepair.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
+            VolumeGatherPlanner.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
                 tail,
                 sources.Select(p => new VolumeCandidate { Path = p, Size = 4096 }).ToList());
 
@@ -169,7 +169,7 @@ namespace ArchiveFixer.Tests
                 File.WriteAllBytes(Path.Combine(entryDirectory, name), new byte[1024]);
             }
 
-            VolumeNameRepair.SpannedZipDiskGather result =
+            VolumeGatherPlanner.SpannedZipDiskGather result =
                 VolumeNameRepair.ResolveSpannedZipDiskGather(tail, Array.Empty<VolumeCandidate>());
 
             Assert.True(result.Applicable);
@@ -196,7 +196,7 @@ namespace ArchiveFixer.Tests
                 candidates.Add(new VolumeCandidate { Path = path, Size = 4096 });
             }
 
-            VolumeNameRepair.SpannedZipDiskGather result =
+            VolumeGatherPlanner.SpannedZipDiskGather result =
                 VolumeNameRepair.ResolveSpannedZipDiskGather(tail, candidates);
 
             Assert.True(result.Applicable);
@@ -227,7 +227,7 @@ namespace ArchiveFixer.Tests
                 candidates.Add(new VolumeCandidate { Path = path, Size = sizes[index] });
             }
 
-            VolumeNameRepair.SpannedZipDiskGather result =
+            VolumeGatherPlanner.SpannedZipDiskGather result =
                 VolumeNameRepair.ResolveSpannedZipDiskGather(tail, candidates);
 
             Assert.True(result.Applicable);
@@ -254,7 +254,7 @@ namespace ArchiveFixer.Tests
             File.WriteAllBytes(a, new byte[2048]);
             File.WriteAllBytes(b, new byte[2048]);
 
-            VolumeNameRepair.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
+            VolumeGatherPlanner.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
                 tail,
                 new[]
                 {

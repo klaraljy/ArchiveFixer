@@ -11,9 +11,13 @@ using System.Threading.Tasks;
 using static ArchiveFixer.Extraction.VolumeNamePlanner;
 using static ArchiveFixer.Extraction.VolumeNameRestorer;
 
+using CrossLayerVolumeGather = ArchiveFixer.Extraction.VolumeGatherPlanner.CrossLayerVolumeGather;
+
+using GatherPiece = ArchiveFixer.Extraction.VolumeNameRepair.GatherPiece;
+
 namespace ArchiveFixer.Extraction
 {
-    public static partial class VolumeNameRepair
+    public static partial class VolumeGatherPlanner
     {        /// <summary>
              /// **跨层收卷**（用户 2026-10-05 真机原话：「各分卷在不同的目录，你就将其全部移动到头文件 .001
              /// 同级目录里面去」）。
@@ -87,7 +91,7 @@ namespace ArchiveFixer.Extraction
             }
 
             string entryPath = SafePathHelper.GetFullPathSafe(entryVolumePath);
-            string entryName = SafeFileName(entryPath);
+            string entryName = VolumeNameRepair.SafeFileName(entryPath);
             string entryDirectory = Path.GetDirectoryName(entryPath) ?? string.Empty;
 
             /*
@@ -161,7 +165,7 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    string name = SafeFileName(full);
+                    string name = VolumeNameRepair.SafeFileName(full);
                     int? index = LegacyVolumeNames.TryGetIndex(name);
                     long size = LengthOf(full);
 
@@ -440,7 +444,7 @@ namespace ArchiveFixer.Extraction
                 return pieceCard.CanonicalVolumeName.Length > 0
                     && string.Equals(
                         pieceCard.CanonicalVolumeName,
-                        SafeFileName(piecePath),
+                        VolumeNameRepair.SafeFileName(piecePath),
                         StringComparison.OrdinalIgnoreCase);
             }
 
@@ -451,7 +455,7 @@ namespace ArchiveFixer.Extraction
                          .OrderBy(p => p.Index)
                          .ThenBy(p => IsCanonicalNameOfItself(p.Path) ? 0 : 1)
                          .ThenBy(p => p.Path.Count(character => character == '\\'))
-                         .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase))
+                         .ThenBy(p => VolumeNameRepair.SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase))
             {
                 /*
                  * ===== 槽位以**卡上的卷号**为准（用户 2026-10-17：「一切看底层识别的来」）=====
@@ -533,7 +537,7 @@ namespace ArchiveFixer.Extraction
 
                 if (canonical.Length == 0)
                 {
-                    canonical = SafeFileName(piece.Path);
+                    canonical = VolumeNameRepair.SafeFileName(piece.Path);
 
                     if (TryBuildRestoredName(canonical, format, out string restored))
                     {
@@ -591,7 +595,7 @@ namespace ArchiveFixer.Extraction
                     Detail = string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.CrossLayerGatherEntryNameNotCanonicalFormat,
-                        SafeFileName(baselinePath))
+                        VolumeNameRepair.SafeFileName(baselinePath))
                 };
             }
 
@@ -671,36 +675,6 @@ namespace ArchiveFixer.Extraction
         // 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批）
         // ================================================================
 
-        /// <summary>**跨盘 ZIP 收卷**的结论（纯事实 + 已经建好的链接；用户的源文件一个字节都不动）。</summary>
-        internal sealed class SpannedZipDiskGather
-        {
-            /// <summary>这一档适不适用：入口必须**自述是跨盘 zip 的末片**（EOCD 盘号 &gt; 0 且总片数 ≥ 2）。</summary>
-            public bool Applicable { get; init; }
-
-            /// <summary>入口那一层现在**逐字规范名**地摆着第 1..n-1 片（引擎解得开）。</summary>
-            public bool Complete { get; init; }
-
-            /// <summary>入口自述的总片数（含末片）。</summary>
-            public int DiskCount { get; init; }
-
-            /// <summary>这一趟真建了几条链接。</summary>
-            public int LinkedCount { get; init; }
-
-            /// <summary>
-            /// 这一趟建出来的链接**路径**（调用方必须在用完这一层之后把它们删掉 —— 它们是我们的临时名字，
-            /// ⛔ 不是内容物：留着会被发布侧当成品搬进用户目录、还会把"半套分卷"闸门自己绊倒，见 2026-10-05 真机）。
-            /// </summary>
-            public IReadOnlyList<string> LinkedPaths { get; init; } = Array.Empty<string>();
-
-            /// <summary>这几条链接指向的**用户源片路径**（用于"这一组已由谁解出"的记账）。</summary>
-            public IReadOnlyList<string> LinkedSources { get; init; } = Array.Empty<string>();
-
-            /// <summary>点名还缺哪几片（规范卷名）。</summary>
-            public IReadOnlyList<string> MissingNames { get; init; } = Array.Empty<string>();
-
-            /// <summary>给人看的一句话。</summary>
-            public string Detail { get; init; } = string.Empty;
-        }
 
     }
 }

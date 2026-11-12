@@ -121,7 +121,7 @@ namespace ArchiveFixer.Tests
                 candidate => string.Equals(candidate.Path, movedThird, StringComparison.OrdinalIgnoreCase));
 
             // ③ ⛔ 放宽的只是"去哪儿找"：三道闸门与"整组完整才动"照旧过一遍 ⇒ 照样判成一组、有可修计划。
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, whole);
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -145,7 +145,7 @@ namespace ArchiveFixer.Tests
             pieces.Add(Piece(MoveToLayer(second, Path.Combine("layer-001", "output"))));
             pieces.Add(Piece(MoveToLayer(third, Path.Combine("layer-002", "output"))));
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
 
             // T7（2026-10-05 真机）：收卷那一行必须说清**是从哪一层收来的** ——
@@ -204,7 +204,7 @@ namespace ArchiveFixer.Tests
             string first = Path.Combine(_root, "单卷.7z.001");
             File.Move(archive, first);
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, Array.Empty<VolumeCandidate>());
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -225,7 +225,7 @@ namespace ArchiveFixer.Tests
 
             var pieces = new List<VolumeCandidate> { Piece(MoveToLayer(third, "layer-002")) };
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -257,7 +257,7 @@ namespace ArchiveFixer.Tests
 
             var pieces = new List<VolumeCandidate> { Piece(MoveToLayer(third, "layer-002")) };
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -280,7 +280,7 @@ namespace ArchiveFixer.Tests
             string occupied = Path.Combine(Path.GetDirectoryName(first)!, "HK.7z.002");
             File.WriteAllBytes(occupied, Array.Empty<byte>());
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -318,7 +318,7 @@ namespace ArchiveFixer.Tests
                 new() { Path = @"\\?\" + second, Size = new FileInfo(second).Length }
             };
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
 
             Assert.True(decision.Applicable, decision.Detail);
@@ -342,7 +342,7 @@ namespace ArchiveFixer.Tests
             File.WriteAllBytes(Path.Combine(directory, "HK.7z.002删"), new byte[128 * 1024]);
             File.WriteAllBytes(Path.Combine(directory, "HK.7z.003删"), new byte[96 * 1024]);
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, Array.Empty<VolumeCandidate>());
 
             // 尺寸规律不过 ⇒ 连"这一组叫什么"都判不出 ⇒ **整档不适用**（什么都不做：
@@ -372,7 +372,7 @@ namespace ArchiveFixer.Tests
             string stranger = Path.Combine(other, "OTHER.7z.002");
             File.WriteAllBytes(stranger, new byte[512 * 1024]);
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(
                     first,
                     new List<VolumeCandidate> { new() { Path = stranger, Size = new FileInfo(stranger).Length } });
@@ -392,7 +392,7 @@ namespace ArchiveFixer.Tests
             File.WriteAllBytes(second, new byte[512 * 1024]);
             File.WriteAllBytes(Path.Combine(directory, "HK.7z.001"), new byte[512 * 1024]);
 
-            VolumeNameRepair.CrossLayerVolumeGather decision =
+            VolumeGatherPlanner.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(second, Array.Empty<VolumeCandidate>());
 
             /*

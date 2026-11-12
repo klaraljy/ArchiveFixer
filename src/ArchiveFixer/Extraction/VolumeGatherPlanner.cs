@@ -44,7 +44,7 @@ namespace ArchiveFixer.Extraction
     /// <para>⛔ 判不出（读不到、归不进任何一组、尺寸异常）一律 <see cref="VolumeGatherAction.Leave"/>：
     /// 这一档的兜底永远是"什么都不做"。</para>
     /// </summary>
-    public static class VolumeGatherPlanner
+    public static partial class VolumeGatherPlanner
     {
         /// <summary>体积规律允许的误差（除末卷外等大；0 = 严格等大）。</summary>
         public const long DefaultSizeTolerance = 0;

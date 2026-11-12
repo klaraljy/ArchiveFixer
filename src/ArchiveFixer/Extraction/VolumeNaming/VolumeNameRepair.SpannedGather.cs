@@ -10,9 +10,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using static ArchiveFixer.Extraction.VolumeNamePlanner;
 
+using SpannedZipDiskGather = ArchiveFixer.Extraction.VolumeGatherPlanner.SpannedZipDiskGather;
+
+using GatherPiece = ArchiveFixer.Extraction.VolumeNameRepair.GatherPiece;
+
 namespace ArchiveFixer.Extraction
 {
-    public static partial class VolumeNameRepair
+    public static partial class VolumeGatherPlanner
     {        /// <summary>
              /// **入口是跨盘 ZIP 的末片时，把同一组的其余几片"接"到它旁边**（用户 2026-10-05 真机第八批：
              /// `111.z0删除1/2/3` 三片散在三个源目录里，末片 `111.zip` 压在两层层层加密的 RAR 里）。
@@ -55,7 +59,7 @@ namespace ArchiveFixer.Extraction
             }
 
             string entryFull = SafePathHelper.GetFullPathSafe(entryPath);
-            string entryName = SafeFileName(entryFull);
+            string entryName = VolumeNameRepair.SafeFileName(entryFull);
             string entryDirectory = Path.GetDirectoryName(entryFull) ?? string.Empty;
             string baseName = Path.GetFileNameWithoutExtension(entryName);
             int diskCount = index.DiskCount;
@@ -120,7 +124,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                string candidateName = SafeFileName(candidate.Path);
+                string candidateName = VolumeNameRepair.SafeFileName(candidate.Path);
 
                 if (!LegacyVolumeNames.BelongsToSameGroup(entryName, candidateName))
                 {

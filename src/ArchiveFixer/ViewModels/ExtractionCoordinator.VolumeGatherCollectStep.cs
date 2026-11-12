@@ -188,7 +188,7 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 只写目录名，不写完整路径（§8）。
         /// </summary>
         private static string DescribeGatherAnchor(
-            VolumeNameRepair.CrossLayerVolumeGather decision,
+            VolumeGatherPlanner.CrossLayerVolumeGather decision,
             string entryPath)
         {
             string? anchor = decision.AnchorPath;

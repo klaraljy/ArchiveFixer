@@ -11,9 +11,11 @@ using System.Threading.Tasks;
 using static ArchiveFixer.Extraction.VolumeNamePlanner;
 using static ArchiveFixer.Extraction.VolumeNameRestorer;
 
+using GatherPiece = ArchiveFixer.Extraction.VolumeNameRepair.GatherPiece;
+
 namespace ArchiveFixer.Extraction
 {
-    public static partial class VolumeNameRepair
+    public static partial class VolumeGatherPlanner
     {
         private static string DescribeStillMissing(int diskCount, IReadOnlyList<string> missing) =>
             string.Format(
@@ -36,7 +38,7 @@ namespace ArchiveFixer.Extraction
                 .OrderBy(p => Depth(p.Path))
                 .ThenBy(p => SamePath(p.Path, entryPath) ? 0 : 1)
                 .ThenBy(p => p.Index)
-                .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(p => VolumeNameRepair.SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase)
                 .Cast<GatherPiece?>()
                 .FirstOrDefault();
 
@@ -90,7 +92,7 @@ namespace ArchiveFixer.Extraction
             try
             {
                 var named = pool
-                    .Select(piece => new VolumeCandidate { Path = SafeFileName(piece.Path), Size = piece.Size })
+                    .Select(piece => new VolumeCandidate { Path = VolumeNameRepair.SafeFileName(piece.Path), Size = piece.Size })
                     .ToList();
 
                 /*
@@ -147,7 +149,7 @@ namespace ArchiveFixer.Extraction
                 string? partFamilySample = entryStem.Length == 0
                     ? null
                     : pool
-                        .Select(piece => SafeFileName(piece.Path))
+                        .Select(piece => VolumeNameRepair.SafeFileName(piece.Path))
                         .FirstOrDefault(name =>
                             name.StartsWith(entryStem + ".part", StringComparison.OrdinalIgnoreCase)
                             && LegacyVolumeNames.TryGetIndex(name) > 1);
@@ -173,7 +175,7 @@ namespace ArchiveFixer.Extraction
                 foreach (VolumeGroup group in VolumeGroupDetector.Group(named))
                 {
                     if (group.Volumes.Any(v => string.Equals(
-                            SafeFileName(v.Path),
+                            VolumeNameRepair.SafeFileName(v.Path),
                             entryBucketName,
                             StringComparison.OrdinalIgnoreCase)))
                     {
@@ -283,8 +285,8 @@ namespace ArchiveFixer.Extraction
                 foreach (VolumeGroup group in VolumeGroupDetector.Group(Project()))
                 {
                     if (group.Volumes.Any(v => string.Equals(
-                            SafeFileName(v.Path),
-                            SafeFileName(entryPath),
+                            VolumeNameRepair.SafeFileName(v.Path),
+                            VolumeNameRepair.SafeFileName(entryPath),
                             StringComparison.OrdinalIgnoreCase)))
                     {
                         missing.AddRange(group.MissingVolumeNames);
@@ -475,14 +477,14 @@ namespace ArchiveFixer.Extraction
         private static string DescribeSourceLayer(string filePath)
         {
             string directory = SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(filePath) ?? string.Empty);
-            string leaf = SafeFileName(directory);
+            string leaf = VolumeNameRepair.SafeFileName(directory);
 
             if (leaf.StartsWith(ExtractionWorkspace.LayerDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 return leaf;
             }
 
-            string parent = SafeFileName(Path.GetDirectoryName(directory) ?? string.Empty);
+            string parent = VolumeNameRepair.SafeFileName(Path.GetDirectoryName(directory) ?? string.Empty);
 
             return parent.StartsWith(ExtractionWorkspace.LayerDirectoryPrefix, StringComparison.OrdinalIgnoreCase)
                 ? parent

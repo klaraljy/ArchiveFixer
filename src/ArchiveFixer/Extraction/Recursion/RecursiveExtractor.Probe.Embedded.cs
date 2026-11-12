@@ -456,7 +456,7 @@ namespace ArchiveFixer.Extraction
         private static string BuildMissingVolumeMessage(
             string archivePath,
             string layerLabel,
-            VolumeNameRepair.CrossLayerVolumeGather decision)
+            VolumeGatherPlanner.CrossLayerVolumeGather decision)
         {
             string names = decision.MissingNames.Count > 0
                 ? string.Format(

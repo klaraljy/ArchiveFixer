@@ -848,7 +848,7 @@ namespace ArchiveFixer.Extraction
              * 并池只多给"能被名字/内容定出盘号"的候选；⛔ 动作仍是硬链接（源片不改名不搬），
              * 盘号判不出/撞号的候选在 gather 内部照旧被拒（ResolveSpannedZipDiskGather 的判据不动）。
              */
-            VolumeNameRepair.SpannedZipDiskGather spannedDisks =
+            VolumeGatherPlanner.SpannedZipDiskGather spannedDisks =
                 VolumeNameRepair.ResolveSpannedZipDiskGather(
                     archivePath,
                     RootSourceCandidates
