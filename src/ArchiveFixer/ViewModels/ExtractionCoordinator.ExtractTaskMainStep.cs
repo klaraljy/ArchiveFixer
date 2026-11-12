@@ -1580,7 +1580,7 @@ namespace ArchiveFixer.ViewModels
                         "资源预算未通过：" + budget.Reason);
                     FinalizeOutcomeIfPending(task);
 
-                    AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}", DiagnosticCodes.TaskFailed, "SpaceBudget");
+                    AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}", DiagnosticCodes.LimitReached, "ResourceBudget");
                     return;
                 }
 
