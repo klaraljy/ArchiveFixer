@@ -236,7 +236,7 @@ namespace ArchiveFixer.Storage
         {
             var suggestions = new List<string>
             {
-                "先清理「其余物」（③「清理与删除」页 →「删除其余物…」）：把上一个包的源包与过程物清掉，空间立刻回来"
+                "先清理「其余物」和残留工作区（③「清理方式」页把最后一层过程物设为彻底删除）：把上一个包的过程物清掉，空间立刻回来"
             };
 
             string tightModeHint = reclaimableBytes > 0

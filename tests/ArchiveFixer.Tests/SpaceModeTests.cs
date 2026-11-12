@@ -260,7 +260,7 @@ namespace ArchiveFixer.Tests
             // 建议动作必须包含三种正路（清其余物 / 换盘 / 开①页「空间不足」模式）。
             string suggestions = string.Join("|", decision.Suggestions);
 
-            Assert.Contains("删除其余物", suggestions, StringComparison.Ordinal);
+            Assert.Contains("清理「其余物」", suggestions, StringComparison.Ordinal);
             Assert.Contains("指定位置", suggestions, StringComparison.Ordinal);
             Assert.Contains("空间不足", suggestions, StringComparison.Ordinal);
             Assert.Contains("并发", suggestions, StringComparison.Ordinal);

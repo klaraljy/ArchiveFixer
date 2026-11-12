@@ -5,9 +5,8 @@
 
     <!--
         ⑨ 说明页（用户 2026-10-14 最终设计：说明独立成一页）。
-        正文与「说明」窗**共用同一份** Views/HelpBodyPanel.xaml —— ⛔ 不许在这里再抄一份文案。
-        用户口径：详细说明文字写进各页签自己的说明与每个功能框下面的「展示框」，
-        平时的功能介绍只留简洁一行；那一档还没做（本页现在先把整份说明摆出来）。
+        正文与「说明」窗共用同一份 HelpBodyPanel；内容按快速开始 / 三种方式 / 功能地图 /
+        术语 / 排查与 FAQ 分页，⛔ 不在本文件或 HelpBodyPanel 里手写第二份文案。
     -->
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -25,7 +24,7 @@
                     MinWidth="120"
                     Style="{StaticResource ToolbarButtonStyle}"
                     Click="CopyAll_Click"
-                    ToolTip="把这一份说明（含术语表）整段复制到剪贴板，方便贴给别人" />
+                    ToolTip="把这一份说明（含三种例子、功能地图与术语表）整段复制到剪贴板，方便贴给别人" />
         </StackPanel>
     </Grid>
 </UserControl>

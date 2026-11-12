@@ -31,7 +31,7 @@
                     MinWidth="120"
                     Style="{StaticResource ToolbarButtonStyle}"
                     Click="CopyAll_Click"
-                    ToolTip="把这一份说明（含术语表）整段复制到剪贴板，方便贴给别人" />
+                    ToolTip="把这一份说明（含三种例子、功能地图与术语表）整段复制到剪贴板，方便贴给别人" />
 
             <Button Content="关闭"
                     MinWidth="90"

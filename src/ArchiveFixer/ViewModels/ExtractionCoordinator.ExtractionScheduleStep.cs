@@ -610,7 +610,7 @@ namespace ArchiveFixer.ViewModels
                 "INFO",
                 "安全上限（解压前预算）：" + BudgetLimits.Describe()
                 + "。超过就不解这个包（预检拒绝，一个字节都不写）；"
-                + "可在⑥设置 →「安全上限」里按自己的盘与资源改。");
+                + "可在⑧设置 →「安全上限」里按自己的盘与资源改。");
         }
 
         /// <summary>

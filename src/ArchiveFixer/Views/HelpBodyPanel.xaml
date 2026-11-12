@@ -4,229 +4,395 @@
              xmlns:models="clr-namespace:ArchiveFixer.Models">
 
     <!--
-        说明正文（介绍 + 功能详解 + 术语表）—— 唯一一份，由「说明」页签与「说明」窗**共用**，
-        ⛔ 不许在别处再抄一份（用户口径：说明文字只有一个出处，改了术语表窗口里不许留旧说法）。
-        文字全部来自 Models/HelpContent.cs，这里一个字都不手写；⛔ 不读任何外部文件。
+        说明正文（快速开始 / 三种方式 / 功能地图 / 术语 / 排查与 FAQ）—— 唯一一份，
+        由「说明」页签与「说明」窗共用；文字全部来自 Models/HelpContent.cs，这里不手写正文。
+        布局改成“顶部定位语 + 分页内容”，避免旧版一整条长滚动。
     -->
+    <UserControl.Resources>
+        <Style x:Key="HelpSectionTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource LabelTextStyle}">
+            <Setter Property="Margin" Value="0,4,0,8" />
+        </Style>
+
+        <Style x:Key="HelpSubTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource CardTitleTextStyle}">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+
+        <Style x:Key="HelpBadgeBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PrimarySoftBrush}" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <DataTemplate x:Key="HelpStepTemplate">
+            <StackPanel Margin="0,0,0,2">
+                <Border Style="{StaticResource CardStyle}"
+                        CornerRadius="{StaticResource CardCornerRadius}"
+                        Padding="12,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Width="24"
+                                Height="24"
+                                CornerRadius="12"
+                                Background="{StaticResource PrimarySoftBrush}"
+                                VerticalAlignment="Top">
+                            <TextBlock Text="{Binding Number}"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource PrimaryBrush}" />
+                        </Border>
+
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <TextBlock Text="{Binding Title}"
+                                       Style="{StaticResource CardTitleTextStyle}" />
+
+                            <TextBlock Text="{Binding Text}"
+                                       Style="{StaticResource BodyTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+
+                            <TextBlock Text="{Binding Path}"
+                                       TextWrapping="Wrap"
+                                       FontFamily="{StaticResource MonoFontFamily}"
+                                       FontSize="12"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       Margin="0,6,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Path}" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="{Binding Connector}"
+                           HorizontalAlignment="Center"
+                           Foreground="{StaticResource PrimaryBrush}"
+                           FontSize="16"
+                           Margin="0,2,0,4">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Connector}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HelpTermTemplate">
+            <Border Style="{StaticResource CardStyle}"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="12,9"
+                    Margin="0,0,0,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Term}"
+                               Style="{StaticResource LabelTextStyle}"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Top" />
+
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Explanation}"
+                               Style="{StaticResource BodyTextStyle}"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HelpModeTemplate">
+            <Border Style="{StaticResource CardStyle}"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="14,12"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <DockPanel>
+                        <Border DockPanel.Dock="Left" Style="{StaticResource HelpBadgeBorderStyle}">
+                            <TextBlock Text="{Binding Badge}"
+                                       FontSize="12"
+                                       Foreground="{StaticResource PrimaryBrush}" />
+                        </Border>
+
+                        <TextBlock Text="{Binding Title}"
+                                   Style="{StaticResource PageTitleTextStyle}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </DockPanel>
+
+                    <TextBlock Text="{Binding Summary}"
+                               Style="{StaticResource BodyTextStyle}"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,8" />
+
+                    <ItemsControl ItemsSource="{Binding Steps}"
+                                  ItemTemplate="{StaticResource HelpStepTemplate}" />
+
+                    <Border Background="{StaticResource PanelSunkenBrush}"
+                            CornerRadius="6"
+                            Padding="10,8"
+                            Margin="0,4,0,8">
+                        <StackPanel>
+                            <TextBlock Text="落点/结果"
+                                       Style="{StaticResource CardTitleTextStyle}"
+                                       Margin="0,0,0,4" />
+                            <TextBlock Text="{Binding OutputTree}"
+                                       FontFamily="{StaticResource MonoFontFamily}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource WarningBannerStyle}" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding Boundary}"
+                                   Style="{StaticResource BannerTextStyle}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <ItemsControl ItemsSource="{Binding Notes}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <TextBlock Text="· "
+                                               Foreground="{StaticResource PrimaryBrush}" />
+                                    <TextBlock Text="{Binding}"
+                                               Style="{StaticResource HintTextStyle}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HelpFaqTemplate">
+            <Border Style="{StaticResource CardStyle}"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="12,9"
+                    Margin="0,0,0,8">
+                <StackPanel>
+                    <TextBlock Text="{Binding Term}"
+                               Style="{StaticResource CardTitleTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Explanation}"
+                               Style="{StaticResource BodyTextStyle}"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0">
-            <TextBlock Text="{x:Static models:HelpContent.Tagline}"
-                       Style="{StaticResource BodyTextStyle}"
-                       TextWrapping="Wrap" />
+        <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="说明"
+                               Style="{StaticResource PageTitleTextStyle}" />
+                    <TextBlock Text="{x:Static models:HelpContent.Tagline}"
+                               Style="{StaticResource BodyTextStyle}"
+                               TextWrapping="Wrap"
+                               Margin="0,6,0,0" />
+                </StackPanel>
+
+                <Border Grid.Column="1"
+                        Background="{StaticResource PrimarySoftBrush}"
+                        CornerRadius="12"
+                        Padding="12,6"
+                        VerticalAlignment="Top"
+                        Margin="12,0,0,0">
+                    <TextBlock Text="v0.2.2"
+                               Foreground="{StaticResource PrimaryBrush}"
+                               FontWeight="SemiBold" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="1" Margin="0,0,0,8">
             <TextBlock Text="{x:Static models:HelpContent.RecursionRiskWarning}"
                        Style="{StaticResource BodyTextStyle}"
                        Foreground="{StaticResource DangerTextBrush}"
                        TextWrapping="Wrap"
                        AutomationProperties.Name="递归解压风险提示"
-                       Margin="0,8,0,0" />
+                       Margin="0,0,0,6" />
 
-            <!-- 空一行后，用红色补「空间不足模式」说明（用户 2026-11-10 原文要求） -->
             <TextBlock Text="{x:Static models:HelpContent.SpaceTightModeHint}"
                        Style="{StaticResource BodyTextStyle}"
                        Foreground="{StaticResource DangerTextBrush}"
                        TextWrapping="Wrap"
-                       AutomationProperties.Name="空间不足模式提示"
-                       Margin="0,16,0,0" />
-
-            <ItemsControl ItemsSource="{x:Static models:HelpContent.Introduction}"
-                          Margin="0,12,0,0">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock Text="{Binding}"
-                                   Style="{StaticResource HintTextStyle}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,6" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                       AutomationProperties.Name="空间不足模式提示" />
         </StackPanel>
 
-        <ScrollViewer x:Name="BodyScrollViewer"
-                      Grid.Row="1"
-                      Margin="0,14,0,0"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
-                <!--
-                    完整例子（用户 2026-10-25：不要一整段文字，要像 Markdown 一样有层次、流程、路径标注）。
-                    这里用原生 XAML 的编号卡片/标题/正文/等宽路径排出 Markdown 的观感，⛔ 不引入
-                    Markdown 解析器、⛔ 不贴图片；内容唯一来源仍是 HelpContent。
-                -->
-                <TextBlock Text="{x:Static models:HelpContent.ExampleHeading}"
-                           Style="{StaticResource LabelTextStyle}"
-                           Margin="0,0,0,6" />
-
-                <TextBlock Text="{x:Static models:HelpContent.ExampleIntro}"
-                           Style="{StaticResource HintTextStyle}"
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,10" />
-
-                <Border Style="{StaticResource CardStyle}"
-                        CornerRadius="{StaticResource CardCornerRadius}"
-                        Padding="12,10"
-                        Margin="0,0,0,10">
+        <TabControl Grid.Row="2">
+            <TabItem Header="快速开始">
+                <ScrollViewer x:Name="QuickStartScrollViewer"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,10,8,0">
                     <StackPanel>
-                        <TextBlock Text="流程（箭头 = 程序实际走的下一步）"
-                                   Style="{StaticResource CardTitleTextStyle}"
-                                   Margin="0,0,0,6" />
+                        <TextBlock Text="{x:Static models:HelpContent.QuickStartHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Disabled"
-                                      Cursor="Arrow"
-                                      PreviewMouseWheel="FlowDiagram_PreviewMouseWheel">
-                            <TextBlock Text="{x:Static models:HelpContent.ExampleFlowDiagram}"
-                                       Style="{StaticResource MonoTextStyle}"
-                                       TextWrapping="NoWrap" />
-                        </ScrollViewer>
-
-                        <TextBlock Text="落点目录（普通文件夹，不含你的盘符）"
-                                   Style="{StaticResource CardTitleTextStyle}"
-                                   Margin="0,12,0,6" />
-
-                        <TextBlock Text="{x:Static models:HelpContent.ExampleDirectoryTree}"
-                                   Style="{StaticResource MonoTextStyle}"
-                                   TextWrapping="NoWrap" />
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.QuickStartSteps}"
+                                      ItemTemplate="{StaticResource HelpStepTemplate}" />
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
 
-                <ItemsControl ItemsSource="{x:Static models:HelpContent.ExampleSteps}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardStyle}"
-                                    CornerRadius="{StaticResource CardCornerRadius}"
-                                    Padding="12,10"
-                                    Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="34" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
+            <TabItem Header="三种方式">
+                <ScrollViewer x:Name="ModesScrollViewer"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,10,8,0">
+                    <StackPanel>
+                        <TextBlock Text="{x:Static models:HelpContent.ModeExamplesHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                                    <Border Grid.Column="0"
-                                            Width="24"
-                                            Height="24"
-                                            CornerRadius="12"
-                                            Background="{StaticResource PrimarySoftBrush}"
-                                            VerticalAlignment="Top">
-                                        <TextBlock Text="{Binding Number}"
-                                                   FontWeight="SemiBold"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   Foreground="{StaticResource PrimaryBrush}" />
-                                    </Border>
+                        <TextBlock Text="{x:Static models:HelpContent.ModeExamplesIntro}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,10" />
 
-                                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                                        <TextBlock Text="{Binding Title}"
-                                                   Style="{StaticResource CardTitleTextStyle}" />
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.ModeExamples}"
+                                      ItemTemplate="{StaticResource HelpModeTemplate}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-                                        <TextBlock Text="{Binding Text}"
-                                                   Style="{StaticResource BodyTextStyle}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,4,0,0" />
+            <TabItem Header="功能地图">
+                <ScrollViewer x:Name="FeaturesScrollViewer"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,10,8,0">
+                    <StackPanel>
+                        <TextBlock Text="{x:Static models:HelpContent.FeatureMapHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                                        <TextBlock Text="{Binding Path}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,6,0,0">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock" BasedOn="{StaticResource MonoTextStyle}">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding Path}" Value="">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.FeatureMap}"
+                                      ItemTemplate="{StaticResource HelpTermTemplate}" />
 
-                <Border Height="1"
-                        Background="{StaticResource PanelBorderBrush}"
-                        Margin="0,6,0,12" />
+                        <Border Height="1"
+                                Background="{StaticResource PanelBorderBrush}"
+                                Margin="0,6,0,12" />
 
-                <!--
-                    功能详解（用户 2026-09-27："里面有专有名词的详细解释，但是没有功能的详细解释"）。
-                    与术语表同一套卡片样式，只是分两段、各有一个小标题。
-                -->
-                <TextBlock Text="{x:Static models:HelpContent.FeaturesHeading}"
-                           Style="{StaticResource LabelTextStyle}"
-                           Margin="0,0,0,8" />
+                        <TextBlock Text="{x:Static models:HelpContent.TabGuidesHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                <ItemsControl ItemsSource="{x:Static models:HelpContent.Features}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardStyle}"
-                                    CornerRadius="{StaticResource CardCornerRadius}"
-                                    Padding="12,8"
-                                    Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="150" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.TabGuides}"
+                                      ItemTemplate="{StaticResource HelpTermTemplate}" />
 
-                                    <TextBlock Grid.Column="0"
-                                               Text="{Binding Term}"
-                                               Style="{StaticResource LabelTextStyle}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top" />
+                        <Border Height="1"
+                                Background="{StaticResource PanelBorderBrush}"
+                                Margin="0,6,0,12" />
 
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Explanation}"
-                                               Style="{StaticResource BodyTextStyle}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                        <TextBlock Text="{x:Static models:HelpContent.ScenariosHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                <TextBlock Text="{x:Static models:HelpContent.GlossaryHeading}"
-                           Style="{StaticResource LabelTextStyle}"
-                           Margin="0,10,0,8" />
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.Scenarios}"
+                                      ItemTemplate="{StaticResource HelpTermTemplate}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-                <ItemsControl ItemsSource="{x:Static models:HelpContent.Glossary}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <!-- 一条术语一张卡片：左边词、右边解释（与⑤页密码卡片同一套样式口径）。 -->
-                            <Border Style="{StaticResource CardStyle}"
-                                    CornerRadius="{StaticResource CardCornerRadius}"
-                                    Padding="12,8"
-                                    Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="150" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
+            <TabItem Header="术语表">
+                <ScrollViewer x:Name="GlossaryScrollViewer"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,10,8,0">
+                    <StackPanel>
+                        <TextBlock Text="{x:Static models:HelpContent.GlossaryHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
 
-                                    <TextBlock Grid.Column="0"
-                                               Text="{Binding Term}"
-                                               Style="{StaticResource LabelTextStyle}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top" />
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.Glossary}"
+                                      ItemTemplate="{StaticResource HelpTermTemplate}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Explanation}"
-                                               Style="{StaticResource BodyTextStyle}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-        </ScrollViewer>
+            <TabItem Header="排查与 FAQ">
+                <ScrollViewer x:Name="DiagnosticsScrollViewer"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,10,8,0">
+                    <StackPanel>
+                        <TextBlock Text="{x:Static models:HelpContent.DiagnosticsHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
+
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.DiagnosticsSteps}"
+                                      ItemTemplate="{StaticResource HelpStepTemplate}" />
+
+                        <Border Background="{StaticResource PanelSunkenBrush}"
+                                CornerRadius="6"
+                                Padding="10,8"
+                                Margin="0,6,0,12">
+                            <TextBlock Text="{x:Static models:HelpContent.DiagnosticsPrivacy}"
+                                       Style="{StaticResource HintTextStyle}"
+                                       TextWrapping="Wrap" />
+                        </Border>
+
+                        <TextBlock Text="{x:Static models:HelpContent.LimitsHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
+
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.Limits}"
+                                      ItemTemplate="{StaticResource HelpFaqTemplate}" />
+
+                        <Border Height="1"
+                                Background="{StaticResource PanelBorderBrush}"
+                                Margin="0,6,0,12" />
+
+                        <TextBlock Text="{x:Static models:HelpContent.FaqHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
+
+                        <ItemsControl ItemsSource="{x:Static models:HelpContent.Faq}"
+                                      ItemTemplate="{StaticResource HelpFaqTemplate}" />
+
+                        <Border Height="1"
+                                Background="{StaticResource PanelBorderBrush}"
+                                Margin="0,6,0,12" />
+
+                        <TextBlock Text="{x:Static models:HelpContent.VersionHeading}"
+                                   Style="{StaticResource HelpSectionTitleStyle}" />
+
+                        <TextBlock Text="{x:Static models:HelpContent.VersionText}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
     </Grid>
 </UserControl>

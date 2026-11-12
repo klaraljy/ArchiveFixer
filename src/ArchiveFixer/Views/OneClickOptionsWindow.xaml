@@ -4,99 +4,134 @@
         xmlns:models="clr-namespace:ArchiveFixer.Models"
         Style="{StaticResource AppWindowStyle}"
         Title="一键处理 · 确认"
-        Width="620"
-        MaxHeight="780"
+        Width="660"
+        MaxHeight="800"
         SizeToContent="Height"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner">
 
     <!--
-        一键处理的**那一个**确认框（用户 2026-09-24 第 17 条）。
-
-        用户原话："现在规定点击完一键处理，就只能有一个弹窗提醒，而且这个可以选中以后不弹出……
-        弹窗里面的东西改为『内容物会生成在什么地方，而且其余物是否自动删除』……
-        为什么我一键处理还没有开始确认，你的进度条就开始动了"
-
-        所以这个窗口只有三段东西：
-        ① 正文两行（+ 需要时再加两行提示）：内容物落点 + 其余物是否自动删除（用户点名要的那两件事）；
-        ② 一个**默认收起**的折叠区：真要临时改落点 / 源包处理 / 删除操作时才展开 ——
-           旧版把这一整套摊在正文里，正是他嫌"这么的啰嗦"的那部分
-           （「终端落法」那一组 2026-09-27 已随设置项一起删除，见下面那段注释）；
-        ③ 「以后不再询问」+ 开始 / 取消。
-
-        ⚠ 三条不许回退的纪律：
-        · 正文措辞全部来自 StatusText（§7：界面文案的唯一来源），本文件里不写死文案常量；
-        · 勾「以后不再询问」写的是**设置**（AppSettings.SkipOneClickConfirm），界面上有开关能再打开；
-        · 这个窗口**不写任何设置**：只有用户勾了「把本次选择存为默认」，才由调用方写一次
-          （§9.2 硬要求②：不勾就一个字节都不改）。
+        一键处理的唯一确认框：先把「落点 / 源包 / 其余物」三件事放在一张摘要卡里，
+        需要临时改才展开下面的折叠区。正文措辞来自调用方/StatusText；本文件只负责排版。
     -->
 
-    <DockPanel Margin="12">
+    <DockPanel Margin="0">
 
-        <!-- ============ 正文：他点名的那两件事 ============ -->
-        <Border DockPanel.Dock="Top" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+        <!-- ============ 标题区 ============ -->
+        <Border DockPanel.Dock="Top"
+                Background="{StaticResource PrimarySoftBrush}"
+                Padding="18,16"
+                Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="一键处理 · 确认"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}" />
+                    <TextBlock Text="先看清这批会怎么跑，再开始处理。"
+                               Style="{StaticResource HintTextStyle}"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+
+                <Border Grid.Column="1"
+                        Background="#22FFFFFF"
+                        CornerRadius="12"
+                        Padding="10,5"
+                        VerticalAlignment="Top">
+                    <TextBlock Text="一次确认"
+                               FontSize="12"
+                               Foreground="{StaticResource PrimaryBrush}"
+                               FontWeight="SemiBold" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ============ 正文摘要 ============ -->
+        <Border DockPanel.Dock="Top"
+                Style="{StaticResource CardStyle}"
+                Margin="0,0,0,8"
+                Padding="16,14">
             <StackPanel>
-                <TextBlock Text="一键处理 · 确认" Style="{StaticResource PageTitleTextStyle}" />
+                <TextBlock Text="内容物会生成在"
+                           Style="{StaticResource HintTextStyle}" />
 
-                <TextBlock Text="内容物会生成在："
-                           Style="{StaticResource HintTextStyle}"
-                           Margin="0,8,0,0" />
+                <Border Background="{StaticResource PanelSunkenBrush}"
+                        CornerRadius="6"
+                        Padding="10,8"
+                        Margin="0,4,0,12">
+                    <TextBlock x:Name="DestinationText"
+                               x:FieldModifier="public"
+                               Style="{StaticResource BodyTextStyle}"
+                               TextWrapping="Wrap"
+                               Text="{Binding DestinationEcho}" />
+                </Border>
 
-                <TextBlock x:Name="DestinationText"
-                           x:FieldModifier="public"
-                           Style="{StaticResource BodyTextStyle}"
-                           Margin="0,2,0,0"
-                           TextWrapping="Wrap"
-                           Text="{Binding DestinationEcho}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                <TextBlock Text="其余物："
-                           Style="{StaticResource HintTextStyle}"
-                           Margin="0,8,0,0" />
+                    <Border Grid.Column="0"
+                            Background="{StaticResource PanelSunkenBrush}"
+                            CornerRadius="6"
+                            Padding="10,8"
+                            Margin="0,0,6,0">
+                        <StackPanel>
+                            <TextBlock Text="源包"
+                                       Style="{StaticResource HintTextStyle}" />
+                            <TextBlock x:Name="SourceText"
+                                       x:FieldModifier="public"
+                                       Style="{StaticResource BodyTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,3,0,0"
+                                       Text="{Binding SourceEcho}" />
+                        </StackPanel>
+                    </Border>
 
-                <TextBlock x:Name="RestText"
-                           x:FieldModifier="public"
-                           Style="{StaticResource BodyTextStyle}"
-                           Margin="0,2,0,0"
-                           TextWrapping="Wrap"
-                           Text="{Binding RestEcho}" />
+                    <Border Grid.Column="1"
+                            Background="{StaticResource PanelSunkenBrush}"
+                            CornerRadius="6"
+                            Padding="10,8"
+                            Margin="6,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="其余物"
+                                       Style="{StaticResource HintTextStyle}" />
+                            <TextBlock x:Name="RestText"
+                                       x:FieldModifier="public"
+                                       Style="{StaticResource BodyTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,3,0,0"
+                                       Text="{Binding RestEcho}" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
 
-                <TextBlock x:Name="SourceText"
-                           x:FieldModifier="public"
-                           Style="{StaticResource HintTextStyle}"
-                           Margin="0,6,0,0"
-                           TextWrapping="Wrap"
-                           Text="{Binding SourceEcho}" />
-
-                <!--
-                    常驻提醒：程序不判断"内容物里该不该有压缩包"（用户 2026-09-26 点名要写在动手之前）。
-                    文案唯一来源 = StatusText.OneClickConfirmNestedCaveat（含"去哪儿调"）。
-                -->
                 <TextBlock x:Name="NestedCaveatText"
                            x:FieldModifier="public"
-                           Margin="0,8,0,0"
+                           Margin="0,10,0,0"
                            TextWrapping="Wrap"
                            FontSize="11.5"
                            Foreground="{StaticResource WarningTextBrush}"
                            Text="{x:Static models:StatusText.OneClickConfirmNestedCaveat}" />
 
-                <!--
-                    特定解压那一行（用户 2026-09-24）：**只有开着的时候才出现** ——
-                    他最恨"我以为它按默认跑的"，所以这一次到底按哪条特定规则跑必须写在动手前。
-                -->
-                <TextBlock x:Name="SpecialText"
-                           x:FieldModifier="public"
-                           Style="{StaticResource HintTextStyle}"
-                           Margin="0,6,0,0"
-                           TextWrapping="Wrap"
-                           Visibility="Collapsed"
-                           Text="{Binding SpecificExtractionEcho}" />
+                <Border x:Name="SpecialText"
+                        x:FieldModifier="public"
+                        Background="{StaticResource PrimarySoftBrush}"
+                        CornerRadius="6"
+                        Padding="10,7"
+                        Margin="0,8,0,0"
+                        Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               TextWrapping="Wrap"
+                               Text="{Binding SpecificExtractionEcho}" />
+                </Border>
 
-                <!--
-                    「空间不足」模式那条**红字**（用户 2026-09-27）：
-                    这个模式会覆盖源包 / 其余物两档，而且会**永久删除源包** —— 属于"必须在点开始之前看见"的事，
-                    所以它用红字（与③页「彻底删除」那条同一分量），而且没有关闭按钮（只有关掉①页那个勾才消失）。
-                    文案唯一来源 = StatusText.SpaceTightConfirmText（本窗口不写字面量）。
-                -->
                 <Border x:Name="SpaceTightNotice"
                         x:FieldModifier="public"
                         Style="{StaticResource WarningBannerStyle}"
@@ -110,7 +145,6 @@
                                Text="{Binding SpaceTightEcho}" />
                 </Border>
 
-                <!-- 无用物 / 没有可用密码两段（有才出现；两段都空时整块收起） -->
                 <TextBlock x:Name="NoticeText"
                            x:FieldModifier="public"
                            Style="{StaticResource HintTextStyle}"
@@ -122,11 +156,14 @@
         </Border>
 
         <!-- ============ 底部按钮区 ============ -->
-        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,8,0,0">
+        <Border DockPanel.Dock="Bottom"
+                Style="{StaticResource CardStyle}"
+                Margin="0,8,0,0"
+                Padding="16,12">
             <StackPanel>
                 <CheckBox x:Name="SuppressPanelBox"
                           x:FieldModifier="public"
-                          Content="以后不再询问，按当前设置直接开始（可在「解压方式」页再打开）"
+                          Content="{x:Static models:StatusText.OneClickConfirmSuppressText}"
                           Checked="Option_Changed"
                           Unchecked="Option_Changed" />
 
@@ -150,7 +187,7 @@
                         <Button x:Name="StartButton"
                                 x:FieldModifier="public"
                                 Content="开始处理"
-                                MinWidth="112"
+                                MinWidth="118"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 IsDefault="True"
                                 Click="StartButton_Click" />
@@ -163,7 +200,8 @@
         <Expander Header="{x:Static models:StatusText.OneClickConfirmExpanderHeader}"
                   x:Name="TweakExpander"
                   x:FieldModifier="public"
-                  IsExpanded="False">
+                  IsExpanded="False"
+                  Margin="0,4,0,0">
             <ScrollViewer VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           MaxHeight="420"
@@ -171,12 +209,6 @@
                 <StackPanel>
 
                     <!-- ==================== 本次落点（二选一） ==================== -->
-                    <!--
-                        ⚠ 这里的 GroupName 必须与主界面选项卡**不重名**（2026-09-25 第 34 条真机故障）：
-                        弹窗和③页原来都用 "SourceHandling"/"RestHandling"，弹窗填初值时把③页那一组
-                        单选按钮一起取消了 —— 用户关掉弹窗回到③页，看到的是一组**没有黑点**的选项，
-                        而设置里的值其实是对的。带 Panel 前缀 = 这两组只在本窗口内互斥。
-                    -->
                     <GroupBox Header="本次落点">
                         <StackPanel>
                             <RadioButton x:Name="PlacementPerArchiveOption"
@@ -215,12 +247,6 @@
                         </DockPanel>
                     </GroupBox>
 
-                    <!--
-                        ⛔ 「终端落法（内容物最后那一层）」这一组**已删除**（用户 2026-09-27：
-                        "这个可以删除掉，默认就是这样的情况"）。现在的口径是固定的：
-                        包名那一层永远在、归档自带的那一层也保留；想塌掉包自带那一层只能用**特定解压**。
-                    -->
-
                     <!-- ==================== 源包操作 ==================== -->
                     <GroupBox Header="1 源包操作（成功之后，源包放哪）">
                         <StackPanel>
@@ -241,17 +267,13 @@
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
                                     <TextBlock Text="彻底删除（就地删掉源包，不可恢复）" Style="{StaticResource BodyTextStyle}" />
-                                    <TextBlock Text="成功 + 校验通过之后才删，就地删、⛔ 不搬进其余物；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
+                                    <TextBlock Text="成功 + 校验通过之后才删，就地删、不搬进其余物；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
                                 </StackPanel>
                             </RadioButton>
                         </StackPanel>
                     </GroupBox>
 
-                    <!-- ==================== 删除操作（2026-09-25 第 33 条补进弹窗） ==================== -->
-                    <!--
-                        ⚠ 2026-10-15：原来是三档（多一档"回收站"），那一档整条下线后只剩两档
-                        （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」）。
-                    -->
+                    <!-- ==================== 删除操作 ==================== -->
                     <GroupBox Header="2 最后一层过程物操作（失败 / 部分完成时，链停下那一层的包怎么办）">
                         <StackPanel>
                             <RadioButton x:Name="PanelRestKeepOption"
@@ -270,10 +292,6 @@
                                 <TextBlock Text="彻底删除，直接省空间（不可恢复）" Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource DangerTextBrush}" />
                             </RadioButton>
 
-                            <!--
-                                选「彻底删除」时下面**常驻**一条提示（与 ③页 同一条口径）：
-                                没有关闭按钮，只有把选项改回去它才消失。
-                            -->
                             <Border x:Name="RestDeleteNotice"
                                     x:FieldModifier="public"
                                     Style="{StaticResource WarningBannerStyle}"
@@ -282,7 +300,7 @@
                                 <TextBlock Style="{StaticResource BannerTextStyle}"
                                            Foreground="{StaticResource DangerTextBrush}"
                                            TextWrapping="Wrap"
-                                           Text="⚠ 彻底删除不可恢复：只作用于失败 / 部分完成时链停下那一层要解的包（最后一层过程物）。成功链上的其他过程物本来就按固定规则当场删除；失败 / 取消的源包一个字节都不动。" />
+                                           Text="彻底删除不可恢复：只作用于失败 / 部分完成时链停下那一层要解的包（最后一层过程物）。成功链上的其他过程物本来就按固定规则当场删除；失败 / 取消的源包一个字节都不动。" />
                             </Border>
                         </StackPanel>
                     </GroupBox>

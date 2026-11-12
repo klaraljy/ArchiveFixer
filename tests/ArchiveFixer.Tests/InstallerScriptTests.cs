@@ -62,8 +62,8 @@ namespace ArchiveFixer.Tests
                 "普通档位解压要 2–3 倍空间，若只有一半但能容纳最大资源，可开空间不足模式。",
                 hint,
                 StringComparison.Ordinal);
-            Assert.Contains("不删原包", hint, StringComparison.Ordinal);
-            Assert.Contains("源包一个字节都不动", hint, StringComparison.Ordinal);
+            Assert.Contains("会删源包", hint, StringComparison.Ordinal);
+            Assert.DoesNotContain("不删原包", hint, StringComparison.Ordinal);
 
             string xaml = File.ReadAllText(FindHelpBodyPanel());
 
