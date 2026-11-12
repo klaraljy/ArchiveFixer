@@ -353,10 +353,15 @@ namespace ArchiveFixer.Detection
         /// **② 内容头**（本方法）对 RAR/ZIP 能给"可证不是"，7z 只能"判不出"；
         /// **③ 名字**（<see cref="VolumeGroupDetector"/>）是兜底 —— 判不出时才轮到它。</para>
         /// </summary>
-        public static VolumeMembershipVerdict ClassifyMembership(string? filePath)
-        {
-            VolumeNumberReading reading = Read(filePath);
+        public static VolumeMembershipVerdict ClassifyMembership(string? filePath) =>
+            ClassifyMembershipFromReading(Read(filePath));
 
+        /// <summary>
+        /// 同一份内容读数直接给三档结论：已经 `Read` 过的调用方必须走这里，
+        /// ⛔ 不要为了 membership 再读一遍文件。
+        /// </summary>
+        public static VolumeMembershipVerdict ClassifyMembershipFromReading(VolumeNumberReading reading)
+        {
             if (reading.IsVolumeMember)
             {
                 return VolumeMembershipVerdict.VolumeMember;
@@ -366,6 +371,13 @@ namespace ArchiveFixer.Detection
                 ? VolumeMembershipVerdict.ProvablyNotVolumeMember
                 : VolumeMembershipVerdict.Unknown;
         }
+
+        private static long _readCalls;
+
+        /// <summary>诊断计数：`Read` 实际进入次数；测试可重置。</summary>
+        internal static long ReadCalls => System.Threading.Interlocked.Read(ref _readCalls);
+
+        internal static void ResetReadCallsForTests() => System.Threading.Interlocked.Exchange(ref _readCalls, 0);
 
         /// <summary>
         /// **内容证据可证"这一份不是分卷组的一员"**（= <see cref="ClassifyMembership"/> 的那一档的便捷出口）。
@@ -383,6 +395,8 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public static VolumeNumberReading Read(string? filePath)
         {
+            System.Threading.Interlocked.Increment(ref _readCalls);
+
             if (string.IsNullOrWhiteSpace(filePath))
             {
                 return NotAVolume(string.Empty, VolumeContentFormat.Unknown, VolumeNumberFail.NotAnArchive);

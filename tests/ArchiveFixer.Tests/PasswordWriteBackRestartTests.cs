@@ -30,6 +30,7 @@ namespace ArchiveFixer.Tests
     ///
     /// <para><b>隐私（AGENTS.md §8）</b>：密码全是合成占位符，路径全部落在系统临时目录下。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class PasswordWriteBackRestartTests
     {
         private const string SecretA = "<示例密码甲>";
