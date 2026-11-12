@@ -193,6 +193,7 @@ namespace ArchiveFixer.ViewModels
             OneClickRunOptions runOptions,
             bool spaceTight)
         {
+            using IDisposable taskSpan = DiagnosticSpan.BeginTask(unit.Entry.TaskId, unit.Entry.LogName);
             _extractionCoordinator.BeginTaskLogCapture(unit.Entry);
             try
             {

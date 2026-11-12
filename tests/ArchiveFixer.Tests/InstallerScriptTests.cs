@@ -31,10 +31,15 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("password-list.dat —— 密码本", text, StringComparison.Ordinal);
 
             // 固定用户数据目录必须与 PathService.DefaultDataRootDirectory 一致；
-            // 升级页要同时写旧版本和新安装包版本，卸载页要指向固定目录。
+            // 页面顺序固定为：欢迎 → 许可 → 安装位置 → 组件 → 安装进度 → 完成。
             Assert.Contains("!define USER_DATA_DIR \"$LOCALAPPDATA\\ArchiveFixer\"", text, StringComparison.Ordinal);
-            Assert.Contains("当前安装包版本", text, StringComparison.Ordinal);
-            Assert.Contains("旧版本", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_WELCOME", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_LICENSE", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_DIRECTORY", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_COMPONENTS", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_INSTFILES", text, StringComparison.Ordinal);
+            Assert.Contains("MUI_PAGE_FINISH", text, StringComparison.Ordinal);
+            Assert.Contains("ArchiveFixer 用于批量识别", text, StringComparison.Ordinal);
             Assert.Contains("WriteRegStr HKCU \"${APP_KEY}\" \"DataDir\"", text, StringComparison.Ordinal);
             Assert.Contains("RMDir /r \"${USER_DATA_DIR}\"", text, StringComparison.Ordinal);
             Assert.Contains("RMDir /r \"$INSTDIR\\tools\"", text, StringComparison.Ordinal);

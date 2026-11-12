@@ -123,6 +123,77 @@ namespace ArchiveFixer.Services
             }
         }
 
+        /// <summary>
+        /// 任务收尾的唯一结构化出口：task.end。它把任务对象上的诊断事实（码/源码/栈/引擎/耗时）
+        /// 原样写进 trace，诊断包和 summary 只读这一份，不再从中文状态反推。
+        /// </summary>
+        public static void WriteTaskEnd(LogService log, ArchiveTask? task)
+        {
+            if (log == null || task == null)
+            {
+                return;
+            }
+
+            TaskDiagnosticFacts facts = task.Diagnostic;
+
+            var payload = new
+            {
+                task_id = task.TaskId,
+                name = task.DisplayFileName,
+                path = task.CurrentPath,
+                output = task.OutputPath,
+                outcome = task.Outcome.ToString(),
+                status = task.Status,
+                reason = task.Reason.ToString(),
+                verification = task.OutputVerification.ToString(),
+                error_code = facts.ErrorCode,
+                code_source = facts.CodeSource,
+                component = facts.Component,
+                stage = facts.Stage,
+                source_file = facts.SourceFile,
+                source_line = facts.SourceLine,
+                caller = facts.Caller,
+                span_id = facts.SpanId,
+                parent_span_id = facts.ParentSpanId,
+                engine = facts.Engine,
+                exit_code = facts.ExitCode,
+                attempts = facts.Attempts,
+                started_at = facts.StartedAt,
+                ended_at = facts.EndedAt,
+                duration_ms = facts.DurationMs,
+                last_event_id = facts.LastEventId,
+                last_message = facts.LastMessage,
+                stack = facts.Stack
+            };
+
+            string level = task.Outcome switch
+            {
+                TaskOutcome.Failed => "ERROR",
+                TaskOutcome.PartiallyCompleted => "WARN",
+                _ => "INFO"
+            };
+
+            log.Event(
+                "task.end",
+                $"{task.DisplayFileName}：{task.Outcome} / {task.Status}",
+                detail: JsonSerializer.Serialize(payload, JsonOptions),
+                level: level,
+                file: task.CurrentPath,
+                result: task.Outcome.ToString(),
+                stack: facts.Stack,
+                engine: facts.Engine,
+                exitCode: facts.ExitCode,
+                durationMs: facts.DurationMs,
+                errorCode: facts.ErrorCode,
+                component: facts.Component,
+                taskId: task.TaskId,
+                spanId: facts.SpanId,
+                stage: facts.Stage,
+                sourceFile: facts.SourceFile,
+                sourceLine: facts.SourceLine,
+                caller: facts.Caller);
+        }
+
         /// <summary>本次设置与工具版本（脱敏：所有名字里带 Password 的属性一律不写）。</summary>
         public static void WriteSettings(LogService log, AppSettings? settings, string tools)
         {

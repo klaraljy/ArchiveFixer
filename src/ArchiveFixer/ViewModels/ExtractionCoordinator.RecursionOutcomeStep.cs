@@ -32,6 +32,18 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void ApplyRecursionResult(ArchiveTask task, RecursionResult result)
         {
+            if (result.FailureException != null)
+            {
+                string exceptionCode = DiagnosticCodes.ForRecursionStop(result.StopReason);
+
+                _vm.Logger.Exception(
+                    "递归解压异常",
+                    result.FailureException,
+                    task.CurrentPath,
+                    errorCode: string.IsNullOrWhiteSpace(exceptionCode) ? DiagnosticCodes.TaskFailed : exceptionCode,
+                    component: "RecursiveExtractor");
+            }
+
             foreach (RecursionLayerReport layer in result.Layers)
             {
 
@@ -178,7 +190,12 @@ namespace ArchiveFixer.ViewModels
                     task.ClearProgress();
                     task.UpdateElapsedText();
 
-                    AppendLog("ERROR", $"{task.LogName}：{result.Summary}");
+                    string sourceChangedCode = DiagnosticCodes.ForRecursionStop(result.StopReason);
+                    AppendLog(
+                        "ERROR",
+                        $"{task.LogName}：{result.Summary}",
+                        string.IsNullOrWhiteSpace(sourceChangedCode) ? DiagnosticCodes.TaskFailed : sourceChangedCode,
+                        "RecursiveExtractor");
                     return;
 
                 default:
@@ -236,7 +253,32 @@ namespace ArchiveFixer.ViewModels
             // 收尾时间/耗时/最后更新时间收进唯一出口 `Extraction/TaskTimingFinalizer`。
             TaskTimingFinalizer.Finalize(task);
 
-            AppendLog(result.Completed ? "INFO" : "WARN", $"{task.LogName}：{result.Summary}");
+            string resultCode = DiagnosticCodes.ForRecursionStop(result.StopReason);
+
+            CriterionLog(
+                "递归停因",
+                $"layers={result.Layers.Count}；produced={result.ProducedAnyLayerOutput}；"
+                + $"tried={task.RecursionTriedCandidateCount}；decision={result.Decision != null}",
+                result.StopReason.ToString(),
+                $"终态={task.Outcome}；状态={task.Status}",
+                task.CurrentPath,
+                task.Outcome.ToString(),
+                level: result.Completed ? "INFO" : "WARN",
+                errorCode: resultCode,
+                component: "RecursiveExtractor");
+
+            if (result.Completed)
+            {
+                AppendLog("INFO", $"{task.LogName}：{result.Summary}");
+            }
+            else
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：{result.Summary}",
+                    string.IsNullOrWhiteSpace(resultCode) ? DiagnosticCodes.TaskFailed : resultCode,
+                    "RecursiveExtractor");
+            }
 
             /*
              * task.OutputPath **不跟着递归结论走**。

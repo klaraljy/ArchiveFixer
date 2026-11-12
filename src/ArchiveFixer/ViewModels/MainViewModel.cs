@@ -2427,7 +2427,11 @@ namespace ArchiveFixer.ViewModels
             {
                 _uiResponsivenessMonitor = UiResponsivenessMonitor.Start(
                     Application.Current.Dispatcher,
-                    message => AppendLog("WARN", message));
+                    message => AppendDiagnosticLog(
+                        "WARN",
+                        message,
+                        DiagnosticCodes.UiStall,
+                        "UiResponsivenessMonitor"));
             }
 
             /*
@@ -4013,21 +4017,65 @@ namespace ArchiveFixer.ViewModels
             string action = "",
             string file = "",
             string identity = "",
-            string level = "INFO")
-            => _logService.Criterion(criterion, inputs, verdict, action, file, identity, level);
+            string level = "INFO",
+            string errorCode = "",
+            string component = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
+            => _logService.Criterion(
+                criterion, inputs, verdict, action, file, identity, level, errorCode, component,
+                sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
 
-        public void AppendLog(string level, string message)
+        public void AppendLog(
+            string level,
+            string message,
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
+            if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendDiagnosticLog(
+                    "ERROR",
+                    message,
+                    DiagnosticCodes.AppUnknown,
+                    "Application",
+                    sourceFile: sourceFile,
+                    sourceLine: sourceLine,
+                    caller: caller);
+                return;
+            }
+
             WriteLogCore(level, message, fileOnly: false);
         }
 
-        public void AppendDiagnosticLog(string level, string message, string errorCode, string component)
+        public void AppendDiagnosticLog(
+            string level,
+            string message,
+            string errorCode,
+            string component,
+            string taskPath = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
-            _logService.WriteWithCode(level, message, errorCode: errorCode, component: component);
+            _logService.WriteWithCode(
+                level,
+                message,
+                taskPath,
+                errorCode,
+                component,
+                sourceFile: sourceFile,
+                sourceLine: sourceLine,
+                caller: caller);
+
             string display = string.IsNullOrWhiteSpace(errorCode)
                 ? message
                 : message + "（错误码 " + errorCode + "）";
-            Logs.Add(new OperationLogItem(level, display, string.Empty));
+
+            // 屏幕日志与文件日志共用同一个“入队”出口；⛔ 不再从后台线程直接 Logs.Add。
+            EnqueueScreenLog(level, display);
         }
 
         /// <summary>
@@ -4072,29 +4120,44 @@ namespace ArchiveFixer.ViewModels
                 // 文件日志失败不影响屏幕日志。
             }
 
-            /*
-             * 屏幕日志走 BeginInvoke（排队），不是 Invoke（同步等待）。
-             *
-             * Invoke 在界面线程上会**就地执行**（不需要泵消息），看起来更"实时"；代价是：
-             * 从后台线程调用时它会阻塞那条线程直到界面线程空出来 —— 一键处理跑一批包时
-             * 每条日志都要和界面上的其它活抢一次，日志一多就变成"界面卡住"的一部分。
-             * BeginInvoke 只入队立刻返回，界面按自己的节奏消费；顺序仍是 FIFO，
-             * 界面日志的先后不会乱（文件日志本来就先在 _logService 里落好了）。
-             */
-            Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+            EnqueueScreenLog(level, safeMessage);
+        }
+
+        /// <summary>
+        /// 屏幕日志的唯一入队出口：UI 线程直接加，后台线程走 Dispatcher.BeginInvoke。
+        /// 文件日志已经由 LogService 落好；这里只维护界面集合，顺序保持 FIFO。
+        /// </summary>
+        private void EnqueueScreenLog(string level, string message)
+        {
+            void Add()
             {
                 Logs.Add(new OperationLogItem
                 {
                     Time = ArchiveFixer.Helpers.Clock.Now,
                     Level = level,
-                    Message = safeMessage
+                    Message = message
                 });
 
                 while (Logs.Count > 1000)
                 {
                     Logs.RemoveAt(0);
                 }
-            }));
+            }
+
+            Application? application = Application.Current;
+
+            if (application == null || application.Dispatcher == null)
+            {
+                return;
+            }
+
+            if (application.Dispatcher.CheckAccess())
+            {
+                Add();
+                return;
+            }
+
+            application.Dispatcher.BeginInvoke(new Action(Add));
         }
 
         /// <summary>

@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -402,6 +403,12 @@ namespace ArchiveFixer.Extraction
         public string Summary { get; init; } = string.Empty;
 
         /// <summary>
+        /// 递归核心自身抛出的异常（只给诊断日志用；⛔ 不参与状态/文案判断）。
+        /// 普通引擎失败、密码错误、缺卷等业务停因不会填这里。
+        /// </summary>
+        public Exception? FailureException { get; init; }
+
+        /// <summary>
         /// **这一趟有没有真的解出过东西**（任意一层成功、或任意一层的产物目录里留下了文件）。
         ///
         /// <para>为什么要单列一条（用户 2026-09-27 真机 `giu.7z.001`）：调用方要据此区分
@@ -518,6 +525,21 @@ namespace ArchiveFixer.Extraction
         /// 由协调器每次任务现建实例时从设置里取。</para>
         /// </summary>
         public bool TestBeforeExtract { get; set; }
+
+        /// <summary>
+        /// 每次真正调用引擎后的观察口（result、归档路径、动作）。
+        /// 由协调器接到结构化日志；⛔ 不参与任何判据，回调异常也不影响解压。
+        /// </summary>
+        public Action<ArchiveOperationResult, string, string>? EngineCallObserved { get; set; }
+
+        /// <summary>
+        /// 停因判定点（reason、源码文件、行号、说明）。由协调器接到 decision.stop 事件；
+        /// ⛔ 不参与判据，观察者异常也不影响解压。
+        /// </summary>
+        public Action<RecursionStopReason, string, int, string, string>? StopReasonObserved { get; set; }
+
+        /// <summary>本层是否已在更精确的分支里报过停因（避免循环收尾再用概括行覆盖源码位置）。</summary>
+        private bool _exactStopReasonReported;
 
         /// <summary>
         /// **本实例自己持有的**本次（最近一次）运行的工作区。
@@ -1188,6 +1210,7 @@ namespace ArchiveFixer.Extraction
 
                     if (blocked != RecursionStopReason.None)
                     {
+                        ReportStopReason(blocked, $"{item.ArchivePath}：上限/安全闸门拦下（{blocked}）");
                         stopReason = blocked;
                         break;
                     }
@@ -1195,6 +1218,7 @@ namespace ArchiveFixer.Extraction
                     if (layers.Count < MaxExpansionRatioChecks &&
                         await IsExpansionRatioExceededAsync(item, layers, pending).ConfigureAwait(false))
                     {
+                        ReportStopReason(RecursionStopReason.ExpansionRatioExceeded, $"{item.ArchivePath}：展开比超限");
                         stopReason = RecursionStopReason.ExpansionRatioExceeded;
                         break;
                     }
@@ -1216,6 +1240,7 @@ namespace ArchiveFixer.Extraction
 
                         if (!string.IsNullOrWhiteSpace(sourceChanged))
                         {
+                            ReportStopReason(RecursionStopReason.SourceChanged, sourceChanged);
                             stopReason = RecursionStopReason.SourceChanged;
                             sourceChangedReason = sourceChanged;
                             break;
@@ -1246,6 +1271,14 @@ namespace ArchiveFixer.Extraction
 
                     if (outcome.StopReason != RecursionStopReason.None)
                     {
+                        if (!_exactStopReasonReported)
+                        {
+                            ReportStopReason(
+                                outcome.StopReason,
+                                $"{item.ArchivePath}：{outcome.StopReason}");
+                        }
+
+                        _exactStopReasonReported = false;
                         stopReason = outcome.StopReason;
                         break;
                     }
@@ -1437,7 +1470,8 @@ namespace ArchiveFixer.Extraction
                         finalOutputDirectory,
                         PasswordMasker.Sanitize(ex.Message),
                         published: false,
-                        unexpandedNames),
+                        unexpandedNames,
+                        failureException: ex),
                     workspace,
                     task.FileName,
                     cancellationToken);
@@ -1492,6 +1526,8 @@ namespace ArchiveFixer.Extraction
             Action<ArchiveStallNotice>? stalled = null,
             string? carvedSource = null)
         {
+            _exactStopReasonReported = false;
+
             /*
              * ===== 这一层到底交给引擎哪一个文件（2026-10-04 真机，用户报"密码是对的怎么解压不了"）=====
              *
@@ -2194,6 +2230,8 @@ namespace ArchiveFixer.Extraction
                         .TestAsync(ArchiveRequest.For(archivePath, candidate), cancellationToken)
                         .ConfigureAwait(false);
 
+                    ObserveEngineCall(preTest, archivePath, "test");
+
                     if (!preTest.Success)
                     {
                         lastFailure = preTest;
@@ -2254,6 +2292,8 @@ namespace ArchiveFixer.Extraction
                         options,
                         cancellationToken)
                     .ConfigureAwait(false);
+
+                ObserveEngineCall(result, archivePath, "extract");
 
                 if (result.Success)
                 {
@@ -3037,6 +3077,11 @@ namespace ArchiveFixer.Extraction
                 if (encryptedHeadersConclusion)
                 {
                     reason = RecursionStopReason.EncryptedHeaders;
+
+                    ReportStopReason(
+                        reason,
+                        $"{layerLabel}：引擎给的是加密头，连清单都列不出来");
+                    _exactStopReasonReported = true;
 
                     encryptedHeadersMessage = string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
@@ -5678,7 +5723,8 @@ namespace ArchiveFixer.Extraction
             string extraMessage,
             bool published,
             IReadOnlyList<string>? unexpandedNames = null,
-            string passwordFallbackNote = "")
+            string passwordFallbackNote = "",
+            Exception? failureException = null)
         {
             bool completed = stopReason == RecursionStopReason.Completed;
             bool partiallyCompleted = !completed && layers.Any(layer => layer.Success);
@@ -5787,6 +5833,7 @@ namespace ArchiveFixer.Extraction
                 ConsumedVolumeSources = _consumedVolumeSources.ToList(),
                 UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),
                 UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
+                FailureException = failureException,
                 Summary = BuildSummary(
                     stopReason,
                     layers,
@@ -6186,6 +6233,47 @@ namespace ArchiveFixer.Extraction
             catch
             {
                 // 见方法注释。
+            }
+        }
+
+        /// <summary>引擎调用观察口：⛔ 不参与判据；观察者自己抛异常也不影响解压。</summary>
+        private void ObserveEngineCall(ArchiveOperationResult result, string archivePath, string action)
+        {
+            if (EngineCallObserved == null || result == null)
+            {
+                return;
+            }
+
+            try
+            {
+                EngineCallObserved(result, archivePath, action);
+            }
+            catch
+            {
+                // 诊断观察失败不得影响解压。
+            }
+        }
+
+        /// <summary>停因判定观察口：⛔ 不改判据；观察者自己抛异常也不影响解压。</summary>
+        private void ReportStopReason(
+            RecursionStopReason reason,
+            string message,
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
+        {
+            if (StopReasonObserved == null || reason == RecursionStopReason.None)
+            {
+                return;
+            }
+
+            try
+            {
+                StopReasonObserved(reason, sourceFile, sourceLine, caller, message);
+            }
+            catch
+            {
+                // 诊断观察失败不得影响解压。
             }
         }
 

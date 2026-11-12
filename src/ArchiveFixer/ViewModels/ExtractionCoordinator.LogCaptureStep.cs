@@ -89,8 +89,15 @@ namespace ArchiveFixer.ViewModels
             string action = "",
             string file = "",
             string identity = "",
-            string level = "INFO")
-            => _vm.CriterionLog(criterion, inputs, verdict, action, file, identity, level);
+            string level = "INFO",
+            string errorCode = "",
+            string component = "",
+            [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+            [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+            => _vm.CriterionLog(
+                criterion, inputs, verdict, action, file, identity, level, errorCode, component,
+                sourceFile, sourceLine, caller);
 
         private sealed class TaskLogCapture
         {
@@ -136,6 +143,8 @@ namespace ArchiveFixer.ViewModels
 
         internal void BeginTaskLogCapture(ArchiveTask task)
         {
+            task?.Diagnostic.Reset();
+
             // 详细档（⑥设置 →「详细日志（排查用）」，默认关）或测试显式要求 → 不攒，全部原样写出去。
             _currentTaskLog.Value = VerboseTaskLogEnabled ? null : new TaskLogCapture();
 
@@ -201,6 +210,66 @@ namespace ArchiveFixer.ViewModels
             }
 
             _vm.AppendLog("INFO", BuildTaskSummaryLine(task));
+            CompleteTaskDiagnostics(task);
+        }
+
+        /// <summary>
+        /// 任务收尾的唯一诊断落点：把当前 span/最近一条失败事件/终态兜底码收进任务，
+        /// 再写一条 task.end。⛔ 只读事实，不改变任务状态。
+        /// </summary>
+        private void CompleteTaskDiagnostics(ArchiveTask task)
+        {
+            TaskDiagnosticFacts facts = task.Diagnostic;
+            DiagnosticError? last = DiagnosticSpan.CurrentLastDecision ?? DiagnosticSpan.CurrentLastError;
+
+            facts.SpanId = DiagnosticSpan.CurrentSpanId;
+            facts.ParentSpanId = DiagnosticSpan.CurrentParentSpanId;
+            facts.StartedAt = DiagnosticSpan.CurrentTaskStartedAt;
+            facts.EndedAt = DateTime.UtcNow;
+            facts.DurationMs = DiagnosticSpan.CurrentTaskElapsedMs;
+            facts.Attempts = task.RecursionTriedCandidateCount;
+
+            bool unsuccessful = task.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted;
+
+            if (unsuccessful && last != null)
+            {
+                facts.ErrorCode = last.ErrorCode;
+                facts.Component = last.Component;
+                facts.SourceFile = last.SourceFile;
+                facts.SourceLine = last.SourceLine;
+                facts.Caller = last.Caller;
+                facts.Stack = last.Stack;
+                facts.Engine = last.Engine;
+                facts.ExitCode = last.ExitCode;
+                facts.LastEventId = last.EventId;
+                facts.LastMessage = last.Message;
+                facts.CodeSource = string.IsNullOrWhiteSpace(last.CodeSource) ? "event" : last.CodeSource;
+            }
+
+            DiagnosticError? engineCall = DiagnosticSpan.CurrentLastEngine;
+
+            if (unsuccessful && engineCall != null)
+            {
+                if (string.IsNullOrWhiteSpace(facts.Engine))
+                {
+                    facts.Engine = engineCall.Engine;
+                    facts.ExitCode = engineCall.ExitCode;
+                }
+            }
+
+            if (unsuccessful && string.IsNullOrWhiteSpace(facts.ErrorCode))
+            {
+                facts.ErrorCode = DiagnosticCodes.ForTask(task);
+                facts.Component = DiagnosticCodes.ComponentFor(facts.ErrorCode);
+                facts.CodeSource = string.IsNullOrWhiteSpace(facts.ErrorCode) ? string.Empty : "fallback";
+            }
+
+            if (string.IsNullOrWhiteSpace(facts.Stage))
+            {
+                facts.Stage = _vm.Logger.RunContext.Stage;
+            }
+
+            DiagnosticLog.WriteTaskEnd(_vm.Logger, task);
         }
 
         /// <summary>一行说清这个任务的结果（成功时的**唯一**一行）。</summary>
@@ -331,13 +400,59 @@ namespace ArchiveFixer.ViewModels
             AppendLog(level, $"{task.LogName}：{message}");
         }
 
-        private void AppendLog(string level, string message) => AppendLog(level, message, string.Empty, string.Empty);
+        /// <summary>
+        /// 适配既有 <see cref="Action{T1,T2}"/> 注入点的两参数入口（引擎原话/失败清单写入器）。
+        /// 它只是转到带 caller 的唯一入口；⛔ 不另建一套日志逻辑。
+        /// </summary>
+        private void AppendLogPair(string level, string message) => AppendLog(level, message);
 
-        private void AppendLog(string level, string message, string errorCode, string component)
+        /// <summary>适配 <see cref="Action{T1,T2,T3,T4}"/> 注入点（失败清单写入器）。</summary>
+        private void AppendLogWithCode(string level, string message, string errorCode, string component) =>
+            AppendLog(level, message, errorCode, component);
+
+        private void AppendLog(
+            string level,
+            string message,
+            [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+            [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        {
+            // 所有 ERROR 至少带兜底码 + 真实调用点；具体分支再给精确码。
+            if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog(
+                    level,
+                    message,
+                    DiagnosticCodes.TaskFailed,
+                    "ExtractionCoordinator",
+                    sourceFile,
+                    sourceLine,
+                    caller);
+                return;
+            }
+
+            AppendLog(level, message, string.Empty, string.Empty, sourceFile, sourceLine, caller);
+        }
+
+        private void AppendLog(
+            string level,
+            string message,
+            string errorCode,
+            string component,
+            [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+            [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
         {
             if (!string.IsNullOrWhiteSpace(errorCode))
             {
-                _vm.AppendDiagnosticLog(level, message, errorCode, component);
+                _vm.AppendDiagnosticLog(
+                    level,
+                    message,
+                    errorCode,
+                    component,
+                    sourceFile: sourceFile,
+                    sourceLine: sourceLine,
+                    caller: caller);
                 return;
             }
 
@@ -357,7 +472,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            _vm.AppendLog(level, message);
+            _vm.AppendLog(level, message, sourceFile, sourceLine, caller);
         }
 
     }

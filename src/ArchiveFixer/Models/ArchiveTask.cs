@@ -1779,6 +1779,12 @@ namespace ArchiveFixer.Models
         /// <summary>终态原因（机器码）；显示文案仍只由 StatusText 给。</summary>
         public TaskReason Reason { get; set; } = TaskReason.None;
 
+        /// <summary>
+        /// 任务级诊断事实：失败码、源码位置、栈、引擎、耗时等。
+        /// 只由日志收尾/诊断记录写入；⛔ 不参与任何业务判据。
+        /// </summary>
+        public TaskDiagnosticFacts Diagnostic { get; } = new();
+
         /// <summary>校验结论的一句话说明。</summary>
         public string VerifyMessage { get; set; } = string.Empty;
 

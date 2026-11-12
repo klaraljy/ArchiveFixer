@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
@@ -131,12 +132,37 @@ namespace ArchiveFixer.Tests
                 Assert.Contains("operation/operation.trace.jsonl", names);
                 Assert.Contains("extra/summary.json", names);
                 Assert.Contains("extra/failed-tasks.json", names);
+                Assert.Contains("extra/bundle.json", names);
 
                 ZipArchiveEntry summaryEntry = archive.GetEntry("extra/summary.json")!;
                 using Stream summaryStream = summaryEntry.Open();
                 using var reader = new StreamReader(summaryStream);
                 string summary = reader.ReadToEnd();
-                Assert.Contains("AF-TASK-001", summary, StringComparison.Ordinal);
+                // 这个样本是真加密头/错密码：诊断包必须给密码类码，不能落泛化 AF-TASK-001。
+                using JsonDocument summaryDocument = JsonDocument.Parse(summary);
+                JsonElement summaryRoot = summaryDocument.RootElement;
+                Assert.Contains("AF-PASSWORD-010", summaryRoot.GetProperty("error_codes").EnumerateArray().Select(x => x.GetString()));
+                JsonElement failedTask = summaryRoot.GetProperty("failed_tasks")[0];
+                Assert.Equal("AF-PASSWORD-010", failedTask.GetProperty("error_code").GetString());
+                Assert.Contains("RecursiveExtractor.cs", failedTask.GetProperty("source_file").GetString(), StringComparison.Ordinal);
+                Assert.True(failedTask.GetProperty("source_line").GetInt32() > 0);
+                Assert.Equal("explicit", failedTask.GetProperty("code_source").GetString());
+
+                ZipArchiveEntry failedEntry = archive.GetEntry("extra/failed-tasks.json")!;
+                using Stream failedStream = failedEntry.Open();
+                using var failedReader = new StreamReader(failedStream);
+                using JsonDocument failedDocument = JsonDocument.Parse(failedReader.ReadToEnd());
+                JsonElement failed = failedDocument.RootElement[0];
+                Assert.Equal("sevenzip", failed.GetProperty("engine").GetString());
+                Assert.Equal(2, failed.GetProperty("exit_code").GetInt32());
+                Assert.True(failed.GetProperty("duration_ms").GetInt64() > 0);
+
+                ZipArchiveEntry traceEntry = archive.GetEntry("operation/operation.trace.jsonl")!;
+                using Stream traceStream = traceEntry.Open();
+                using var traceReader = new StreamReader(traceStream);
+                string trace = traceReader.ReadToEnd();
+                Assert.Contains("\"event\":\"task.end\"", trace, StringComparison.Ordinal);
+                Assert.Contains("\"event\":\"engine.extract\"", trace, StringComparison.Ordinal);
 
                 ZipArchiveEntry logEntry = archive.GetEntry("operation/operation.log")!;
                 using Stream logStream = logEntry.Open();

@@ -118,7 +118,9 @@ namespace ArchiveFixer.ViewModels
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.BatchPasswordSuspectsLogFormat,
                         passwordSuspects.Count,
-                        string.Join("、", passwordSuspects.Take(MaxBatchSummaryFailures).Select(task => task.FileName))));
+                        string.Join("、", passwordSuspects.Take(MaxBatchSummaryFailures).Select(task => task.FileName))),
+                    DiagnosticCodes.Password,
+                    "BatchSummary");
             }
 
             if (tally.Failed == 0)

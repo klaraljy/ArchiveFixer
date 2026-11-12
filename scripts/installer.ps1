@@ -1,4 +1,4 @@
-﻿# 出 ArchiveFixer 的 .exe 安装包（NSIS）。
+# 出 ArchiveFixer 的 .exe 安装包（NSIS）。
 #
 # 用法：
 #   pwsh scripts/installer.ps1                          # 拿 dist\ArchiveFixer-<版本>-独立 当内容，出 dist\ArchiveFixer-<版本>-setup.exe
@@ -176,7 +176,7 @@ Write-Host "                本机没有第二个固定盘时才退 %LOCALAPPDAT
 Write-Host "                每用户安装、免 UAC，安装时可以改目录。"
 Write-Host "  用户数据    : 固定 %LOCALAPPDATA%\ArchiveFixer（设置 / 密码 / 日志），不跟安装目录走；"
 Write-Host "                旧程序的 data\ 会在第一次启动时只读复制过来。"
-Write-Host "  升级        : 装过就显示旧版本/新版本并问一次（①升级覆盖保留用户数据 = 默认 ②先卸载旧版 ③取消）"
+Write-Host "  升级        : 装到已有目录直接覆盖程序文件，用户数据保留；不再单开“升级覆盖/先卸载/取消”页。"
 Write-Host "  卸载        : 控制面板「应用和功能」里那一项 / 开始菜单 / 安装目录下的 Uninstall.exe；"
 Write-Host "                卸载页问一次「保留用户数据（默认）还是全部删除」，静默卸载一律保留。"
 Write-Host "  验证办法    : <安装包> /S /D=<临时目录>  （静默安装不建快捷方式），再看目录里有没有 ArchiveFixer.exe"

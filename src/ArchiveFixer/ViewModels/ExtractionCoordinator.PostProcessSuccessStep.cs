@@ -479,12 +479,23 @@ namespace ArchiveFixer.ViewModels
                 if (cancelled)
                 {
                     // 取消支整族搬进唯一出口 `Extraction/PostProcessCancelledWriter`（一次只搬这一个功能族）。
-                    PostProcessCancelledWriter.Write(task, work.Verification.FailureMessage, AppendLog);
+                    PostProcessCancelledWriter.Write(task, work.Verification.FailureMessage, AppendLogPair);
                     return false;
                 }
 
                 // 这一支整族搬进唯一出口 `Extraction/PostProcessFailureWriter`（一次只搬这一个功能族）。
-                PostProcessFailureWriter.Write(task, work.Verification.FailureMessage, AppendLog, AppendLog);
+                PostProcessFailureWriter.Write(task, work.Verification.FailureMessage, AppendLogPair, AppendLogWithCode);
+
+                CriterionLog(
+                    "输出校验",
+                    work.Verification.FailureMessage,
+                    "未通过",
+                    "落解压失败；源包不动",
+                    task.CurrentPath,
+                    task.TaskId,
+                    level: "ERROR",
+                    errorCode: DiagnosticCodes.VerifyFailed,
+                    component: "OutputVerifier");
                 return false;
             }
 

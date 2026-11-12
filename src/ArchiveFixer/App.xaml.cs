@@ -426,10 +426,14 @@ namespace ArchiveFixer
 
             try
             {
-                SafeCreateDirectory(string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? LogsDirectory : LogService.Current.CurrentOperationDirectory);
+                string fatalDirectory = string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory)
+                    ? LogsDirectory
+                    : LogService.Current.CurrentOperationDirectory;
+
+                SafeCreateDirectory(fatalDirectory);
 
                 string logFile = Path.Combine(
-                    LogsDirectory,
+                    fatalDirectory,
                     $"fatal_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd}.log");
 
                 string text =

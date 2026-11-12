@@ -302,6 +302,12 @@ namespace ArchiveFixer.ViewModels
                 task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
                 AppendLog("ERROR", $"任务失败：{task.FileName}，{ex.Message}", DiagnosticCodes.TaskFailed, "ExtractionCoordinator.ExtractTask");
+                _vm.Logger.Exception(
+                    "任务失败",
+                    ex,
+                    task.CurrentPath,
+                    errorCode: DiagnosticCodes.TaskFailed,
+                    component: "ExtractionCoordinator.ExtractTask");
             }
             finally
             {
@@ -1455,6 +1461,17 @@ namespace ArchiveFixer.ViewModels
                     FinalizeOutcomeIfPending(task);
 
                     AppendLog("ERROR", $"{task.LogName}：{volumeMissingMessage}", DiagnosticCodes.VolumeIncomplete, "ExtractionCoordinator.VolumePreflight");
+
+                    CriterionLog(
+                        "分卷完整性",
+                        task.VolumeInfoText + "；missing=" + string.Join(",", task.MissingVolumeNames),
+                        "缺卷/不完整",
+                        "不解压；源包不动",
+                        task.CurrentPath,
+                        task.VolumeGroupKey,
+                        level: "ERROR",
+                        errorCode: DiagnosticCodes.VolumeIncomplete,
+                        component: "ExtractionCoordinator.VolumePreflight");
                     return;
                 }
 
@@ -1885,7 +1902,7 @@ namespace ArchiveFixer.ViewModels
                     lastResult = testResult;
 
                     // 内部日志永远详细：普通档由任务缓冲只写文件、不上屏幕。
-                    EngineOutputLog.LogVerbose(AppendLog, task.FileName, testResult);
+                    EngineOutputLog.LogVerbose(AppendLogPair, task.FileName, testResult);
 
                     if (testResult.DetectedErrorType == "Cancelled" ||
                         testResult.Status == StatusText.Cancelled ||
@@ -2446,7 +2463,7 @@ namespace ArchiveFixer.ViewModels
                      * 写一次（见下面 `conclusionResult` 那一段）。
                      */
                     // 内部日志永远详细：普通档由任务缓冲只写文件、不上屏幕。
-                    EngineOutputLog.LogVerbose(AppendLog, task.FileName, extractResult);
+                    EngineOutputLog.LogVerbose(AppendLogPair, task.FileName, extractResult);
 
                     _vm.Logger.Event(
                         "engine.extract",
@@ -2774,7 +2791,7 @@ namespace ArchiveFixer.ViewModels
                                 // 与循环里同一个描述器（⛔ 绝不出明文）。
                                 DescribeCandidate = (_, ordinal) => fallbackSlice.Describe(ordinal),
 
-                                Log = AppendLog,
+                                Log = AppendLogPair,
                                 MainEngine = _archiveEngine,
                                 CancellationToken = cancellationToken
                             })
@@ -2817,7 +2834,7 @@ namespace ArchiveFixer.ViewModels
                          * ⛔ 不许静默跳过、⛔ 不许把没跑过的兜底说成跑过了）。
                          */
                         passwordConclusionNote += PasswordEngineFallback
-                            .ReportMissingEngine(task.FileName, ResolveFailedEngineName(lastResult), AppendLog)
+                            .ReportMissingEngine(task.FileName, ResolveFailedEngineName(lastResult), AppendLogPair)
                             .Note;
                     }
                     else if (PasswordEngineFallback.ShouldReportIndistinguishableEvidence(fallbackFacts))
@@ -2830,7 +2847,7 @@ namespace ArchiveFixer.ViewModels
                         PasswordEngineFallback.ReportIndistinguishableEvidence(
                             task.FileName,
                             ResolveFailedEngineName(lastResult),
-                            AppendLog);
+                            AppendLogPair);
                     }
                 }
 
@@ -3417,7 +3434,7 @@ namespace ArchiveFixer.ViewModels
              *
              * ⛔ 出口只有 <see cref="EngineOutputLog"/> 一个（递归路径同一个）。
              */
-            EngineOutputLog.LogFailure(AppendLog, task.FileName, lastResult);
+            EngineOutputLog.LogFailure(AppendLogPair, task.FileName, lastResult);
         }
     }
 }

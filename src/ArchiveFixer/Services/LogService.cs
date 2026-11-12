@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -688,6 +689,9 @@ namespace ArchiveFixer.Services
                     started_at = FormatTimestamp(started),
                     app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
                     file_version = ResolveFileVersion(),
+                    build_commit = BuildInfo.Commit,
+                    build_configuration = BuildInfo.Configuration,
+                    build_time = BuildInfo.BuildTime,
                     os = RuntimeInformation.OSDescription,
                     framework = RuntimeInformation.FrameworkDescription,
                     process_id = Environment.ProcessId,
@@ -882,7 +886,7 @@ namespace ArchiveFixer.Services
                 Process process = Process.GetCurrentProcess();
                 string detail = JsonSerializer.Serialize(new
                 {
-                    schema = "archivefixer.log.v2",
+                    schema = "archivefixer.log.v3",
                     app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
                     /*
                      * 单文件发布里 `Assembly.Location` 恒为空（IL3000，会被当成错误）⇒ 以**进程路径**为准；
@@ -1074,8 +1078,15 @@ namespace ArchiveFixer.Services
             string taskPath = "",
             string errorCode = DiagnosticCodes.AppUnknown,
             string component = "",
-            string eventId = "")
+            string eventId = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
+            string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
+                ? DiagnosticCodes.AppUnknown
+                : errorCode.Trim();
+
             WriteInternal(
                 level,
                 message,
@@ -1083,28 +1094,50 @@ namespace ArchiveFixer.Services
                 criterion: null,
                 new LogEventFields(
                     Event: "log.event",
-                    EventId: string.IsNullOrWhiteSpace(eventId) ? errorCode : eventId,
-                    ErrorCode: string.IsNullOrWhiteSpace(errorCode) ? DiagnosticCodes.AppUnknown : errorCode,
+                    EventId: string.IsNullOrWhiteSpace(eventId) ? normalizedCode : eventId,
+                    ErrorCode: normalizedCode,
                     Component: string.IsNullOrWhiteSpace(component)
-                        ? DiagnosticCodes.ComponentFor(errorCode)
+                        ? DiagnosticCodes.ComponentFor(normalizedCode)
                         : component,
-                    TaskId: DiagnosticSpan.CurrentTaskId));
+                    TaskId: DiagnosticSpan.CurrentTaskId,
+                    SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
+                    SourceLine: sourceLine,
+                    Caller: caller,
+                    CodeSource: string.IsNullOrWhiteSpace(errorCode) ? "fallback" : "explicit"));
         }
 
         /// <summary>
         /// 写入 WARN 日志。
         /// </summary>
-        public void WriteWarning(string message)
+        public void WriteWarning(
+            string message,
+            string errorCode = "",
+            string component = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
-            Write("WARN", message);
+            if (!string.IsNullOrWhiteSpace(errorCode))
+            {
+                WriteWithCode("WARN", message, errorCode: errorCode, component: component,
+                    sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
+                return;
+            }
+
+            Write("WARN", message, sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
         }
 
         /// <summary>
         /// 写入 ERROR 日志。
         /// </summary>
-        public void WriteError(string message)
+        public void WriteError(
+            string message,
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
-            Write("ERROR", message);
+            WriteWithCode("ERROR", message, errorCode: DiagnosticCodes.AppUnknown, component: string.Empty,
+                sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
         }
 
         /// <summary>
@@ -1129,11 +1162,16 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 写入任务警告日志。
         /// </summary>
-        public void WriteTaskWarning(ArchiveTask task, string message)
+        public void WriteTaskWarning(
+            ArchiveTask task,
+            string message,
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
             if (task == null)
             {
-                WriteWarning(message);
+                WriteWarning(message, sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
                 return;
             }
 
@@ -1142,17 +1180,22 @@ namespace ArchiveFixer.Services
                 : task.FileName;
 
             string text = $"任务[{fileName}] {message}";
-            Write("WARN", text, task.CurrentPath);
+            Write("WARN", text, task.CurrentPath, sourceFile, sourceLine, caller);
         }
 
         /// <summary>
         /// 写入任务错误日志。
         /// </summary>
-        public void WriteTaskError(ArchiveTask task, string message)
+        public void WriteTaskError(
+            ArchiveTask task,
+            string message,
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
             if (task == null)
             {
-                WriteError(message);
+                WriteError(message, sourceFile, sourceLine, caller);
                 return;
             }
 
@@ -1161,7 +1204,7 @@ namespace ArchiveFixer.Services
                 : task.FileName;
 
             string text = $"任务[{fileName}] {message}";
-            Write("ERROR", text, task.CurrentPath);
+            Write("ERROR", text, task.CurrentPath, sourceFile, sourceLine, caller);
         }
 
         /// <summary>
@@ -1184,7 +1227,13 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 写入日志。
         /// </summary>
-        public void Write(string level, string message, string taskPath = "")
+        public void Write(
+            string level,
+            string message,
+            string taskPath = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
             LogEventFields? evidence = null;
 
@@ -1194,7 +1243,11 @@ namespace ArchiveFixer.Services
                     Event: "log.error",
                     EventId: DiagnosticCodes.AppUnknown,
                     ErrorCode: DiagnosticCodes.AppUnknown,
-                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown));
+                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown),
+                    SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
+                    SourceLine: sourceLine,
+                    Caller: caller,
+                    CodeSource: "fallback");
             }
 
             WriteInternal(level, message, taskPath, criterion: null, evidence);
@@ -1226,7 +1279,11 @@ namespace ArchiveFixer.Services
             string component = "",
             string eventId = "",
             string spanId = "",
-            string taskId = "")
+            string taskId = "",
+            string stage = "",
+            string sourceFile = "",
+            int sourceLine = 0,
+            string caller = "")
         {
             string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
                 ? (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase) ? DiagnosticCodes.AppUnknown : string.Empty)
@@ -1235,6 +1292,34 @@ namespace ArchiveFixer.Services
                 ? DiagnosticCodes.ComponentFor(normalizedCode)
                 : component;
             string normalizedEventId = string.IsNullOrWhiteSpace(eventId) ? eventName : eventId;
+            string normalizedSourceFile = DiagnosticSource.NormalizeFile(sourceFile);
+            string codeSource = !string.IsNullOrWhiteSpace(errorCode)
+                ? "explicit"
+                : (normalizedCode.Length > 0 ? "fallback" : string.Empty);
+
+            if (normalizedCode.Length > 0)
+            {
+                var diagnosticError = new DiagnosticError(
+                    normalizedCode,
+                    normalizedComponent,
+                    normalizedEventId,
+                    normalizedSourceFile,
+                    sourceLine,
+                    caller,
+                    stack,
+                    message,
+                    engine,
+                    exitCode,
+                    codeSource);
+
+                DiagnosticSpan.NoteError(diagnosticError);
+
+                if (string.Equals(eventName, "decision.stop", StringComparison.Ordinal))
+                {
+                    DiagnosticSpan.NoteDecision(diagnosticError);
+                }
+            }
+
             string human = $"事件「{eventName}」：{message}"
                 + (source.Length > 0 || target.Length > 0
                     ? $"（{source} → {target}）"
@@ -1283,7 +1368,12 @@ namespace ArchiveFixer.Services
                                 Component: normalizedComponent,
                                 SpanId: string.IsNullOrWhiteSpace(spanId) ? DiagnosticSpan.CurrentSpanId : spanId,
                                 ParentSpanId: DiagnosticSpan.CurrentParentSpanId,
-                                TaskId: string.IsNullOrWhiteSpace(taskId) ? DiagnosticSpan.CurrentTaskId : taskId),
+                                TaskId: string.IsNullOrWhiteSpace(taskId) ? DiagnosticSpan.CurrentTaskId : taskId,
+                                Stage: stage,
+                                SourceFile: normalizedSourceFile,
+                                SourceLine: sourceLine,
+                                Caller: caller,
+                                CodeSource: codeSource),
                             ++_traceSequence,
                             _runId,
                             Environment.ProcessId,
@@ -1304,7 +1394,10 @@ namespace ArchiveFixer.Services
             Exception exception,
             string taskPath = "",
             string errorCode = DiagnosticCodes.Unhandled,
-            string component = "")
+            string component = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
             if (exception == null)
             {
@@ -1338,7 +1431,10 @@ namespace ArchiveFixer.Services
                 errorCode: normalizedCode,
                 component: normalizedComponent,
                 eventId: normalizedCode,
-                taskId: DiagnosticSpan.CurrentTaskId);
+                taskId: DiagnosticSpan.CurrentTaskId,
+                sourceFile: sourceFile,
+                sourceLine: sourceLine,
+                caller: caller);
         }
 
         /// <summary>
@@ -1359,7 +1455,10 @@ namespace ArchiveFixer.Services
             string identity = "",
             string level = "INFO",
             string errorCode = "",
-            string component = "")
+            string component = "",
+            [CallerFilePath] string sourceFile = "",
+            [CallerLineNumber] int sourceLine = 0,
+            [CallerMemberName] string caller = "")
         {
             string human = $"判据「{criterion}」｜输入：{inputs} ⇒ 结论：{verdict}"
                 + (action.Length > 0 ? $"（动作：{action}）" : string.Empty);
@@ -1387,7 +1486,13 @@ namespace ArchiveFixer.Services
                     EventId: criterion,
                     ErrorCode: code,
                     Component: normalizedComponent,
-                    TaskId: DiagnosticSpan.CurrentTaskId));
+                    TaskId: DiagnosticSpan.CurrentTaskId,
+                    SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
+                    SourceLine: sourceLine,
+                    Caller: caller,
+                    CodeSource: string.IsNullOrWhiteSpace(code)
+                        ? string.Empty
+                        : string.IsNullOrWhiteSpace(errorCode) ? "fallback" : "explicit"));
         }
 
         /// <summary><see cref="Write"/> 与 <see cref="Criterion"/> 的**唯一**收口（屏幕 + 人读文件 + 机器读文件）。</summary>
@@ -1408,11 +1513,23 @@ namespace ArchiveFixer.Services
                     Event: "log.error",
                     EventId: DiagnosticCodes.AppUnknown,
                     ErrorCode: DiagnosticCodes.AppUnknown,
-                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown));
+                    Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown),
+                    CodeSource: "fallback");
             }
 
             if (evidence != null && !string.IsNullOrWhiteSpace(evidence.ErrorCode))
             {
+                DiagnosticSpan.NoteError(new DiagnosticError(
+                    evidence.ErrorCode,
+                    evidence.Component,
+                    evidence.EventId,
+                    evidence.SourceFile,
+                    evidence.SourceLine,
+                    evidence.Caller,
+                    evidence.Stack,
+                    message,
+                    CodeSource: evidence.CodeSource));
+
                 message = message + "（错误码 " + evidence.ErrorCode + "）";
             }
 
@@ -1593,7 +1710,12 @@ namespace ArchiveFixer.Services
             string SpanId = "",
             string ParentSpanId = "",
             string TaskId = "",
-            string OperationName = "");
+            string OperationName = "",
+            string Stage = "",
+            string SourceFile = "",
+            int SourceLine = 0,
+            string Caller = "",
+            string CodeSource = "");
 
         /// <summary>这一行的来源上下文（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）。</summary>
         public sealed record LogRunContext
@@ -1643,6 +1765,10 @@ namespace ArchiveFixer.Services
             AppendJsonField(builder, "event_id", evidence?.EventId ?? string.Empty);
             AppendJsonField(builder, "error_code", evidence?.ErrorCode ?? string.Empty);
             AppendJsonField(builder, "component", evidence?.Component ?? string.Empty);
+            AppendJsonField(builder, "source_file", evidence?.SourceFile ?? string.Empty);
+            AppendJsonNumber(builder, "source_line", evidence?.SourceLine ?? 0);
+            AppendJsonField(builder, "caller", evidence?.Caller ?? string.Empty);
+            AppendJsonField(builder, "code_source", evidence?.CodeSource ?? string.Empty);
             string effectiveSpanId = string.IsNullOrWhiteSpace(evidence?.SpanId)
                 ? DiagnosticSpan.CurrentSpanId
                 : evidence!.SpanId;
@@ -1660,7 +1786,7 @@ namespace ArchiveFixer.Services
             AppendJsonField(builder, "batch", context.Batch);
             AppendJsonNumber(builder, "round", context.Round);
             AppendJsonField(builder, "sample", context.Sample);
-            AppendJsonField(builder, "stage", context.Stage);
+            AppendJsonField(builder, "stage", string.IsNullOrWhiteSpace(evidence?.Stage) ? context.Stage : evidence!.Stage);
             AppendJsonField(builder, "task", context.Task);
             AppendJsonNumber(builder, "layer", context.Layer);
             AppendJsonField(builder, "file", criterion?.File ?? item.TaskPath);

@@ -219,6 +219,19 @@ New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
 $publishArgs = @('publish', $projectPath, '-c', 'Release', '-o', $publishDir, '--nologo')
 
+# 诊断包必须能对到具体提交：把 git HEAD 写进 AssemblyInformationalVersion。
+# 没有 git（源码包/脱机）时留 unknown，不阻止打包。
+$gitCommit = ''
+try {
+    $gitCommit = (& git -C $repoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+} catch {
+    $gitCommit = ''
+}
+if (-not [string]::IsNullOrWhiteSpace($gitCommit)) {
+    $publishArgs += "-p:SourceRevisionId=$gitCommit"
+    Write-Detail "构建提交    : $gitCommit"
+}
+
 # 发行档（用户 2026-09-27："发行版要删「不删原包」，我们本地的不用"）：
 # 它把 src\ArchiveFixer\ViewModels\MainViewModel.cs 里那个测试期专用的安全档整块关掉
 # （编译期常量 Models\BuildEdition.cs）。⛔ 本机构建 / 测试不传这个参数。

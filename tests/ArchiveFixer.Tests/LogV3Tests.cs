@@ -122,6 +122,9 @@ namespace ArchiveFixer.Tests
             Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("span_id").GetString()));
             Assert.Equal("task-1", root.GetProperty("task_id").GetString());
             Assert.Equal(DiagnosticCodes.VerifyFailed, root.GetProperty("error_code").GetString());
+            Assert.Contains("LogV3Tests.cs", root.GetProperty("source_file").GetString(), StringComparison.Ordinal);
+            Assert.True(root.GetProperty("source_line").GetInt32() > 0);
+            Assert.Equal("结构化事件带操作ID_span_错误码_异常栈", root.GetProperty("caller").GetString());
 
             string trace = File.ReadAllText(log.CurrentTraceFilePath);
             Assert.Contains("AF-VERIFY-002", trace, StringComparison.Ordinal);

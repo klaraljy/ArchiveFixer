@@ -61,7 +61,7 @@ namespace ArchiveFixer.ViewModels
                 new MagicArchiveProber(),
                 archivePath => BuildRecursionPasswordCandidates(archivePath, candidateSources),
                 BuildRecursionLimits(maxDepth, manualSingleLayer, spaceTight),
-                AppendLog,
+                AppendLogPair,
                 // 不变量 11 在**第 0 层**上的落点：递归核心每解一层之前都会问一次
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
                 // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的过程物，
@@ -79,6 +79,72 @@ namespace ArchiveFixer.ViewModels
              * 与上面那一档同一个理由：**每次任务现建一个实例、当场从设置里取**（改完设置不重启也要生效）。
              */
             extractor.KeepRules = ContentKeepRules.FromSettings(Settings);
+
+            /*
+             * 递归路的引擎调用也要进结构化 trace：单层路早就有 engine.extract，
+             * 递归路过去只有散文 —— 用户拿到 zip 时看不到退出码/耗时/到底调了哪个引擎。
+             * 只记录，不改判据；观察者内部失败由 RecursiveExtractor 吞掉。
+             */
+            extractor.EngineCallObserved = (result, archivePath, action) =>
+            {
+                string detail = "command=" + (result.CommandSummary ?? string.Empty)
+                    + "; exit=" + result.ExitCode
+                    + "; engine_version=" + (result.EngineVersion ?? string.Empty)
+                    + "; message=" + (result.Message ?? string.Empty)
+                    + "; output=" + string.Join(" ｜ ", result.KeyOutputLines());
+                string engineCode = result.Success
+                    ? string.Empty
+                    : result.IsWrongPassword || result.IsNeedPassword
+                        ? DiagnosticCodes.Password
+                        : result.IsCorrupted || result.IsPasswordOrCorrupted
+                            ? DiagnosticCodes.ArchiveDamaged
+                            : result.IsCancelled
+                                ? string.Empty
+                                : DiagnosticCodes.EngineFailed;
+
+                _vm.Logger.Event(
+                    "engine." + action,
+                    $"{Path.GetFileName(archivePath)}：引擎={result.EngineId}；成功={result.Success}；错误={result.DetectedErrorType}",
+                    detail: PasswordMasker.Sanitize(detail),
+                    file: archivePath,
+                    engine: result.EngineId,
+                    exitCode: result.ExitCode,
+                    durationMs: (long)result.Elapsed.TotalMilliseconds,
+                    result: result.Success ? "success" : "failed",
+                    errorCode: engineCode,
+                    component: "RecursiveExtractor");
+            };
+
+            extractor.StopReasonObserved = (reason, sourceFile, sourceLine, caller, message) =>
+            {
+                string code = DiagnosticCodes.ForRecursionStop(reason);
+
+                if (string.IsNullOrWhiteSpace(code))
+                {
+                    return;
+                }
+
+                DiagnosticError? previous = DiagnosticSpan.CurrentLastDecision;
+
+                if (previous != null
+                    && string.Equals(previous.ErrorCode, code, StringComparison.Ordinal)
+                    && string.Equals(previous.SourceFile, DiagnosticSource.NormalizeFile(sourceFile), StringComparison.Ordinal)
+                    && previous.SourceLine == sourceLine)
+                {
+                    return;
+                }
+
+                _vm.Logger.Event(
+                    "decision.stop",
+                    message,
+                    errorCode: code,
+                    component: "RecursiveExtractor",
+                    sourceFile: sourceFile,
+                    sourceLine: sourceLine,
+                    caller: caller,
+                    taskId: DiagnosticSpan.CurrentTaskId,
+                    result: reason.ToString());
+            };
 
             /*
              * 详细日志档与"候选来源描述器"（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）：

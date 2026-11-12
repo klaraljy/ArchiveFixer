@@ -192,8 +192,7 @@ namespace ArchiveFixer.Services
                 _warn(
                     $"[性能] UI 线程明显停顿：本次 {gap.TotalMilliseconds:N0} 毫秒，"
                     + $"本段累计 {_stallCount} 次 / 最大 {_maxGapMs:N0} 毫秒 ｜ "
-                    + UiActivity.Snapshot()
-                    + $"（错误码 {DiagnosticCodes.UiStall}）");
+                    + UiActivity.Snapshot());
                 _stallCount = 0;
                 _maxGapMs = 0;
             }
