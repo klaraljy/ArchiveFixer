@@ -184,8 +184,13 @@ namespace ArchiveFixer.Tests
         {
             // 静态钉住（MainViewModel 的启动日志）：判据是"任一引擎可用"，
             // 所以那句提示必须由 ToolLocator 现算 —— 不许再出现写死的 tools\7zip\7z.exe 文案。
-            string source = File.ReadAllText(
-                Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "ViewModels", "MainViewModel.cs"));
+            string viewModels = Path.Combine(
+                XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "ViewModels");
+            string source = string.Join(
+                Environment.NewLine,
+                Directory.GetFiles(viewModels, "MainViewModel*.cs")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .Select(File.ReadAllText));
 
             Assert.Contains("DescribeNoEngineAvailable", source, StringComparison.Ordinal);
 

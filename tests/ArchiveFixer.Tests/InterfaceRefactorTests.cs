@@ -197,7 +197,7 @@ namespace ArchiveFixer.Tests
         {
             string extraction = Read("Views", "Tabs", "ExtractionTab.xaml");
             string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
-            string mainViewModel = Read("ViewModels", "MainViewModel.cs");
+            string mainViewModel = ReadMainViewModelSources();
 
             foreach (string retired in new[]
                      {
@@ -398,7 +398,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("设置", headers);
             Assert.Contains("打包", headers);
 
-            string viewModel = Read("ViewModels", "MainViewModel.cs");
+            string viewModel = ReadMainViewModelSources();
 
             // 自动保存（用户 2026-09-26）：主视图模型里必须有这条唯一出口，⛔ 不许再有"手动保存"命令。
             Assert.Contains("AutoSaveSettingsIfChanged", viewModel, StringComparison.Ordinal);
@@ -545,7 +545,7 @@ namespace ArchiveFixer.Tests
         public void 输出位置的第二入口_每一项都真挂在任务页且不重复绑设置项()
         {
             string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
-            string viewModelSource = Read("ViewModels", "MainViewModel.cs");
+            string viewModelSource = ReadMainViewModelSources();
 
             foreach ((string name, string reason) in DeliberateSecondEntries)
             {
@@ -739,6 +739,19 @@ namespace ArchiveFixer.Tests
         private static string ViewsDirectory => Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views");
 
         private static string TabsDirectory => Path.Combine(ViewsDirectory, "Tabs");
+
+        /// <summary>MainViewModel 已拆成 partial；所有静态/结构检查都要读整套文件。</summary>
+        private static string ReadMainViewModelSources()
+        {
+            string directory = Path.Combine(
+                XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "ViewModels");
+
+            return string.Join(
+                Environment.NewLine,
+                Directory.GetFiles(directory, "MainViewModel*.cs")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .Select(File.ReadAllText));
+        }
 
         private static string Read(params string[] parts)
         {
