@@ -11,6 +11,7 @@ using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Globalization;
@@ -337,7 +338,8 @@ namespace ArchiveFixer.ViewModels
                     conflictAction,
                     conflictDecision,
                     cancellationToken,
-                    recursion),
+                    recursion,
+                    manifestExpectation.ExpectedRootPath),
                 cancellationToken);
 
             // 回到 UI 线程：只做状态与日志，不再碰大盘。
@@ -548,6 +550,9 @@ namespace ArchiveFixer.ViewModels
                     ? work.Collected.DestinationPath
                     : sourceRoot;
 
+                UiActivity.Mark("收尾", task.LogName, "回填产物路径");
+                var producedWatch = Stopwatch.StartNew();
+
                 task.ProducedFiles.Clear();
 
                 /*
@@ -594,6 +599,14 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 MarkSourceConsumed(task);
+                producedWatch.Stop();
+
+                if (producedWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[性能] {task.LogName}：回填产物路径耗时 {producedWatch.ElapsedMilliseconds:N0} 毫秒（{work.Commit.ProducedFiles.Count} 项）");
+                }
             }
 
             /*
@@ -651,7 +664,17 @@ namespace ArchiveFixer.ViewModels
              */
             if (work.Verification.Verified)
             {
+                UiActivity.Mark("收尾", task.LogName, "跨链收片");
+                var adoptWatch = Stopwatch.StartNew();
                 AdoptPublishedVolumePieces(task);
+                adoptWatch.Stop();
+
+                if (adoptWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[性能] {task.LogName}：跨链收片耗时 {adoptWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
             }
 
             /*
@@ -667,7 +690,19 @@ namespace ArchiveFixer.ViewModels
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
                 UiActivity.Mark("收尾", task.LogName, "清理中间工作区");
+                var cleanupWatch = Stopwatch.StartNew();
                 await Task.Run(() => CleanupTaskWorkspaceDirectory(task, stageDirectory));
+                cleanupWatch.Stop();
+                UiActivity.ClearBackground();
+
+                if (cleanupWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[性能] {task.LogName}：清理中间工作区耗时 {cleanupWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
+
+                UiActivity.Mark("收尾", task.LogName, "清理中间工作区完成");
             }
 
             /*

@@ -39,7 +39,17 @@ namespace ArchiveFixer.ViewModels
 
                 await ProcessExtractTaskAsync(task, oneClickRun);
 
+                UiActivity.Mark("收尾", task.LogName, "其余物处理");
+                var restWatch = System.Diagnostics.Stopwatch.StartNew();
                 await RunRestHandlingAsync(task, runtime, oneClickRun);
+                restWatch.Stop();
+
+                if (restWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog("WARN", $"[性能] {task.LogName}：其余物处理耗时 {restWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
+
+                UiActivity.Mark("收尾", task.LogName, "其余物处理完成");
 
                 // 空间不足也不能拿“用户接受风险”替代本单成功/校验证据：
                 // 失败/部分完成时源包保留，由链尾按用户档位处理。
@@ -249,7 +259,9 @@ namespace ArchiveFixer.ViewModels
                  * 包装解出来的 7z 中间片/Unknown 常常没有独立任务行，
                  * 不在这里登记，SevenZipBoundaryResolver 就永远只看到一小部分片。
                  */
-                RegisterProducedOutputsToLedger(task);
+                UiActivity.Mark("收尾", task.LogName, "登记第一大步产物");
+                await RegisterProducedOutputsToLedgerAsync(task);
+                UiActivity.ClearBackground();
 
                 /*
                  * 收尾（P1）：owner 任务先按 VolumeGroupUnit 收片/留片/回写结论；
@@ -342,11 +354,23 @@ namespace ArchiveFixer.ViewModels
                  * 那些内容此刻还在这一单的暂存目录里，清掉就再也没有了（老口径正是这么丢的）。
                  * 返回值 = "内容没全发布，工作区不能清"（见 PartialPublisher.Result.AllMoved）。
                  */
+                UiActivity.Mark("收尾", task.LogName, "部分完成发布");
                 bool keepWorkspaceForUnpublished = await TryPublishPartialProductsAsync(
                     task,
                     cancelled: taskCts.IsCancellationRequested);
 
+                UiActivity.Mark("收尾", task.LogName, "失败工作区清理");
+                var failedCleanupWatch = System.Diagnostics.Stopwatch.StartNew();
                 await Task.Run(() => CleanupFailedTaskWorkspace(task, keepWorkspaceForUnpublished));
+                failedCleanupWatch.Stop();
+                UiActivity.ClearBackground();
+
+                if (failedCleanupWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[性能] {task.LogName}：失败工作区清理耗时 {failedCleanupWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
 
                 /*
                  * ⛔ **任务收尾：实时进度清零**（`ArchiveTask.ProgressPercent` 的契约逐字：「它是**瞬时状态**：
@@ -361,9 +385,27 @@ namespace ArchiveFixer.ViewModels
                 task.ClearProgress();
 
                 // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
+                UiActivity.Mark("收尾", task.LogName, "任务日志收尾");
+                var logWatch = System.Diagnostics.Stopwatch.StartNew();
                 EndTaskLogCapture(task);
+                logWatch.Stop();
 
+                if (logWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog("WARN", $"[性能] {task.LogName}：任务日志收尾耗时 {logWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
+
+                UiActivity.Mark("收尾", task.LogName, "更新汇总");
+                var summaryWatch = System.Diagnostics.Stopwatch.StartNew();
                 UpdateSummary();
+                summaryWatch.Stop();
+
+                if (summaryWatch.ElapsedMilliseconds >= 1000)
+                {
+                    AppendLog("WARN", $"[性能] {task.LogName}：更新汇总耗时 {summaryWatch.ElapsedMilliseconds:N0} 毫秒");
+                }
+
+                UiActivity.Clear();
             }
         }
 

@@ -51,6 +51,33 @@ namespace ArchiveFixer.Services
             }
         }
 
+        /// <summary>只清后台标记（后台清理结束、UI 阶段仍在进行时用）。</summary>
+        public static void ClearBackground()
+        {
+            lock (Gate)
+            {
+                _backgroundPhase = string.Empty;
+                _backgroundTask = string.Empty;
+                _backgroundDetail = string.Empty;
+            }
+        }
+
+        /// <summary>任务真正结束 / 空闲时清掉阶段与后台标记，避免下一次停顿归因到旧阶段。</summary>
+        public static void Clear()
+        {
+            lock (Gate)
+            {
+                _phase = "空闲";
+                _task = string.Empty;
+                _detail = string.Empty;
+                _markedAtTicks = 0;
+                _markedThreadId = 0;
+                _backgroundPhase = string.Empty;
+                _backgroundTask = string.Empty;
+                _backgroundDetail = string.Empty;
+            }
+        }
+
         /// <summary>当前没有实际任务在跑；空闲阶段的窗口停顿不是“卡死”。</summary>
         public static bool IsIdle
         {

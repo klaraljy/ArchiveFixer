@@ -265,7 +265,15 @@ namespace ArchiveFixer.ViewModels
         /// 把这一单产出的全部文件登记进唯一第一大步账本。
         /// 这是“文件产物产生时”的登记点，覆盖包装/递归产出的 Unknown 与中间片。
         /// </summary>
-        internal void RegisterProducedOutputsToLedger(ArchiveTask task)
+        private sealed class ProducedOutputFact
+        {
+            public string File { get; init; } = string.Empty;
+            public FileNatureCard Card { get; init; } = null!;
+            public int? NameSlot { get; init; }
+            public bool Candidate { get; init; }
+        }
+
+        internal async Task RegisterProducedOutputsToLedgerAsync(ArchiveTask task)
         {
             if (task == null || string.IsNullOrWhiteSpace(task.OutputPath))
             {
@@ -281,107 +289,117 @@ namespace ArchiveFixer.ViewModels
 
             string originRootId = _extractionContentGraph.ResolveRootId(task);
             string placementKey = _extractionContentGraph.ResolvePlacementKey(task);
+            string currentPath = task.CurrentPath ?? string.Empty;
 
-            IEnumerable<string> files;
+            /*
+             * 这里原来在 UI 线程逐个 FileNature.Inspect 整棵产物树；1~12 的 1979 个文件实测
+             * 阻塞 UI 46 秒（运行期调用栈：RegisterProducedOutputsToLedger → FileNature.Inspect
+             * → VolumeNumberFromContent.ReadZip）。内容事实的读取放后台；账本写入仍回 UI 线程，
+             * 因为 FirstStepFileLedger 不是并发容器。
+             */
+            List<ProducedOutputFact> facts = await Task.Run(() =>
+            {
+                var collected = new List<ProducedOutputFact>();
 
-            try
-            {
-                files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories);
-            }
-            catch
-            {
-                return;
-            }
+                IEnumerable<string> files;
 
-            foreach (string file in files)
-            {
-                /*
-                 * ⛔ 只登记已发布的产物：.ArchiveFixer.work 下的 stage/recursive 是临时层，
-                 * 任务收尾会清理；把它登记进账本会让后续 resolver 拿到已经不存在的源路径
-                 * （Win32 错误 3：建硬链接时源文件找不到了）。
-                 */
-                if (file.Contains(
-                        Path.DirectorySeparatorChar + ".ArchiveFixer.work" + Path.DirectorySeparatorChar,
-                        StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    continue;
+                    files = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories);
+                }
+                catch
+                {
+                    return collected;
                 }
 
-                if (string.Equals(file, task.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                foreach (string file in files)
                 {
-                    continue;
+                    if (file.Contains(
+                            Path.DirectorySeparatorChar + ".ArchiveFixer.work" + Path.DirectorySeparatorChar,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(file, currentPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    FileNatureCard card;
+
+                    try
+                    {
+                        card = FileNature.Inspect(file);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (!card.HasIdentity || card.IsKnownNormalMedia)
+                    {
+                        continue;
+                    }
+
+                    int? nameSlot = LegacyVolumeNames.TryGetIndex(
+                        FileNameHelper.GetFileName(file));
+
+                    collected.Add(new ProducedOutputFact
+                    {
+                        File = file,
+                        Card = card,
+                        NameSlot = nameSlot,
+                        Candidate = RecursiveExtractor.IsPieceOfIncompleteGroup(file)
+                    });
                 }
 
+                return collected;
+            }).ConfigureAwait(true);
+
+            foreach (ProducedOutputFact fact in facts)
+            {
                 /*
                  * 已经由候选登记点挂上租约的片：保留那份角色/租约/来源根，
                  * ⛔ 不用这次“普通产出物”登记把它降级成可回收。
                  */
-                if (_firstStepFileLedger.TryGetByPath(file, out FirstStepFileLedgerEntry existing)
+                if (_firstStepFileLedger.TryGetByPath(fact.File, out FirstStepFileLedgerEntry existing)
                     && existing.HasCandidateLease)
                 {
                     continue;
                 }
 
-                ArchiveFixer.Detection.FileNatureCard card;
-                try
-                {
-                    card = ArchiveFixer.Detection.FileNature.Inspect(file);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (!card.HasIdentity)
-                {
-                    continue;
-                }
-
-                /*
-                 * 普通媒体内容物不是分卷候选：不登记进第二大步账本（⛔ 不靠后缀猜，
-                 * 只认"媒体结构正好占满整个文件且没有尾部归档"这条内容事实）。
-                 */
-                if (card.IsKnownNormalMedia)
-                {
-                    continue;
-                }
-
-                int? nameSlot = LegacyVolumeNames.TryGetIndex(
-                    FileNameHelper.GetFileName(file));
-
-                bool candidate = RecursiveExtractor.IsPieceOfIncompleteGroup(file);
-                string leaseId = candidate
+                string leaseId = fact.Candidate
                     ? _extractionContentGraph.LeaseCandidate(
-                        file,
+                        fact.File,
                         originRootId,
                         task.TaskId,
                         placementKey)
                     : string.Empty;
 
-                if (candidate)
+                if (fact.Candidate)
                 {
                     AppendLog(
                         "INFO",
-                        $"{task.LogName}：候选分卷片已登记交界前租约 —— {FileNameHelper.GetFileName(file)}"
+                        $"{task.LogName}：候选分卷片已登记交界前租约 —— {FileNameHelper.GetFileName(fact.File)}"
                         + "（组收片前不再按普通过程物回收）");
                 }
 
                 _firstStepFileLedger.AddOrReplace(
-                    ArchiveFixer.Detection.FirstStepFileLedgerEntry.FromCard(
-                        card,
-                        FileNameHelper.GetFileName(file),
-                        ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced,
+                    FirstStepFileLedgerEntry.FromCard(
+                        fact.Card,
+                        FileNameHelper.GetFileName(fact.File),
+                        VolumeHandoffSource.ChainProduced,
                         gatePassed: true,
-                        nameSlot: nameSlot,
+                        nameSlot: fact.NameSlot,
                         originRootId: originRootId,
                         producedByTaskId: task.TaskId,
-                        role: candidate
+                        role: fact.Candidate
                             ? ArtifactRole.CandidateVolumePiece
                             : ArtifactRole.Unknown,
                         candidateLeaseId: leaseId,
                         placementKey: placementKey));
             }
-
         }
 
         private static bool IsInsideWorkDirectory(string? path) =>

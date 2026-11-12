@@ -179,6 +179,11 @@ namespace ArchiveFixer.Tests
 
             harness.Engine.ExpectedFileCount = 2;
             harness.Engine.ExpectedTotalSize = 20;
+            harness.Engine.Products = new[]
+            {
+                new FakeProduct("payload-00000.bin", 10),
+                new FakeProduct("payload-00001.bin", 10)
+            };
 
             await harness.Coordinator.StartExtractAsync();
 
@@ -745,7 +750,13 @@ namespace ArchiveFixer.Tests
                     FileCount = ExpectedFileCount,
                     TotalUncompressedSize = ExpectedTotalSize,
                     Entries = Enumerable.Range(0, ExpectedFileCount)
-                        .Select(i => new ArchiveEntry { Path = $"entry-{i:D5}.bin", Size = 1 })
+                        .Select(i =>
+                        {
+                            FakeProduct product = i < Products.Count
+                                ? Products[i]
+                                : new FakeProduct($"extra-{i:D5}.bin", 1);
+                            return new ArchiveEntry { Path = product.Name, Size = product.Size };
+                        })
                         .ToList(),
                     EngineId = "fake",
                     EngineVersion = "1.0"

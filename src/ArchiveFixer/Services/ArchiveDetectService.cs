@@ -29,6 +29,14 @@ namespace ArchiveFixer.Services
     /// </summary>
     public class ArchiveDetectService
     {
+        private static long _probeCalls;
+
+        /// <summary>诊断计数：实际进入 DetectAsync 的次数（缓存命中前就计数）。</summary>
+        public static long ProbeCalls => System.Threading.Interlocked.Read(ref _probeCalls);
+
+        public static void ResetProbeCallsForTests() =>
+            System.Threading.Interlocked.Exchange(ref _probeCalls, 0);
+
         // 需要读到 ISO 9660 卷描述符位置（偏移 0x8001），所以读取 34KB 文件头。
         private const int HeaderReadLength = 34816;
 
@@ -245,6 +253,8 @@ namespace ArchiveFixer.Services
             string filePath,
             CancellationToken cancellationToken = default)
         {
+            System.Threading.Interlocked.Increment(ref _probeCalls);
+
             if (string.IsNullOrWhiteSpace(filePath))
             {
                 return CreateUnknownResult("文件路径为空");

@@ -207,7 +207,10 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 解压后校验。expected 为 null 或 Success=false 时：只做“输出目录存在且非空”的底线校验。
         /// </summary>
-        public static OutputVerificationResult Verify(string? outputDirectory, ArchiveListResult? expected)
+        public static OutputVerificationResult Verify(
+            string? outputDirectory,
+            ArchiveListResult? expected,
+            string? expectedRootPath = null)
         {
             /*
              * ===== 预期数必须按"仅大小写去重"折算（2026-09-27 真机铁证）=====
@@ -238,9 +241,12 @@ namespace ArchiveFixer.Extraction
                 expected is { Success: true } &&
                 expected.Entries is { Count: > 0 };
 
-            (List<ArchiveEntry> missingEntries, int sizeMismatchCount) = hasExpectedEntries
-                ? CompareExpectedEntries(outputDirectory, expected!)
-                : (new List<ArchiveEntry>(), 0);
+            string? expectedRootRelative = ResolveExpectedRoot(outputDirectory, expectedRootPath, out bool expectedRootKnown);
+
+            (List<ArchiveEntry> missingEntries, int sizeMismatchCount, string? effectiveRoot, bool suffixFallback) =
+                hasExpectedEntries
+                    ? CompareExpectedEntries(outputDirectory, expected!, expectedRootRelative)
+                    : (new List<ArchiveEntry>(), 0, expectedRootRelative, false);
 
             /*
              * 规则 1：输出目录不存在 / 是空目录 —— 直接不通过。
@@ -286,6 +292,27 @@ namespace ArchiveFixer.Extraction
                         ? $"校验未通过：产物为空 —— 输出目录里有 {actualFileCount} 个文件，但全是 0 字节（没有解出任何内容）"
                         : $"校验未通过：产物为空 —— 预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，" +
                           $"实际 {actualFileCount} 个 / {actualTotalSize} 字节（解出来的全是 0 字节文件）"
+                };
+            }
+
+            /*
+             * 叶子层清单只描述它自己那一层；最终产物树里可能还套着包名文件夹。
+             * 预期根映射不出来时，不能把“路径对不上”当成“缺文件”，也不能冒充“清单核对过”：
+             * 只做非空底线校验，ManifestCrossChecked=false，源包不动。
+             */
+            if (hasExpectedEntries && !expectedRootKnown && !suffixFallback)
+            {
+                return new OutputVerificationResult
+                {
+                    Verified = true,
+                    Known = false,
+                    ManifestCrossChecked = false,
+                    ExpectedFileCount = expectedFileCount,
+                    ActualFileCount = actualFileCount,
+                    ExpectedTotalSize = expectedTotalSize,
+                    ActualTotalSize = actualTotalSize,
+                    Message = $"预期清单对应的产物根无法映射到本次产物目录（{expectedRootPath}），"
+                              + $"只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
                 };
             }
 
@@ -347,7 +374,10 @@ namespace ArchiveFixer.Extraction
              * 判据一个字没放宽（仍然是 >=），只是把"多的是谁"如实点名前几个 ——
              * 用户看到"实际多于预期也算通过"才不会以为程序没核对。
              */
-            bool verified = actualFileCount >= expectedFileCount && actualTotalSize >= expectedTotalSize;
+            bool verified = actualFileCount >= expectedFileCount
+                && actualTotalSize >= expectedTotalSize
+                && missingEntries.Count == 0
+                && sizeMismatchCount == 0;
 
             /*
              * 只缺 0 字节条目：
@@ -380,10 +410,15 @@ namespace ArchiveFixer.Extraction
                           .Select(entry => $"{entry.Path}（{entry.Size} 字节）"))
                   + (missingEntries.Count > 5 ? " 等" : string.Empty);
 
+            string suffixNote = suffixFallback
+                ? $"；清单路径未在预期根下逐条命中，按实际产物的唯一路径后缀匹配到公共根 {(string.IsNullOrWhiteSpace(effectiveRoot) ? "（空）" : effectiveRoot)}，"
+                  + "清单条目与字节逐条对上"
+                : string.Empty;
+
             string surplusNote = verified
                 && !onlyZeroByteEntriesMissing
                 && (actualFileCount > expectedFileCount || actualTotalSize > expectedTotalSize)
-                    ? DescribeSurplus(outputDirectory, expected, actualFileCount - expectedFileCount)
+                    ? DescribeSurplus(outputDirectory, expected, actualFileCount - expectedFileCount, effectiveRoot)
                     : string.Empty;
 
             return new OutputVerificationResult
@@ -412,6 +447,7 @@ namespace ArchiveFixer.Extraction
                         ? $"校验通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
                         : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节")
                       + missingNote
+                      + suffixNote
                       + surplusNote
                       + caseNote
             };
@@ -426,7 +462,11 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>只在"确实多出来"这一档才走这一遍目录：正常情况下一个字节都不多读。</para>
         /// </summary>
-        private static string DescribeSurplus(string? outputDirectory, ArchiveListResult? expected, int extraFileCount)
+        private static string DescribeSurplus(
+            string? outputDirectory,
+            ArchiveListResult? expected,
+            int extraFileCount,
+            string? expectedRootRelative = null)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -437,7 +477,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                known.Add(NormalizeRelativePath(entry.Path));
+                known.Add(NormalizeExpectedPath(entry.Path, expectedRootRelative));
             }
 
             var names = new List<string>();
@@ -479,9 +519,11 @@ namespace ArchiveFixer.Extraction
         /// <para>只做事实比较；大小写折叠与“后写覆盖先写”沿用 <see cref="CollapseCaseOnlyDuplicates"/>
         /// 的同一口径（每组最后一条）。目录已在清单侧滤掉。</para>
         /// </summary>
-        private static (List<ArchiveEntry> Missing, int SizeMismatchCount) CompareExpectedEntries(
-            string? outputDirectory,
-            ArchiveListResult expected)
+        private static (List<ArchiveEntry> Missing, int SizeMismatchCount, string? EffectiveRoot, bool SuffixFallback)
+            CompareExpectedEntries(
+                string? outputDirectory,
+                ArchiveListResult expected,
+                string? expectedRootRelative)
         {
             var actualByPath = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
@@ -507,7 +549,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                lastExpectedByPath[NormalizeRelativePath(entry.Path)] = entry;
+                lastExpectedByPath[NormalizeExpectedPath(entry.Path, expectedRootRelative)] = entry;
             }
 
             var missing = new List<ArchiveEntry>();
@@ -525,13 +567,163 @@ namespace ArchiveFixer.Extraction
                 }
             }
 
-            return (missing, sizeMismatchCount);
+            if (missing.Count == 0 && sizeMismatchCount == 0)
+            {
+                return (missing, sizeMismatchCount, expectedRootRelative, false);
+            }
+
+            /*
+             * 叶子层清单可能被发布到“包名层 / 归档自带文件夹”之下，而 work 目录里的
+             * layer.OutputPath 并不是最终产物根。此时按完整相对路径精确比对必然报缺，
+             * 但文件确实在产物树里。这里只在“每个清单条目在整个产物树里唯一命中、大小一致、
+             * 且公共前缀一致”时采用该前缀；任何重复/缺失/大小不符都不放宽。
+             */
+            string? suffixRoot = TryFindUniqueSuffixRoot(actualByPath, lastExpectedByPath);
+
+            if (suffixRoot != null)
+            {
+                var fallbackMissing = new List<ArchiveEntry>();
+                int fallbackMismatch = 0;
+
+                foreach (ArchiveEntry entry in lastExpectedByPath.Values)
+                {
+                    string path = NormalizeExpectedPath(entry.Path, suffixRoot);
+
+                    if (!actualByPath.TryGetValue(path, out long actualSize))
+                    {
+                        fallbackMissing.Add(entry);
+                    }
+                    else if (actualSize != entry.Size)
+                    {
+                        fallbackMismatch++;
+                    }
+                }
+
+                if (fallbackMissing.Count == 0 && fallbackMismatch == 0)
+                {
+                    return (fallbackMissing, 0, suffixRoot, true);
+                }
+            }
+
+            return (missing, sizeMismatchCount, expectedRootRelative, false);
+        }
+
+        /// <summary>
+        /// 为清单找“唯一的实际产物公共前缀”：每个预期相对路径在产物树里只能有一个
+        /// 以该路径结尾的实际文件，大小必须一致，且所有命中文件剥掉预期路径后的目录前缀相同。
+        /// 任一条件不成立返回 null。
+        /// </summary>
+        private static string? TryFindUniqueSuffixRoot(
+            IReadOnlyDictionary<string, long> actualByPath,
+            IReadOnlyDictionary<string, ArchiveEntry> expectedByPath)
+        {
+            string? root = null;
+
+            foreach (ArchiveEntry entry in expectedByPath.Values)
+            {
+                string expectedPath = NormalizeRelativePath(entry.Path);
+                string suffix = "/" + expectedPath;
+
+                var matches = actualByPath
+                    .Where(kv => string.Equals(kv.Key, expectedPath, StringComparison.OrdinalIgnoreCase)
+                                 || kv.Key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+
+                if (matches.Length != 1 || matches[0].Value != entry.Size)
+                {
+                    return null;
+                }
+
+                string matched = matches[0].Key;
+                string candidate = matched.Length == expectedPath.Length
+                    ? string.Empty
+                    : NormalizeRelativePath(matched.Substring(0, matched.Length - expectedPath.Length));
+
+                if (root == null)
+                {
+                    root = candidate;
+                }
+                else if (!string.Equals(root, candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+            }
+
+            return root ?? string.Empty;
+        }
+
+        /// <summary>
+        /// 把清单对应的产物根折算成**相对最终产物目录的前缀**。
+        /// 空根 = 前缀为空；根在产物目录之外/取不到 = known=false。
+        /// </summary>
+        private static string? ResolveExpectedRoot(
+            string? outputDirectory,
+            string? expectedRootPath,
+            out bool known)
+        {
+            known = true;
+
+            if (string.IsNullOrWhiteSpace(expectedRootPath))
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                known = false;
+                return null;
+            }
+
+            try
+            {
+                string outputFull = Path.GetFullPath(outputDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string rootFull = Path.GetFullPath(expectedRootPath)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                if (string.Equals(outputFull, rootFull, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                string relative = Path.GetRelativePath(outputFull, rootFull);
+
+                if (string.Equals(relative, ".", StringComparison.Ordinal)
+                    || Path.IsPathRooted(relative)
+                    || string.Equals(relative, "..", StringComparison.Ordinal)
+                    || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                    || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    if (!string.Equals(relative, ".", StringComparison.Ordinal))
+                    {
+                        known = false;
+                    }
+
+                    return null;
+                }
+
+                return NormalizeRelativePath(relative);
+            }
+            catch
+            {
+                known = false;
+                return null;
+            }
+        }
+
+        private static string NormalizeExpectedPath(string path, string? expectedRootRelative)
+        {
+            string normalized = NormalizeRelativePath(path);
+
+            return string.IsNullOrWhiteSpace(expectedRootRelative)
+                ? normalized
+                : NormalizeRelativePath(expectedRootRelative + "/" + normalized);
         }
 
         /// <summary>路径归一：反斜杠统一成正斜杠、去掉开头的分隔符，比较时再忽略大小写。</summary>
         private static string NormalizeRelativePath(string path)
         {
-            return (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
+            return (path ?? string.Empty).Replace('\\', '/').Trim('/');
         }
 
         /// <summary>产物树里的文件（不跟随符号链接 / 联接点；读不了的目录跳过 —— 与 <see cref="Measure"/> 同一口径）。</summary>

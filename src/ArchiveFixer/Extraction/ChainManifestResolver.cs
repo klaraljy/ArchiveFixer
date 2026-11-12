@@ -46,6 +46,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>那一层的说法（`第 1 层：Sociology.7z`）。</summary>
         public string LayerLabel { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 清单对应的**产物根绝对路径**（叶子层才可能非空）。校验时由调用方相对最终产物根折算前缀；
+        /// 外层清单（第 0 层）与现问引擎的清单为空。
+        /// </summary>
+        public string ExpectedRootPath { get; init; } = string.Empty;
+
         /// <summary>取不到时的原因（**点名哪一层 + 为什么** + 用户能做什么）；取得到时为空串。</summary>
         public string UnavailableReason { get; init; } = string.Empty;
 
@@ -162,7 +168,8 @@ namespace ArchiveFixer.Extraction
                     Source = ManifestExpectationSource.LeafLayer,
                     Expected = manifest.ToExpected(),
                     LayerDepth = deepest.Depth,
-                    LayerLabel = DescribeLayer(deepest)
+                    LayerLabel = DescribeLayer(deepest),
+                    ExpectedRootPath = deepest.OutputPath
                 };
             }
 

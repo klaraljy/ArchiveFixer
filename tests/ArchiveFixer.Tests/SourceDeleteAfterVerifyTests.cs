@@ -597,7 +597,13 @@ namespace ArchiveFixer.Tests
                     FileCount = ExpectedFileCount,
                     TotalUncompressedSize = ExpectedTotalSize,
                     Entries = Enumerable.Range(0, ExpectedFileCount)
-                        .Select(i => new ArchiveEntry { Path = $"entry-{i:D5}.bin", Size = 1 })
+                        .Select(i =>
+                        {
+                            (string Name, int Size) product = i < _products.Count
+                                ? _products[i]
+                                : ($"extra-{i:D5}.bin", 1);
+                            return new ArchiveEntry { Path = product.Name, Size = product.Size };
+                        })
                         .ToList(),
                     EngineId = "fake",
                     EngineVersion = "1.0"

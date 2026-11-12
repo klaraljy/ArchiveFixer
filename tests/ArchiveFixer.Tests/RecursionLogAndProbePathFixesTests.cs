@@ -466,14 +466,25 @@ namespace ArchiveFixer.Tests
             (string Path, long Size) entry,
             long declaredTotalBytes)
         {
+            var entries = new List<ArchiveEntry>
+            {
+                new ArchiveEntry { Path = entry.Path, Size = entry.Size }
+            };
+
+            if (declaredTotalBytes > entry.Size)
+            {
+                entries.Add(new ArchiveEntry
+                {
+                    Path = "payload.bin",
+                    Size = declaredTotalBytes - entry.Size
+                });
+            }
+
             return new ArchiveListResult
             {
                 Success = true,
-                Entries = new List<ArchiveEntry>
-                {
-                    new ArchiveEntry { Path = entry.Path, Size = entry.Size }
-                },
-                FileCount = 1,
+                Entries = entries,
+                FileCount = entries.Count,
                 TotalUncompressedSize = declaredTotalBytes,
                 IsEncrypted = true,
                 EngineId = EngineIds.SevenZip,
@@ -487,13 +498,14 @@ namespace ArchiveFixer.Tests
             if (!string.IsNullOrWhiteSpace(outputPath))
             {
                 Directory.CreateDirectory(outputPath);
+                File.WriteAllBytes(Path.Combine(outputPath, "readme.txt"), new byte[12]);
 
                 using FileStream stream = new(
-                    Path.Combine(outputPath, "readme.txt"),
+                    Path.Combine(outputPath, "payload.bin"),
                     FileMode.Create,
                     FileAccess.Write);
 
-                stream.SetLength(size);
+                stream.SetLength(size - 12);
             }
 
             return ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero);

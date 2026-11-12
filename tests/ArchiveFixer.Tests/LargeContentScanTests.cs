@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Services;
 using ArchiveFixer.Tests.Batch120;
 using Xunit;
 
@@ -55,8 +56,10 @@ namespace ArchiveFixer.Tests
                 new UTF8Encoding(false));
 
             ContentAdmission.ResetProbeCallsForTests();
+            ArchiveDetectService.ResetProbeCallsForTests();
 
             Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId);
+            long archiveProbeCalls = ArchiveDetectService.ProbeCalls;
 
             try
             {
@@ -76,6 +79,10 @@ namespace ArchiveFixer.Tests
                 Assert.True(
                     ContentAdmission.ProbeCalls < 100,
                     "普通内容物被内容识别了：" + ContentAdmission.ProbeCalls + " 次");
+
+                Assert.True(
+                    archiveProbeCalls < 100,
+                    "普通内容物被逐文件归档探测了：" + archiveProbeCalls + " 次");
             }
             finally
             {
@@ -91,6 +98,7 @@ namespace ArchiveFixer.Tests
                 }
 
                 ContentAdmission.ResetProbeCallsForTests();
+                ArchiveDetectService.ResetProbeCallsForTests();
             }
         }
 
@@ -99,7 +107,9 @@ namespace ArchiveFixer.Tests
             using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
             using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
 
-            byte[] png = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+            // 合法 1x1 PNG；8 字节魔数桩会被 FileNature 判成 Unknown，不能代表普通图片。
+            byte[] png = Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
             for (int index = 0; index < count; index++)
             {

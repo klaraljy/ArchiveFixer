@@ -1001,9 +1001,9 @@ namespace ArchiveFixer.Tests
             {
                 Success = true,
                 FileCount = fileNames.Length,
-                TotalUncompressedSize = 0,
+                TotalUncompressedSize = fileNames.Length * 3L,
                 Entries = fileNames
-                    .Select(name => new ArchiveEntry { Path = name, Size = 0 })
+                    .Select(name => new ArchiveEntry { Path = name, Size = 3 })
                     .ToList(),
                 EngineId = "fake",
                 EngineVersion = "1.0"

@@ -54,7 +54,8 @@ namespace ArchiveFixer.ViewModels
             string conflictAction,
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
-            RecursionResult? recursion = null)
+            RecursionResult? recursion = null,
+            string expectedRootPath = "")
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -69,7 +70,10 @@ namespace ArchiveFixer.ViewModels
              * <see cref="OutputVerifier.Verify"/> 内部对 null 与 Success=false 的处理逐字相同
              * （两条规则都先判 Success），所以这一改**只多带一句话，不改任何判定**。
              */
-            OutputVerificationResult verification = OutputVerifier.Verify(stageDirectory, expected);
+            OutputVerificationResult verification = OutputVerifier.Verify(
+                stageDirectory,
+                expected,
+                expectedRootPath);
 
             /*
              * ⛔ 「只出了源包自己那一个垃圾」—— 收尾这一步的最后一道闸门（用户 2026-09-28 红检实测）。

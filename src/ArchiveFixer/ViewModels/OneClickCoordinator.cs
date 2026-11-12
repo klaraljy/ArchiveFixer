@@ -3537,7 +3537,37 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    (bool isArchive, string how) = await ClassifyArchiveByContentAsync(file);
+                    /*
+                     * 普通产物先看底层卡，不再对每个图片/视频都跑一遍 DetectAsync。
+                     * 只对“卡上仍判不出格式且没有归档结构”的文件进入完整归档探测；
+                     * 媒体前缀归档的卡是 ContentClass=Archive/EmbeddedOffset>0，不会被这里跳过。
+                     */
+                    FileNatureCard producedNature = FileNature.Inspect(file);
+                    bool isArchive;
+                    string how;
+
+                    if (producedNature.IsKnownNormalMedia
+                        && producedNature.ContentClass != FileContentClass.Archive
+                        && producedNature.BodyKind == ArchiveBodyKind.Unknown)
+                    {
+                        RememberTerminalProducedContent(file, "普通媒体（内容结构完整，无尾部归档）");
+                        skippedLines.Add($"{file}（普通媒体，不做归档探测）");
+                        continue;
+                    }
+
+                    if (producedNature.Format != VolumeContentFormat.Unknown
+                        || producedNature.ContentClass == FileContentClass.Archive
+                        || producedNature.BodyKind != ArchiveBodyKind.Unknown)
+                    {
+                        isArchive = true;
+                        how = producedNature.EmbeddedOffset > 0
+                            ? $"尾部内嵌归档（{producedNature.Format}，偏移 {producedNature.EmbeddedOffset}）"
+                            : $"文件头魔数（{producedNature.Format}）";
+                    }
+                    else
+                    {
+                        (isArchive, how) = await ClassifyArchiveByContentAsync(file);
+                    }
 
                     /*
                      * ⚠ **引擎按内容打不开，不代表它不该进续解链**（2026-10-11 真机 EEE 实测，轮次模型补的那一格）：
