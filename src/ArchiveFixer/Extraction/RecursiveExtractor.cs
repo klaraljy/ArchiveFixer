@@ -959,15 +959,11 @@ namespace ArchiveFixer.Extraction
                      * 每层只回传一次：同一份清单每个候选都列得出来，逐候选重报只会把日志刷成噪声
                      * （提示说的是这个包有什么，与用哪个密码打开无关）。
                      */
-                    if (!dangerousEntriesHintReported)
-                    {
-                        dangerousEntriesHintReported = true;
-
-                        DangerousEntriesReported?.Invoke(
-                            ViewModels.ExtractionCoordinator.AnalyzeDangerousEntries(
-                                listedThisCandidate.Entries,
-                                ReportDangerousEntries));
-                    }
+                    dangerousEntriesHintReported = RecursiveLayerDiagnostics.ReportDangerousEntriesOnce(
+                        dangerousEntriesHintReported,
+                        ReportDangerousEntries,
+                        DangerousEntriesReported,
+                        listedThisCandidate);
                 }
                 else if (string.Equals(
                     listedThisCandidate?.ErrorType,
