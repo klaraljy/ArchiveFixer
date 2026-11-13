@@ -156,7 +156,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
 
-        private void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
+        internal void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
         {
             lock (_runningTaskCtsLock)
             {
@@ -165,7 +165,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private void UntrackRunningTask(CancellationTokenSource cts)
+        internal void UntrackRunningTask(CancellationTokenSource cts)
         {
             lock (_runningTaskCtsLock)
             {
@@ -473,6 +473,11 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        private ExtractionTaskRunner? _taskRunner;
+
+        /// <summary>一个任务从开工到收工的执行器（生命周期与协调器同寿命）。</summary>
+        private ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
     }
 }
 

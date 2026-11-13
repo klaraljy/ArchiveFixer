@@ -313,7 +313,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⚠ 没点名 / 传 null ⇒ false（第一大步）。</para>
         /// </summary>
-        private bool IsSecondStepTask(ArchiveTask? task) =>
+        internal bool IsSecondStepTask(ArchiveTask? task) =>
             task != null && _volumeStepTasks.Contains(task);
 
 

@@ -629,7 +629,7 @@ namespace ArchiveFixer.ViewModels
         /// 名字槽 &gt; 1 的未知内容片：只有当**同基名、同批**里真有一份内容自证的第一卷时，
         /// 才把它当第二大步候选。这样既不用 `.7z` 字面量，也不会把普通的 `作用域.002` 挡在第一大步外。
         /// </summary>
-        private bool HasContentProvenVolumeFirstSibling(ArchiveTask task, string entryName)
+        internal bool HasContentProvenVolumeFirstSibling(ArchiveTask task, string entryName)
         {
             string baseName = FileNameHelper.SecondStepBaseName(task.CurrentPath ?? string.Empty);
 
@@ -840,7 +840,7 @@ namespace ArchiveFixer.ViewModels
             return renamed;
         }
 
-        private ArchiveFixer.Detection.VolumeHandoffEntry RegisterVolumeHandoff(
+        internal ArchiveFixer.Detection.VolumeHandoffEntry RegisterVolumeHandoff(
             ArchiveTask task,
             ArchiveFixer.Detection.FileNatureCard card)
         {

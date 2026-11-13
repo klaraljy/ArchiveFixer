@@ -77,7 +77,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
         }
 
-        private static void FinalizeOutcomeIfPending(ArchiveTask task, bool producedContent = false)
+        internal static void FinalizeOutcomeIfPending(ArchiveTask task, bool producedContent = false)
         {
             // 判据与落点都搬进唯一出口 `Extraction/OutcomeFinalizer`（一次只搬这一个方法）。
             OutcomeFinalizer.FinalizeIfPending(task, producedContent);

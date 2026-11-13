@@ -58,7 +58,7 @@ namespace ArchiveFixer.ViewModels
         private void PreserveCurrentProcessArtifacts(ArchiveTask task, IReadOnlyList<string>? artifactPaths, string? entryPath) =>
             _partialPublishStep.PreserveCurrentProcessArtifacts(task, artifactPaths, entryPath);
 
-        private Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
+        internal Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
             _partialPublishStep.TryPublishPartialProductsAsync(task, cancelled);
 
         private bool PartialPublishActive => _partialPublishStep.PartialPublishActive;

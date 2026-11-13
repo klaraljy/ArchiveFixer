@@ -66,7 +66,7 @@ namespace ArchiveFixer.ViewModels
             return source + "；" + rest;
         }
 
-        private long? ProbeAvailableSpace(string path)
+        internal long? ProbeAvailableSpace(string path)
         {
             return SpaceProbeOverride != null
                 ? SpaceProbeOverride(path)
@@ -214,7 +214,7 @@ namespace ArchiveFixer.ViewModels
         /// </list>
         /// <para>曲线本身不受影响：这一针照样进采样表，最低点仍然写清"哪一刻、在什么节点上"。</para>
         /// </summary>
-        private void RecordSpaceTrend(string note)
+        internal void RecordSpaceTrend(string note)
         {
             _spaceTrend?.Record(note, at: null, notify: false);
         }
@@ -448,7 +448,7 @@ namespace ArchiveFixer.ViewModels
             return task.DirectoryPath;
         }
 
-        private string ResolveSpaceProbePathOrBatch(ArchiveTask task)
+        internal string ResolveSpaceProbePathOrBatch(ArchiveTask task)
         {
             string path = ResolveSpaceProbePathForTask(task);
 

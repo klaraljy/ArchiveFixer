@@ -681,7 +681,7 @@ namespace ArchiveFixer.ViewModels
                     runtime.ReservedBytes = gate.ProbeFailed ? 0L : item.RequiredBytes;
                     runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
                     startedTasks.Add(task);
-                    Task runningTask = RunScheduledTaskAsync(task, oneClickRun, runtime);
+                    Task runningTask = TaskRunner.RunScheduledTaskAsync(task, oneClickRun, runtime);
                     runningTaskMap[runningTask] = task;
                     runningTasks.Add(runningTask);
                     slotWorkByTask[task] = scheduledWork;
@@ -1138,7 +1138,7 @@ namespace ArchiveFixer.ViewModels
                             "INFO",
                             $"{waitingTask.LogName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
 
-                        runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
+                        runningTasks.Add(TaskRunner.RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
                     }
                 }
 

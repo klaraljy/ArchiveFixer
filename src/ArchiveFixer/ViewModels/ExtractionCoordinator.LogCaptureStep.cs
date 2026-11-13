@@ -381,10 +381,10 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private void UpdateSummary() => _vm.UpdateSummary();
+        internal void UpdateSummary() => _vm.UpdateSummary();
 
 
-        private void AppendLog(string message) => _vm.AppendLog(message);
+        internal void AppendLog(string message) => _vm.AppendLog(message);
 
         /// <summary>任务级日志：统一带任务名前缀，并走与普通解压相同的成功/失败捕获规则。</summary>
         internal void AppendTaskLog(ArchiveTask task, string message) =>
@@ -410,7 +410,7 @@ namespace ArchiveFixer.ViewModels
         private void AppendLogWithCode(string level, string message, string errorCode, string component) =>
             AppendLog(level, message, errorCode, component);
 
-        private void AppendLog(
+        internal void AppendLog(
             string level,
             string message,
             [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
@@ -434,7 +434,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog(level, message, string.Empty, string.Empty, sourceFile, sourceLine, caller);
         }
 
-        private void AppendLog(
+        internal void AppendLog(
             string level,
             string message,
             string errorCode,

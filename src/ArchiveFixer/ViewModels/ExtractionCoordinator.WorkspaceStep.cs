@@ -32,7 +32,7 @@ namespace ArchiveFixer.ViewModels
         private void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory) =>
             _workspaceStep.CleanupTaskWorkspaceDirectory(task, stageDirectory);
 
-        private void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false) =>
+        internal void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false) =>
             _workspaceStep.CleanupFailedTaskWorkspace(task, keepWorkspace);
 
         private bool HasProductEntriesOutsideWorkspace(string directory) =>

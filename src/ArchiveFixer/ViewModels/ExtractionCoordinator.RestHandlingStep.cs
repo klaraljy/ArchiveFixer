@@ -211,7 +211,7 @@ namespace ArchiveFixer.ViewModels
             out string? failure) =>
             RestHandlingStep.TryMoveIntoRest(from, to, movedTargets, out target, out failure);
 
-        private Task RunRestHandlingAsync(
+        internal Task RunRestHandlingAsync(
             ArchiveTask task,
             ScheduledTaskRuntime runtime,
             bool oneClickRun,

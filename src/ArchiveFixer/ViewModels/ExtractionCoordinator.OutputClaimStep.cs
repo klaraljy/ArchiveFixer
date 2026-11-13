@@ -105,7 +105,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>释放最终目录占位（任务收尾时调；没占过就是一次空操作）。</summary>
-        private void ReleaseOutputDirectoryClaim(string? outputPath)
+        internal void ReleaseOutputDirectoryClaim(string? outputPath)
         {
             if (string.IsNullOrWhiteSpace(outputPath))
             {
