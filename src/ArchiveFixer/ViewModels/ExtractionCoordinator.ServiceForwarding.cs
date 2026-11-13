@@ -426,7 +426,7 @@ namespace ArchiveFixer.ViewModels
             set => _restHandlingStep.RestHandlingThisBatch = value;
         }
 
-        private Task CollectChainInnerPackagesIntoRestAsync(
+        internal Task CollectChainInnerPackagesIntoRestAsync(
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
             CancellationToken cancellationToken,
@@ -437,7 +437,7 @@ namespace ArchiveFixer.ViewModels
         private void CollectChainInnerLayerInputsIntoRest(ArchiveTask rootTask, string restDirectory, string outputRoot) =>
             _restHandlingStep.CollectChainInnerLayerInputsIntoRest(rootTask, restDirectory, outputRoot);
 
-        private void ReportLeftBehindInnerPackages(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks) =>
+        internal void ReportLeftBehindInnerPackages(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks) =>
             _restHandlingStep.ReportLeftBehindInnerPackages(rootTask, chainTasks);
 
         internal static List<(string From, string To)> PlanChainInnerPackageMoves(
@@ -455,7 +455,7 @@ namespace ArchiveFixer.ViewModels
         internal string TryRepairBrokenVolumeChainName(ArchiveTask task, string engineArchivePath) =>
             _restHandlingStep.TryRepairBrokenVolumeChainName(task, engineArchivePath);
 
-        private Task ApplyRestHandlingAfterChainAsync(
+        internal Task ApplyRestHandlingAfterChainAsync(
             ArchiveTask task,
             IReadOnlyList<ArchiveTask>? chainTasks,
             CancellationToken cancellationToken) =>
@@ -467,7 +467,7 @@ namespace ArchiveFixer.ViewModels
             SourceHandlingMode sourceHandling) =>
             _restHandlingStep.AppendCompletenessEvidence(task, verification, sourceHandling);
 
-        private Task<DeferredSourceMoveWork> RunDeferredSourceMoveWorkAsync(
+        internal Task<DeferredSourceMoveWork> RunDeferredSourceMoveWorkAsync(
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
             SourceHandlingMode sourceHandling,
@@ -491,7 +491,7 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyDictionary<string, string>? consumedVolumeSources) =>
             RestHandlingStep.CanSweepPassThroughRest(task, consumedVolumeSources);
 
-        private Task SweepPassThroughRestDirectoriesAsync(ArchiveTask rootTask, CancellationToken cancellationToken) =>
+        internal Task SweepPassThroughRestDirectoriesAsync(ArchiveTask rootTask, CancellationToken cancellationToken) =>
             _restHandlingStep.SweepPassThroughRestDirectoriesAsync(rootTask, cancellationToken);
 
         internal static bool IsRestInsideRootTree(string? rootDirectory, string? restDirectory) =>

@@ -126,12 +126,12 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>第二大步入口任务 ⇒ 它这一组的基名/入口层/片清单（成功后收片与回写用；批首清空）。</summary>
-        private readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _volumeStepGroupWork = new();
+        internal readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _volumeStepGroupWork = new();
 
         /// <summary>第二大步每组一句话结论（批末回写读它；⛔ 不从日志反推）。</summary>
         private readonly Dictionary<string, string> _volumeStepGroupVerdicts = new(StringComparer.OrdinalIgnoreCase);
 
-        private sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
+        internal sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
 
         /// <summary>B/C 段点名入口任务时登记这一组的收片账（基名 + 入口层 + 片清单）。</summary>
         internal void RememberVolumeStepGroupWork(

@@ -946,7 +946,7 @@ namespace ArchiveFixer.ViewModels
         /// 的消费方（`ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval`）——
         /// 这就是 `&&` 的第二步。⛔ 组不完整 / 校验没过 / 判不出消费方 ⇒ 什么都不做；幂等（Done 跳过）。</para>
         /// </summary>
-        private void SettleVerifiedGroupFollowers()
+        internal void SettleVerifiedGroupFollowers()
         {
             SourceHandlingMode handling = _spaceTightPolicy.Enabled
                 ? SourceHandlingMode.DeleteInPlace

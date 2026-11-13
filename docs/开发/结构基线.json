@@ -50,7 +50,7 @@
     "ViewModels/ExtractionCoordinator.ExtractionScheduleStep.cs": 806,
     "ViewModels/ExtractionCoordinator.ExtractTaskMainStep.cs": 744,
     "ViewModels/ExtractionCoordinator.PieceAdoptionStep.cs": 1006,
-    "ViewModels/ExtractionCoordinator.Source.cs": 1717,
+    "ViewModels/ExtractionCoordinator.Source.cs": 633,
     "ViewModels/ExtractionCoordinator.VolumeGatherCollectStep.cs": 1397,
     "ViewModels/ExtractionCoordinator.VolumeGatherStep.cs": 974,
     "ViewModels/ExtractionCoordinator.VolumeHandoffStep.cs": 1406,

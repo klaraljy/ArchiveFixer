@@ -36,7 +36,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
 
-        private readonly MainViewModel _vm;
+        internal readonly MainViewModel _vm;
         private readonly IArchiveEngine _archiveEngine;
         private readonly PasswordService _passwordService;
         private readonly PasswordFailureRegistry _passwordFailureRegistry;
@@ -129,7 +129,7 @@ namespace ArchiveFixer.ViewModels
         // ================================================================
 
 
-        private CancellationTokenSource? _operationCts;
+        internal CancellationTokenSource? _operationCts;
 
         /// <summary>
         /// **第二大步"当前工作"的取消源**：解析 / 试开 / 命名 / 建入口根这一整段。
@@ -330,7 +330,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
 
         /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
-        private SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
+        internal SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
 
         public ExtractionCoordinator(
             MainViewModel vm,

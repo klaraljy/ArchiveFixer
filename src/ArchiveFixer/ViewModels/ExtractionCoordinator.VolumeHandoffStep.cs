@@ -1274,7 +1274,7 @@ namespace ArchiveFixer.ViewModels
         /// **把收拢搬走的用户源片放回原目录**（逐层回收动删除之前唯一该做的补偿）。
         /// 返回放回的份数；放不回（原位置又被占 / 出错）⇒ 如实写 WARN，⛔ 不拦别人的删除。
         /// </summary>
-        private int RestoreGatheredUserSourcePieces(List<(string Level, string Message)>? logEntries)
+        internal int RestoreGatheredUserSourcePieces(List<(string Level, string Message)>? logEntries)
         {
             if (_gatheredUserSourcePieces.Count == 0)
             {
