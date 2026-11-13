@@ -401,7 +401,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 与"文件名已加密"/"路径过长"同一处产出（同一次 list），保证三个结论口径一致。
         /// </summary>
-        private void PublishDangerousEntriesHint(ArchiveTask task, string hint, string level = "WARN")
+        internal void PublishDangerousEntriesHint(ArchiveTask task, string hint, string level = "WARN")
         {
             if (string.IsNullOrWhiteSpace(hint))
             {

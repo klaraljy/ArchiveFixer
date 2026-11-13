@@ -34,7 +34,7 @@ namespace ArchiveFixer.ViewModels
         internal string EngineOutputPath { get; init; } = string.Empty;
 
         /// <summary>交给引擎的那一份入口路径（⛔ 不是 task.CurrentPath）。</summary>
-        internal string EngineArchivePath { get; init; } = string.Empty;
+        internal string EngineArchivePath { get; set; } = string.Empty;
 
         /* ===== 候选循环交给失败结论收尾的账（只在本阶段边界上写一次）===== */
 
@@ -91,6 +91,12 @@ namespace ArchiveFixer.ViewModels
         internal bool PasswordConfirmed { get; set; }
 
         internal ArchiveFixer.Engines.ArchiveOperationResult? AmbiguousTestResult { get; set; }
+
+        internal ArchiveFixer.Extraction.EmbeddedZipProbeResult? DirectZip { get; set; }
+
+        internal string LastListErrorType { get; set; } = string.Empty;
+
+        internal string LastListMessage { get; set; } = string.Empty;
     }
 }
 

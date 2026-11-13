@@ -359,7 +359,7 @@ namespace ArchiveFixer.ViewModels
 
         private AppSettings? _runSettings;
 
-        private AppSettings Settings => _runSettings ?? _vm.Settings;
+        internal AppSettings Settings => _runSettings ?? _vm.Settings;
 
 
         private string GlobalPassword => _vm.GlobalPassword;

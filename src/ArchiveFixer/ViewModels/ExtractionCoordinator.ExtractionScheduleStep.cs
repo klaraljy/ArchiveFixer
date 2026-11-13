@@ -343,7 +343,7 @@ namespace ArchiveFixer.ViewModels
         /// **绝不默认成同卷**：默认同卷等于把"工作区那块盘也要留一份"这件事从账面上抹掉，
         /// 而那正是用户 2026-09-24 要求如实算进去的那一条。</para>
         /// </summary>
-        private bool? ResolveWorkspaceVolumeShare(string? targetPath)
+        internal bool? ResolveWorkspaceVolumeShare(string? targetPath)
         {
             string workRoot = _pathService.WorkDirectory;
 
@@ -397,7 +397,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>它只回答"空间账面上要不要预留那份副本"，不决定解压怎么做；解压那一刻会再探一次，
         /// 探不通就原地回落到抠取（见 <c>ExtractSingleTaskAsync</c> 里内嵌归档那一段）。</para>
         /// </summary>
-        private bool DirectReadAppliesTo(ArchiveTask? task)
+        internal bool DirectReadAppliesTo(ArchiveTask? task)
         {
             if (task == null ||
                 task.EmbeddedArchiveOffset <= 0 ||
@@ -475,7 +475,7 @@ namespace ArchiveFixer.ViewModels
         /// 空间门拦下的共用落点（启动前与解压前预检两条路都走它）：
         /// 状态、错误信息、日志、批末报告清单**一次写全**。
         /// </summary>
-        private void MarkSpaceBlockedCore(
+        internal void MarkSpaceBlockedCore(
             ArchiveTask task,
             string message,
             long requiredBytes,
@@ -688,7 +688,7 @@ namespace ArchiveFixer.ViewModels
         /// **不是** <see cref="TaskSpaceEstimate.PeakBytes"/>：源包已经在盘上、不在可用空间里，
         /// 拿峰值比可用空间就是把源包算两遍（2026-09-29 真机事故，见那个属性的说明）。</para>
         /// </summary>
-        private SpaceGateDecision ReconcileReservation(ArchiveTask task, TaskSpaceEstimate refined)
+        internal SpaceGateDecision ReconcileReservation(ArchiveTask task, TaskSpaceEstimate refined)
         {
             SpaceReservationLedger? ledger = _spaceLedger;
 
@@ -761,7 +761,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>旧写法：解压前预检直接用 <c>new ResourceBudget()</c>（= 硬编码 4 GiB 单文件 / 20 GiB 总量），
         /// 界面上一个字都没有 —— 他 12 GiB 的分卷包被拦下时看到的就是那句判决。</para>
         /// </summary>
-        private ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(Settings);
+        internal ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(Settings);
 
         /// <summary>本批的空间预留账本（串行时也建，只是永远只有一个任务在账上）。</summary>
         private SpaceReservationLedger? _spaceLedger;

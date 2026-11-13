@@ -82,7 +82,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⚠ 刻意**不走任务级捕获缓冲**（那条缓冲会把成功任务的 INFO 丢掉）：判据是大测试"只看日志排查"的
         /// 唯一线索 ⇒ 它每一处都必须落进日志文件。⛔ 只是记录：判据与行为一个字都不改。</para>
         /// </summary>
-        private void CriterionLog(
+        internal void CriterionLog(
             string criterion,
             string inputs,
             string verdict,

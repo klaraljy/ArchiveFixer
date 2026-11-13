@@ -61,7 +61,7 @@ namespace ArchiveFixer.ViewModels
         internal Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled) =>
             _partialPublishStep.TryPublishPartialProductsAsync(task, cancelled);
 
-        private bool PartialPublishActive => _partialPublishStep.PartialPublishActive;
+        internal bool PartialPublishActive => _partialPublishStep.PartialPublishActive;
 
         AppSettings? IPartialPublishStepHost.Settings => Settings;
 

@@ -161,7 +161,7 @@ namespace ArchiveFixer.ViewModels
         /// 只按命名筛（能不能归组由 <see cref="VolumeGroupDetector"/> 说了算），
         /// 不读内容、不碰别的目录。
         /// </summary>
-        private static List<string> CollectVolumeFilesInDirectory(string directory)
+        internal static List<string> CollectVolumeFilesInDirectory(string directory)
         {
             var found = new List<string>();
 

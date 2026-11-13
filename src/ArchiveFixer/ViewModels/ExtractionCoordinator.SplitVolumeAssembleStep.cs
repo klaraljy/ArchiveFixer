@@ -36,7 +36,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>返回 <c>(null, null)</c> = 没拼 / 拼了但引擎不认 —— 调用方照旧走今天那条路。</para>
         /// </summary>
-        private async Task<(string? FirstVolumePath, ArchiveListResult? List)> TryAssembleSplitVolumesAsync(
+        internal async Task<(string? FirstVolumePath, ArchiveListResult? List)> TryAssembleSplitVolumesAsync(
             ArchiveTask task,
             string carvedPath,
             IReadOnlyList<PasswordItem> candidates,

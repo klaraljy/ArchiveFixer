@@ -376,7 +376,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>引擎报的是不是"分卷缺失"这一类（7-Zip 与 UnRAR 两套错误码都认）。</summary>
-        private static bool IsVolumeMissingErrorType(string? detectedErrorType)
+        internal static bool IsVolumeMissingErrorType(string? detectedErrorType)
         {
             if (string.IsNullOrWhiteSpace(detectedErrorType))
             {
