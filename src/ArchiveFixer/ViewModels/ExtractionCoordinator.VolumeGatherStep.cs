@@ -390,7 +390,7 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 搬运仍只有既有出口 <c>ExecuteSourcePackageMove</c>（六道闸门一条都不绕过）；
         /// ⛔ 已经收过场的（跟班 + 已搬）不重复做。</para>
         /// </summary>
-        private void SettleGroupPieceProducers(
+        internal void SettleGroupPieceProducers(
             ArchiveTask consumer,
             bool moveSources,
             List<(string Level, string Message)> logEntries)

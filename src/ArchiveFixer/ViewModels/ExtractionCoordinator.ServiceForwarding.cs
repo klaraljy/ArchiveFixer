@@ -480,7 +480,7 @@ namespace ArchiveFixer.ViewModels
         internal static string ResolveRestDirectoryAfterCollect(StageCommitResult commit, CollectResult? collected) =>
             RestHandlingStep.ResolveRestDirectoryAfterCollect(commit, collected);
 
-        private void PurgePassThroughRestOfSettledProducer(ArchiveTask producer, ArchiveTask consumer, string groupBaseName) =>
+        internal void PurgePassThroughRestOfSettledProducer(ArchiveTask producer, ArchiveTask consumer, string groupBaseName) =>
             _restHandlingStep.PurgePassThroughRestOfSettledProducer(producer, consumer, groupBaseName);
 
         internal static string DescribeRestScope(SourceHandlingMode sourceHandling) =>

@@ -44,7 +44,7 @@
     "Storage/RecycleBinService.cs": 466,
     "Storage/RestItemPurger.cs": 998,
     "ViewModels/ExtractionCoordinator.BatchReminderStep.cs": 830,
-    "ViewModels/ExtractionCoordinator.ConsumedSettlementStep.cs": 1404,
+    "ViewModels/ExtractionCoordinator.ConsumedSettlementStep.cs": 349,
     "ViewModels/ExtractionCoordinator.DeferredVolumeDeficitStep.cs": 1182,
     "ViewModels/ExtractionCoordinator.ExtractEntryStep.cs": 1169,
     "ViewModels/ExtractionCoordinator.ExtractionScheduleStep.cs": 806,

@@ -303,7 +303,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>整本账的**逐组快照**（收场那一档遍历用；并发安全）。</summary>
-        private List<List<(ArchiveTask Task, string PieceName)>> SnapshotGroupPieceProducerLists()
+        internal List<List<(ArchiveTask Task, string PieceName)>> SnapshotGroupPieceProducerLists()
         {
             lock (_groupPieceProducersGate)
             {
@@ -437,7 +437,7 @@ namespace ArchiveFixer.ViewModels
         /// （25 GB 事故那一档）。所以凡是要按这两条账删/认领一个路径之前，先问这一句；
         /// 判"是源" ⇒ 调用方什么都不做。</para>
         /// </summary>
-        private bool IsAnyTaskSourcePath(string path)
+        internal bool IsAnyTaskSourcePath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {

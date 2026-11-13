@@ -26,7 +26,7 @@ namespace ArchiveFixer.ViewModels
     internal sealed partial class ExtractionCoordinator
     {
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
-        private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
+        internal void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
         {
             foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _pendingPassThroughRest)
             {
@@ -99,7 +99,7 @@ namespace ArchiveFixer.ViewModels
         /// 记**一条**"这一份源片借给了谁用"（与 <see cref="RememberGroupPiecesConsumedBy"/> 写的是同一份账）。
         /// 单独一条是为了"补记"那一档：批末才发现某一单的路径没进账，而它的组确实由某个已成功的消费方解开。
         /// </summary>
-        private void RememberOneConsumedVolumeSource(string? piecePath, string consumerName)
+        internal void RememberOneConsumedVolumeSource(string? piecePath, string consumerName)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || string.IsNullOrWhiteSpace(consumerName))
             {
@@ -300,7 +300,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>寿命：一键处理的**同一条续解链跨轮有效**（第 2 轮起不清空 —— 第 1 轮没解出来的
         /// 第 1 卷很可能在第 2 轮才出现），下一次**用户发起**的批次开始时清空。</para>
         /// </summary>
-        private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
+        internal readonly List<ArchiveTask> _volumeDeficitDeferred = new();
 
         /// <summary>
         /// 试开确认后建的**硬链接暂存组入口目录**（每一条都是 `<入口层>\.ArchiveFixer.work\order-<id>`）——
@@ -375,7 +375,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>用途只有一个：那一单自己不该再报「分卷缺失」（内容已经出来了），按跟班卷收场
         /// （<see cref="TryResolveConsumedByAnotherTask"/>）。⛔ 它不改任何删除 / 搬运判据。</para>
         /// </summary>
-        private readonly Dictionary<string, string> _consumedVolumeSources =
+        internal readonly Dictionary<string, string> _consumedVolumeSources =
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
@@ -384,7 +384,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>用途只有一件：同一组的**别的单**在这个消费方收尾之前**不许落任何结论**
         /// （否则会得到一句"分卷缺失、未开始解压"，而那一刻内容正在被解开）。</para>
         /// </summary>
-        private readonly Dictionary<string, string> _groupConsumerByName =
+        internal readonly Dictionary<string, string> _groupConsumerByName =
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
@@ -429,14 +429,14 @@ namespace ArchiveFixer.ViewModels
         private readonly object _groupPieceProducersGate = new();
 
         /// <summary>这些生产者的源包**已经交给既有出口搬过了**（幂等：搬一次就够，⛔ 不重复搬）。</summary>
-        private readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
+        internal readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
 
         /// <summary>
         /// 这些"过路层"生产者的**其余物已经按档处理过了**（幂等：⛔ 不重复删、不重复写日志）。
         /// 见 <see cref="PurgePassThroughRestOfSettledProducer"/>（真机 CCCC 2026-10-06 的 48.35 MB）。
         /// ⚠ **没删成的会被移除**、排进 <see cref="_pendingPassThroughRest"/> 等批末重试。
         /// </summary>
-        private readonly HashSet<ArchiveTask> _passThroughRestHandled = new();
+        internal readonly HashSet<ArchiveTask> _passThroughRestHandled = new();
 
         /// <summary>
         /// "这一刻还删不成"的过路层其余物（生产者 + 接手它的那一单 + 组基名）——批末再试一次。
@@ -465,7 +465,7 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 只在"产出方自己的落点树里、且不在过程物目录里"的那一档才记（见
         /// <see cref="RememberAdoptedLandedPiece"/>：用户源目录里的片**永远不进这份账**）。</para>
         /// </summary>
-        private readonly List<(ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot)>
+        internal readonly List<(ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot)>
             _adoptedLandedPieces = new();
 
         /// <summary>
@@ -501,7 +501,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
         /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
-        private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
+        internal readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
 
         /// <summary>
         /// **"未识别"但可能是某个分卷组一片的那些**（唯一用途：批末用严格判据再检验一步）。
@@ -530,7 +530,7 @@ namespace ArchiveFixer.ViewModels
 
 
         /// <summary>这本账现在有几组（并发安全）。</summary>
-        private int GroupPieceProducerCount
+        internal int GroupPieceProducerCount
         {
             get
             {

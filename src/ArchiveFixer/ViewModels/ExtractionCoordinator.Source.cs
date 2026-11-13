@@ -574,7 +574,7 @@ namespace ArchiveFixer.ViewModels
         private ExtractionSourcePurge? _sourcePurge;
         private ExtractionSourcePurge SourcePurge => _sourcePurge ??= new ExtractionSourcePurge(this);
 
-        private string? PurgeLayerSourcePackage(
+        internal string? PurgeLayerSourcePackage(
             ArchiveTask task,
             OutputVerificationResult? verification,
             StageCommitResult? commit,

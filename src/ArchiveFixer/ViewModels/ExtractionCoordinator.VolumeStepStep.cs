@@ -18,7 +18,7 @@ namespace ArchiveFixer.ViewModels
     /// </summary>
     internal sealed partial class ExtractionCoordinator
     {
-        private readonly VolumeGroupService _volumeGroupService = new();
+        internal readonly VolumeGroupService _volumeGroupService = new();
 
         /// <summary>本批/本链已登记的组（只读，给日志/批末用）。</summary>
         internal IReadOnlyCollection<VolumeGroupUnit> VolumeGroupUnits => _volumeGroupService.Units;
