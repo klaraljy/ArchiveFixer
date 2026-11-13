@@ -361,7 +361,7 @@ namespace ArchiveFixer.ViewModels
         /// 递归结论（调用方要用它判断"展开了几层"——结果校验拿什么当预期全靠这个，见
         /// <see cref="PostProcessSuccessAsync"/> 的 <c>recursion</c> 参数）。
         /// </returns>
-        private async Task<RecursionResult?> RunRecursiveAsync(
+        internal async Task<RecursionResult?> RunRecursiveAsync(
             ArchiveTask task,
             string engineArchivePath,
             string stageDirectory,

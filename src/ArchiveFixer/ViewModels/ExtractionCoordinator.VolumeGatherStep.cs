@@ -477,7 +477,7 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 不许拿 <see cref="RecursionResult.UnresolvedVolumePieces"/> 里那份原路径代替 ——
         /// 落地是移动，原路径已经不存在了。
         /// </param>
-        private void AdoptUnresolvedVolumePieces(
+        internal void AdoptUnresolvedVolumePieces(
             RecursionResult? recursion,
             ArchiveTask? owner,
             IReadOnlyList<string>? publishedPieces = null)
@@ -544,7 +544,7 @@ namespace ArchiveFixer.ViewModels
         /// 这一档碰都不碰（名字与字节都不动）；⛔ 搬不动（占用 / 目标被目录占着）⇒ 留在原地、
         /// 什么都不做（随后由既有的接片那一档按规范卷名处理）。</para>
         /// </summary>
-        private List<string> PublishUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
+        internal List<string> PublishUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
         {
             var published = new List<string>();
 
@@ -666,7 +666,7 @@ namespace ArchiveFixer.ViewModels
             return published;
         }
 
-        private void PublishUnresolvedPieceLandingCopies(IReadOnlyList<string>? pieces, ArchiveTask? owner)
+        internal void PublishUnresolvedPieceLandingCopies(IReadOnlyList<string>? pieces, ArchiveTask? owner)
         {
             if (owner == null || pieces == null || pieces.Count == 0)
             {

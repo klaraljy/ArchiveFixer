@@ -29,7 +29,7 @@ namespace ArchiveFixer.ViewModels
     {
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
-        private void RecordPasswordFailure(ArchiveTask task)
+        internal void RecordPasswordFailure(ArchiveTask task)
         {
             if (task == null)
             {
