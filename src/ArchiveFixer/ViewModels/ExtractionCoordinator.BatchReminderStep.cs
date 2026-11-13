@@ -90,7 +90,7 @@ namespace ArchiveFixer.ViewModels
         /// 自动并发已冻结到 <c>Experimental/AutoConcurrency</c>，这里不再建控制器、不再按设备/吞吐升降档。
         /// <see cref="AppSettings.ConcurrencyOverride"/> 只保留给测试/旧配置做固定覆盖，不暴露到界面。
         /// </remarks>
-        private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
+        internal int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
         {
             fullSpeed = false;
             return ResolveManualConcurrencyLimit();
@@ -129,7 +129,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 本批的"完成后打开输出目录"记账清零（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>）。
         /// </summary>
-        private void ResetBatchOutputFolderState()
+        internal void ResetBatchOutputFolderState()
         {
             lock (_outputFolderLock)
             {
@@ -584,7 +584,7 @@ namespace ArchiveFixer.ViewModels
         /// 解压前的合并提醒。
         /// </summary>
         /// <returns><c>false</c> = 用户在提醒里选了「先不处理」，调用方**直接返回**（这一批不开始）。</returns>
-        private async Task<bool> ConfirmBatchRemindersAsync(IReadOnlyList<ArchiveTask> selectedTasks)
+        internal async Task<bool> ConfirmBatchRemindersAsync(IReadOnlyList<ArchiveTask> selectedTasks)
         {
             if (_remindersSuppressedThisRun)
             {

@@ -222,7 +222,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 批首清零空间规划与本批记账（账本、逐任务运行期记录、精确估算、被跳过的清单）。
         /// </summary>
-        private void ResetSpacePlanningState()
+        internal void ResetSpacePlanningState()
         {
             _spaceLedger = null;
             _spaceProbePath = string.Empty;
@@ -239,7 +239,7 @@ namespace ArchiveFixer.ViewModels
             _spaceBlockedNoticeShown = false;
         }
 
-        private ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
+        internal ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
         {
             lock (_spaceRuntimeLock)
             {
@@ -413,7 +413,7 @@ namespace ArchiveFixer.ViewModels
         /// 本批探测哪块盘：优先归集目标目录（开了归集时产物最终都落那儿），
         /// 其次是第一个任务的输出目录，最后退回源包所在目录。
         /// </summary>
-        private string ResolveSpaceProbePath(IReadOnlyList<ArchiveTask> tasks)
+        internal string ResolveSpaceProbePath(IReadOnlyList<ArchiveTask> tasks)
         {
             if (Settings.CollectResultsToDirectory && !string.IsNullOrWhiteSpace(Settings.CollectTargetDirectory))
             {
@@ -764,7 +764,7 @@ namespace ArchiveFixer.ViewModels
         internal ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(Settings);
 
         /// <summary>本批的空间预留账本（串行时也建，只是永远只有一个任务在账上）。</summary>
-        private SpaceReservationLedger? _spaceLedger;
+        internal SpaceReservationLedger? _spaceLedger;
 
         private readonly object _spaceRuntimeLock = new();
 
@@ -782,7 +782,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>后面的同类情况只写日志 —— 一批几十个包时逐个弹等于把批卡死在他面前。</para>
         /// </summary>
-        private bool _spaceBlockedNoticeShown;
+        internal bool _spaceBlockedNoticeShown;
 
         /// <summary>
         /// 本批是不是按**「空间不足」模式**跑（批首定一次；用户 2026-09-27 拍板的模式）。

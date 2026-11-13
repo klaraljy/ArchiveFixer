@@ -37,14 +37,14 @@ namespace ArchiveFixer.ViewModels
         internal const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
 
         internal readonly MainViewModel _vm;
-        private readonly IArchiveEngine _archiveEngine;
-        private readonly PasswordService _passwordService;
+        internal readonly IArchiveEngine _archiveEngine;
+        internal readonly PasswordService _passwordService;
         private readonly PasswordFailureRegistry _passwordFailureRegistry;
 
         /// <summary>测试/既有调用点仍按字段名读本批手动密码（唯一实现已搬进 PasswordFailureRegistry）。</summary>
         internal List<string> _manualBatchPasswords => _passwordFailureRegistry.ManualBatchPasswords;
-        private readonly PathService _pathService;
-        private readonly DialogService _dialogService;
+        internal readonly PathService _pathService;
+        internal readonly DialogService _dialogService;
 
         /// <summary>
         /// 源包搬运要碰的文件系统（决策 D-12）。
@@ -201,7 +201,7 @@ namespace ArchiveFixer.ViewModels
             cts.Dispose();
         }
 
-        private bool _isExtracting;
+        internal bool _isExtracting;
 
         /*
          * 本批因密码没通过而失败的任务（密码错误 / 达到密码尝试上限）。
@@ -258,7 +258,7 @@ namespace ArchiveFixer.ViewModels
          * · 同时只有一批能在跑（_isExtracting 守着），所以字段不会被两批同时用到；
          * · 手动「只解压」（地基路径）**不带**它：那条路径照旧完全按设置走。
          */
-        private OneClickRunOptions? _runOptions;
+        internal OneClickRunOptions? _runOptions;
 
         /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
         internal OneClickRunOptions? RunOptions => _runOptions;
@@ -272,7 +272,7 @@ namespace ArchiveFixer.ViewModels
          * ② 与「本次选项」同寿：批首置入、`finally` 里连同 _runOptions 一起清掉，不进设置、不落盘；
          * ③ 同名冲突照走既定冲突档（用户拍板接受这个代价：摊平本来就更容易撞名）。
          */
-        private bool _extractIntoSourceFolderThisRun;
+        internal bool _extractIntoSourceFolderThisRun;
 
         /*
          * 2026-10-25 用户拍板：手动「只解压」只解当前这一层（WinRAR 语义）。
@@ -318,7 +318,7 @@ namespace ArchiveFixer.ViewModels
         /// 唯一被允许的例外之一（纯提示 / 一个按钮 / 非模态 / 同一批一次）——
         /// 手动档保持原样（只写日志），所以要能把两档分开。</para>
         /// </summary>
-        private bool _oneClickThisBatch;
+        internal bool _oneClickThisBatch;
 
         /// <summary>
         /// 本批是不是按「空间不足」的**安全档**跑（「不删原包」勾着时；见
@@ -375,7 +375,7 @@ namespace ArchiveFixer.ViewModels
 
         internal bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
 
-        private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
+        internal bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
 
 
         public void StopAfterCurrent()
@@ -482,7 +482,7 @@ namespace ArchiveFixer.ViewModels
         private ExtractionTaskRunner? _taskRunner;
 
         /// <summary>一个任务从开工到收工的执行器（生命周期与协调器同寿命）。</summary>
-        private ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
+        internal ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
     }
 }
 

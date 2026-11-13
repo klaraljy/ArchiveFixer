@@ -565,7 +565,7 @@ namespace ArchiveFixer.ViewModels
         /// （用户当场推翻：一键档只决定"问不问"，展开策略按②页所选档位）。
         /// </para>
         /// </summary>
-        private void SuppressDecisionPromptsForOneClickRun()
+        internal void SuppressDecisionPromptsForOneClickRun()
         {
             _conflictStep.SuppressPromptsForRun();
 

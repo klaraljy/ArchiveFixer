@@ -333,7 +333,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 只读它自己的记录，⛔ 不放宽任何按名字的判据（那些判据对别的文件照旧一个字不改）。</para>
         /// </summary>
-        private readonly List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> _byteBudgetLinkedSources = new();
+        internal readonly List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> _byteBudgetLinkedSources = new();
 
         /// <summary>
         /// **打分分配试到第几版**（键 = 组基名 + 那一层；⛔ 只记账、不碰盘）。
@@ -343,10 +343,10 @@ namespace ArchiveFixer.ViewModels
         /// 样子**」。⇒ 同一组同一层**再来一次** = 上一版没成 ⇒ 先**删掉我们建的那几个槽位链接**（回滚，
         /// 因为它们只是零字节硬链接，删掉就等于回到原样），再试下一版；两版都不成 ⇒ 不再动手、如实写日志。</para>
         /// </summary>
-        private readonly Dictionary<string, int> _scoredSlotAttempts = new();
+        internal readonly Dictionary<string, int> _scoredSlotAttempts = new();
 
         /// <summary>这一组这一层**我们亲手建过**的槽位链接（回滚用；⛔ 只删我们自己建的那些名字）。</summary>
-        private readonly Dictionary<string, List<string>> _scoredSlotLinks = new();
+        internal readonly Dictionary<string, List<string>> _scoredSlotLinks = new();
 
         /// <summary>本批后缀清洗改过的源名（原名 → 标准名）；KeepInPlace 收尾按它把标准名收掉。</summary>
         private readonly List<(string Original, string Renamed)> _suffixRenamedSources = new();
@@ -481,7 +481,7 @@ namespace ArchiveFixer.ViewModels
         /// （实测残留逐字 `…\out-…\111(2)_\111.z01`，一个字节不多、但**没人认领**）。
         /// 同一件事的真值只允许有一个出口 ⇒ 这里**记住**接片那一刻算出来的层，⛔ 不重算、⛔ 不看谁先到。</para>
         /// </summary>
-        private readonly Dictionary<string, string> _groupLayerByBaseName = new(StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, string> _groupLayerByBaseName = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// **这一批里哪些单是"第二大步"**（分卷阶段，只解一层 —— 用户 2026-10-11 轮次模型）。
@@ -496,7 +496,7 @@ namespace ArchiveFixer.ViewModels
         /// （每轮边界把记住的都再试一遍 —— 因为判出"这一组是分卷"的那一刻**改名与解压还没发生**）。
         /// ⛔ 不改任何判据；本批结束随其它账一起清。
         /// </summary>
-        private readonly List<(string Directory, string ReferenceName)> _volumeGroupEntriesThisBatch = new();
+        internal readonly List<(string Directory, string ReferenceName)> _volumeGroupEntriesThisBatch = new();
 
         /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在

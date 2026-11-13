@@ -59,7 +59,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>同名冲突处理档（唯一来源；空 / 非法回落 AutoRename）。</summary>
         private string ConflictActionValue => _conflictStep.ConflictActionValue;
 
-        private void ResetBatchConflictState() => _conflictStep.ResetBatchConflictState();
+        internal void ResetBatchConflictState() => _conflictStep.ResetBatchConflictState();
 
         internal void ResetTaskConflictState() => _conflictStep.ResetTaskConflictState();
 
@@ -105,7 +105,7 @@ namespace ArchiveFixer.ViewModels
         // ===== 来自 ExtractionCoordinator.WorkspaceStep.cs（实现见 Services 对应 Step 类）=====
         private readonly WorkspaceStep _workspaceStep;
 
-        private WorkspaceRootResolution ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks) =>
+        internal WorkspaceRootResolution ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks) =>
             _workspaceStep.ApplyBatchWorkspaceRoot(tasks);
 
         private void RemoveEmptyWorkspaceShells() => _workspaceStep.RemoveEmptyWorkspaceShells();
@@ -627,7 +627,7 @@ namespace ArchiveFixer.ViewModels
         internal void RecordPasswordFailure(ArchiveTask task) => _passwordFailureRegistry.Record(task);
 
 
-        private void ClearPasswordFailures() => _passwordFailureRegistry.ClearFailures();
+        internal void ClearPasswordFailures() => _passwordFailureRegistry.ClearFailures();
 
 
         /// <summary>
@@ -635,7 +635,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 不是"记住上次输的密码"—— 那是持久化，红线。上一批输过什么，这一批重新问。
         /// </summary>
-        private void ResetManualBatchPassword() => _passwordFailureRegistry.ResetManualBatchPassword();
+        internal void ResetManualBatchPassword() => _passwordFailureRegistry.ResetManualBatchPassword();
 
 
 

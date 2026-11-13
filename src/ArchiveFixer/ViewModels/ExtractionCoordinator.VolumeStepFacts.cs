@@ -43,7 +43,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 判不出（找不到产出方 / 产出方自己也在等入口包 / 名字推不出标准名）⇒ 空串
         /// ⇒ 落点与改动前逐字相同（兜底落在"什么都不做"那一档）。⛔ 深度上限 2 层，防互相等成环。</para>
         /// </summary>
-        private string ResolveProducerEntryArchivePathCore(
+        internal string ResolveProducerEntryArchivePathCore(
             ArchiveTask task,
             ExtractOptions options,
             string archivePath,

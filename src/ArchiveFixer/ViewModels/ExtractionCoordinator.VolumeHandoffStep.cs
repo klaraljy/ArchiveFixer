@@ -389,7 +389,7 @@ namespace ArchiveFixer.ViewModels
             return renamed;
         }
 
-        private readonly List<(string OriginalPath, string CurrentPath)> _gatheredUserSourcePieces = new();
+        internal readonly List<(string OriginalPath, string CurrentPath)> _gatheredUserSourcePieces = new();
 
         /// <summary>记下"这几片是从用户自己的源目录里收拢过来的"（只记搬离过的那几份）。</summary>
         private void RememberGatheredUserSourcePieces(IReadOnlyList<VolumeRepairItem> items)

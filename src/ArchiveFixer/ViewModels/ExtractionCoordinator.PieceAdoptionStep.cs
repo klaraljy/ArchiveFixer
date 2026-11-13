@@ -312,7 +312,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>批首/批末清账（并发安全）。</summary>
-        private void ClearGroupPieceProducers()
+        internal void ClearGroupPieceProducers()
         {
             lock (_groupPieceProducersGate)
             {
