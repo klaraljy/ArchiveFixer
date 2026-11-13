@@ -1678,65 +1678,6 @@ namespace ArchiveFixer.Services
             }
         }
 
-        /// <summary>一处判据的四个结构化字段（唯一出口 <see cref="Criterion"/>）。</summary>
-        public sealed record CriterionFields(
-            string Criterion,
-            string Inputs,
-            string Verdict,
-            string Action,
-            string File,
-            string Identity);
-
-        /// <summary>
-        /// 一条结构化诊断事件的字段（唯一写入口 <see cref="Event"/>）；⛔ 不参与任何业务判据。
-        /// </summary>
-        public sealed record LogEventFields(
-            string Event = "",
-            string Source = "",
-            string Target = "",
-            string Action = "",
-            string Result = "",
-            string Detail = "",
-            string Stack = "",
-            string Engine = "",
-            int? ExitCode = null,
-            long? Bytes = null,
-            long? DurationMs = null,
-            string Group = "",
-            string Identity = "",
-            string EventId = "",
-            string ErrorCode = "",
-            string Component = "",
-            string SpanId = "",
-            string ParentSpanId = "",
-            string TaskId = "",
-            string OperationName = "",
-            string Stage = "",
-            string SourceFile = "",
-            int SourceLine = 0,
-            string Caller = "",
-            string CodeSource = "");
-
-        /// <summary>这一行的来源上下文（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）。</summary>
-        public sealed record LogRunContext
-        {
-            public string Batch { get; init; } = string.Empty;
-
-            /// <summary>第几轮（0 = 还没进轮次循环）。</summary>
-            public int Round { get; init; }
-
-            /// <summary>大测试的第几份原包（`1111` / `2222` …）。</summary>
-            public string Sample { get; init; } = string.Empty;
-
-            /// <summary>阶段：第一大步 / 第二大步 / 接片 / 收卷 / 落点 / 删除 / 引擎调用。</summary>
-            public string Stage { get; init; } = string.Empty;
-
-            public string Task { get; init; } = string.Empty;
-
-            /// <summary>层号（-1 = 不适用）。</summary>
-            public int Layer { get; init; } = -1;
-        }
-
         /// <summary>
         /// 把一行日志拼成**机器读**的 JSON 对象（⛔ 零依赖：自己转义，不引第三方）。
         /// 字段固定：<c>ts/level/batch/round/sample/stage/task/layer/file/identity/criterion/inputs/verdict/action/msg</c>。
