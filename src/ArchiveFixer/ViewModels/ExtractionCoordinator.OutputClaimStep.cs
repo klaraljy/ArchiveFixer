@@ -36,7 +36,7 @@ namespace ArchiveFixer.ViewModels
         /// （同一个用户可见约定），区别只有一个：那里判"磁盘上有没有"，这里还要判"有没有被并发任务占下"——
         /// 被占下的目录此刻在磁盘上还不存在，所以那个方法看不见它。</para>
         /// </summary>
-        private string ClaimOutputDirectory(string requestedPath, ArchiveTask task, ref string outputRedirectNote)
+        internal string ClaimOutputDirectory(string requestedPath, ArchiveTask task, ref string outputRedirectNote)
         {
             lock (_outputClaimLock)
             {

@@ -61,7 +61,7 @@ namespace ArchiveFixer.ViewModels
 
         private void ResetBatchConflictState() => _conflictStep.ResetBatchConflictState();
 
-        private void ResetTaskConflictState() => _conflictStep.ResetTaskConflictState();
+        internal void ResetTaskConflictState() => _conflictStep.ResetTaskConflictState();
 
         private ConflictDecision? GetEffectiveConflictDecision() => _conflictStep.GetEffectiveConflictDecision();
 
@@ -174,7 +174,7 @@ namespace ArchiveFixer.ViewModels
         private static bool IsDamagedArchive(string? detectedErrorType) =>
             PartialPublishStep.IsDamagedArchive(detectedErrorType);
 
-        private void RecordPartialPublishCandidate(
+        internal void RecordPartialPublishCandidate(
             ArchiveTask task,
             string stagingRoot,
             string archivePath,
@@ -452,7 +452,7 @@ namespace ArchiveFixer.ViewModels
         internal static string DescribeThroughput(long writtenBytes, TimeSpan elapsed) =>
             RestHandlingStep.DescribeThroughput(writtenBytes, elapsed);
 
-        private string TryRepairBrokenVolumeChainName(ArchiveTask task, string engineArchivePath) =>
+        internal string TryRepairBrokenVolumeChainName(ArchiveTask task, string engineArchivePath) =>
             _restHandlingStep.TryRepairBrokenVolumeChainName(task, engineArchivePath);
 
         private Task ApplyRestHandlingAfterChainAsync(
@@ -752,6 +752,25 @@ namespace ArchiveFixer.ViewModels
             _progressHeartbeat.BuildTrackedRequest(archivePath, password, outputPath, progressSink);
 
         void IPasswordCandidatesHost.AppendLog(string level, string message) => AppendLog(level, message);
+
+        /// <summary>单任务解压的辅助阶段（准备/跳过/入仓/占位/失败事实），与协调器同寿命。</summary>
+        private ExtractionTaskAuxiliary? _auxiliary;
+
+        internal ExtractionTaskAuxiliary Auxiliary => _auxiliary ??= new ExtractionTaskAuxiliary(this);
+
+        /// <summary>本次任务执行器要读的账本（与空间门同一个对象，⛔ 不复制）。</summary>
+        internal SpaceReservationLedger? SpaceLedger => _spaceLedger;
+
+        /// <summary>准备/入仓段要读的路径服务与试开暂存账（与协调器同一个对象，⛔ 不复制）。</summary>
+        internal PathService PathService => _pathService;
+
+        internal Dictionary<ArchiveTask, string> StagedGroupOutputPaths => _stagedGroupOutputPaths;
+
+        internal PasswordService PasswordService => _passwordService;
+
+        internal MainViewModel Vm => _vm;
+
+        internal ProgressHeartbeatStep ProgressHeartbeat => _progressHeartbeat;
     }
 }
 

@@ -270,7 +270,7 @@ namespace ArchiveFixer.ViewModels
              *   ⚠ 2026-09-27 落点模型 v2 之后那一档已经**每包一个目录**（`sharedOutputRoot` 恒为 false），
              *   这条判据留着当兜底，不再有生产路径会命中它。
              */
-            (outputPath, outputRedirectNote) = host.ClaimFinalOutputDirectoryIfNeeded(
+            (outputPath, outputRedirectNote) = host.Auxiliary.ClaimFinalOutputDirectoryIfNeeded(
                 task, outputPath, landsInSourceDirectory, sharedOutputRoot, outputRedirectNote);
 
             /*
@@ -295,7 +295,7 @@ namespace ArchiveFixer.ViewModels
                     : $"{task.LogName}：本次实际输出目录 {outputPath}（依据 → {host.RunOptions.Describe()}）");
 
             (bool stagingOk, string stageDirectory, string engineOutputPath) staging =
-                await host.TryPrepareStagingAsync(task, outputPath, cancellationToken);
+                await host.Auxiliary.TryPrepareStagingAsync(task, outputPath, cancellationToken);
 
             if (!staging.stagingOk)
             {

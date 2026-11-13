@@ -103,7 +103,7 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 自动一键处理不碰非压缩文件：图片/视频/音频/文档/文本，以及 ZIP 家族的
                  * docx/epub/apk/jar。手动「只解压」不走这里（oneClickRun=false），保留既有强制拆语义。
                  */
-                if (_host.TrySkipKnownContent(task, oneClickRun, entryCard))
+                if (_host.Auxiliary.TrySkipKnownContent(task, oneClickRun, entryCard))
                 {
                     return;
                 }

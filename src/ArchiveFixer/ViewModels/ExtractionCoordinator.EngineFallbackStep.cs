@@ -227,7 +227,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 返回 null = 准备好了；返回非空字符串 = 失败原因（调用方落成失败状态并把原因写给用户）。
         /// </summary>
-        private async Task<string?> PrepareStageDirectoryAsync(
+        internal async Task<string?> PrepareStageDirectoryAsync(
             ArchiveTask task,
             string stageDirectory,
             CancellationToken cancellationToken)

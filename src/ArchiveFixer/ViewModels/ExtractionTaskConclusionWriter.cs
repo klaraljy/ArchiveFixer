@@ -170,7 +170,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!extractSuccess)
             {
-                host.RecordPartialPublishFacts(
+                host.Auxiliary.RecordPartialPublishFacts(
                     task,
                     engineOutputPath,
                     engineArchivePath,

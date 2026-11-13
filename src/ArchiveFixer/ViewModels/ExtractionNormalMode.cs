@@ -89,7 +89,7 @@ namespace ArchiveFixer.ViewModels
             /*
              * 把预检的"文件名已加密"结论恢复回来：只在"这一层最后仍然只是密码没通过"时生效。
              */
-            host.RestoreEncryptedHeadersConclusion(task, preflightSaidEncryptedHeaders, encryptedHeadersMessage);
+            host.Auxiliary.RestoreEncryptedHeadersConclusion(task, preflightSaidEncryptedHeaders, encryptedHeadersMessage);
 
             /*
              * 密码类结论上要补的两句话（换引擎兜底 / 未试候选点名）——⛔ 必须排在加密头恢复之后。

@@ -1650,7 +1650,7 @@ namespace ArchiveFixer.ViewModels
         /// 状态落「源文件已变化」，<c>ErrorMessage</c> 里点名"哪一个文件、哪一项变了"并给出出路。</para>
         /// </summary>
         /// <returns>true = 已经拦下（调用方必须立刻 return，什么都不许做）。</returns>
-        private bool StopIfSourceChanged(ArchiveTask task) => StopIfSourceChanged(task, out _);
+        internal bool StopIfSourceChanged(ArchiveTask task) => StopIfSourceChanged(task, out _);
 
         /// <summary>
         /// 与上面同一个判据，只是把"为什么"也交回给调用方（递归核心要拿它当停止理由）。
