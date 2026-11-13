@@ -880,11 +880,8 @@ namespace ArchiveFixer.Extraction
                  * 引擎也可能回一份残缺/空清单，拿它当预期会把"解得好好的"判成不完整。
                  * 于是每个候选各记一份，等这次解压成功（下面的 `result.Success`）才采信。
                  */
-                candidateManifest = listedThisCandidate is { Success: true }
-                    ? LayerManifest.From(listedThisCandidate)
-                    : LayerManifest.Unavailable(LayerManifest.DescribeListFailure(listedThisCandidate));
-
-                item.ListingSaidNoEncryption = listedThisCandidate is { Success: true, IsEncrypted: false };
+                (candidateManifest, item.ListingSaidNoEncryption) =
+                    RecursiveCandidateFacts.FromListing(listedThisCandidate);
 
                 /*
                  * ===== 引擎读不动它 + 它确实是双面文件 ⇒ 直接按偏移取出那唯一一个原样存的条目 =====
