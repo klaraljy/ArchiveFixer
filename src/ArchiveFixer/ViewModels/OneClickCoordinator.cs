@@ -224,71 +224,13 @@ namespace ArchiveFixer.ViewModels
         private readonly RenameCoordinator _renameCoordinator;
         private readonly ExtractionCoordinator _extractionCoordinator;
         private readonly DialogService _dialogService;
+        private readonly InnerLayerCollector _innerLayerCollector;
+        private readonly OneClickBatchFinalizer _batchFinalizer;
 
         /// <summary>本次运行的不可变快照（阶段 4 影子：先冻结，尚未替换所有读取点）。</summary>
         internal RunSnapshot? CurrentRunSnapshot { get; private set; }
 
-        private bool _batchFinalized;
 
-        /// <summary>
-        /// 内层包候选的"这真的是包吗"判据（用户 2026-09-24 要求加的下限；2026-09-25 第 33 条改成**只认内容**）。
-        ///
-        /// <para>走 <see cref="ArchiveDetectService"/> 的完整识别（文件头魔数 + 文件头认不出时的尾部
-        /// "内嵌归档"检测）——与"扫描任务"那一步**同一个实现**，⛔ 不另造一套签名表，
-        /// 也**不再**按后缀筛（真机上"名字被塞两个字就只解一层"就是那道筛子造成的）。</para>
-        /// </summary>
-        private readonly ArchiveDetectService _detectService = new();
-
-        /// <summary>
-        /// 已经判成“内容物”的产出文件缓存：同一路径 + 大小 + 修改时间不再打开。
-        /// 轮次扫描/批末确认读到它就直接跳过，避免图片、视频在每一轮被重复嗅探。
-        /// </summary>
-        private readonly Dictionary<string, (long Length, long Ticks, string How)> _terminalProducedContent =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private bool TryGetTerminalProducedContent(string file, out string how)
-        {
-            how = string.Empty;
-
-            try
-            {
-                var info = new FileInfo(file);
-
-                if (!info.Exists)
-                {
-                    return false;
-                }
-
-                if (_terminalProducedContent.TryGetValue(file, out (long Length, long Ticks, string How) fact)
-                    && fact.Length == info.Length
-                    && fact.Ticks == info.LastWriteTimeUtc.Ticks)
-                {
-                    how = fact.How;
-                    return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
-        private void RememberTerminalProducedContent(string file, string how)
-        {
-            try
-            {
-                var info = new FileInfo(file);
-
-                if (info.Exists)
-                {
-                    _terminalProducedContent[file] = (info.Length, info.LastWriteTimeUtc.Ticks, how);
-                }
-            }
-            catch
-            {
-            }
-        }
 
         /// <summary>
         /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹确认框。
@@ -324,6 +266,8 @@ namespace ArchiveFixer.ViewModels
             _renameCoordinator = renameCoordinator;
             _extractionCoordinator = extractionCoordinator;
             _dialogService = dialogService;
+            _innerLayerCollector = new InnerLayerCollector(vm, extractionCoordinator);
+            _batchFinalizer = new OneClickBatchFinalizer(vm, extractionCoordinator);
         }
 
         /// <summary>
@@ -377,357 +321,40 @@ namespace ArchiveFixer.ViewModels
         private AppSettings Settings => _vm.Settings;
         private bool IsBusy => _vm.IsBusy;
 
-        /// <summary>
-        /// 内层包的落点 = **那个内层包自己所在的那一层目录**（第 35 条改正；归集开启时仍以归集目录为准）。
-        ///
-        /// <para><b>真机现场</b>（"添加文件夹 + 指定位置"，多个包共用同一个输出根）：外层包第一层的产物是
-        /// 一个文件夹 <c>BBB\111\2222\</c>，里面躺着下一层的包 <c>222.ra删除r</c>。
-        /// 老实现按**父任务的 OutputPath**（＝共用根 <c>BBB\111</c>）落下一层的产物，于是内容物与包名目录
-        /// **平级**（<c>BBB\111\222</c> 与 <c>BBB\111\2222</c> 并排）。用户原话：
-        /// "我觉得你应该是要将 `BBB\111\222` 文件夹放在 `BBB\111\2222` 这个里面"。</para>
-        ///
-        /// <para>判据用"内层包自己所在的目录"这条**事实**，不猜任何名字：下一层的内容物落在那个包**旁边**，
-        /// 天然就是"一个源包 = 一个目录"。唯一要处理的是内层包**本身就在「其余物」里**的情况
-        /// （过程物集中处）—— 那时要爬到「其余物」外面那一层，否则下一层的内容物会被放进其余物里、
-        /// 跟着「彻底删除」一起没了。</para>
-        ///
-        /// <para>归集（<c>CollectResultsToDirectory</c>）是"把产物目录整个搬走"，那时旧路径已经不存在，
-        /// 权威落点是 <see cref="ArchiveTask.CollectedPath"/>（既有行为，不变）。</para>
-        /// </summary>
-        /// <param name="parentTask">内层包所属的父任务。</param>
-        /// <param name="innerPackagePath">内层包自己的路径（给 null 时退回"父任务的内容物层 / 输出目录"）。</param>
-        /// <param name="ownLayerName">
-        /// 给**这一层自己**再套的那一层文件夹名（2026-09-27 用户拍板的"首尾必留、中间看开关"）：
-        /// 给了就在算出来的目录后面追加一层（<c>…\222</c> → <c>…\222\333</c>），
-        /// 给 null / 空 = 不追加（这一层的产物直接落进父任务那一层）。
-        ///
-        /// <para>⛔ 名字**必须由调用方按 <see cref="ShouldAddContinuationLevelLayer"/> 算出来再传**：
-        /// 这里只管"怎么拼、要不要防重复"，不管"该不该加"—— 判据只有一处（扫描那一侧），
-        /// 免得同一件事在两个地方各判一遍、判出两个结果。</para>
-        /// </param>
+        /*
+         * ===== 续解落点规划（实现见 OneClickContinuationPlanner）=====
+         *
+         * 下面这些 internal 静态入口是既有用例与协调器的调用点（⛔ 判据只有一处，不许在这里再写一份）：
+         * 本类只保留一行转发，行为与改动前逐字相同。
+         */
+
         internal static string ResolveContinuationOutputDirectory(
             ArchiveTask parentTask,
             string? innerPackagePath = null,
-            string? ownLayerName = null)
-        {
-            string directory = ResolveContinuationBaseDirectory(parentTask, innerPackagePath);
+            string? ownLayerName = null) =>
+            OneClickContinuationPlanner.ResolveContinuationOutputDirectory(parentTask, innerPackagePath, ownLayerName);
 
-            /*
-             * ⚠ 这一层的位置**被内层包自己那个文件占着**时不能建（2026-09-27 真机测试逮到）：
-             * Windows 同一条路径上不许既有文件又有目录。典型现场 = **名字被改坏、剥不出后缀**的包
-             * （`user.jp删除g`、`222.ra删除r`）：它的包基名就等于文件名本身，于是
-             * `<父层>\user.jp删除g` 既是那个文件、又要当这一层的目录 → 建目录必然失败，
-             * 任务会落成"最终目录不存在且创建失败"。
-             *
-             * 处置：这一层**不另建**，内容落进父任务那一层里（内层包自己就躺在那里）——
-             * 这是物理上唯一可行的选择，调用方会写一条日志说清为什么（见扫描那一侧）。
-             */
-            if (IsOwnLayerOccupiedByPackageFile(directory, ownLayerName, innerPackagePath))
-            {
-                return directory;
-            }
-
-            return AppendOwnLayer(directory, ownLayerName);
-        }
-
-        /// <summary>
-        /// 这一层要建的位置是不是**被内层包自己那个文件占着**（同路径不许既有文件又有目录）。
-        ///
-        /// <para>只有"包基名 == 文件名"（名字被改坏、剥不出已知后缀那种）才会命中；
-        /// 正常包（`333.7z` → 层名 `333`）永远不会命中。</para>
-        /// </summary>
         internal static bool IsOwnLayerOccupiedByPackageFile(
             string directory,
             string? ownLayerName,
-            string? innerPackagePath)
-        {
-            if (string.IsNullOrWhiteSpace(innerPackagePath) || string.IsNullOrWhiteSpace(ownLayerName))
-            {
-                return false;
-            }
+            string? innerPackagePath) =>
+            OneClickContinuationPlanner.IsOwnLayerOccupiedByPackageFile(directory, ownLayerName, innerPackagePath);
 
-            string layered = AppendOwnLayer(directory, ownLayerName);
-
-            if (string.Equals(layered, directory, StringComparison.OrdinalIgnoreCase))
-            {
-                // 没打算加层（名字为空 / 最后一段已经同名）——不关这一条的事。
-                return false;
-            }
-
-            try
-            {
-                return File.Exists(layered) && !Directory.Exists(layered);
-            }
-            catch
-            {
-                // 路径形状怪异时按"没被占"处理：真建不出来会在任务级如实报出来。
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**；
-        /// 2026-10-16：中间那个开关删掉了，现在中间层一律照建）。
-        ///
-        /// <para>
-        /// ⚠ 判据**只有一处**：<see cref="PackageLayerRules.ShouldAddInnerPackageLayer"/>。
-        /// 这里只做转发（保留这个方法名是因为既有用例与文档都按它指认这一档规则），
-        /// ⛔ 不许在这里再写第二份规则 —— 递归发布侧读的是同一个出口。
-        /// </para>
-        /// </summary>
         internal static bool ShouldAddContinuationLevelLayer(
             bool parentProducedContent,
-            int siblingCount)
-        {
-            return PackageLayerRules.ShouldAddInnerPackageLayer(
-                parentProducedContent,
-                siblingCount);
-        }
+            int siblingCount) =>
+            OneClickContinuationPlanner.ShouldAddContinuationLevelLayer(parentProducedContent, siblingCount);
 
-        /// <summary>
-        /// 把"这一层自己的包名"追到目录后面（<c>…\222</c> → <c>…\222\333</c>）。
-        ///
-        /// <para>三条防重复/防空的判断，每条都对应一种真实形状：</para>
-        /// <list type="bullet">
-        /// <item><description>名字为空（取不出包名）→ 一个字都不加；</description></item>
-        /// <item><description>目录最后一段**已经**叫这个名字（<c>…\333\333.rar</c> 那种"包在自名文件夹里"）
-        /// → 不再加，否则会得到 <c>333\333</c> 这种重复层（用户明确抱怨过的形状）；</description></item>
-        /// <item><description><b>过程物名不成层</b>（用户 2026-09-27 红线）：分卷组的基名（真机现场
-        /// <c>59768866.001/.002</c> → <c>59768866</c>）**不是**用户认得出来的包名，
-        /// 拿它当一层只会在成品里造出 <c>…\包名\59768866\真内容</c> 这种怪目录 →
-        /// 这一档**不追加**，那一层的内容物归父任务自己那一层。</description></item>
-        /// </list>
-        /// </summary>
-        internal static string AppendOwnLayer(string directory, string? ownLayerName)
-        {
-            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(ownLayerName))
-            {
-                return directory;
-            }
+        internal static string AppendOwnLayer(string directory, string? ownLayerName) =>
+            OneClickContinuationPlanner.AppendOwnLayer(directory, ownLayerName);
 
-            string layer = FileNameHelper.SanitizeFileName(ownLayerName);
+        internal static string ResolveContinuationLayerName(string? innerPackagePath) =>
+            OneClickContinuationPlanner.ResolveContinuationLayerName(innerPackagePath);
 
-            if (layer.Length == 0)
-            {
-                return directory;
-            }
-
-            string trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            if (trimmed.Length == 0)
-            {
-                return directory;
-            }
-
-            if (string.Equals(Path.GetFileName(trimmed), layer, StringComparison.OrdinalIgnoreCase))
-            {
-                return directory;
-            }
-
-            return Path.Combine(trimmed, layer);
-        }
-
-        /// <summary>
-        /// 这一层该叫什么（= 内层包**去掉假后缀的基名**：就地替换留下的那个文件夹名）；
-        /// **分卷组返回空** —— 过程物名不成层。
-        ///
-        /// <para>
-        /// ⚠ 判据**只有一处**：<see cref="PackageLayerRules.ResolveInPlaceLayerName"/>
-        /// （递归发布侧留目录用的是同一个方法），这里只做转发。
-        /// </para>
-        /// </summary>
-        internal static string ResolveContinuationLayerName(string? innerPackagePath)
-        {
-            return PackageLayerRules.ResolveInPlaceLayerName(innerPackagePath);
-        }
-
-        /// <summary>
-        /// 内层包落点的**原有推导**（2026-09-25 第 35 条 + 第 43 条）：只算"内层包自己所在的那一层"，
-        /// 不追加任何层 —— <see cref="ResolveContinuationOutputDirectory"/> 在外面套那一层。
-        ///
-        /// <para>⚠ <c>internal</c>（不是 private）只为一处：扫描那一侧要拿它判
-        /// "这一层的位置是不是被内层包自己占着"，好在日志里说清为什么没建那一层。</para>
-        /// </summary>
-        internal static string ResolveContinuationBaseDirectory(ArchiveTask parentTask, string? innerPackagePath = null)
-        {
-            if (parentTask == null)
-            {
-                return string.Empty;
-            }
-
-            if (!string.IsNullOrWhiteSpace(parentTask.CollectedPath))
-            {
-                return parentTask.CollectedPath;
-            }
-
-            string fallback = string.IsNullOrWhiteSpace(parentTask.ContentDirectoryPath)
-                ? parentTask.OutputPath
-                : parentTask.ContentDirectoryPath;
-
-            if (string.IsNullOrWhiteSpace(innerPackagePath))
-            {
-                return EnsureChainRootPackageLayer(parentTask, fallback);
-            }
-
-            string? directory = Path.GetDirectoryName(innerPackagePath);
-
-            if (string.IsNullOrWhiteSpace(directory))
-            {
-                return EnsureChainRootPackageLayer(parentTask, fallback);
-            }
-
-            // 内层包在「其余物」（含旧名「过程物」）里 → 爬到那一层之外。
-            string? outermostArtifact = null;
-            string? cursor = directory;
-
-            // 「其余物\<这一层>\…」里的 <这一层>：共用根那一档下它就是**外层包的包基名**（D-10 的布局）。
-            string? artifactChild = null;
-            string? childCursor = directory;
-
-            while (!string.IsNullOrWhiteSpace(childCursor))
-            {
-                if (ProcessArtifactLayout.IsArtifactDirectoryName(Path.GetDirectoryName(childCursor)))
-                {
-                    artifactChild = Path.GetFileName(childCursor);
-                }
-
-                childCursor = Path.GetDirectoryName(childCursor);
-            }
-
-            while (!string.IsNullOrWhiteSpace(cursor))
-            {
-                if (ProcessArtifactLayout.IsArtifactDirectoryName(cursor))
-                {
-                    outermostArtifact = cursor;
-                }
-
-                cursor = Path.GetDirectoryName(cursor);
-            }
-
-            if (outermostArtifact != null)
-            {
-                directory = Path.GetDirectoryName(outermostArtifact);
-            }
-
-            if (string.IsNullOrWhiteSpace(directory))
-            {
-                return EnsureChainRootPackageLayer(parentTask, fallback, artifactChild);
-            }
-
-            /*
-             * 不许越出根任务的输出范围（共用输出根模式下 root 就是那个根）：
-             * 内层包如果被放在了范围之外（理论上不该发生），落点退回 fallback，绝不往外写。
-             */
-            string outputRoot = string.IsNullOrWhiteSpace(parentTask.OutputPath)
-                ? parentTask.ContentDirectoryPath
-                : parentTask.OutputPath;
-
-            if (!string.IsNullOrWhiteSpace(outputRoot) &&
-                !ArchivePathGuard.IsInsideRoot(outputRoot, directory, out _))
-            {
-                return EnsureChainRootPackageLayer(parentTask, fallback, artifactChild);
-            }
-
-            return EnsureChainRootPackageLayer(parentTask, directory, artifactChild);
-        }
-
-        /// <summary>
-        /// **链根那一层包名目录必须存在**（用户 2026-09-25 第 43 条，真机：68 套图全平铺进共用根）。
-        ///
-        /// <para><b>现场</b>：用户"添加文件夹 + 指定位置"导入 68 个包，落点是**共用输出根**
-        /// （`CCC\SJA佳爷…\`，最后一段是**导入文件夹名**）。每个外层包的清单里**只有内层包**
-        /// （`00NN_auto.7z.001/.002/.003`）、**没有内容文件夹** —— 于是外层包这一轮什么都没定稿，
-        /// 链根那一层"包名目录"从来没被建出来。续解任务按"内层包所在的那一层"算落点，
-        /// 得到的就是那个**共用根**；再加上「每个包只留一层内容」把最后一层塌掉，
-        /// 68 套图全倒进同一个目录（真机实测：4339 个文件平铺、几千个同名被自动改名成 `(1)…`）。</para>
-        ///
-        /// <para><b>该是什么样</b>：用户 2026-09-24 拍板的语义就是 `222\1111\内容物`
-        /// （成品目录 \ **包名** \ 内容物）。所以这里补一层**链根任务的包基名**：
-        /// `CCC\SJA佳爷…\055\…`——每个包一个目录，兄弟包互不干扰。</para>
-        ///
-        /// <para><b>判据只有两条事实</b>（⛔ 不猜、不看文案）：①父任务是**链根**（不是续解任务）；
-        /// ②算出来的目录**最后一段不是它自己的包基名** —— 那说明这是"多个包共用的根"
-        /// （包名那一层不在路径里），而不是"它自己的包名目录"。两条都成立才补。</para>
-        ///
-        /// <para>⚠ 第二条正是它**不会**动到第 35 条那两种情形的原因：内层包在内容文件夹里时
-        /// （`…\111\2222\`），最后一段就是包名 `2222`；单个包 + 指定位置时目录本来就是
-        /// `…\指定位置\包名\` —— 两种都不补，行为与从前逐字相同。</para>
-        /// </summary>
-        private static string EnsureChainRootPackageLayer(
+        internal static string ResolveContinuationBaseDirectory(
             ArchiveTask parentTask,
-            string directory,
-            string? artifactChildLayer = null)
-        {
-            if (parentTask == null
-                || parentTask.IsContinuationTask
-                || string.IsNullOrWhiteSpace(directory))
-            {
-                return directory;
-            }
-
-            /*
-             * ⚠ 只有"算出来的目录就是这个链根自己的输出根"时才补那一层（⛔ 不许用"最后一段名字不等于包名"
-             * 之类的近似判据 —— 实测踩到：扫描把**兄弟包**内容目录里的内层包也算到这个父任务头上时，
-             * 那个近似判据会把兄弟的那一层当成共用根，补出一层 `…\3333\2222` 的错目录，把第 35 条那条
-             * "跟着内层包自己所在的目录走"给毁了）。
-             */
-            string ownRoot = string.IsNullOrWhiteSpace(parentTask.ContentDirectoryPath)
-                ? parentTask.OutputPath
-                : parentTask.ContentDirectoryPath;
-
-            if (string.IsNullOrWhiteSpace(ownRoot) || !SafePathHelper.PathEquals(ownRoot, directory))
-            {
-                return directory;
-            }
-
-            /*
-             * 层名优先取**内层包真正所在的那一层**（「其余物\055\…」里的 `055`）：
-             * 共用根那一档下"其余物"按包基名分了子目录（ResultFinalizer 的 D-10），
-             * 那个子目录名就是外层包的包基名，**比父任务的名字更可靠** ——
-             * 实测：两个兄弟包都装着同名内层卷时，扫描会把另一个包的内层包也算到这个父任务头上
-             * （`2222.7z：内层包移入其余物 —— …\3333\333.7z`），用父任务名就会把两个包的内容
-             * 倒进同一个目录（真机上就是"混乱"）。
-             */
-            string packageLayer = string.IsNullOrWhiteSpace(artifactChildLayer)
-                ? FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(parentTask.CurrentPath))
-                : FileNameHelper.SanitizeFileName(artifactChildLayer!);
-
-            if (string.IsNullOrWhiteSpace(packageLayer))
-            {
-                return directory;
-            }
-
-            string trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            if (string.Equals(Path.GetFileName(trimmed), packageLayer, StringComparison.OrdinalIgnoreCase))
-            {
-                // 已经在自己那一层里（单个包 + 指定位置 / 内层包在内容文件夹里）→ 一个字都不动。
-                return directory;
-            }
-
-            string layered = Path.Combine(trimmed, packageLayer);
-
-            /*
-             * ⚠ 2026-10-18 困难批 `11111111` 组合 2 运行期定案（调试器读数逐字）：
-             * `rootTask.ContentFileCount = 1`、`ContentDirectoryPath = …\aaa-W0-0`、
-             * 实际内容在 `…\aaa-W0-0\aaa-L2\content-60mb.bin`（递归最后一层的包名是 `aaa-L2`，
-             * **不是**链根包名 `aaa-W0-1删除`）⇒ 老写法无条件补出
-             * `…\aaa-W0-0\aaa-W0-1删除`（盘上不存在）⇒ 链尾补搬数到 0 个内容物 ⇒
-             * 选了「彻底删除」也不删源包（④ 8 份同一族）。
-             *
-             * 判据两件**盘上事实**（⛔ 不猜内容在哪一层）：
-             * ① 这一单确实发布过内容物（`ContentFileCount > 0`，定稿计划记的账）；
-             * ② 补出来的那一层盘上不存在。
-             * 两条同时成立 ⇒ 退回记录下来的 `ContentDirectoryPath`（调用方数内容物是递归的，
-             * 能数到子层里的内容物）；只有一条成立 ⇒ 照旧补层（老行为一个字不改）。
-             */
-            if (parentTask.ContentFileCount > 0 && !Directory.Exists(layered))
-            {
-                return directory;
-            }
-
-            return layered;
-        }
+            string? innerPackagePath = null) =>
+            OneClickContinuationPlanner.ResolveContinuationBaseDirectory(parentTask, innerPackagePath);
 
         /*
          * 忙碌标志必须**成对进出**（MainViewModel.EnterBusy/ExitBusy 是嵌套计数）。
@@ -933,7 +560,7 @@ namespace ArchiveFixer.ViewModels
 
                     OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
 
-                    CleanupSuccessfulProcessArtifacts(Tasks, message => AppendLog("INFO", message));
+                    OneClickBatchFinalizer.CleanupSuccessfulProcessArtifacts(Tasks, message => AppendLog("INFO", message));
 
                     _vm.ReportPendingContinuation(outcome.PendingContinuationCount);
 
@@ -1036,7 +663,7 @@ namespace ArchiveFixer.ViewModels
 
             RunStopToken stopToken = new();
 
-            _batchFinalized = false;
+            _batchFinalizer.BeginBatch();
 
             CurrentRunSnapshot = RunSnapshot.Capture(
                 rootTargets,
@@ -1183,7 +810,7 @@ namespace ArchiveFixer.ViewModels
                     //    "没轮到" ⇒ 这一轮判成"被停止" ⇒ 链尾整段不跑 ⇒ **补判永远不发生**，
                     //    汇总还把一单"缺末片"报成「没轮到」。判据只读那份名单（事实位）。
                     if (stopRequested
-                        || roundStartTargets.Any(t => !IsHandled(t) && !_extractionCoordinator.IsDeferredVolumeDeficit(t)))
+                        || roundStartTargets.Any(t => !OneClickBatchFinalizer.IsHandled(t) && !_extractionCoordinator.IsDeferredVolumeDeficit(t)))
                     {
                         stopped = true;
                         break;
@@ -1209,7 +836,7 @@ namespace ArchiveFixer.ViewModels
                      * UI 线程继续 `AddInnerTasksAsync`。
                      */
                     (List<InnerArchiveCandidate> innerArchives, List<string> scanLog) =
-                        await Task.Run(() => CollectInnerLayersAsync(
+                        await Task.Run(() => _innerLayerCollector.CollectAsync(
                             round,
                             roundTargets,
                             existingFiles,
@@ -1321,7 +948,7 @@ namespace ArchiveFixer.ViewModels
                                              "*",
                                              SearchOption.TopDirectoryOnly))
                                 {
-                                    if (IsVolumeCandidateSeed(file))
+                                    if (InnerLayerCandidateClassifier.IsVolumeCandidateSeed(file))
                                     {
                                         extraGroupSeeds.Add(file);
                                     }
@@ -1576,7 +1203,7 @@ namespace ArchiveFixer.ViewModels
                                     continue;
                                 }
 
-                                string? targetWorkRoot = ResolvePreparedGroupTargetWorkRoot(prepared);
+                                string? targetWorkRoot = _batchFinalizer.ResolvePreparedGroupTargetWorkRoot(prepared);
                                 PreparedVolumeGroup? linked = VolumeGroupEntryDirectory.TryMaterialize(
                                     prepared,
                                     VolumeGroupEntryDirectory.TryResolveTargetEntryRoot(
@@ -1753,7 +1380,7 @@ namespace ArchiveFixer.ViewModels
 
                         if (!string.IsNullOrWhiteSpace(earlyEntryPath)
                             && !File.Exists(earlyEntryPath)
-                            && FindSucceededTaskInLayer(entryLayer, group.BaseName) != null)
+                            && _batchFinalizer.FindSucceededTaskInLayer(entryLayer, group.BaseName) != null)
                         {
                             AppendLog(
                                 "INFO",
@@ -1885,7 +1512,7 @@ namespace ArchiveFixer.ViewModels
                                  * 实际上已经由那个任务收口，不能再报"找不到入口"的 WARN。
                                  * 只认同一层 + 同基名 + 机器终态成功，禁跨层猜。
                                  */
-                                ArchiveTask? settledSameBase = FindSucceededTaskInLayer(entryLayer, group.BaseName);
+                                ArchiveTask? settledSameBase = _batchFinalizer.FindSucceededTaskInLayer(entryLayer, group.BaseName);
 
                                 if (settledSameBase != null)
                                 {
@@ -2382,7 +2009,7 @@ namespace ArchiveFixer.ViewModels
              */
             stopRequested |= stopToken.IsStopRequested;
 
-            await CompleteRootSourcePackagesAsync(
+            await _batchFinalizer.CompleteRootSourcePackagesAsync(
                 rootTargets,
                 processed,
                 stopped || stopRequested,
@@ -2404,9 +2031,9 @@ namespace ArchiveFixer.ViewModels
              */
             _extractionCoordinator.AppendVolumeHandoffBatchSummary();
 
-            FinalizeBatch();
+            _batchFinalizer.FinalizeBatch();
 
-            string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count, stoppedPhase);
+            string summary = _batchFinalizer.BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count, stoppedPhase);
 
             AppendLog("INFO", summary);
 
@@ -2491,83 +2118,6 @@ namespace ArchiveFixer.ViewModels
             return !sourcePaths.Contains(file) && !knownTaskPaths.Contains(file);
         }
 
-        /// <summary>
-        /// 续解链跑完之后，对"本轮没有内容物、记账成待补搬"的**最外层源包**再给一次机会
-        /// （2026-09-22 修复的真实缺陷，见调用点的说明）。
-        ///
-        /// <para>
-        /// 三条不补搬的情况（都写日志，不静默）：
-        /// ① 链没跑完（停止后续 / 撞轮数上限）→ 取消语义，源包留在原地；
-        /// ② 没有一个源包需要补搬 → 什么都不做（连日志都不写，免得每批都刷一行废话）；
-        /// ③ 具体的判据不成立（根任务没成功 / 校验没过 / 分卷不完整 / 那个目录里没有内容物）→
-        ///    由 <see cref="ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync"/> 逐条说清原因。
-        /// </para>
-        /// </summary>
-        private async Task CompleteRootSourcePackagesAsync(
-            IReadOnlyList<ArchiveTask> rootTasks,
-            IReadOnlyList<ArchiveTask> chainTasks,
-            bool stopped,
-            bool hitRoundLimit,
-            OneClickRunOptions? runOptions = null)
-        {
-            int pending = rootTasks.Count(task => task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
-
-
-            if (stopped)
-            {
-                /*
-                 * ⚠ 2026-09-30：**即使 pending == 0 也要写一句**。
-                 * 链没跑完 ⇒ 链尾那一档整段不执行（"按「删除操作」处理其余物"也在里面），
-                 * 于是选了「彻底删除」的人会发现过程物还留着 —— 而老写法只在 pending > 0 时才吭声，
-                 * pending == 0 时**一个字都不写**，用户只能猜（与 ApplyRestHandlingAfterChainAsync
-                 * 那处静默 return 是同一类毛病）。
-                 */
-                AppendLog(
-                    "WARN",
-                    $"一键处理：被「停止后续」中断，链尾那一档（补搬源包 / 按「删除操作」处理其余物）整段没有执行 —— "
-                    + $"源包与其余物都留在原地（{pending} 个源包本来要补搬）。");
-                return;
-            }
-
-            /*
-             * 「缺卷留到最后再判」：已停用（用户 2026-10-24）。
-             * 原来这里调 `FinalizeDeferredVolumeDeficitsAsync`（链尾缺卷终判）；实现仍在
-             * `SecondStepResidue/ExtractionCoordinator.DeferredVolumeDeficitStep.cs`，
-             * 重建第二大步时再决定接法（不接 ⇒ 这几单如实留在「未处理」，不假报结论）。
-             */
-
-            if (hitRoundLimit)
-            {
-                AppendLog(
-                    "WARN",
-                    $"一键处理：还有更深的包没解（已达到 {RoundLimit} 轮上限），链尾那一档整段没有执行 —— "
-                    + $"源包与其余物都留在原地（{pending} 个源包本来要补搬）；内容物可能还不全，此时不动源包。");
-                return;
-            }
-
-            if (pending > 0)
-            {
-                AppendLog(
-                    "INFO",
-                    $"一键处理：续解链已结束，对 {pending} 个「本轮没有内容物」的最外层源包做一次补搬（按源包处理档位）。");
-            }
-
-            /*
-             * ⚠ **即使 pending == 0 也必须调下去**（2026-09-25 第 33 条被测试逮到的那一处）：
-             * 链尾这一步不只做"源包补搬"，还负责**按「删除操作」那一档处理已经搬好的其余物**。
-             * 形状 A（第一层直接出内容物）下源包在第 1 轮就当场搬进其余物了，
-             * 到这里 `SourcePackageMove` 已经是 <c>Done</c> → 老的 `if (pending == 0) return;`
-             * 让整条链尾钩子**一次都不跑** → 用户选了「彻底删除」，跑完其余物还在
-             * （正是他真机报的那个现象；形状 B 的包因为 pending > 0 反而照常生效，
-             * 所以这个缺陷只在"第一层就出内容物"的包上露出来）。
-             */
-            await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(
-                rootTasks,
-                chainTasks,
-                cancellationToken: default,
-                runOptions);
-
-        }
 
         /// <summary>
         /// 一轮的"识别"步骤。
@@ -3099,7 +2649,7 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask task in roundTargets)
             {
-                directories.AddRange(CandidateDirectories(task));
+                directories.AddRange(InnerLayerCandidateClassifier.CandidateDirectories(task));
             }
 
             // 归集目标目录在解压前就能确定：不先记下来，它里面的老文件会被当成这一轮的新产物。
@@ -3207,806 +2757,14 @@ namespace ArchiveFixer.ViewModels
         /// **末片 `X.zip`**（它没有卷号），那一档由**按内容识别**那条路兜（它自己带 ZIP 头，引擎认得）。
         /// ⛔ 判据只读两条事实：卷号 == 1（既有那把尺子）、同目录里真有同一组的另一片 —— 判不出 ⇒ false。</para>
         /// </summary>
-        private static bool IsVolumeGroupEntryInPlace(string file)
-        {
-            string name = FileNameHelper.GetFileName(file);
+        /// <summary>「后续卷」判断的唯一入口（测试与既有调用点按这个名字指认；实现见 <see cref="InnerLayerCollector"/>）。</summary>
+        internal static bool IsVolumeContinuationPart(string filePath) =>
+            InnerLayerCandidateClassifier.IsVolumeContinuationPart(filePath);
 
-            if (LegacyVolumeNames.TryGetIndex(name) != 1)
-            {
-                return false;
-            }
+        /// <summary>批末副作用（实现见 <see cref="OneClickBatchFinalizer"/>；本类只留既有入口）。</summary>
+        internal void FinalizeBatch() => _batchFinalizer.FinalizeBatch();
 
-            string directory = Path.GetDirectoryName(file) ?? string.Empty;
-
-            if (directory.Length == 0)
-            {
-                return false;
-            }
-
-            try
-            {
-                foreach (string other in Directory.EnumerateFiles(directory))
-                {
-                    if (!string.Equals(other, file, StringComparison.OrdinalIgnoreCase)
-                        && LegacyVolumeNames.BelongsToSameGroup(
-                            FileNameHelper.GetFileName(other),
-                            name))
-                    {
-                        return true;
-                    }
-                }
-            }
-            catch
-            {
-                // 目录读不动 ⇒ 判不出 ⇒ 照旧走"按内容"那条路（什么都不多做）。
-            }
-
-            return false;
-        }
-
-        private async Task<(List<InnerArchiveCandidate> Candidates, List<string> LogLines)> CollectInnerLayersAsync(
-            int round,
-            IReadOnlyList<ArchiveTask> roundTargets,
-            HashSet<string> existingFiles,
-            HashSet<string> unreadableDirectories,
-            HashSet<string> sourcePaths)
-        {
-            // 已经在任务列表里的文件不重复加（去重）。
-            var knownTaskPaths = new HashSet<string>(
-                Tasks.Select(t => t.CurrentPath).Where(p => !string.IsNullOrWhiteSpace(p)),
-                StringComparer.OrdinalIgnoreCase);
-
-            /*
-             * task.OutputPath / task.CollectedPath 是解压管线回写的**实际落点**（唯一权威来源），
-             * 不是"打算输出到哪"。所以这里无条件按它去找内层包：
-             * 目录已经存在时它可能是自动改名后的 xxx(1)，绝不是快照里那个原定目录。
-             * 是不是"这一轮新产物"由下面的 existingFiles 继续把关 ——
-             * 解压前就有的文件会被过滤掉，不会把用户自己放在旁边的包重新解一遍。
-             */
-            var parents = new List<(ArchiveTask Task, string OutputDirectory)>();
-            var seenDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (ArchiveTask task in roundTargets)
-            {
-                /*
-                 * 只有**产物校验通过**的任务才有"产物"可言（用户 2026-09-24 要求：判据只准看事实）。
-                 *
-                 * 老写法是 `IsSuccessStatus(task)`，也就是拿 `task.Status == "解压成功"` 这个**字符串**去决定
-                 * "要不要继续往下解"。真机日志里恰好出现过"状态写着解压成功、校验却已判否"的那一刻 ——
-                 * 那种情况下续解链会在两个 0 字节的桩文件上继续解两层，全程在解空气。
-                 * 现在读的是校验那一刻的事实；失败/取消的任务在这里天然被排除（它们的结论不是 Passed）。
-                 */
-                if (task.OutputVerification != OutputVerificationOutcome.Passed)
-                {
-                    continue;
-                }
-
-                foreach (string directory in CandidateDirectories(task))
-                {
-                    /*
-                     * ⚠ 同一个目录只扫一次（2026-09-25 第 35 条修的真机日志噪声）：
-                     * 共用输出根那一档下 4 个任务指向同一个目录，逐个任务扫就把同一批文件数了 4 遍 ——
-                     * 日志里出现"新文件 16 个"（实际 4 个）和同一条"认出…"重复 4 行，纯噪声。
-                     */
-                    if (!string.IsNullOrWhiteSpace(directory) &&
-                        !unreadableDirectories.Contains(directory) &&
-                        seenDirectories.Add(directory))
-                    {
-                        parents.Add((task, directory));
-                    }
-                }
-            }
-
-            if (parents.Count == 0)
-            {
-                /*
-                 * ⛔ 这一档原来**静默早退**（连"扫描到底跑没跑"都看不出来 —— 真机 EEE 就是这样：
-                 * 第 2 轮日志里只有「第 2 层没有发现可继续解压的内层包」，没有任何扫描行，
-                 * 于是分不清是"没有候选"还是"扫描根本没跑"）。
-                 *
-                 * 按项目那条规矩（判不出就把**判据输入**写进日志）补一行：每一单为什么没交出目录 ——
-                 * 产物校验过没过 / 落点与归集那两格是空还是有值。⛔ 只写程序当场算出来的值，不改任何判据。
-                 */
-                var why = new List<string>(roundTargets.Count);
-
-                foreach (ArchiveTask candidateTask in roundTargets)
-                {
-                    string outputPath = candidateTask.OutputPath ?? string.Empty;
-                    string collectedPath = candidateTask.CollectedPath ?? string.Empty;
-
-                    why.Add(
-                        $"{candidateTask.LogName}（校验={candidateTask.OutputVerification}，"
-                        + $"落点={(outputPath.Length > 0 ? outputPath : "空")}，"
-                        + $"归集={(collectedPath.Length > 0 ? collectedPath : "空")}）");
-                }
-
-                return (new List<InnerArchiveCandidate>(), new List<string>
-                {
-                    $"[WARN] 第 {round} 层产物扫描：这一轮一个可扫的产物目录都没有（{roundTargets.Count} 单）—— "
-                    + string.Join("；", why)
-                });
-            }
-
-            /*
-             * 轮次输入账本：本轮成功任务的定稿计划已经登记了实际落地的内容物。
-             * 全部父任务都有账本 ⇒ 下一轮只吃这些路径，不扫输出目录树；
-             * 有一个任务没有账本（旧任务 / 定稿未走计划）才回落到目录扫描。
-             */
-            bool useProducedLedger = parents.Count > 0
-                && parents.All(parent => parent.Task.ProducedFiles.Count > 0);
-
-            List<(string OutputDirectory, List<string> Files)> scanned;
-
-            if (useProducedLedger)
-            {
-                string workRoot = _vm.CurrentWorkspaceRoot;
-
-                scanned = parents
-                    .Select(parent => (
-                        parent.OutputDirectory,
-                        parent.Task.ProducedFiles
-                            .Where(File.Exists)
-                            .Where(file => !WorkspaceTree.IsInsideWorkspace(file, workRoot))
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList()))
-                    .ToList();
-            }
-            else
-            {
-                scanned = await Task.Run(() =>
-                {
-                    var results = new List<(string, List<string>)>();
-
-                    // 扫描发生在后台线程上，先把当前生效的工作区根读出来（读的是批首定好的那一个）。
-                    string workRoot = _vm.CurrentWorkspaceRoot;
-
-                    foreach ((ArchiveTask _, string outputDirectory) in parents)
-                    {
-                        if (!Directory.Exists(outputDirectory))
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            /*
-                             * ⛔ 第 N 层产物扫描**必须排除工作区自己那棵树**（用户 2026-09-30）：
-                             * 工作区默认就建在目标目录里面（<目标目录>\.ArchiveFixer.work），
-                             * 里面躺着抠出来的内嵌归档副本、逐层的中间包 —— 它们**全都能被识别成归档**。
-                             * 不排除的话，程序会把工作区里的中间产物当成"用户的内层包"继续解，
-                             * 解完再把它们当内容物搬出去：不可逆的事故。
-                             *
-                             * ⚠ 「其余物」**不许整棵排除**（2026-10-05 实测）：默认档（只解当前这一层 +
-                             * 一键处理续解）下，上一层产出的内层包正是**收进其余物之后**才被这一轮扫描认出来、
-                             * 当下一个任务接着解的 —— 排掉整棵树等于把续解链砍掉
-                             * （`InnerLayerContinuationTests` / `ChainManifestCompletenessTests` 当场 18 条红）。
-                             * 真机那 857 vs 855 的噪声改由 <see cref="ShouldScanProducedFile"/> 那一处收口。
-                             */
-                            results.Add((outputDirectory, WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
-                        }
-                        catch
-                        {
-                            // 读不了这个目录：跳过（快照阶段已经写过一条 WARN，不重复打扰用户）。
-                        }
-                    }
-
-                    return results;
-                });
-            }
-
-            var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
-
-            /*
-             * 这一轮认出来的内层包**按盘上物理身份去重**（2026-10-18，`8888` 现场）：
-             * 同一份文件的两条名字（接片建的硬链接 / 同目录副本）只允许建一单 —— 见下面循环里那段。
-             */
-            var seenInnerPackageIdentities = new Dictionary<string, string>(StringComparer.Ordinal);
-
-            // 本轮按父任务登记的候选（父任务、父任务名、内层包路径）—— 落点要等扫完一整轮才能定。
-            var candidates = new List<(ArchiveTask Parent, string ParentName, string File)>();
-
-            var scanLog = new List<string>();
-            var recognizedLines = new List<string>();
-            var skippedLines = new List<string>();
-            int newFileCount = 0;
-
-            /*
-             * 「内容物保留关键词」判据（用户 2026-10-04 的新功能「内容物压缩文件不解压」）：
-             * 一轮扫下来只算一次（设置在一轮里不会变），空列表 ⇒ 一个都不拦。
-             */
-            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
-
-            foreach ((ArchiveTask task, string outputDirectory) in parents)
-            {
-                List<string>? files = scanned
-                    .Where(entry => string.Equals(entry.OutputDirectory, outputDirectory, StringComparison.OrdinalIgnoreCase))
-                    .Select(entry => entry.Files)
-                    .FirstOrDefault();
-
-                if (files == null)
-                {
-                    continue;
-                }
-
-                string parentName = string.IsNullOrWhiteSpace(task.FileName)
-                    ? Path.GetFileName(task.CurrentPath)
-                    : task.FileName;
-
-                foreach (string file in files)
-                {
-                    // 只认"这一轮新出现"的：解压前就在那里的文件不是这一轮的产物。
-                    if (existingFiles.Contains(file))
-                    {
-                        continue;
-                    }
-
-                    /*
-                     * ⛔ 已经是我们自己的东西（本批的源包 / 已经登记过路径的文件）**不进这一轮的统计与日志**
-                     * （用户 2026-10-05 真机）：真机那一轮扫出 857 个文件，其中 2 个是
-                     * `其余物\HK.7z.001/.002`（本批的源包）—— 它们永远只会是"跳过"，
-                     * 却把"新文件"这个数字与日志行都撑大了（用户点名的"857 个文件、20 行日志"）。
-                     *
-                     * ⚠ 判据只过滤**已知的**（见 <see cref="ShouldScanProducedFile"/>）：
-                     * ⛔ 不许顺手把整个「其余物」目录排除掉 —— 里面**没登记过**的包正是默认档续解链的输入。
-                     */
-                    if (!ShouldScanProducedFile(file, sourcePaths, knownTaskPaths))
-                    {
-                        continue;
-                    }
-
-                    newFileCount++;
-
-                    /*
-                     * 已经判成内容物的文件（同一路径 + 大小 + 修改时间）不再打开：
-                     * 轮次扫描、批末确认反复枚举到它时直接跳过，避免图片/视频被重复嗅探。
-                     */
-                    if (TryGetTerminalProducedContent(file, out _))
-                    {
-                        continue;
-                    }
-
-                    /*
-                     * ===== 「内容物保留关键词」：命中就**不当内层归档**（用户 2026-10-04 的新功能）=====
-                     *
-                     * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
-                     * 出厂默认档（RecursionMode = SingleLayer）**不进递归核心**，内层包由这里按轮次继续解
-                     * —— 所以这条设置必须在这条路也生效，否则默认档下它等于没做。
-                     *
-                     * 判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中、大小写不敏感、
-                     * ⛔ 不做通配 / 正则、只吃文件名）；空关键词列表 ⇒ 一个都不拦（行为与以前逐字相同）。
-                     */
-                    string? keepsKeyword = keepRules.FindMatch(file);
-
-                    if (keepsKeyword != null)
-                    {
-                        skippedLines.Add($"{file}（名字命中「内容物保留关键词」：{keepsKeyword} —— 按设置不解开也不改名）");
-                        RememberTerminalProducedContent(file, "内容物保留关键词");
-                        continue;
-                    }
-
-                    if (ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(file))
-                    {
-                        skippedLines.Add(
-                            $"{file}（{ArchiveFixer.Security.ContentContainerProtection.Describe(file)}"
-                            + " —— 默认当内容物保留，不解开也不改名；要拆请单独选中它用「只解压」）");
-                        RememberTerminalProducedContent(file, "内容容器");
-                        continue;
-                    }
-
-                    /*
-                     * ===== 内层包候选的**下限**（用户 2026-09-24 铁证）=====
-                     *
-                     * 现场：外层 ZIP 是加密条目 → 7z 半成功写出 **0 字节**的 `2部轻熟1.7z.001/.002` →
-                     * 老逻辑只看后缀，把那个 0 字节的 `.001` 当成"包"继续往下解，一路解到 `2部轻熟1.7z`
-                     * 才被 7-Zip 用"文件为空"打回来 —— 用户看到的是连解两层空气。
-                     * 用户明确要求：**0 字节的文件绝不许进入续解链**。
-                     */
-                    if (!TryGetCandidateLength(file, out long candidateLength) || candidateLength <= 0)
-                    {
-                        skippedLines.Add($"{file}（0 字节或读不到，不可能是包）");
-                        continue;
-                    }
-
-                    /*
-                     * 空间不足模式：其余物里的东西是「最后一层过程物」或已成功过程的副本，
-                     * 成功时应彻底删除，失败时只留给用户，⛔ 不再当下一轮的新内层包。
-                     */
-                    if (ShouldSkipAsProcessArtifact(file, _vm.SpaceTightMode, out string artifactReason))
-                    {
-                        skippedLines.Add($"{file}（{artifactReason}）");
-                        continue;
-                    }
-
-                    /*
-                     * 唯一还按名字排除的一类：分卷的**后续卷**（.002 / .z02 / .r01 / .part2+）。
-                     * 理由是"哪一卷是组的开头"只能从名字看出来 —— 这是**分组**信息，不是格式判断；
-                     * 格式一律只看内容（下一段）。⛔ 别在这里再加"后缀得是已知归档后缀"那种条件：
-                     * 那正是 2026-09-25 真机上"名字被塞了两个字就只解一层"的根因。
-                     *
-                     * ⛔ **但名字这一格必须让内容先说**（2026-10-18，唯一出口
-                     * <see cref="ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece"/>）：
-                     * 现场（困难批 `24242424`）`222-W1-1.932` 的真实内容是**单盘 ZIP**，名字里那个 `932`
-                     * 只是伪装尾巴 —— 老写法把它当"后续卷"跳过 ⇒ 它的密码候选只试 1 个就收场。
-                     * 内容可证是单卷 ⇒ 名字不算数，照旧按内容分类进续解链。
-                     */
-                    if (IsVolumeContinuationPart(file)
-                        && !ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(file)
-                        && !ContentProvesFirstVolumePiece(file))
-                    {
-                        skippedLines.Add($"{file}（是分卷的后续卷，起点在第一卷上）");
-                        continue;
-                    }
-
-                    /*
-                     * 普通产物先看底层卡，不再对每个图片/视频都跑一遍 DetectAsync。
-                     * 只对“卡上仍判不出格式且没有归档结构”的文件进入完整归档探测；
-                     * 媒体前缀归档的卡是 ContentClass=Archive/EmbeddedOffset>0，不会被这里跳过。
-                     */
-                    FileNatureCard producedNature = _extractionCoordinator.TryGetProducedCard(file, out FileNatureCard cachedNature)
-                        ? cachedNature
-                        : FileNature.Inspect(file);
-                    bool isArchive;
-                    string how;
-
-                    if (producedNature.IsKnownNormalMedia
-                        && producedNature.ContentClass != FileContentClass.Archive
-                        && producedNature.BodyKind == ArchiveBodyKind.Unknown)
-                    {
-                        RememberTerminalProducedContent(file, "普通媒体（内容结构完整，无尾部归档）");
-                        skippedLines.Add($"{file}（普通媒体，不做归档探测）");
-                        continue;
-                    }
-
-                    if (producedNature.Format != VolumeContentFormat.Unknown
-                        || producedNature.ContentClass == FileContentClass.Archive
-                        || producedNature.BodyKind != ArchiveBodyKind.Unknown)
-                    {
-                        isArchive = true;
-                        how = producedNature.EmbeddedOffset > 0
-                            ? $"尾部内嵌归档（{producedNature.Format}，偏移 {producedNature.EmbeddedOffset}）"
-                            : $"文件头魔数（{producedNature.Format}）";
-                    }
-                    else
-                    {
-                        (isArchive, how) = await ClassifyArchiveByContentAsync(file);
-                    }
-
-                    /*
-                     * ⚠ **引擎按内容打不开，不代表它不该进续解链**（2026-10-11 真机 EEE 实测，轮次模型补的那一格）：
-                     *
-                     * 现场逐字：`第 1 层产物扫描 —— 新文件 3 个；按内容认出归档 0 个；跳过 3 个`，
-                     * 而这三个新文件是**第二大步刚解出来的那两片**（`111.parts1.racr` / `111.part删2.ra除r`）
-                     * —— RAR 找兄弟卷**靠名字**，这一对名字是脏的（一个 `parts1`、一个夹着"删/除"），
-                     * 引擎自然打不开它 ⇒ 0 个"归档" ⇒ 这一批就"到此为止"，
-                     * 可用户要的东西还压在这两层分卷里（正是他说的"接着就该下一轮的第二大步"）。
-                     *
-                     * ⇒ 补一道**分卷专属那把尺子**：这一份确实是**某一组的第一卷**（同目录里真有它的兄弟卷）
-                     * 就照样当候选收进来 —— 判据只读名字与目录事实，⛔ 不猜格式、⛔ 不改名；
-                     * 名字怎么改、那一组怎么开，是**下一轮第二大步**的事。
-                     */
-                    if (!isArchive && IsVolumeGroupEntryInPlace(file))
-                    {
-                        isArchive = true;
-                        how = "按分卷尺子认出：这一组的第一卷（引擎按内容打不开是因为名字脏，交给第二大步）";
-                    }
-
-                    /*
-                     * 内容自证是“某一组的第一片”（7z 起始头自述整包/片数）⇒ 名字像后续卷也不算数：
-                     * 真机 19191919：`.0!601` 是首片，名字尾巴 601 被当成“后续卷”跳过，整组就永远缺卷。
-                     * ⛔ 只认内容事实，不改名、不猜格式。
-                     */
-                    /*
-                     * ⛔ 只有名字本身带卷槽时才允许做“内容自证首片”的 `FileNature`：
-                     * 普通图片/视频没有卷槽，不该为了这一条再读一遍头尾。
-                     * 同基名的内容物由第二大步候选层按基名上下文处理。
-                     */
-                    if (!isArchive
-                        && LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(file)).HasValue
-                        && ContentProvesFirstVolumePiece(file))
-                    {
-                        isArchive = true;
-                        how = "按内容认出：分卷首片（起始头自述整包/片数），交给第二大步";
-                    }
-
-
-                    if (!isArchive)
-                    {
-                        RememberTerminalProducedContent(file, how);
-                        skippedLines.Add($"{file}（{how}）");
-                        continue;
-                    }
-
-                    /*
-                     * ⛔ **同一份物理文件的两条名字，只算一个内层包**（2026-10-18，困难批 `8888` 运行期定案）。
-                     *
-                     * <para>现场逐字：`打包111-L2.part1.rar` 与 `打包111-L2.part1删删删删删删删.rar`
-                     * 是**同一个 File ID**（`fsutil file hardlink list` 两个名字、`接片` 建的是零字节硬链接），
-                     * 而这一轮扫描按**名字**给它们各建了一单 ⇒ 两单都去解同一组 ⇒ 第一单解出的
-                     * `打包111-L1.7z` 被第二单当"自己的过程物"搬进其余物 ⇒ 下一轮又被当新原包解开
-                     * ⇒ `contentBytes = 125829120`（两份 60 MiB，判据 ① 红）。</para>
-                     *
-                     * <para>判据只读盘上身份（<see cref="ArchiveFixer.Detection.FileIdentity"/>：卷序列号 + 文件索引，
-                     * 改名 / 移动 / 硬链接都不变）；同一份物理文件保留**内容卡自证"这条名字就是规范名"**的那一条
-                     * （2026-10-18 困难批 `15151515` 组合 6 运行期定案：`aaa-L2.zip` 与 `aaa-L2.z00000000ip`
-                     * 是同一份字节，卡的 `CanonicalVolumeName` 都是 `aaa-L2.zip`；原来"留先出现的"留下了脏名
-                     * ⇒ 第二轮拿脏名去开这一组 ⇒ 引擎找不到 `.z01` ⇒ ① ② 双红）。两条都不是规范名 ⇒ 照旧留先出现的。
-                     * ⛔ 不涉及用户源包 —— 源包在前面 `ShouldScanProducedFile` 已经排掉。</para>
-                     */
-                    if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(file, out ulong dupVolume, out ulong dupIndex))
-                    {
-                        string identityKey = dupVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                            + ":"
-                            + dupIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-                        if (seenInnerPackageIdentities.TryGetValue(identityKey, out string? keptFile))
-                        {
-                            bool candidateIsCanonical = IsContentCanonicalName(file);
-                            bool keptIsCanonical = IsContentCanonicalName(keptFile!);
-
-                            if (candidateIsCanonical && !keptIsCanonical)
-                            {
-                                /*
-                                 * 新来的这一条才是规范名 ⇒ 换掉旧那一条（把旧名字从已认出的清单里撤掉，
-                                 * 否则同一个身份会留下两条候选）。
-                                 */
-                                skippedLines.Add(
-                                    $"{keptFile}（与「{file}」是同一份文件的两个名字 —— 只算一个内层包，留规范名那一条）");
-
-                                recognizedLines.RemoveAll(line =>
-                                    line.StartsWith(keptFile! + "（", StringComparison.Ordinal));
-                                candidates.RemoveAll(candidate =>
-                                    string.Equals(candidate.File, keptFile, StringComparison.OrdinalIgnoreCase));
-                                found.Remove(keptFile!);
-
-                                seenInnerPackageIdentities[identityKey] = file;
-                            }
-                            else
-                            {
-                                skippedLines.Add($"{file}（与「{keptFile}」是同一份文件的两个名字 —— 只算一个内层包）");
-                                continue;
-                            }
-                        }
-                        else
-                        {
-                            seenInnerPackageIdentities[identityKey] = file;
-                        }
-                    }
-
-                    recognizedLines.Add($"{file}（{TaskSpaceEstimate.FormatSize(candidateLength)}，{how}）");
-
-                    if (!found.ContainsKey(file))
-                    {
-                        /*
-                         * ⚠ 落点**按每个内层包自己所在的目录**算（第 35 条），不能用"每个父任务一个" ——
-                         * 共用输出根那一档下，同一个父任务的两个内层包分别躺在
-                         * `…\111\2222\` 与 `…\111\3333\`，各自的内容物必须回到各自那一层旁边。
-                         *
-                         * 先只记下来，"要不要给这一层再套一层包名目录"**必须等这一轮扫完**才能定：
-                         * 判据里有"同一个父任务认出了几个内层包"（分支 or 单链）这条事实。
-                         */
-                        candidates.Add((task, parentName, file));
-                    }
-                }
-            }
-
-            /*
-             * 同一份内层包在「其余物」里还有一份副本时，只认产品树那一份。
-             * 空间不足模式会删掉产品树里的源，但其余物副本仍在；不拦就会把同一包
-             * 再当一次新内层包解开，出现 222-L2 / 222-L2(1) 这种重复目录。
-             * 判据 = 同名 + 同字节数；只拦其余物里的那一份，正常「只存在于其余物」的续解包照旧保留。
-             */
-            var outsideRestKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach ((ArchiveTask _, string _, string file) in candidates)
-            {
-                if (!ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
-                {
-                    outsideRestKeys.Add(InnerPackageKey(file));
-                }
-            }
-
-            foreach ((ArchiveTask _, string _, string file) in candidates.ToList())
-            {
-                if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(file)
-                    && outsideRestKeys.Contains(InnerPackageKey(file)))
-                {
-                    skippedLines.Add($"{file}（产品树里已有同名同大小的内层包，其余物里的副本不再当成新包）");
-                    candidates.RemoveAll(candidate =>
-                        string.Equals(candidate.File, file, StringComparison.OrdinalIgnoreCase));
-                    found.Remove(file);
-                }
-            }
-
-            /*
-             * ===== 续解层那一层目录（用户 2026-09-27：首尾必留，中间看开关）=====
-             *
-             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做三件事：
-             * ① 按父任务分组（"这一轮认出几个内层包"是按父任务数的）；
-             * ② 要建层时取**这一层内层包的包基名**（分卷组取不出来 → 过程物名不成层，见 AppendOwnLayer）；
-             * ③ 层名被内层包自己那个文件占着时不建层，写日志说清（见下面那一段）。
-             */
-            foreach (IGrouping<ArchiveTask, (ArchiveTask Parent, string ParentName, string File)> group in
-                     candidates.GroupBy(candidate => candidate.Parent))
-            {
-                ArchiveTask parent = group.Key;
-                List<(ArchiveTask Parent, string ParentName, string File)> children = group.ToList();
-
-                // 父任务自己产出了内容物 = 这一层是"内容 + 内层包"的分支，不是干净的单链中间层。
-                // ⚠ 判据是**搬出去的内容物文件数**（唯一权威来源 = 定稿计划），不是
-                // `ContentDirectoryPath` —— 后者对"只出过程物"的层也非空（见 ArchiveTask.ContentFileCount）。
-                bool parentProducedContent = parent.ContentFileCount > 0;
-
-                bool addLayer = ShouldAddContinuationLevelLayer(
-                    parentProducedContent,
-                    children.Count);
-
-                if (parentProducedContent && addLayer && children.Count > 1)
-                {
-                    scanLog.Add(
-                        $"{parent.FileName}：这一层自己产出了内容物、又认出了 {children.Count} 个内层包 ——"
-                        + "它们各自占一层（否则几个包的内容物会倒进同一层）。");
-                }
-                else if (parentProducedContent && !addLayer)
-                {
-                    /*
-                     * 用户 2026-09-27 真机：父层已经出了内容物 → 内层包解出来的东西**并进父层那一个目录**，
-                     * 与父层自己的内容物并排，不再用内层包名另造一层（那会把真内容埋深一层）。
-                     */
-                    scanLog.Add(
-                        $"{parent.FileName}：这一层自己产出了内容物 —— 内层包解出来的东西并进这一层"
-                        + "（不再另建以包名命名的目录，免得真内容被埋到上一层文件下面）。");
-                }
-
-                foreach ((ArchiveTask _, string parentName, string file) in children)
-                {
-                    string layerName = addLayer ? ResolveContinuationLayerName(file) : string.Empty;
-
-                    /*
-                     * 层名**被内层包自己那个文件占着**（名字被改坏、剥不出后缀那种）→ 那一层建不出来，
-                     * 内容落进父任务那一层。这是用户看得见的落点差别，必须写日志说清（⛔ 绝不静默）。
-                     */
-                    if (layerName.Length > 0
-                        && IsOwnLayerOccupiedByPackageFile(ResolveContinuationBaseDirectory(parent, file), layerName, file))
-                    {
-                        scanLog.Add(
-                            $"{file}：这一层要建的位置被「内层包自己」占着（名字被改坏、剥不出后缀）——"
-                            + "这一层不另建，内容落进父任务那一层里。");
-                    }
-
-                    found[file] = new InnerArchiveCandidate
-                    {
-                        Path = file,
-                        ParentOutputDirectory = ResolveContinuationOutputDirectory(parent, file, layerName),
-                        ParentTaskName = parentName,
-                        RootSourcePath = parent.ChainRootIdentity
-                    };
-                }
-            }
-
-            /*
-             * 扫描日志：**先写清"看了多少、认出几个、跳过几个"，再把逐条明细列出来**。
-             * 上限 20 条明细（一个包里几千个文件时不能让日志爆掉），超出只报个数 ——
-             * 但"有多少没列出来"必须写出来，绝不静默截断。
-             */
-            scanLog.Add(
-                $"一键处理：第 {round} 层产物扫描 —— 新文件 {newFileCount} 个；"
-                + $"按内容认出归档 {recognizedLines.Count} 个；跳过 {skippedLines.Count} 个。");
-
-            foreach (string line in AppendCapped(recognizedLines, "认出（会继续解）"))
-            {
-                scanLog.Add(line);
-            }
-
-            foreach (string line in AppendCapped(skippedLines, "跳过"))
-            {
-                scanLog.Add(line);
-            }
-
-            return (found.Values.OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).ToList(), scanLog);
-        }
-
-        /// <summary>明细行的条数上限（每个方向）：够看清现场，又不至于让日志爆掉。</summary>
-        internal const int MaxScanDetailLines = 20;
-
-        /// <summary>把明细行截成"最多 N 条 + 一行说明还剩多少"（绝不静默截断）。</summary>
-        private static IEnumerable<string> AppendCapped(List<string> lines, string label)
-        {
-            foreach (string line in lines.Take(MaxScanDetailLines))
-            {
-                yield return $"一键处理：    {label}：{line}";
-            }
-
-            if (lines.Count > MaxScanDetailLines)
-            {
-                yield return $"一键处理：    {label}：…还有 {lines.Count - MaxScanDetailLines} 个（略）";
-            }
-        }
-
-        /// <summary>
-        /// 取候选文件的字节数；读不到（文件刚好被删 / 权限）返回 false = 不算候选。
-        ///
-        /// <para>0 字节的 `*.7z.001` **不是包**（用户 2026-09-24 铁证）：7z 用错密码"半成功"时
-        /// 就会写出这种桩文件，把它当内层包继续解等于连解两层空气。</para>
-        /// </summary>
-        private static bool TryGetCandidateLength(string filePath, out long length)
-        {
-            length = 0;
-
-            try
-            {
-                length = new FileInfo(filePath).Length;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 按**内容**判断一个候选是不是归档（后缀一个字都不看）。
-        ///
-        /// <para>判据与识别阶段**同一口径**：直接调 <see cref="ArchiveDetectService.DetectAsync"/>
-        /// ——也就是"扫描任务"那一步用的同一个实现：先读文件头魔数（RAR5 / 7z / ZIP / 分卷起点…），
-        /// 文件头认不出时它自己会去看文件尾部有没有"内嵌归档"（假 MP4 头 + 尾部完整 ZIP 那种双面文件）。
-        /// ⛔ 这里**不许**再另造一套签名表或另加一道按名字的筛子 —— 那正是 2026-09-25
-        /// 真机上"名字被塞了两个字就只解一层"的根因。</para>
-        ///
-        /// <para>返回 <c>(是归档?, 判据说明)</c>：说明会原样进日志（用户要求"看日志就能定位"）。</para>
-        /// </summary>
-        private async Task<(bool IsArchive, string How)> ClassifyArchiveByContentAsync(string filePath)
-        {
-            try
-            {
-                DetectResult result = await _detectService.DetectAsync(filePath);
-
-                if (!result.IsArchive || !result.IsKnownFormat)
-                {
-                    return (false, "按内容认不出是归档（文件头与尾部都试过了）");
-                }
-
-                /*
-                 * 说清是**哪一条**判据认出来的：
-                 * · 尾部内嵌归档 → 这种文件必须按偏移抠出来才能解（解压侧已经这么做了）；
-                 * · 文件头魔数 → 普通包。
-                 * 用户要的是"日志能自证"，所以这一句不能含糊。
-                 */
-                return result.EmbeddedArchiveOffset > 0
-                    ? (true, $"尾部内嵌归档（{result.Format}，偏移 {result.EmbeddedArchiveOffset}）")
-                    : (true, $"文件头魔数（{result.Format}）");
-            }
-            catch
-            {
-                // 读不了（被独占 / 刚好被删）：当作"认不出来"，不把它当包 —— 宁可不续解，也不解空气。
-                return (false, "读不了（被占用或刚好被删）");
-            }
-        }
-
-        /// <summary>
-        /// 一个任务的产物可能落在哪几个目录。
-        ///
-        /// 除了输出目录，还要看归集目录：开了"结果归集"时产物会被**移动**到归集目标目录，
-        /// 内层包也跟着跑了 —— 只看 OutputPath 的话这种配置下永远找不到内层包（看起来就像功能没生效）。
-        /// </summary>
-        private static IEnumerable<string> CandidateDirectories(ArchiveTask task)
-        {
-            if (!string.IsNullOrWhiteSpace(task.OutputPath))
-            {
-                yield return task.OutputPath;
-            }
-
-            if (!string.IsNullOrWhiteSpace(task.CollectedPath))
-            {
-                yield return task.CollectedPath;
-            }
-        }
-
-        /// <summary>
-        /// 判断一个文件是不是<b>分卷的后续卷</b>（<c>.002+</c>／<c>.z02+</c>／<c>.r01+</c>／<c>.part2+</c>）。
-        ///
-        /// <para>这是续解扫描里**唯一**还按名字排除的一类，理由：一组分卷里"哪一卷是开头"
-        /// 只能从名字看出来 —— 那是<b>分组</b>信息，不是格式判断。格式一律只看内容
-        /// （见 <see cref="ClassifyArchiveByContentAsync"/>）。</para>
-        ///
-        /// <para>⛔ 别在这里加"后缀必须是已知归档后缀"那种条件：2026-09-25 真机上
-        /// "名字被塞了两个字（<c>222.ra删除r</c>）就只解一层"的根因正是那样一道门。</para>
-        /// </summary>
-        internal static bool IsVolumeContinuationPart(string filePath)
-        {
-            /*
-             * ⚠ 2026-10-02：实现搬到 `Helpers/FileNameHelper.IsVolumeContinuationPart`，这里只留一个转调。
-             *
-             * 理由不是"换个地方放"，而是**同一条规则现在有两个消费者**：续解扫描（这里）与递归的
-             * 单链判定（`RecursiveExtractor.HasOnlyInformationalSiblings` —— 分卷组过去会被那一边
-             * 当成"多分支"）。而 `Extraction` 不许反向引用 `ViewModels`（分层铁律），
-             * 所以规则必须落在两边都能读的 `Helpers` 里 —— ⛔ 不许在那边再写第二份。
-             */
-            return FileNameHelper.IsVolumeContinuationPart(filePath);
-        }
-
-        /// <summary>
-        /// 内容自证“我是某一组的第一片”（7z `VolumeFirstPiece`：起始头自述整包字节/片数）。
-        /// 用来压过**名字**的“像后续卷”判断（真机 19191919：`.0!601` 是首片，却被名字尾巴 601 跳过）。
-        /// 判不出/读不到 ⇒ false（⛔ 不猜）。
-        /// </summary>
-        internal static bool ContentProvesFirstVolumePiece(string filePath)
-        {
-            try
-            {
-                return ArchiveFixer.Detection.FileNature.Inspect(filePath).BodyKind
-                    == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 名字/内容像“某一组的片”的候选种子（只用于第二大步候选池，⛔ 不据此搬/删/改名）：
-        /// 卷标记容忍档命中、卷号 ≥ 2、或内容自证首片。
-        /// </summary>
-        internal static bool IsVolumeCandidateSeed(string filePath)
-        {
-            try
-            {
-                if (FileNameHelper.IsVolumeContinuationPart(filePath))
-                {
-                    return true;
-                }
-
-                int? index = LegacyVolumeNames.TryGetIndex(
-                    Path.GetFileName(filePath));
-
-                if (index is >= 2)
-                {
-                    return true;
-                }
-
-                return ContentProvesFirstVolumePiece(filePath);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 批末唯一副作用阶段：清卷入口、清 group-entry 壳、恢复源名、清冗余片名。
-        /// 汇总函数只拼文字，调它不许改盘；本方法幂等。
-        /// </summary>
-        internal void FinalizeBatch()
-        {
-            if (_batchFinalized)
-            {
-                return;
-            }
-
-            _batchFinalized = true;
-
-            _extractionCoordinator.CleanupAllVolumeStepEntryDirectories();
-            _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
-            _extractionCoordinator.RestoreKeepInPlaceSourceNames();
-            _extractionCoordinator.PurgeRedundantPieceAliases();
-
-            // 源快照删完、片名收完，再把这一趟用过的每个工作区根收一遍空壳（根下无文件才删）。
-            _extractionCoordinator.CleanupRunWorkspaceShells();
-        }
-
-        /// <summary>
-        /// 一行汇总。
-        ///
-        /// 硬要求：各分项加起来**必须等于本次处理的任务数**。
-        /// 以前这里统计整个列表，还把"扫描过但从没被处理"的任务算成失败 ——
-        /// 于是出现过 `成功 0 / 失败 1 / 跳过 2（共 4 个任务）`：0+1+2=3≠4，
-        /// 用户根本没法判断到底发生了什么。汇总如果自己都对不上，还不如不显示。
-        ///
-        /// 续解加进来的任务同样计入"本次处理的任务数"（它们确实被处理了），口径写在 scope 里。
-        /// </summary>
-        /// <param name="pendingContinuation">
-        /// 撞到轮数上限时"已加进列表、这一批没解"的内层包个数（用户 2026-09-24 第 16 条追加）。
-        /// 大于 0 时汇总里必须写出**还剩多少 + 怎么继续** —— 到顶静默停下正是他要修的那件事。
-        /// </param>
+        /// <summary>一行汇总（实现见 <see cref="OneClickBatchFinalizer"/>）。</summary>
         internal string BuildSummaryLine(
             IReadOnlyList<ArchiveTask> targets,
             bool stopped = false,
@@ -4014,433 +2772,22 @@ namespace ArchiveFixer.ViewModels
             int continuationLayers = 0,
             bool hitRoundLimit = false,
             int pendingContinuation = 0,
-            string stoppedPhase = "")
-        {
-            /*
-             * ===== 分项一律按**机器终态**算，而且**数法只有一份** =====
-             *
-             * 这份数法（<see cref="BatchOutcomeTally"/>）是本行、批末「本批汇总」那一行、
-             * 以及导出的日志头部**共用**的：三处读同一对字段（`Outcome` + `OutputVerification`）
-             * 与同一个事实位（`CountsTowardBatchOutcome`），⛔ 不许哪一处再自己 `Count(task => …)`。
-             *
-             * 为什么收敛（用户 2026-10-02 真机日志）：过去三处各写一遍，于是同一批里
-             * ①「跳过」一处算跟班卷、一处不算（2026-10-01 第三报的现场：
-             *   10 个任务里 4 个是各组的分卷后续卷，一行「跳过 4」被他读成"还有 4 个没弄完"）；
-             * ②「终态说成功、校验却判否」那一帧在一处算成功、另一处算失败
-             *   （旧写法这里读的是状态字符串，而递归失败那条路过去只写状态、`Outcome` 留在 `Pending`
-             *   ⇒ ①页说「部分完成」、这里说「未处理 1」、批末诊断说「下一步：其他」）。
-             *
-             * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
-             * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
-             */
-            /*
-             * ⛔ 同一任务对象可能被连续两轮追加进 processed（真机 2026-11-08：风景01 三单在
-             * 第一/第二轮各出现一次，最终行写“本次 40 / 列表 37”）。汇总按**对象身份**去重，
-             * 不能把同一单的两次处理算成两个任务。
-             */
-            targets = DistinctTargets(targets);
+            string stoppedPhase = "") =>
+            _batchFinalizer.BuildSummaryLine(
+                targets, stopped, stopRequestedByUser, continuationLayers, hitRoundLimit, pendingContinuation, stoppedPhase);
 
-            BatchReport report = BatchReport.Create(targets);
-            BatchOutcomeTally tally = report.Tally;
+        internal static bool IsSuccessStatus(ArchiveTask task) => OneClickBatchFinalizer.IsSuccessStatus(task);
 
-            var parts = new List<string>(tally.BuildParts());
+        internal static bool IsHandled(ArchiveTask task) => OneClickBatchFinalizer.IsHandled(task);
 
-            string scope = targets.Count == Tasks.Count
-                ? $"本次 {targets.Count} 个任务"
-                : $"本次 {targets.Count} 个 / 列表共 {Tasks.Count} 个";
+        internal static bool IsFailureStatus(ArchiveTask task) => OneClickBatchFinalizer.IsFailureStatus(task);
 
-            /*
-             * 被「停止后续」打断时不许写成"完成"：失败/取消/部分完成不得显示成成功（不变量 6）。
-             * 分项数字照旧自洽，只是把话说准。
-             */
-            string line = $"{(stopped ? "一键处理已停止" : "一键处理完成")}：{string.Join(" / ", parts)}（{scope}）。";
+        internal static int CleanupSuccessfulProcessArtifacts(
+            IEnumerable<ArchiveTask>? tasks,
+            Action<string>? log = null) =>
+            OneClickBatchFinalizer.CleanupSuccessfulProcessArtifacts(tasks, log);
 
-            int renameSuccess = targets.Count(t => t.Status == StatusText.RenameSuccess);
-
-            if (renameSuccess > 0)
-            {
-                line += $" 已修正后缀 {renameSuccess} 个。";
-            }
-
-            // 跳过必须说清为什么，否则"跳过 2"等于没说
-            // ⚠ 跟班卷单独说（下一句），⛔ 不许在这里再算一遍 —— 它跳过的理由不是"7-Zip 说它不是压缩包"。
-            int notArchive = targets.Count(t =>
-                t.Status == StatusText.Skipped && !t.IsArchive && t.CountsTowardBatchOutcome);
-
-            if (notArchive > 0)
-            {
-                line += $" 跳过的 {notArchive} 个已由 7-Zip 确认不是压缩包。";
-            }
-
-            /*
-             * 跟班卷单独一句：它**不是**"没做成"（整组由第一卷那一单解完，它按设计不重复解）。
-             * 用户真正会读错的就是这个数字。
-             *
-             * ⚠ 文案与批末「本批汇总」那一行、日志导出头部**共用同一句**
-             * （`BatchOutcomeTally.DescribeFollowerNote` —— 用户 2026-10-02 真机：同一份日志里
-             * 一处「跳过 1」、一处「跳过 0」，两个口径；现在三处读同一个事实位、写同一句话）。
-             */
-            if (tally.FollowerSkipped > 0)
-            {
-                line += " " + tally.DescribeFollowerNote();
-            }
-
-            if (tally.ContentGroupProcessSkipped > 0)
-            {
-                line += " " + tally.DescribeContentGroupProcessNote();
-            }
-
-            int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);
-
-            if (passwordError > 0)
-            {
-                line += $" 密码错误 {passwordError} 个：检查密码本里是否包含这些包的密码。";
-            }
-
-            int corrupted = targets.Count(t => t.Status == StatusText.Corrupted);
-
-            if (corrupted > 0)
-            {
-                line += $" 文件损坏 {corrupted} 个：这类只能重新下载。";
-            }
-
-            if (stopped)
-            {
-                /*
-                 * ⚠ 两种"停下"必须分开说（2026-09-28 真机）：用户按了「停止后续」，和
-                 * "本轮有任务真的没轮到"（程序自己的判断）是两件事 —— 老代码一律写"已按「停止后续」中断"，
-                 * 于是用户没按过也被告知"你按了"，还会误以为程序没错。
-                 */
-                /*
-                 * 停在第二大步的解析/试开/命名阶段是**另一种停**：那时还没有开始解那一层，
-                 * ⛔ 不许套"已按停止后续中断（已完成续解 N 层）"那句话（真机 2026-11-10 00:14:28 就是这么写的，
-                 * 实际 21 GB 已经解完）。
-                 */
-                string reason = stoppedPhase.Length > 0
-                    ? $"已按「暂停所有操作」在{stoppedPhase}阶段停下（还没开始解那一层）"
-                    : stopRequestedByUser
-                        ? "已按「停止后续」中断"
-                        : "本轮有任务没轮到，已停下（不是你按的「停止后续」）";
-
-                line += continuationLayers > 0
-                    ? $" {reason}（已完成续解 {continuationLayers} 层）。"
-                    : $" {reason}，没有继续解内层包。";
-            }
-            else if (continuationLayers > 0)
-            {
-                // 续解出来的内层包**不另建目录**：产物全部归到源包那一个输出目录里
-                // （用户诉求："一个源包 = 一个最终目录"）。这句话就是给用户对账用的。
-                line += $" 自动续解 {continuationLayers} 层（产物归入同一个输出目录，不再另建文件夹）。";
-            }
-
-            if (hitRoundLimit)
-            {
-                /*
-                 * 用户 2026-09-24 第 16 条追加：到顶必须"提示还剩多少 + 怎么继续"。
-                 * 只有"已达到 N 轮上限，没有继续"这句话时，用户看到的就是"又只解了两层"——
-                 * 他不知道还剩什么、也不知道下一步点哪里。
-                 */
-                line += pendingContinuation > 0
-                    ? $" 已达到 {RoundLimit} 轮上限，还剩 {pendingContinuation} 个内层包没解（已加进列表并勾好，点「继续解」接着解）。"
-                    : $" 还有更深的内层包，但已达到 {RoundLimit} 轮上限，没有继续。";
-            }
-
-            /*
-             * 「成品目录里还留着内层包、内容还没解出来」—— 用户 2026-11-10 真机口径：
-             * 汇总里一个字都没有就等于没说。事实位在任务上（唯一写入点在链尾清点），这里只摆出来。
-             */
-            int leftBehindInnerPackages = targets
-                .SelectMany(task => task.LeftBehindInnerPackageNames)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
-
-            if (leftBehindInnerPackages > 0)
-            {
-                line += string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.OneClickLeftBehindInnerPackagesSuffixFormat,
-                    leftBehindInnerPackages);
-            }
-
-            return line;
-        }
-
-        /// <summary>
-        /// 解压成功（含"已覆盖"）**且产物校验没有判否**。
-        ///
-        /// <para>
-        /// ⚠ 2026-09-24 起加上了后半句（不变量 6 的真机违反）：用户机器上出现过
-        /// "状态写着解压成功、校验却已判否"的那一帧。**统计口径不许把那种任务算成成功**，
-        /// 所以这里读一次校验事实 —— 这是**机器可判的字段**，不是中文文案比较
-        /// （用户 2026-09-24 明确要求：统计与裁决不许依赖状态字符串）。
-        /// </para>
-        /// <para>
-        /// ⛔ 它只用于**统计与显示**。凡是"要不要删源 / 搬源 / 继续往下解"的裁决，
-        /// 一律读 <see cref="ArchiveTask.OutputVerification"/> 与 <see cref="ArchiveTask.Outcome"/>，
-        /// 不许调这个方法（那是本次修复的另一半）。
-        /// </para>
-        /// </summary>
-        internal static bool IsSuccessStatus(ArchiveTask task)
-        {
-            /*
-             * 判据本体搬到了 Models/TaskOutcomeClassifier —— 这里转调。
-             * 搬家的理由见那个类的注释：同一份名单以前在 OneClickCoordinator 与
-             * TaskSummaryService 各写了一遍，漏一条就表现为"①页算失败、一键汇总算未处理"。
-             */
-            return TaskOutcomeClassifier.IsSuccessStatus(task);
-        }
-
-        /// <summary>
-        /// 这个任务"这一轮处理过了"吗 —— 有终态的都算处理过。
-        /// 没有终态的（已识别 / 等待解压 / 解压中…）说明它**根本没轮到**，那就是被「停止后续」截断的信号。
-        ///
-        /// internal 是为了让测试直接钉住"新增状态有没有被认账"（同类先例：旧后缀白名单）：
-        /// 漏一个状态不会编译失败，只会让汇总把"跑完了"说成"已停止 / 未处理 N"。
-        /// </summary>
-        internal static bool IsHandled(ArchiveTask task)
-        {
-            if (task == null)
-            {
-                return false;
-            }
-
-            /*
-             * **机器终态优先**（用户 2026-09-27 真机：口径打架的根子之一）。
-             *
-             * `Outcome` 不是 `Pending` 就说明这一单确实跑过了并落了结论 —— 这是事实，
-             * 比任何状态名单都硬。旧写法只读状态名单，于是"状态写着某个名单外的中文、
-             * 终态却已经是失败"的帧会被读成"没轮到"，汇总当场打印「未处理 1 / 已按停止后续中断」，
-             * 而用户根本没按过停止（真机 `giu.7z.001` 就是这一帧）。
-             */
-            if (task.Outcome != TaskOutcome.Pending)
-            {
-                return true;
-            }
-
-            // 终态还没落的（少数路径 / 老数据 / 测试直接造的任务）：退回状态名单判。
-            return IsSuccessStatus(task) ||
-                   task.Status == StatusText.PartiallyCompleted ||
-                   task.Status == StatusText.Cancelled ||
-                   task.Status == StatusText.Skipped ||
-                   /*
-                    * ⚠ 2026-10-08：**缺卷要单列**（用户拍板后它已不在失败名单里）——
-                    * 这一单确实跑过了并落了结论（只是不完整），⛔ 不许被读成"没轮到"
-                    * （那会让汇总打印"一键处理已停止 / 未处理 N"）。
-                    */
-                   task.Status == StatusText.VolumeMissing ||
-                   IsFailureStatus(task);
-        }
-
-        /// <summary>
-        /// 真正"处理过并且失败了"的状态。
-        ///
-        /// 「达到密码尝试上限」也算（不变量 6 的反面同样成立：跑完了不许说成"被停止"）：
-        /// 候选试到上限就停了，这是一次**正常的失败终态**。漏掉它会同时坏两件事：
-        /// ① 汇总的"失败"里少算一个，分项之和与任务数对不上；
-        /// ② <see cref="IsHandled"/> 跟着返回 false → 被当成"没轮到" → 汇总打印
-        ///    "一键处理已停止 / 未处理 N"，把正常结束误报成被用户停止。
-        /// 实测量到的错话（负向对照）：
-        /// "一键处理已停止：成功 0 / 失败 0 / 跳过 0 / 未处理 1（本次 1 个任务）。已按「停止后续」中断…"
-        /// </summary>
-        private ArchiveTask? FindSucceededTaskInLayer(string layer, string baseName)
-        {
-            if (string.IsNullOrWhiteSpace(layer)
-                || string.IsNullOrWhiteSpace(baseName))
-            {
-                return null;
-            }
-
-            foreach (ArchiveTask task in Tasks)
-            {
-                if (task.Outcome != TaskOutcome.Succeeded
-                    || !task.CountsTowardBatchOutcome
-                    || string.IsNullOrWhiteSpace(task.CurrentPath))
-                {
-                    continue;
-                }
-
-                string taskLayer = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
-
-                if (string.Equals(taskLayer, layer, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(
-                        FileNameHelper.GetArchiveBaseName(task.CurrentPath),
-                        baseName,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    return task;
-                }
-            }
-
-            return null;
-        }
-
-        private static IReadOnlyList<ArchiveTask> DistinctTargets(IReadOnlyList<ArchiveTask> targets)
-        {
-            var seen = new HashSet<ArchiveTask>();
-            var result = new List<ArchiveTask>(targets.Count);
-
-            foreach (ArchiveTask task in targets)
-            {
-                if (seen.Add(task))
-                {
-                    result.Add(task);
-                }
-            }
-
-            return result;
-        }
-
-        internal static bool IsFailureStatus(ArchiveTask task)
-        {
-            /*
-             * 名单本体只有一个出口：<see cref="TaskOutcomeClassifier"/>（本方法只转调）。
-             *
-             * 旧写法是在这里 `task.Status is …` 再写一遍名单，与 ①页那份
-             * （`TaskSummaryService.IsExtractFailureStatus`）各写各的 —— 2026-09-29 因此漏过两条，
-             * 2026-09-27 真机 `giu.7z.001` 又出现了"①页算失败、一键汇总算未处理"。
-             * ⛔ 以后加状态只改 <see cref="TaskOutcomeClassifier"/> 一处。
-             */
-            return task != null && TaskOutcomeClassifier.IsFailureStatus(task.Status);
-        }
-
-        /// <summary>
-        /// 这一组对应的任务目标工作区根；用于把标准名入口放到“解压发生的地方”，
-        /// 而不是源盘根目录。找不到任务/输出目录时返回 null，由调用方回落。
-        /// </summary>
-        private string? ResolvePreparedGroupTargetWorkRoot(PreparedVolumeGroup group)
-        {
-            /*
-             * 唯一出口：入口任务 ⇒ 生产者任务（账本 ProducedByTaskId）⇒ 都没有就不猜。
-             * ⛔ 不在这里堆第二套路径比较；事实链在 SecondStepEntryRootResolver，测试直接钉它。
-             */
-            return SecondStepEntryRootResolver.Resolve(
-                group,
-                Tasks,
-                _extractionCoordinator.FirstStepLedger,
-                AppendLog);
-        }
-
-        private static bool PathsEqual(string? left, string? right)
-        {
-            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
-            {
-                return false;
-            }
-
-            try
-            {
-                return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 整条单一物（单包或整组）最终成功时，清掉曾经为失败保留的最后一层过程物。
-        /// 失败 / 部分完成 / 待处理 / 取消的组一律不动；源包路径一律不碰。
-        /// </summary>
-        internal static int CleanupSuccessfulProcessArtifacts(IEnumerable<ArchiveTask>? tasks, Action<string>? log = null)
-        {
-            if (tasks == null)
-            {
-                return 0;
-            }
-
-            int deleted = 0;
-
-            foreach (IGrouping<string, ArchiveTask> group in tasks
-                         .Where(task => task != null && !string.IsNullOrWhiteSpace(task.ChainRootIdentity))
-                         .GroupBy(task => task.ChainRootIdentity, StringComparer.OrdinalIgnoreCase))
-            {
-                if (group.Any(task => task.Outcome is TaskOutcome.Failed
-                            or TaskOutcome.PartiallyCompleted
-                            or TaskOutcome.Pending
-                            or TaskOutcome.Cancelled))
-                {
-                    continue;
-                }
-
-                var sourcePaths = new HashSet<string>(
-                    group.SelectMany(task => new[] { task.CurrentPath, task.OriginalPath, task.RootSourcePath })
-                        .Where(path => !string.IsNullOrWhiteSpace(path))
-                        .Select(path => Path.GetFullPath(path)),
-                    StringComparer.OrdinalIgnoreCase);
-
-                foreach (ArchiveTask task in group)
-                {
-                    string artifact = task.LastProcessArtifactPath;
-
-                    if (string.IsNullOrWhiteSpace(artifact)
-                        || string.IsNullOrWhiteSpace(task.RestDirectoryPath)
-                        || !File.Exists(artifact))
-                    {
-                        RemoveEmptyRestDirectory(task.RestDirectoryPath);
-                        continue;
-                    }
-
-                    string fullArtifact = Path.GetFullPath(artifact);
-
-                    if (sourcePaths.Contains(fullArtifact)
-                        || !ArchivePathGuard.IsInsideRoot(task.RestDirectoryPath, fullArtifact, out _))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        FileOperations.Delete(fullArtifact);
-                        task.LastProcessArtifactPath = string.Empty;
-                        deleted++;
-                        log?.Invoke(
-                            $"{task.LogName}：单一物最终成功，已清掉此前保留的最后一层过程物（{Path.GetFileName(artifact)}）。");
-
-                        RemoveEmptyRestDirectory(task.RestDirectoryPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        log?.Invoke(
-                            $"{task.LogName}：最后一层过程物清理失败（{Path.GetFileName(artifact)}）：{ex.Message}");
-                    }
-                }
-            }
-
-            return deleted;
-        }
-
-        private static void RemoveEmptyRestDirectory(string? restDirectory)
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(restDirectory)
-                    && Directory.Exists(restDirectory)
-                    && !Directory.EnumerateFileSystemEntries(restDirectory).Any())
-                {
-                    Directory.Delete(restDirectory, recursive: false);
-                }
-            }
-            catch
-            {
-                // 只影响空壳清理由，不能影响任务结论。
-            }
-        }
-
-        /// <summary>
-        /// **这条名字是不是内容卡自证的规范名**（本方法只负责"拍一次卡"；判据唯一出口 =
-        /// <see cref="Detection.VolumePieceFacts.IsNameItsOwnCanonicalName"/>）。
-        /// </summary>
-        private static bool IsContentCanonicalName(string path)
-        {
-            try
-            {
-                return Detection.VolumePieceFacts.IsNameItsOwnCanonicalName(FileNature.Inspect(path));
-            }
-            catch
-            {
-                return false;
-            }
-        }
+        internal static bool IsContentCanonicalName(string path) =>
+            OneClickBatchFinalizer.IsContentCanonicalName(path);
     }
 }
