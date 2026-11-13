@@ -117,7 +117,6 @@
     "Extraction/ResultCollector.cs": 2,
     "Extraction/ResultCompleteness.cs": 3,
     "Extraction/ResultFinalizer.cs": 5,
-    "Extraction/SourceCleanupService.cs": 6,
     "Extraction/SpaceQueueUnitBuilder.cs": 2,
     "Extraction/SpecificBatchUnitBuilder.cs": 2,
     "Extraction/SpecificExtractionRunner.cs": 2,
