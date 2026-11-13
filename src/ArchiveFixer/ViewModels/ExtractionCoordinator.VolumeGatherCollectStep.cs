@@ -137,7 +137,7 @@ namespace ArchiveFixer.ViewModels
         /// 1 号槽 ⇒ 组永远凑不齐；而卡上写得清清楚楚：第 1 片 `专属算法=VolumeFirstPiece`、
         /// 第 3 片 `专属算法=VolumePiece`（体积 26 214 400 vs 10 490 213，末片最小）。</para>
         /// </summary>
-        private static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
+        internal static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
         {
             /*
              * ⚠ 2026-10-14：这套顺序（**卡 → 内容 → 名字**）已经收成一个唯一出口 ——
