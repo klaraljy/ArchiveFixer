@@ -834,15 +834,13 @@ namespace ArchiveFixer.Extraction
                  * ⛔ 停下之后按"候选还有、只是不再试"收尾（`passwordLedger.Tried < candidates.Count` ⇒
                  * 「达到密码尝试上限」那一档），**不许报成密码错误** —— 候选根本没试完。
                  */
-                if (passwordLedger.Tried > 0 && StopRequested?.Invoke() == true)
+                if (RecursiveStopPolicy.ShouldStop(passwordLedger.Tried, StopRequested))
                 {
                     Log(
                         "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.RecursionStoppedByStopRequestLogFormat,
+                        RecursiveStopPolicy.BuildMessage(
                             layerLabel,
-                            Math.Max(0, layerCandidateLimit - passwordLedger.Tried)));
+                            layerCandidateLimit - passwordLedger.Tried));
 
                     break;
                 }
