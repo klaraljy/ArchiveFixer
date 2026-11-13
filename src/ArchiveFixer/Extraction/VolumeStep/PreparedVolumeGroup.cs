@@ -6,39 +6,6 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>**一组已经由族专属 resolver 解析完的结论**（共用骨架）。</summary>
-    public enum PreparedGroupState
-    {
-        /// <summary>可证完整（标准名已建好）。</summary>
-        Complete = 0,
-
-        /// <summary>缺片（只有内容/名字能点名时才允许）。</summary>
-        Missing = 1,
-
-        /// <summary>判不出（证据不足/冲突）。</summary>
-        Unknown = 2,
-
-        /// <summary>结构矛盾（数量/槽位/大小/混族）。</summary>
-        SizeAnomaly = 3
-    }
-
-    /// <summary>
-    /// **标准名 -> 原始片**的一条映射。
-    ///
-    /// <para>标准名只在临时组入口目录里存在；原始片是用户源文件或本链产出的片。
-    /// 源包删除/落点/接片一律读 <see cref="OriginalPath"/>，⛔ 不碰临时链接。</para>
-    /// </summary>
-    public sealed class PreparedVolumePiece
-    {
-        public string CanonicalName { get; init; } = string.Empty;
-
-        public string OriginalPath { get; init; } = string.Empty;
-
-        public long Size { get; init; }
-
-        public VolumeHandoffSource Source { get; init; }
-    }
-
     /// <summary>
     /// **边界 resolver 的统一产物**（共用骨架）：族、顺序、标准名、原始映射、结论。
     ///

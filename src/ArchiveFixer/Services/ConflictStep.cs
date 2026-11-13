@@ -9,37 +9,6 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Services
 {
-    /// <summary>同名冲突这一步要问宿主的事。</summary>
-    internal interface IConflictStepHost
-    {
-        /// <summary>设置里的冲突档（原样，未归一）。</summary>
-        string ConflictAction { get; }
-
-        DialogService Dialogs { get; }
-
-        PathService Paths { get; }
-
-        void AppendLog(string level, string message);
-
-        /// <summary>用户选了「取消本批」：停止后续 + 取消当前任务（两套取消语义一起用）。</summary>
-        void StopAfterCurrent();
-
-        void CancelCurrentTask();
-    }
-
-    /// <summary>定稿前的冲突预检结论（Ask 档要在动最终目录之前先问完）。</summary>
-    internal sealed class ConflictPrecheck
-    {
-        /// <summary>计划里"落点已经被占着"的条目总数。</summary>
-        public int TotalCount { get; set; }
-
-        /// <summary>其中属于**内容物**的条数（其余物撞名不算用户的内容被顶掉）。</summary>
-        public int ContentCount { get; set; }
-
-        /// <summary>给用户看的样例（最多 <see cref="ConflictStep.MaxConflictSamplesInDialog"/> 条）。</summary>
-        public List<(string Path, ConflictTargetKind Kind)> Samples { get; } = new();
-    }
-
     /// <summary>
     /// 同名冲突询问/决定（第 17 轮③：从 <c>ExtractionCoordinator.ConflictStep.cs</c> 搬成独立类）。
     ///
