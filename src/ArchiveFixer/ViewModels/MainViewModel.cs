@@ -206,40 +206,7 @@ namespace ArchiveFixer.ViewModels
         /// 引擎那一份数据来自 <see cref="SettingsEditor"/> 的检测结果，界面与这里不会分叉。
         /// </para>
         /// </summary>
-        public string AboutText
-        {
-            get
-            {
-                var builder = new System.Text.StringBuilder();
-
-                string version = typeof(MainViewModel).Assembly.GetName().Version?.ToString() ?? "（版本读不到）";
-
-                builder.AppendLine("ArchiveFixer " + version);
-                builder.AppendLine();
-
-                // 反馈方式也写在「关于」里（用户 2026-09-26 要求写进标题，这里同步 —— 邮箱只有一处字面量）。
-                builder.AppendLine("遇到问题请反馈给作者：发邮件 " + StatusText.FeedbackEmail);
-                builder.AppendLine("最新版本下载：" + StatusText.ReleaseDownloadUrl);
-                builder.AppendLine();
-
-                if (SettingsEditor.Engines.Count == 0)
-                {
-                    builder.AppendLine("（没有检测到任何引擎）");
-                }
-                else
-                {
-                    foreach (EngineOptionItem engine in SettingsEditor.Engines)
-                    {
-                        builder.AppendLine(engine.HeaderText);
-                    }
-                }
-
-                builder.AppendLine();
-                builder.Append(StatusText.AboutLicenseText);
-
-                return builder.ToString();
-            }
-        }
+        public string AboutText => AboutTextProvider.Build(SettingsEditor.Engines);
 
         /// <summary>
         /// 把设置里与归档引擎有关的项推给引擎层。
@@ -341,36 +308,11 @@ namespace ArchiveFixer.ViewModels
         /// 把这个清单露出来是因为"扫了哪些根"决定了界面上报几个残留、以及清理会动哪些目录 ——
         /// 那是必须能被钉住的一条事实（默认跟输出盘之后根会变，多一个根就多一批会被删的目录）。</para>
         /// </summary>
-        internal IReadOnlyList<string> WorkspaceScanRoots => ResolveWorkspaceScanRoots();
+        internal IReadOnlyList<string> WorkspaceScanRoots
+            => WorkspaceScanRootProvider.Resolve(_pathService.WorkDirectory, WorkspaceRootIndex.SessionRoots);
 
-        /// <summary>
-        /// ③「清理与删除」页 / 启动日志要扫的**所有**工作区根（去重、当前生效的排最前）。
-        ///
-        /// <para>⛔ 这里**不读任何历史清单**（用户 2026-09-30 收口）：账本只记本次会话用过的根
-        /// （<see cref="WorkspaceRootIndex.SessionRoots"/>），重启之后不会再去猜"上次在哪开过工"。</para>
-        /// </summary>
         private IReadOnlyList<string> ResolveWorkspaceScanRoots()
-        {
-            var roots = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            void TryAdd(string? root)
-            {
-                if (!string.IsNullOrWhiteSpace(root) && seen.Add(root.Trim()))
-                {
-                    roots.Add(root.Trim());
-                }
-            }
-
-            TryAdd(_pathService.WorkDirectory);
-
-            foreach (string remembered in WorkspaceRootIndex.SessionRoots)
-            {
-                TryAdd(remembered);
-            }
-
-            return roots;
-        }
+            => WorkspaceScanRootProvider.Resolve(_pathService.WorkDirectory, WorkspaceRootIndex.SessionRoots);
 
         /// <summary>
         /// 流水线上真正在用的那个引擎对象（生产路径上是 <see cref="EngineRouter"/> 门面）。
@@ -396,48 +338,10 @@ namespace ArchiveFixer.ViewModels
         /// 问不到时返回 null，由 <see cref="TaskSummaryService"/> 退回通用引擎身份。
         /// </summary>
         private EngineIdentity? ResolveEngineIdentity(ArchiveTask? task)
-        {
-            if (task == null || _archiveEngine is not EngineRouter router)
-            {
-                return null;
-            }
+            => EngineIdentityResolver.Resolve(_archiveEngine, task);
 
-            return router.ResolveIdentityFor(task.CurrentPath);
-        }
-
-        /// <summary>
-        /// 由注入的引擎推出一套注册表。
-        ///
-        /// 两条规则，区别只在"注入的是什么"：
-        /// ① 注入的是**内置引擎之一**（默认构造走这条，也包含"想定制 7-Zip/UnRAR 其中一个"的调用方）
-        ///    → 建完整注册表（UnRAR + 7-Zip），并让注入的那个实例**覆盖同 Id 的那一个**，
-        ///    这样定制的路径 / runner 不会被丢掉，同时另一个内置引擎照常参与分派；
-        /// ② 注入的是别的东西（测试替身、将来第三方实现的引擎）→ **只用它一个**：
-        ///    绝不在它背后偷偷拉起真 7z.exe 进程（那会让"假引擎"的测试变成真的解压）。
-        /// </summary>
         private static EngineRegistry BuildEngineRegistry(IArchiveEngine? injected)
-        {
-            var registry = new EngineRegistry();
-
-            if (injected == null)
-            {
-                return EngineRegistry.CreateDefault();
-            }
-
-            bool isBuiltIn = string.Equals(injected.Id, EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase)
-                             || string.Equals(injected.Id, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase);
-
-            if (!isBuiltIn)
-            {
-                registry.Register(injected);
-                return registry;
-            }
-
-            EngineRegistry defaultRegistry = EngineRegistry.CreateDefault();
-            defaultRegistry.Register(injected);
-
-            return defaultRegistry;
-        }
+            => EngineRegistryFactory.Build(injected);
 
         public string GlobalPassword
         {

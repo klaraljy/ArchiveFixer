@@ -56,7 +56,7 @@
     "ViewModels/ExtractionCoordinator.VolumeHandoffStep.cs": 1406,
     "ViewModels/ExtractionCoordinator.VolumeSlotFillStep.cs": 1165,
     "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 905,
-    "ViewModels/MainViewModel.cs": 1590,
+    "ViewModels/MainViewModel.cs": 1494,
     "ViewModels/OneClickCoordinator.cs": 4446,
     "ViewModels/PackingViewModel.cs": 1267,
     "ViewModels/PasswordListViewModel.cs": 1492,
