@@ -100,7 +100,6 @@
     "Experimental/AutoConcurrency/DevicePoolScheduler.cs": 2,
     "Experimental/AutoConcurrency/SystemResourceProbe.cs": 2,
     "Extraction/ChainManifestResolver.cs": 3,
-    "Extraction/CleanupLedger.cs": 8,
     "Extraction/ConcurrencyAdvisor.cs": 2,
     "Extraction/ContentGroup.cs": 4,
     "Extraction/EmbeddedArchiveCarver.cs": 2,
