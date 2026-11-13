@@ -5,63 +5,6 @@ using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>一条清单条目与盘上实际的比对结论（**逐条**，这就是"敢不敢发布"的最小单位）。</summary>
-    public enum PartialEntryState
-    {
-        /// <summary>清单里有、盘上也在、大小对得上、引擎也没点它的名 ⇒ **可以发布**。</summary>
-        Publishable = 0,
-
-        /// <summary>清单里有、盘上没有 ⇒ 缺（引擎没解出来 / 解到一半就断了）。</summary>
-        Missing = 1,
-
-        /// <summary>盘上有，但大小与清单对不上（半截 / 被截断）⇒ 坏。</summary>
-        SizeMismatch = 2,
-
-        /// <summary>盘上有、大小也对，但**引擎点了它的名**（CRC/Data Error）⇒ 坏。</summary>
-        EngineReported = 3
-    }
-
-    /// <summary>一条条目的比对结果。</summary>
-    public sealed class PartialEntryVerdict
-    {
-        public string Path { get; init; } = string.Empty;
-
-        public long ExpectedSize { get; init; }
-
-        /// <summary>盘上实际大小；<c>-1</c> = 不在盘上。</summary>
-        public long ActualSize { get; init; } = -1;
-
-        public PartialEntryState State { get; init; } = PartialEntryState.Publishable;
-    }
-
-    /// <summary>要不要按「部分完成」发布、发哪些、为什么 —— **机器可判的唯一结论**。</summary>
-    public sealed class PartialPublishVerdict
-    {
-        /// <summary>能不能发布。</summary>
-        public bool CanPublish { get; init; }
-
-        /// <summary>逐条结论（顺序 = 清单顺序）。</summary>
-        public IReadOnlyList<PartialEntryVerdict> Entries { get; init; } = Array.Empty<PartialEntryVerdict>();
-
-        /// <summary>可发布的文件（相对路径 + 清单上的字节数）。</summary>
-        public IReadOnlyList<(string Path, long Size)> Publishable { get; init; } = Array.Empty<(string, long)>();
-
-        /// <summary>不发布的条目（相对路径 + 为什么）—— 报告里要点名的那一份。</summary>
-        public IReadOnlyList<(string Path, PartialEntryState State)> Rejected { get; init; } =
-            Array.Empty<(string, PartialEntryState)>();
-
-        /// <summary>机器可判的原因码（日志与文案都读它，⛔ 不比中文）。</summary>
-        public string ReasonCode { get; init; } = string.Empty;
-
-        /// <summary>给人看的一句话（点名原因；文案常量在 <c>StatusText</c>）。</summary>
-        public string Reason { get; init; } = string.Empty;
-
-        /// <summary>可发布的字节数 / 清单总字节数（报告里用）。</summary>
-        public long PublishableBytes { get; init; }
-
-        public long ExpectedBytes { get; init; }
-    }
-
     /// <summary>
     /// **「部分完成」能不能发布、发哪些** —— 唯一出口（纯函数，⛔ 自己不碰盘、不调引擎）。
     ///
