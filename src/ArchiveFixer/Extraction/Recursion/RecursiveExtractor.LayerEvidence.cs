@@ -63,7 +63,7 @@ namespace ArchiveFixer.Extraction
         /// <para>读不到（目录不在 / 被占用 / 权限）一律返回 0：那只会让结论退回老口径
         /// （用最后一次失败），⛔ 不会把"什么都没留下"误判成"留下了东西"。</para>
         /// </summary>
-        private static long ProducedBytesInLayerOutput(WorkItem item)
+        internal static long ProducedBytesInLayerOutput(WorkItem item)
         {
             try
             {
@@ -96,7 +96,7 @@ namespace ArchiveFixer.Extraction
             }
         }
 
-        private RecursionLayerReport BuildLayerReport(
+        internal RecursionLayerReport BuildLayerReport(
             WorkItem item,
             ArchiveOperationResult? result,
             string? succeededPassword,

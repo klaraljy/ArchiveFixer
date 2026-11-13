@@ -264,7 +264,7 @@ namespace ArchiveFixer.Extraction
         /// <para>与补救那一处**同一个检测器**（<see cref="EmbeddedArchiveDetector"/>，⛔ 不另写一份判据）；
         /// 它只读文件尾部那段（默认 256 KB），不建目录、不改名字、不调引擎。</para>
         /// </summary>
-        private static bool IsDoubleFacedEmbeddedArchive(string archivePath)
+        internal static bool IsDoubleFacedEmbeddedArchive(string archivePath)
         {
             EmbeddedArchiveInfo info = DetectEmbeddedArchive(archivePath);
 
@@ -289,7 +289,7 @@ namespace ArchiveFixer.Extraction
         /// ⛔ 判不出 / 抠不动 ⇒ 返回 <c>null</c>，调用方照旧按失败处置（口径一个字不改）；
         /// ⛔ 抠出来的只是**副本**（落在这一层的 <c>carved\</c> 兄弟目录里，不在产物目录里），原文件一个字节都不动。</para>
         /// </summary>
-        private async Task<LayerOutcome?> RetryWithCarvedEmbeddedArchiveAsync(
+        internal async Task<LayerOutcome?> RetryWithCarvedEmbeddedArchiveAsync(
             WorkItem item,
             CancellationToken cancellationToken,
             IProgress<ArchiveProgress>? progress,
@@ -577,7 +577,7 @@ namespace ArchiveFixer.Extraction
         /// 这里刻意**按引擎的分类枚举**（DetectedErrorType）而不是按中文状态串来判：
         /// 中文文案是给用户看的，随时可能改；用它做控制流会让"改一句提示"变成"改行为"。
         /// </summary>
-        private static RecursionStopReason MapEngineErrorToStopReason(ArchiveOperationResult result)
+        internal static RecursionStopReason MapEngineErrorToStopReason(ArchiveOperationResult result)
         {
             return result.DetectedErrorType switch
             {
