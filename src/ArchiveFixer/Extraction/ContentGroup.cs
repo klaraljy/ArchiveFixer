@@ -6,43 +6,6 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>最终内容分卷组的失败种类；只由组事实层写入。</summary>
-    public enum FinalGroupFailureKind
-    {
-        None = 0,
-
-        /// <summary>组不完整（缺片）：链失败，源包不删。</summary>
-        Incomplete = 1,
-
-        /// <summary>组完整但数据损坏：链失败，源包不删。</summary>
-        Corrupted = 2
-    }
-
-    /// <summary>最终层输入片的直接产出者（用户源包与程序过程物分开）。</summary>
-    public sealed class ContentGroupFinalLayerProducer
-    {
-        public string TaskFileName { get; init; } = string.Empty;
-
-        public string Path { get; init; } = string.Empty;
-
-        public bool IsSource { get; init; }
-    }
-
-    /// <summary>内容组的最终内容结论；⛔ 任务级“解压成功”不能替代它。</summary>
-    public enum FinalContentState
-    {
-        Unknown = 0,
-
-        /// <summary>有产物但证据只到非空/未逐条核对，不能当最终成功。</summary>
-        Partial = 1,
-
-        /// <summary>产物校验通过且逐条核对过，可当最终成功。</summary>
-        Verified = 2,
-
-        /// <summary>没有最终内容。</summary>
-        Missing = 3
-    }
-
     /// <summary>
     /// **交界处的内容组**：把“哪些片、来自哪些源根、最终内容落在哪”收成一条组级事实。
     ///
