@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using ArchiveFixer.Models;
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>
@@ -33,6 +35,58 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>交给引擎的那一份入口路径（⛔ 不是 task.CurrentPath）。</summary>
         internal string EngineArchivePath { get; init; } = string.Empty;
+
+        /* ===== 候选循环交给失败结论收尾的账（只在本阶段边界上写一次）===== */
+
+        internal bool ExtractSuccess { get; set; }
+
+        internal bool HasWrongPassword { get; set; }
+
+        internal ArchiveFixer.Engines.ArchiveOperationResult? AmbiguousResult { get; set; }
+
+        internal bool PasswordProvenDataFailed { get; set; }
+
+        internal bool PasswordIrrelevant { get; set; }
+
+        internal bool StoppedByStopRequest { get; set; }
+
+        internal ArchiveFixer.Engines.ArchiveOperationResult? LastResult { get; set; }
+
+        internal int AttemptedCandidates { get; set; }
+
+        internal int MaxPasswordAttempts { get; set; }
+
+        internal bool CandidatesTruncated { get; set; }
+
+        internal string PasswordConclusionNote { get; set; } = string.Empty;
+
+        internal bool PreflightSaidEncryptedHeaders { get; set; }
+
+        internal string? EncryptedHeadersMessage { get; set; }
+
+
+
+
+
+        internal int AttemptLimit { get; set; }
+
+        internal List<PasswordItem> Candidates { get; set; } = new();
+
+        internal ArchiveFixer.Engines.ArchiveListResult? PreflightList { get; set; }
+
+        internal bool AnyCandidateWroteBytes { get; set; }
+
+        internal string SelectedPassword { get; set; } = string.Empty;
+
+        internal IReadOnlyList<(string Path, long Size)>? LastLayerManifestEntries { get; set; }
+
+        internal ArchiveFixer.Extraction.OutputVerificationResult? LastVerification { get; set; }
+
+        internal string? PasswordIrrelevantReason { get; set; }
+
+        internal (int Files, long Bytes) ProvenProducts { get; set; }
+
+        internal bool SkippedOnlyEmptyPasswordBecauseEncrypted { get; set; }
     }
 }
 

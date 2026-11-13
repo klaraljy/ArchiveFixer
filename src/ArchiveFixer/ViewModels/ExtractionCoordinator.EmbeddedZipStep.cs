@@ -299,7 +299,7 @@ namespace ArchiveFixer.ViewModels
         /// 任务确实有内嵌归档 + 引擎报的确实是分卷缺失类 + 同目录里确实存在"缺首卷的那一组"。
         /// 三条缺一条就返回空串（⛔ 不猜、不拼凑）。</para>
         /// </summary>
-        private string BuildEmbeddedVolumeMissingHint(ArchiveTask task, string? detectedErrorType)
+        internal string BuildEmbeddedVolumeMissingHint(ArchiveTask task, string? detectedErrorType)
         {
             if (task == null || task.EmbeddedArchiveOffset <= 0)
             {

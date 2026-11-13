@@ -106,7 +106,7 @@ namespace ArchiveFixer.ViewModels
             string remark = "本次运行手动输入（不落盘）") =>
             PasswordCandidatesStep.InsertManualPasswordCandidates(candidates, manualPasswords, remark);
 
-        private PasswordFallbackTriggerFacts BuildPasswordFallbackFacts(
+        internal PasswordFallbackTriggerFacts BuildPasswordFallbackFacts(
             bool extractSuccess,
             bool hasWrongPassword,
             bool sawAmbiguousPasswordFailure,
@@ -133,7 +133,7 @@ namespace ArchiveFixer.ViewModels
                 archiveEncrypted,
                 anyCandidateWroteBytes);
 
-        private PasswordCandidatesStep.FallbackCandidateSlice BuildFallbackCandidateSlice(List<PasswordItem> candidates, int maxPasswordAttempts) =>
+        internal PasswordCandidatesStep.FallbackCandidateSlice BuildFallbackCandidateSlice(List<PasswordItem> candidates, int maxPasswordAttempts) =>
             _passwordCandidatesStep.BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
 
         private Task<List<PasswordItem>> RankCandidatesByDecryptedPrefixAsync(

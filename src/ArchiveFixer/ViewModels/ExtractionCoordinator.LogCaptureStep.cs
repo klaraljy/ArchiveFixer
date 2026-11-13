@@ -404,7 +404,7 @@ namespace ArchiveFixer.ViewModels
         /// 适配既有 <see cref="Action{T1,T2}"/> 注入点的两参数入口（引擎原话/失败清单写入器）。
         /// 它只是转到带 caller 的唯一入口；⛔ 不另建一套日志逻辑。
         /// </summary>
-        private void AppendLogPair(string level, string message) => AppendLog(level, message);
+        internal void AppendLogPair(string level, string message) => AppendLog(level, message);
 
         /// <summary>适配 <see cref="Action{T1,T2,T3,T4}"/> 注入点（失败清单写入器）。</summary>
         private void AppendLogWithCode(string level, string message, string errorCode, string component) =>

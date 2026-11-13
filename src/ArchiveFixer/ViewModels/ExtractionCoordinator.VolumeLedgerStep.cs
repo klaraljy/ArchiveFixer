@@ -119,7 +119,7 @@ namespace ArchiveFixer.ViewModels
         /// （见 `ApplyRecursionResult` 后面那段说明，实测在那一档改它会整组连入口都不再落地）。
         /// 解前预检那一档要连状态与文案一起写，由 <see cref="RecordDeferredVolumeDeficit"/> 补。</para>
         /// </summary>
-        private void RememberDeferredVolumeDeficit(ArchiveTask? task, string? stalledMemberPath = null)
+        internal void RememberDeferredVolumeDeficit(ArchiveTask? task, string? stalledMemberPath = null)
         {
             if (task == null)
             {

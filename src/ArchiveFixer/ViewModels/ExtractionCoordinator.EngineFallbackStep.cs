@@ -30,7 +30,7 @@ namespace ArchiveFixer.ViewModels
         /// 优先取**引擎自己盖的戳**（<see cref="ArchiveOperationResult.EngineDisplayName"/>，不变量 14），
         /// 取不到才退回注入的那个引擎实例的显示名。
         /// </summary>
-        private string ResolveFailedEngineName(ArchiveOperationResult? lastResult)
+        internal string ResolveFailedEngineName(ArchiveOperationResult? lastResult)
         {
             if (!string.IsNullOrWhiteSpace(lastResult?.EngineDisplayName))
             {
@@ -61,7 +61,7 @@ namespace ArchiveFixer.ViewModels
         /// 现场（这一趟写下的东西）原样留着交给调用方那段失败处理（③页「工作区残留」那一档看的就是它）。</para>
         /// </summary>
         /// <returns>true = 校验通过、已经按成功收尾；false = 这个候选不算数（调用方必须保持"没成功"）。</returns>
-        private async Task<bool> FinishFallbackSuccessAsync(
+        internal async Task<bool> FinishFallbackSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
             string password,
@@ -186,7 +186,7 @@ namespace ArchiveFixer.ViewModels
         /// 那也会被如实报出来；为了"清残留失败"把整单判死只会让用户更难办。
         /// </para>
         /// </summary>
-        private async Task DiscardStageProductsAsync(
+        internal async Task DiscardStageProductsAsync(
             ArchiveTask task,
             string stageDirectory,
             CancellationToken cancellationToken)

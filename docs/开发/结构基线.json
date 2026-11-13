@@ -48,7 +48,7 @@
     "ViewModels/ExtractionCoordinator.DeferredVolumeDeficitStep.cs": 1182,
     "ViewModels/ExtractionCoordinator.ExtractEntryStep.cs": 1169,
     "ViewModels/ExtractionCoordinator.ExtractionScheduleStep.cs": 806,
-    "ViewModels/ExtractionCoordinator.ExtractTaskMainStep.cs": 2779,
+    "ViewModels/ExtractionCoordinator.ExtractTaskMainStep.cs": 2479,
     "ViewModels/ExtractionCoordinator.PieceAdoptionStep.cs": 1006,
     "ViewModels/ExtractionCoordinator.Source.cs": 1717,
     "ViewModels/ExtractionCoordinator.VolumeGatherCollectStep.cs": 1397,
