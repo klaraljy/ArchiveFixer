@@ -241,7 +241,7 @@ namespace ArchiveFixer.ViewModels
         /// 任务表的**不会抛**的快照（下标拷贝；理由见调用处）。
         /// 中途被 UI 线程改了就以已经拷到的那部分为准 —— 少同步一个任务，下一次改名还会再同步一遍。
         /// </summary>
-        private static ArchiveTask[] SnapshotTaskTable(ObservableCollection<ArchiveTask> tasks)
+        internal static ArchiveTask[] SnapshotTaskTable(ObservableCollection<ArchiveTask> tasks)
         {
             var copy = new List<ArchiveTask>();
             int count = tasks.Count;

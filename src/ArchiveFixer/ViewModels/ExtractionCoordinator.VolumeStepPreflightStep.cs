@@ -129,7 +129,7 @@ namespace ArchiveFixer.ViewModels
         internal readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _volumeStepGroupWork = new();
 
         /// <summary>第二大步每组一句话结论（批末回写读它；⛔ 不从日志反推）。</summary>
-        private readonly Dictionary<string, string> _volumeStepGroupVerdicts = new(StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, string> _volumeStepGroupVerdicts = new(StringComparer.OrdinalIgnoreCase);
 
         internal sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
 

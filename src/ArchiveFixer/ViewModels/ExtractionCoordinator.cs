@@ -371,7 +371,7 @@ namespace ArchiveFixer.ViewModels
 
         private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
 
-        private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
+        internal ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
 
         internal bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
 

@@ -514,7 +514,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 与"缺卷名单"（<c>_volumeDeficitDeferred</c>）**不是一回事**：那一份装的是
         /// "已确认是分卷、只是缺片"的单；装错了会把纯文本文件改判成「分卷缺失」（第一版就是这么错的）。</para>
         /// </summary>
-        private readonly HashSet<ArchiveTask> _unrecognizedMaybePiece = new();
+        internal readonly HashSet<ArchiveTask> _unrecognizedMaybePiece = new();
 
         // ================================================================
         // 开工前跨目录收卷（用户 2026-10-05 口径 1）
