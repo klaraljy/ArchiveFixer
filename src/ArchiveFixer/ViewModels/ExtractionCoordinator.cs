@@ -39,6 +39,10 @@ namespace ArchiveFixer.ViewModels
         private readonly MainViewModel _vm;
         private readonly IArchiveEngine _archiveEngine;
         private readonly PasswordService _passwordService;
+        private readonly PasswordFailureRegistry _passwordFailureRegistry;
+
+        /// <summary>测试/既有调用点仍按字段名读本批手动密码（唯一实现已搬进 PasswordFailureRegistry）。</summary>
+        internal List<string> _manualBatchPasswords => _passwordFailureRegistry.ManualBatchPasswords;
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
 
@@ -348,6 +352,7 @@ namespace ArchiveFixer.ViewModels
             _progressHeartbeat = new ProgressHeartbeatStep(this);
             _conflictStep = new ConflictStep(this);
             _passwordCandidatesStep = new PasswordCandidatesStep(this);
+            _passwordFailureRegistry = new PasswordFailureRegistry();
             _placementStep = new PlacementStep(this);
             _partialPublishStep = new PartialPublishStep(this);
             _restHandlingStep = new RestHandlingStep(this);

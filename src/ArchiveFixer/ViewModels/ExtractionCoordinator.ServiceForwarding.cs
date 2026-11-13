@@ -21,6 +21,7 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 
+
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>
@@ -28,7 +29,7 @@ namespace ArchiveFixer.ViewModels
     /// PartialPublish / Placement）：这里只有一行转发与 host 接口实现，实现都在 <c>Services/*Step.cs</c>。
     /// ⛔ 判据/文案/终态不在这里。
     /// </summary>
-    internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IConflictStepHost, IWorkspaceStepHost, IPartialPublishStepHost, IPlacementStepHost, IRestHandlingStepHost
+    internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IConflictStepHost, IWorkspaceStepHost, IPartialPublishStepHost, IPlacementStepHost, IRestHandlingStepHost, IPasswordCandidatesHost
     {
 
         // ===== 来自 ExtractionCoordinator.UiThreadStep.cs（实现见 Services 对应 Step 类）=====
@@ -619,6 +620,138 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks) =>
             DescribeChainVerificationGap(destinationDirectory, rootTask, chainTasks);
+
+        // ===== 来自 ExtractionCoordinator.PasswordCandidates.cs（候选/密码失败的接线；状态见 Services/PasswordFailureRegistry，候选实现见 Services/PasswordCandidatesStep）=====
+
+        /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗；状态与判据在 PasswordFailureRegistry）。</summary>
+        internal void RecordPasswordFailure(ArchiveTask task) => _passwordFailureRegistry.Record(task);
+
+
+        private void ClearPasswordFailures() => _passwordFailureRegistry.ClearFailures();
+
+
+        /// <summary>
+        /// 批开始时把手动密码清干净：**只对本次运行有效**（不变量 5）。
+        ///
+        /// 不是"记住上次输的密码"—— 那是持久化，红线。上一批输过什么，这一批重新问。
+        /// </summary>
+        private void ResetManualBatchPassword() => _passwordFailureRegistry.ResetManualBatchPassword();
+
+
+
+
+
+        private readonly PasswordCandidatesStep _passwordCandidatesStep;
+
+        internal IReadOnlyList<string> BuildRecursionPasswordCandidates(
+            string archivePath,
+            IDictionary<string, string>? sourceSink = null) =>
+            _passwordCandidatesStep.BuildRecursionPasswordCandidates(archivePath, sourceSink);
+
+        internal IReadOnlyList<string> BuildVolumeProbePasswordCandidates(string archivePath) =>
+            _passwordCandidatesStep.BuildVolumeProbePasswordCandidates(archivePath);
+
+        private static void InsertManualPasswordCandidates(
+            List<PasswordItem> candidates,
+            IReadOnlyList<string>? manualPasswords,
+            string remark = "本次运行手动输入（不落盘）") =>
+            PasswordCandidatesStep.InsertManualPasswordCandidates(candidates, manualPasswords, remark);
+
+        internal PasswordFallbackTriggerFacts BuildPasswordFallbackFacts(
+            bool extractSuccess,
+            bool hasWrongPassword,
+            bool sawAmbiguousPasswordFailure,
+            bool passwordProvenDataFailed,
+            bool passwordIrrelevant,
+            bool stoppedByStopRequest,
+            ArchiveOperationResult? lastResult,
+            int attemptedCandidates,
+            int maxPasswordAttempts,
+            int candidateCount,
+            bool archiveEncrypted,
+            bool anyCandidateWroteBytes) =>
+            _passwordCandidatesStep.BuildPasswordFallbackFacts(
+                extractSuccess,
+                hasWrongPassword,
+                sawAmbiguousPasswordFailure,
+                passwordProvenDataFailed,
+                passwordIrrelevant,
+                stoppedByStopRequest,
+                lastResult,
+                attemptedCandidates,
+                maxPasswordAttempts,
+                candidateCount,
+                archiveEncrypted,
+                anyCandidateWroteBytes);
+
+        internal PasswordCandidatesStep.FallbackCandidateSlice BuildFallbackCandidateSlice(List<PasswordItem> candidates, int maxPasswordAttempts) =>
+            _passwordCandidatesStep.BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
+
+        internal Task<List<PasswordItem>> RankCandidatesByDecryptedPrefixAsync(
+            ArchiveTask task,
+            string archivePath,
+            SevenZipEngine engine,
+            string entryPath,
+            List<PasswordItem> candidates,
+            int maxPasswordAttempts,
+            CancellationToken cancellationToken) =>
+            _passwordCandidatesStep.RankCandidatesByDecryptedPrefixAsync(
+                task,
+                archivePath,
+                engine,
+                entryPath,
+                candidates,
+                maxPasswordAttempts,
+                cancellationToken);
+
+        internal Task<PasswordCandidatesStep.PasswordProbeOutcome> ProbePasswordAsync(
+            string archivePath,
+            ExtractOptions extractOptions,
+            string stageDirectory,
+            string entryPath,
+            string password,
+            ProgressHeartbeatStep.Sink progressSink,
+            CancellationToken cancellationToken) =>
+            _passwordCandidatesStep.ProbePasswordAsync(
+                archivePath,
+                extractOptions,
+                stageDirectory,
+                entryPath,
+                password,
+                progressSink,
+                cancellationToken);
+
+        private List<ArchiveTask> FindTasksWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks) =>
+            _passwordCandidatesStep.FindTasksWithoutUsablePassword(tasks);
+
+        private List<ArchiveTask> FindSuspectsWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks) =>
+            _passwordCandidatesStep.FindSuspectsWithoutUsablePassword(tasks);
+
+        private int MaxPasswordAttemptsPerLayer => _passwordCandidatesStep.MaxPasswordAttemptsPerLayer;
+
+        AppSettings IPasswordCandidatesHost.Settings => Settings;
+
+        string IPasswordCandidatesHost.GlobalPassword => GlobalPassword;
+
+        PasswordService IPasswordCandidatesHost.Passwords => _passwordService;
+
+        IArchiveEngine IPasswordCandidatesHost.Engine => _archiveEngine;
+
+        List<string> IPasswordCandidatesHost.ManualBatchPasswords => _passwordFailureRegistry.ManualBatchPasswords;
+
+        bool IPasswordCandidatesHost.IsStopping => IsStopping;
+
+        ProgressHeartbeatStep.Sink IPasswordCandidatesHost.CreateProgressSink(ArchiveTask task) =>
+            _progressHeartbeat.CreateSink(task);
+
+        ArchiveRequest IPasswordCandidatesHost.BuildTrackedRequest(
+            string archivePath,
+            string password,
+            string? outputPath,
+            ProgressHeartbeatStep.Sink progressSink) =>
+            _progressHeartbeat.BuildTrackedRequest(archivePath, password, outputPath, progressSink);
+
+        void IPasswordCandidatesHost.AppendLog(string level, string message) => AppendLog(level, message);
     }
 }
 

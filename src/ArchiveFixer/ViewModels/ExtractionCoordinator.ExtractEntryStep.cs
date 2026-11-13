@@ -365,7 +365,7 @@ namespace ArchiveFixer.ViewModels
                  * 它是用户刚刚给出的信息，比密码本里的历史条目更"新"）。
                  *
                  * 三条纪律：
-                 * ① **整批一次性**（_manualPasswordPrompted）—— 不做成每个包问一次，那正是 D-4 要避免的；
+                 * ① **整批一次性**（_passwordFailureRegistry.ManualPasswordPrompted）—— 不做成每个包问一次，那正是 D-4 要避免的；
                  * ② 手动「只解压」这条路上**只对本次运行有效、绝不落盘**（不变量 5）——
                  *    只是一个字段，不进设置、不进密码列表、不进日志；
                  * ③ **无 UI 宿主不弹窗、不死等** —— 判定见 PromptForManualBatchPasswordAsync。
@@ -375,7 +375,7 @@ namespace ArchiveFixer.ViewModels
                  * （当时那个输入框是整块撤掉的，不是搬去了别处），只写一条"要手动给就去「密码」页
                  * 一键导入"的日志 —— 见 LogOneClickPasswordHint。
                  *
-                 * ⇒ 由此可以断定：一键档下 `_manualBatchPasswords` **恒为空**，所以每轮开头那次
+                 * ⇒ 由此可以断定：一键档下 `_passwordFailureRegistry.ManualBatchPasswords` **恒为空**，所以每轮开头那次
                  * `ResetManualBatchPassword()`（StartExtractForOneClickAsync 的批首）清掉的是"空表"，
                  * 不会丢任何输入。
                  * ⚠ 以后若真要把输入框加回一键档，**必须同时改那一处清空**：一键处理一轮 = 一次

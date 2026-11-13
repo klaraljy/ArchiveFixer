@@ -364,7 +364,7 @@ namespace ArchiveFixer.ViewModels
              * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
              * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
              */
-            InsertManualPasswordCandidates(candidates, _manualBatchPasswords);
+            InsertManualPasswordCandidates(candidates, _passwordFailureRegistry.ManualBatchPasswords);
 
             /*
              * 直读/抠取两条路共用的候选值表。⛔ 只活在内存里：日志里只说"第 N 个候选 + 哪种字节编码"，

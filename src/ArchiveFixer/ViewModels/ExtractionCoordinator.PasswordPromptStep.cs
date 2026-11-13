@@ -38,13 +38,13 @@ namespace ArchiveFixer.ViewModels
         /// 与 <c>DialogService.ShowConflictDecisionAsync</c> 同一口径。
         /// </para>
         /// <para>
-        /// 用户答"不用"也一样记 <see cref="_manualPasswordPrompted"/>：一次性就是一次性，
+        /// 用户答"不用"也一样记 <see cref="_passwordFailureRegistry.ManualPasswordPrompted"/>：一次性就是一次性，
         /// 不能因为"没填"就每次遇到觉得需要密码的包再问一遍。
         /// </para>
         /// </summary>
         private async Task PromptForManualBatchPasswordAsync(IReadOnlyList<ArchiveTask> tasks)
         {
-            if (_manualPasswordPrompted)
+            if (_passwordFailureRegistry.ManualPasswordPrompted)
             {
                 return;
             }
@@ -64,7 +64,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            _manualPasswordPrompted = true;
+            _passwordFailureRegistry.ManualPasswordPrompted = true;
 
             List<ArchiveTask> named = suspects.Take(MaxPasswordFailureNamesInDialog).ToList();
 
@@ -85,7 +85,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            _manualBatchPasswords.Add(entered);
+            _passwordFailureRegistry.ManualBatchPasswords.Add(entered);
 
             /*
              * 日志只说"收到一个手动密码"，**绝不记录内容**（不变量 5）。
@@ -120,14 +120,14 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void LogOneClickPasswordHint(IReadOnlyList<ArchiveTask> selectedTasks)
         {
-            _manualPasswordPrompted = true;
+            _passwordFailureRegistry.ManualPasswordPrompted = true;
 
             bool mayNeedPassword = selectedTasks.Any(task =>
                 task != null &&
                 (task.IsEncrypted ||
                  string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)));
 
-            if (mayNeedPassword && _manualBatchPasswords.Count == 0)
+            if (mayNeedPassword && _passwordFailureRegistry.ManualBatchPasswords.Count == 0)
             {
                 AppendLog("INFO", StatusText.OneClickConfirmManualPasswordSkippedLog);
             }
@@ -423,17 +423,11 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private async Task ShowPasswordFailuresSummaryAsync(bool showDialog = true)
         {
-            List<(string FileName, string Status)> failures;
+            List<(string FileName, string Status)> failures = _passwordFailureRegistry.TakeFailures();
 
-            lock (_passwordFailuresLock)
+            if (failures.Count == 0)
             {
-                if (_passwordFailures.Count == 0)
-                {
-                    return;
-                }
-
-                failures = _passwordFailures.ToList();
-                _passwordFailures.Clear();
+                return;
             }
 
             /*
@@ -537,9 +531,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             builder.AppendLine(
-                _manualBatchPasswords.Count > 0
+                _passwordFailureRegistry.ManualBatchPasswords.Count > 0
                     ? "本次运行你已经手动给过密码；如果还是解不开，说明它不是这些包的密码 —— 换一个再试，或者去核对密码本。"
-                    : _batchHadPasswordFailures
+                    : _passwordFailureRegistry.BatchHadFailures
                         ? "下一步：再点一次「一键处理 / 只解压」——「只解压」会在开始前问你要不要手动输一个密码；"
                           + "一键处理则是把密码填进开始前的那个确认框（填了会加到「密码」页列表末尾，以后一直有效）。"
                         : "如果这些包需要密码：「只解压」会在开始前问你；一键处理则在开始前的确认框里有「本批手动密码」一格。");
@@ -586,19 +580,6 @@ namespace ArchiveFixer.ViewModels
         /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
         private const int MaxPasswordFailureNamesInDialog = 10;
 
-        private readonly List<(string FileName, string Status)> _passwordFailures = new();
-
-        private readonly object _passwordFailuresLock = new();
-
-        /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
-        private bool _manualPasswordPrompted;
-
-        /// <summary>
-        /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
-        /// 批次结束后的合并提示据此换一句话：出过密码问题时指引"再点一次、把密码输进去"，
-        /// 没出过就不提（免得每次跑完都念一遍）。
-        /// </summary>
-        private bool _batchHadPasswordFailures;
 
     }
 }
