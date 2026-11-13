@@ -35,7 +35,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>取消原样抛出去：<c>ProcessExtractTaskAsync</c> 会落成「已取消」（不变量 6），
         /// 而直读器在抛之前已经把它写出去的东西全删掉了 —— 不留半成品、也不发布。</para>
         /// </summary>
-        private async Task RunEmbeddedZipDirectExtractionAsync(
+        internal async Task RunEmbeddedZipDirectExtractionAsync(
             ArchiveTask task,
             EmbeddedZipProbeResult plan,
             IReadOnlyList<string> passwordCandidates,
