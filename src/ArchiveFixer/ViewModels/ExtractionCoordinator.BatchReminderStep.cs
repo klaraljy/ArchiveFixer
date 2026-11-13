@@ -536,7 +536,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>为什么必须是一个方法：一键处理确认框要预告"内容物会落到哪"，而它必须与真正开跑时
         /// 用**完全相同的字段**去算 —— 两处各抄一份字段清单，迟早会漂移成"预告说 A、实际落 B"。</para>
         /// </summary>
-        private ExtractOptions BuildExtractOptions(bool tryExtractUnknownFormat)
+        internal ExtractOptions BuildExtractOptions(bool tryExtractUnknownFormat)
         {
             var extractOptions = new ExtractOptions
             {
