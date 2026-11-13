@@ -782,57 +782,32 @@ namespace ArchiveFixer.Extraction
              * 并池只多给"能被名字/内容定出盘号"的候选；⛔ 动作仍是硬链接（源片不改名不搬），
              * 盘号判不出/撞号的候选在 gather 内部照旧被拒（ResolveSpannedZipDiskGather 的判据不动）。
              */
-            VolumeGatherPlanner.SpannedZipDiskGather spannedDisks =
-                VolumeNameRepair.ResolveSpannedZipDiskGather(
-                    archivePath,
-                    RootSourceCandidates
-                        .Concat(EnumerateWorkspacePool(CurrentWorkspace))
-                        .ToList());
+            List<VolumeCandidate> spannedPool = RootSourceCandidates
+                .Concat(EnumerateWorkspacePool(CurrentWorkspace))
+                .ToList();
+            SpannedZipStageResult spannedStage = RecursiveSpannedZipStage.Run(archivePath, layerLabel, spannedPool);
 
-            if (spannedDisks.Applicable)
+            if (spannedStage.Blocked)
             {
-                if (!spannedDisks.Complete)
-                {
-                    string blocked = string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.SpannedZipDisksLayerBlockedFormat,
-                        layerLabel,
-                        spannedDisks.Detail);
+                Log("WARN", spannedStage.BlockedMessage);
+                RememberUnresolvedVolumePiece(archivePath);
 
-                    Log("WARN", blocked);
+                return LayerOutcome.Stop(
+                    BuildLayerReport(
+                        item,
+                        result: null,
+                        succeededPassword: null,
+                        overrideMessage: spannedStage.BlockedMessage,
+                        manifestEntries: null,
+                        overrideStatus: StatusText.VolumeMissing),
+                    RecursionStopReason.MissingVolume);
+            }
 
-                    /*
-                     * 这一片（真机上是末片 `111.zip`）**还在工作区里**，而这一组缺的那几片可能正是
-                     * 同批别单刚解出来的东西 ⇒ 记下来交给协调器收（见 `_unresolvedVolumePieces` 的说明）。
-                     * ⛔ 只是记账：这一层照旧停下、一次引擎调用都不做（不变量 7）。
-                     */
-                    RememberUnresolvedVolumePiece(archivePath);
-
-                    return LayerOutcome.Stop(
-                        BuildLayerReport(
-                            item,
-                            result: null,
-                            succeededPassword: null,
-                            overrideMessage: blocked,
-                            manifestEntries: null,
-                            overrideStatus: StatusText.VolumeMissing),
-                        RecursionStopReason.MissingVolume);
-                }
-
-                if (spannedDisks.LinkedCount > 0)
-                {
-                    _crossBoundaryLinks.AddRange(spannedDisks.LinkedPaths);
-                    _consumedVolumeSources.AddRange(spannedDisks.LinkedSources);
-
-                    Log(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.SpannedZipDisksLayerLinkedFormat,
-                            layerLabel,
-                            Path.GetFileName(archivePath),
-                            spannedDisks.Detail));
-                }
+            if (spannedStage.LinkedCount > 0)
+            {
+                _crossBoundaryLinks.AddRange(spannedStage.LinkedPaths);
+                _consumedVolumeSources.AddRange(spannedStage.LinkedSources);
+                Log("INFO", spannedStage.LinkedMessage);
             }
 
             foreach (string candidate in candidates)
