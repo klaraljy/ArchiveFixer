@@ -2005,35 +2005,24 @@ namespace ArchiveFixer.Extraction
                  * 「达到密码尝试上限」（那边原话："那是更具体的结论，不动"）—— 候选还有剩、再试就能开，
                  * 说成"文件名已加密"会把用户从"去补候选"引开。同理也不覆盖两义与损坏（各自断言了别的原因）。
                  */
-                bool encryptedHeadersConclusion =
-                    reason == RecursionStopReason.WrongPassword
-                    && !listedAnyCandidate
-                    && sawEncryptedHeadersListFailure
-                    && !sawOtherListFailure;
-
-                string? encryptedHeadersMessage = null;
-
-                if (encryptedHeadersConclusion)
-                {
-                    reason = RecursionStopReason.EncryptedHeaders;
-
-                    ReportStopReason(
+                (RecursionStopReason failureReason, string? failureMessage, bool exactReported) =
+                    RecursiveFailureClassifier.ApplyEncryptedHeaders(
                         reason,
-                        $"{layerLabel}：引擎给的是加密头，连清单都列不出来");
+                        listedAnyCandidate,
+                        sawEncryptedHeadersListFailure,
+                        sawOtherListFailure,
+                        layerLabel,
+                        encryptedHeadersListMessage,
+                        (r, m) => ReportStopReason(r, m),
+                        Log);
+
+                reason = failureReason;
+                string? encryptedHeadersMessage = failureMessage;
+                bool encryptedHeadersConclusion = exactReported;
+
+                if (exactReported)
+                {
                     _exactStopReasonReported = true;
-
-                    encryptedHeadersMessage = string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.RecursionEncryptedHeadersMessageFormat,
-                        encryptedHeadersListMessage);
-
-                    Log(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.RecursionEncryptedHeadersLogFormat,
-                            layerLabel,
-                            StatusText.EncryptedHeaders));
                 }
 
                 /*
