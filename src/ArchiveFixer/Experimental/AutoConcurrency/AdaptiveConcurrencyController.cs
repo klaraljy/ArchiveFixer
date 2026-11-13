@@ -1,35 +1,9 @@
 // STATUS: 未完成 / 暂停（2026-11-05）。自动并发实验代码，不接入产品路径。
 // 恢复前必须先完成 docs/未完成-自动并发.md 里的 T(n) 实测与验收标准。
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Storage;
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 
 namespace ArchiveFixer.Experimental.AutoConcurrency
 {
-    /// <summary>一个并发采样窗口（P0 埋点的唯一出口）。</summary>
-    public readonly record struct ConcurrencyWindowSample(
-        double NormalizedLatencySecondsPerGb,
-        double AggregateMegabytesPerSecond,
-        int ActiveTasks,
-        int UiStalls,
-        bool DiskSpaceLow,
-        int Failures)
-    {
-        /// <summary>完成任务的源包字节数；0 = 旧调用方/测试，按小任务处理。</summary>
-        public long TaskBytes { get; init; }
-
-        /// <summary>系统 CPU 忙的百分比（0–100；&lt;=0 表示没有采到，按有余量处理）。</summary>
-        public double SystemCpuBusyPercent { get; init; }
-
-        /// <summary>可用物理内存字节；0 = 没有采到，按未知处理（不据此降档）。</summary>
-        public long AvailablePhysicalBytes { get; init; }
-    }
-
     /// <summary>
     /// **延迟梯度 + AIMD** 控制器（Envoy / Netflix concurrency-limits 同族）。
     ///
@@ -298,84 +272,5 @@ namespace ArchiveFixer.Experimental.AutoConcurrency
 
             return CurrentLimit;
         }
-    }
-
-    /// <summary>本机“上次验证过好的并发/基线”，按卷+设备类别存储；不记录文件名。</summary>
-    public sealed class ConcurrencyProfile
-    {
-        public int LastGoodLimit { get; set; } = 1;
-
-        public double MinLatencySecondsPerGb { get; set; }
-
-        public DateTimeOffset UpdatedAt { get; set; }
-    }
-
-    /// <summary>
-    /// 本地 profile 存取（SQL Server DOP feedback 的“持久化已验证值”类比）。
-    /// 键=卷根 + 设备类别；换盘自然失效；损坏/读不出 ⇒ 返回 null。
-    /// </summary>
-    public static class ConcurrencyProfileStore
-    {
-        public static string BuildKey(string? targetRoot, StorageDeviceKind device)
-        {
-            string normalized = string.IsNullOrWhiteSpace(targetRoot)
-                ? string.Empty
-                : Path.GetFullPath(targetRoot).TrimEnd('\\').ToUpperInvariant();
-
-            using var sha = SHA256.Create();
-            byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(normalized + "|" + device));
-            return Convert.ToHexString(hash, 0, 12).ToLowerInvariant();
-        }
-
-        public static ConcurrencyProfile? Load(
-            string directory,
-            string? targetRoot,
-            StorageDeviceKind device)
-        {
-            try
-            {
-                string path = PathFor(directory, targetRoot, device);
-
-                if (!File.Exists(path))
-                {
-                    return null;
-                }
-
-                ConcurrencyProfile? profile = JsonSerializer.Deserialize<ConcurrencyProfile>(
-                    File.ReadAllText(path, Encoding.UTF8));
-
-                return profile != null && profile.LastGoodLimit >= 1 && profile.LastGoodLimit <= 8
-                    ? profile
-                    : null;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        public static void Save(
-            string directory,
-            string? targetRoot,
-            StorageDeviceKind device,
-            ConcurrencyProfile profile)
-        {
-            try
-            {
-                Directory.CreateDirectory(directory);
-                string path = PathFor(directory, targetRoot, device);
-                string temp = path + ".tmp";
-                string json = JsonSerializer.Serialize(profile);
-                File.WriteAllText(temp, json, new UTF8Encoding(false));
-                FileOperations.Move(temp, path, overwrite: true);
-            }
-            catch
-            {
-                // 写不进去不影响本批；下次重新学习。
-            }
-        }
-
-        public static string PathFor(string directory, string? targetRoot, StorageDeviceKind device) =>
-            Path.Combine(directory, "concurrency-" + BuildKey(targetRoot, device) + ".json");
     }
 }
