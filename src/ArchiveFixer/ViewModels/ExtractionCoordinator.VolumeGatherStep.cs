@@ -831,7 +831,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 判据输入一个字不改：记过 ⇒ 那一片自己的路径（它的基名 = 那一组的基名）；
         /// 没记过 ⇒ <c>task.CurrentPath</c>（与改动前逐字相同）。</para>
         /// </summary>
-        private string ResolveDeferredGroupMemberPath(ArchiveTask task) =>
+        internal string ResolveDeferredGroupMemberPath(ArchiveTask task) =>
             _deferredVolumeGroupMember.TryGetValue(task, out string? recorded) && !string.IsNullOrWhiteSpace(recorded)
                 ? recorded!
                 : task.CurrentPath ?? string.Empty;
