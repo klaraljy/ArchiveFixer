@@ -332,5 +332,24 @@ namespace ArchiveFixer.Extraction
             _exactStopReasonReported = true;
         }
 
+        /*
+         * ===== 候选循环（LayerExecutor）的宿主出口 =====
+         *
+         * 同样只把循环本来就在用的两笔账按方法露出来：账本仍是本类这两个字段
+         * （谁建谁负责清，见 ExtractAsync 里那两处 Clear），⛔ 不复制第二份。
+         */
+
+        /// <summary>跨盘 ZIP 那一档建出来的临时链接（收尾要删干净：留着会被当成内容物发布）。</summary>
+        internal void AddCrossBoundaryLinks(IReadOnlyList<string> linkedPaths)
+        {
+            _crossBoundaryLinks.AddRange(linkedPaths);
+        }
+
+        /// <summary>"这一组的内容已由谁解出"的记账（借来用过的用户源片）。</summary>
+        internal void AddConsumedVolumeSources(IReadOnlyList<string> linkedSources)
+        {
+            _consumedVolumeSources.AddRange(linkedSources);
+        }
+
     }
 }

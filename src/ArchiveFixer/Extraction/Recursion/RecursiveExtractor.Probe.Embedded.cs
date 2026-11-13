@@ -46,7 +46,7 @@ namespace ArchiveFixer.Extraction
              /// <para>⛔ 成功时**不写 ERROR**：用户看到的必须是"为什么引擎打不开 + 我们换了什么办法"，
              /// 而不是一句会被读成"包坏了"的失败。</para>
              /// </summary>
-        private async Task<LayerOutcome?> TryTakeSingleStoredEntryAsync(
+        internal async Task<LayerOutcome?> TryTakeSingleStoredEntryAsync(
             WorkItem item,
             IProgress<ArchiveProgress>? progress,
             CancellationToken cancellationToken)
@@ -431,7 +431,7 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 只这一处枚举：<c>layer-NNN\output</c> 的**直接**子文件 —— 不递归、不含
         /// <c>carved</c>（它挂在层目录下、是产物目录的兄弟）、不碰用户源目录（源包不在工作区里）。</para>
         /// </summary>
-        private static List<VolumeCandidate> EnumerateWorkspacePool(ExtractionWorkspace? workspace)
+        internal static List<VolumeCandidate> EnumerateWorkspacePool(ExtractionWorkspace? workspace)
         {
             var pool = new List<VolumeCandidate>();
 

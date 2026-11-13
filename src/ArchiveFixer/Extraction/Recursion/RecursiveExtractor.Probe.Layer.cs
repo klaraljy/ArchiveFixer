@@ -118,7 +118,7 @@ namespace ArchiveFixer.Extraction
         /// 第一个元素 = 预检结论（null = 没发现问题 / 列不出目录）；
         /// 第二个元素 = 这一次的列目录原始结论（列不出来时为 null）。
         /// </returns>
-        private async Task<(string? UnsafeSummary, ArchiveListResult? Listed)> CheckEntriesBeforeExtractAsync(
+        internal async Task<(string? UnsafeSummary, ArchiveListResult? Listed)> CheckEntriesBeforeExtractAsync(
             string archivePath,
             string password,
             CancellationToken cancellationToken)
@@ -172,7 +172,7 @@ namespace ArchiveFixer.Extraction
         /// <para>探针目录建在**这一层产物目录之外**（同层的兄弟目录）：产物目录里的东西要参与
         /// 结果校验与发布，⛔ 一个字节都不能混进去；用完就整份删掉。</para>
         /// </summary>
-        private async Task<ArchiveOperationResult?> ProbeCandidateAsync(
+        internal async Task<ArchiveOperationResult?> ProbeCandidateAsync(
             WorkItem item,
             string archivePath,
             ExtractOptions options,
@@ -308,7 +308,7 @@ namespace ArchiveFixer.Extraction
         /// 直读器逐条目计算并校验 CRC32；CRC 不对按损坏收场，不回落再读一遍；
         /// 不支持的方法 / 结构不自洽仍原样回落抠副本 + 引擎。</para>
         /// </summary>
-        private async Task<LayerOutcome?> TryTakeEmbeddedZipDirectAsync(
+        internal async Task<LayerOutcome?> TryTakeEmbeddedZipDirectAsync(
             WorkItem item,
             IReadOnlyList<string> candidates,
             IProgress<ArchiveProgress>? progress,

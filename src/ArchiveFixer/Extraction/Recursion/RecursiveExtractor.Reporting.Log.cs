@@ -33,7 +33,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>引擎调用观察口：⛔ 不参与判据；观察者自己抛异常也不影响解压。</summary>
-        private void ObserveEngineCall(ArchiveOperationResult result, string archivePath, string action)
+        internal void ObserveEngineCall(ArchiveOperationResult result, string archivePath, string action)
         {
             if (EngineCallObserved == null || result == null)
             {
