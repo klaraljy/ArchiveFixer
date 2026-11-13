@@ -8,48 +8,6 @@ using ArchiveFixer.Models;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
-    /// 一条用户导入的源根。身份用**导入那一刻的规范化原始路径**，不随改名/搬移改变。
-    /// </summary>
-    public sealed class SourceRootRecord
-    {
-        public string RootId { get; init; } = string.Empty;
-
-        public string TaskId { get; init; } = string.Empty;
-
-        public string OriginalPath { get; init; } = string.Empty;
-
-        public string CurrentPath { get; init; } = string.Empty;
-
-        public string PlacementKey { get; init; } = string.Empty;
-
-        public bool IsFolderSelection { get; init; }
-
-        public string SelectionRoot { get; init; } = string.Empty;
-
-        public SourceHandlingMode SourceHandling { get; init; } = SourceHandlingMode.KeepInPlace;
-    }
-
-    /// <summary>
-    /// 第一大步/递归层产出的一个文件。候选分卷片在这里持有租约，交界前不得回收。
-    /// </summary>
-    public sealed class ProducedArtifactRecord
-    {
-        public string Path { get; init; } = string.Empty;
-
-        public string OriginRootId { get; init; } = string.Empty;
-
-        public string ProducedByTaskId { get; init; } = string.Empty;
-
-        public ArtifactRole Role { get; init; } = ArtifactRole.Unknown;
-
-        public string CandidateLeaseId { get; init; } = string.Empty;
-
-        public string PlacementKey { get; init; } = string.Empty;
-
-        public bool HasCandidateLease => !string.IsNullOrWhiteSpace(CandidateLeaseId);
-    }
-
-    /// <summary>
     /// **本批的源根 → 产出物 → 内容组账本骨架**。
     ///
     /// <para>第一阶段登记源根；第二阶段登记产出物并给候选分卷片发租约。

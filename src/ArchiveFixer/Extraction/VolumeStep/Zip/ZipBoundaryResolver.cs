@@ -712,30 +712,4 @@ namespace ArchiveFixer.Extraction
             return kept;
         }
     }
-
-    /// <summary>跨盘 ZIP 专属 resolver（末片 `.zip` 是入口）。</summary>
-    public sealed class ZipSpannedBoundaryResolver : IVolumeBoundaryResolver
-    {
-        private readonly ZipBoundaryResolverCore _core = new(ZipVariant.Spanned);
-
-        public VolumeNamingFamily Family => VolumeNamingFamily.ZipSpanned;
-
-        public Task<PreparedVolumeGroup?> ResolveAsync(
-            VolumeBoundaryContext context,
-            CancellationToken cancellationToken = default) =>
-            _core.ResolveAsync(context, cancellationToken);
-    }
-
-    /// <summary>通用 ZIP 分片专属 resolver（第 1 片 `.zip.001` 是入口）。</summary>
-    public sealed class ZipNumberedBoundaryResolver : IVolumeBoundaryResolver
-    {
-        private readonly ZipBoundaryResolverCore _core = new(ZipVariant.Numbered);
-
-        public VolumeNamingFamily Family => VolumeNamingFamily.ZipNumbered;
-
-        public Task<PreparedVolumeGroup?> ResolveAsync(
-            VolumeBoundaryContext context,
-            CancellationToken cancellationToken = default) =>
-            _core.ResolveAsync(context, cancellationToken);
-    }
 }
