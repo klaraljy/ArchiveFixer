@@ -87,6 +87,10 @@ namespace ArchiveFixer.ViewModels
         internal (int Files, long Bytes) ProvenProducts { get; set; }
 
         internal bool SkippedOnlyEmptyPasswordBecauseEncrypted { get; set; }
+
+        internal bool PasswordConfirmed { get; set; }
+
+        internal ArchiveFixer.Engines.ArchiveOperationResult? AmbiguousTestResult { get; set; }
     }
 }
 

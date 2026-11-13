@@ -137,7 +137,7 @@ namespace ArchiveFixer.ViewModels
         /// 单层递归（只展开一层）仍然照旧拿外层清单核对 —— 那时两者确实是一回事。
         /// </para>
         /// </param>
-        private async Task<bool> PostProcessSuccessAsync(
+        internal async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
             string password,

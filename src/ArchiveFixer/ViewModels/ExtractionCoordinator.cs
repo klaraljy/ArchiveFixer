@@ -368,7 +368,7 @@ namespace ArchiveFixer.ViewModels
 
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
 
-        private bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
+        internal bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
 
         private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
 

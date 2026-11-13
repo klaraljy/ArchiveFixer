@@ -136,7 +136,7 @@ namespace ArchiveFixer.ViewModels
         internal PasswordCandidatesStep.FallbackCandidateSlice BuildFallbackCandidateSlice(List<PasswordItem> candidates, int maxPasswordAttempts) =>
             _passwordCandidatesStep.BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
 
-        private Task<List<PasswordItem>> RankCandidatesByDecryptedPrefixAsync(
+        internal Task<List<PasswordItem>> RankCandidatesByDecryptedPrefixAsync(
             ArchiveTask task,
             string archivePath,
             SevenZipEngine engine,
@@ -153,7 +153,7 @@ namespace ArchiveFixer.ViewModels
                 maxPasswordAttempts,
                 cancellationToken);
 
-        private Task<PasswordCandidatesStep.PasswordProbeOutcome> ProbePasswordAsync(
+        internal Task<PasswordCandidatesStep.PasswordProbeOutcome> ProbePasswordAsync(
             string archivePath,
             ExtractOptions extractOptions,
             string stageDirectory,

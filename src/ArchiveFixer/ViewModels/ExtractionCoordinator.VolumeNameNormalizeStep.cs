@@ -78,7 +78,7 @@ namespace ArchiveFixer.ViewModels
         /// ⇒ 候选循环当场 break、正确密码（密码本第 7 位）永远没机会被试。这里只负责把两个计数递过去。</para>
         /// </summary>
 
-        private static bool TryMeasureProducedContent(
+        internal static bool TryMeasureProducedContent(
             string? directory,
             ArchiveOperationResult engineResult,
             out int files,

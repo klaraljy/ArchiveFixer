@@ -147,7 +147,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para><b>只允许在后台线程上跑</b>：列目录是引擎进程调用，量产物是整棵目录树的磁盘活。</para>
         /// </summary>
-        private async Task<StageProductVerification> VerifyStageProductsAsync(
+        internal async Task<StageProductVerification> VerifyStageProductsAsync(
             ArchiveTask task,
             string engineArchivePath,
             string password,
@@ -343,7 +343,7 @@ namespace ArchiveFixer.ViewModels
 
 
         /// <summary>一个候选的产物校验结论（清单 + 校验，见 <see cref="VerifyStageProductsAsync"/>）。</summary>
-        private sealed class StageProductVerification
+        internal sealed class StageProductVerification
         {
             public StageProductVerification(ArchiveListResult list, OutputVerificationResult verification)
             {
