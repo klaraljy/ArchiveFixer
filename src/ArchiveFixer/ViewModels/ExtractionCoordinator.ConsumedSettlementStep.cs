@@ -226,7 +226,7 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="VolumeGroupDetector.Group"/> 的"完整 / 卷号连续 / 除末片外等大"回答，
         /// ⛔ 这里只是**把候选池看宽一层**（多喂一个目录）。
         /// </param>
-        private static VolumeGroup? ResolveCompleteGroupFromDisk(ArchiveTask task, string? preferDirectory = null)
+        internal static VolumeGroup? ResolveCompleteGroupFromDisk(ArchiveTask task, string? preferDirectory = null)
         {
             try
             {

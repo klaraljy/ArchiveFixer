@@ -25,7 +25,7 @@ namespace ArchiveFixer.ViewModels
     /// <summary>整组试开（数字 ZIP / 跨盘 ZIP 尾巴 + 排序试开；第 10 块，从 Password 大杂烩搬出；同一 partial 类）。</summary>
     internal sealed partial class ExtractionCoordinator
     {
-        private async Task<GroupOrderTrialResult> ProbeGatherGroupAsync(
+        internal async Task<GroupOrderTrialResult> ProbeGatherGroupAsync(
             IReadOnlyList<string> pieces,
             IReadOnlyList<string> candidatePool,
             string entryLayer,
@@ -700,7 +700,7 @@ namespace ArchiveFixer.ViewModels
         /// 用户那一份一个字节都不动。</para>
         /// </summary>
         /// <summary>试开定序的结论（<see cref="Confirmed"/> = 赢的那一版；<see cref="Failure"/> 非空 = 不做）。</summary>
-        private sealed class GroupOrderTrialResult
+        internal sealed class GroupOrderTrialResult
         {
             /// <summary>这一档**适用**（通用分片、片数 ≤5、末片可定）—— 失败时调用方不再按名字硬拼。</summary>
             public bool Applicable { get; init; }

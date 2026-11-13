@@ -349,7 +349,7 @@ namespace ArchiveFixer.ViewModels
         /// <item><description>组基名非空；同一 (组, 路径) 只记一次。</description></item>
         /// </list>
         /// </summary>
-        private void RememberAdoptedLandedPiece(
+        internal void RememberAdoptedLandedPiece(
             string piecePath,
             ArchiveTask? owner,
             string groupBaseName,
@@ -756,7 +756,7 @@ namespace ArchiveFixer.ViewModels
         /// 能把"用户自己那一片"认出来（⛔ 只用于**列表显示**，不参与任何搬运 / 删除判据）。</para>
         /// <para>判不出 ⇒ 空串（调用方那一行显示照旧，⛔ 不猜）。</para>
         /// </summary>
-        private static string FindUserOwnFileBesideItsDirectory(ArchiveTask task, string startPointPath)
+        internal static string FindUserOwnFileBesideItsDirectory(ArchiveTask task, string startPointPath)
         {
             string original = task.OriginalPath ?? string.Empty;
             string directory = Path.GetDirectoryName(original) ?? string.Empty;

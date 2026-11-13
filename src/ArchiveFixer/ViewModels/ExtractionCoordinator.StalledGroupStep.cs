@@ -62,7 +62,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>缺卷清单那一句话（任务账上那份；空 ⇒ 如实说"名字上看不出"）。</summary>
-        private static string DescribeMissingVolumeNames(ArchiveTask task)
+        internal static string DescribeMissingVolumeNames(ArchiveTask task)
         {
             IReadOnlyList<string> names = task == null ? Array.Empty<string>() : task.MissingVolumeNames;
 

@@ -703,7 +703,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath, string? cardEntryPath = null)
+        internal void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath, string? cardEntryPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -1091,7 +1091,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>判不出 / 规范名不齐 ⇒ null（调用方照旧走名字那把尺子，一个字不放宽）。</para>
         /// </summary>
-        private static VolumeGroup? ResolveCanonicalGroupFromCardSlots(
+        internal static VolumeGroup? ResolveCanonicalGroupFromCardSlots(
             string entryLayer,
             ArchiveFixer.Detection.CardVolumeGroupReading reading)
         {

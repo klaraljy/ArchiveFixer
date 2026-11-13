@@ -751,7 +751,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private VolumeGroup? ResolveGatheredGroupFromEntryLayer(
+        internal VolumeGroup? ResolveGatheredGroupFromEntryLayer(
             ArchiveTask task,
             string? entryLayer,
             string? memberPath = null)

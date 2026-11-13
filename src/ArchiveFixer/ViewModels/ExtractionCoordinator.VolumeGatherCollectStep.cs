@@ -152,7 +152,7 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="SkipWhenAnotherTaskOwnsThisVolumeGroup"/> 同一个口径：任务表里有没有别人指着它）。
         /// 是 ⇒ 这一单不许把起点改过去（那一组只解一次，别的卷按「跟班卷」跳过）。
         /// </summary>
-        private bool IsFirstVolumeOwnedByAnotherTask(ArchiveTask task, string firstVolumePath)
+        internal bool IsFirstVolumeOwnedByAnotherTask(ArchiveTask task, string firstVolumePath)
         {
             string first = SafePathHelper.GetFullPathSafe(firstVolumePath);
 
@@ -385,7 +385,7 @@ namespace ArchiveFixer.ViewModels
             return VolumeGatherStep.BaseNameRelatedToGroup(name, FileNameHelper.GetArchiveBaseName(tailName));
         }
 
-        private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
+        internal string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
         {
             /*
              * ⚠ "手上这一片的名字干不干净" = **它自己算出来的规范名就是它自己**（唯一出口
@@ -772,7 +772,7 @@ namespace ArchiveFixer.ViewModels
         private ExtractionVolumeCandidateCollector VolumeCandidateCollector =>
             _volumeCandidateCollector ??= new ExtractionVolumeCandidateCollector(this);
 
-        private List<string> CollectVolumeCandidatePaths(
+        internal List<string> CollectVolumeCandidatePaths(
             ArchiveTask task,
             string entryLayer,
             out string referenceName,

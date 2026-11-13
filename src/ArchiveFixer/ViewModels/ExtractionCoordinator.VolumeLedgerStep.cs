@@ -65,7 +65,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 只记**同一组**、且不是消费方自己那一条；⛔ 一个字节都不动 —— 搬运与删除仍旧由既有出口
         /// 在消费方**真的成功**之后按那六道闸门办（见 <see cref="CollectConsumedSourcePiecesIntoRest"/>）。</para>
         /// </summary>
-        private void RememberGroupPiecesConsumedBy(ArchiveTask consumer)
+        internal void RememberGroupPiecesConsumedBy(ArchiveTask consumer)
         {
             /*
              * ⛔ 引用名必须来自**这一单自己**（`ResolveGroupReferenceName`），⛔ 不许写死 `<基名>.zip`：
@@ -306,7 +306,7 @@ namespace ArchiveFixer.ViewModels
         /// 试开确认后建的**硬链接暂存组入口目录**（每一条都是 `<入口层>\.ArchiveFixer.work\order-<id>`）——
         /// 批末统一删（里面只有零字节链接，删名字不丢字节；⛔ 不碰任何用户/任务源）。
         /// </summary>
-        private readonly List<string> _confirmedOrderStagingDirectories = new();
+        internal readonly List<string> _confirmedOrderStagingDirectories = new();
 
         /// <summary>
         /// 一键开始前给 KeepInPlace 源文件做的同卷硬链接快照（原路径 → 备份路径）。
@@ -319,7 +319,7 @@ namespace ArchiveFixer.ViewModels
         /// 试开定序的组任务：**原来的落点**（暂存组入口会改 `task.CurrentPath`，但产物必须回这个落点）。
         /// 提取那一站按这个覆盖掉"从暂存路径算出来的"输出目录，⛔ 不让产物写进 `.ArchiveFixer.work`。
         /// </summary>
-        private readonly Dictionary<ArchiveTask, string> _stagedGroupOutputPaths = new();
+        internal readonly Dictionary<ArchiveTask, string> _stagedGroupOutputPaths = new();
 
         /// <summary>
         /// **按字节数补片那一档用过的来源**（我亲手把它链接成了槽位名）—— 判据 ③ 要的那个
@@ -366,7 +366,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>存的就是"批末该拿谁去问那一组"：那一片自己的路径（它的基名 = 那一组的基名，
         /// 它的名字 = 那一组的规范参照物）。⛔ 只读，⛔ 不改任何删除 / 搬运判据。</para>
         /// </summary>
-        private readonly Dictionary<ArchiveTask, string> _deferredVolumeGroupMember = new();
+        internal readonly Dictionary<ArchiveTask, string> _deferredVolumeGroupMember = new();
 
         /// <summary>
         /// **本批"借来用过的用户源片" → 解出它的那一单**（唯一写入点 = 递归结果带回来那份名单，
@@ -390,7 +390,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 每一组的**一等事实**（批内只建一次；本轮只接“源层”这一项，owner/顺序暂不接线）。
         /// </summary>
-        private readonly Dictionary<string, VolumeGroupUnit> _volumeGroupUnits =
+        internal readonly Dictionary<string, VolumeGroupUnit> _volumeGroupUnits =
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>

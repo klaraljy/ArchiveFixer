@@ -288,7 +288,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>把这一单记成"第二大步任务"（批末那一组齐了、要照常跑这一组的那一刻）。</summary>
-        private void RememberVolumeStepTask(ArchiveTask task)
+        internal void RememberVolumeStepTask(ArchiveTask task)
         {
             if (task != null)
             {
