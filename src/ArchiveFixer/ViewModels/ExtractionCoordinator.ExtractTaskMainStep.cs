@@ -780,96 +780,18 @@ namespace ArchiveFixer.ViewModels
                         cancellationToken)
                     .ConfigureAwait(true))
             {
-                /*
-                 * 普通模式：
-                 * 不先测试，直接解压。
-                 *
-                 * 好处：
-                 * 1. 普通无密码压缩包会立刻产生解压产物。
-                 * 2. 不会让用户误以为卡住。
-                 * 3. 如果遇到密码错误，再尝试下一个密码。
-                 */
-                ExtractionRunState loopState = new()
-                {
-                    MaxPasswordAttempts = maxPasswordAttempts,
-                    AttemptLimit = attemptLimit,
-                    CandidatesTruncated = candidatesTruncated,
-                    Candidates = candidates,
-                    PreflightList = preflightList,
-                    PreflightSaidEncryptedHeaders = preflightSaidEncryptedHeaders,
-                    EncryptedHeadersMessage = encryptedHeadersMessage,
-                    EngineArchivePath = engineArchivePath,
-                    EngineOutputPath = engineOutputPath,
-                    OutputRedirectNote = outputRedirectNote,
-                    SharedOutputRoot = sharedOutputRoot,
-                    LastResult = lastResult,
-                    SelectedPassword = selectedPassword,
-                    PasswordConfirmed = passwordConfirmed,
-                    AmbiguousTestResult = ambiguousTestResult,
-                    PasswordConclusionNote = passwordConclusionNote
-                };
-
-                await new ExtractionCandidateLoop()
-                    .RunAsync(this, loopState, task, cancellationToken, oneClickRun, extractOptions, progressSink, lastListErrorType)
+                passwordConclusionNote = await new ExtractionNormalMode()
+                    .RunAsync(this, task, maxPasswordAttempts, attemptLimit, candidatesTruncated, candidates,
+                        preflightList, preflightSaidEncryptedHeaders, encryptedHeadersMessage, engineArchivePath,
+                        engineOutputPath, outputRedirectNote, sharedOutputRoot, lastResult, selectedPassword,
+                        passwordConfirmed, ambiguousTestResult, passwordConclusionNote, lastListErrorType,
+                        extractOptions, progressSink, oneClickRun, cancellationToken)
                     .ConfigureAwait(true);
-
-                passwordConclusionNote = (await new ExtractionTaskConclusionWriter()
-                    .WriteAsync(this, task, loopState, oneClickRun, cancellationToken)
-                    .ConfigureAwait(true)).PasswordConclusionNote;
-
-            }
-            /*
-             * 把预检的"文件名已加密"结论恢复回来（见上面 preflightSaidEncryptedHeaders 的说明）。
-             * 条件收得最紧：预检说过、而且这一层最后得到的**只是**"密码没通过"。
-             */
-            RestoreEncryptedHeadersConclusion(task, preflightSaidEncryptedHeaders, encryptedHeadersMessage);
-
-            /*
-             * ===== 密码类结论上那两句补充（位置刻意在"文件名已加密"恢复之后）=====
-             *
-             * 两件事都只在这条路上才有值（判据不成立时是空串 ⇒ 正常路径一个字都不改）：
-             * ① **换引擎兜底**跑过 / 没跑成（"已换 WinRAR 再试过一遍" / "没找到 WinRAR，所以没换引擎再试"）；
-             * ② **候选被每层上限截断**时点名"哪几条没试到"。
-             *
-             * ⛔ 必须排在上面那一支之后：它会把整条 ErrorMessage **重新赋值**（= 覆盖），
-             * 写在它前面等于白写。
-             */
-            if (!string.IsNullOrEmpty(passwordConclusionNote) && !string.IsNullOrEmpty(task.ErrorMessage))
-            {
-                task.ErrorMessage += passwordConclusionNote;
             }
 
-            // 密码类失败登记到本批，批次结束后合并成一次提示（不再在任务循环里逐个弹模态框）。
-            RecordPasswordFailure(task);
-
-            task.EndTime = ArchiveFixer.Helpers.Clock.Now;
-            task.ElapsedText = task.StartTime.HasValue
-                ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
-                : "-";
-
-            /*
-             * 实时进度到此为止：把百分比与"长时间无响应"提示一起清掉。
-             *
-             * 光靠 EndTime 已经能让 HasLiveProgress 判否（界面上不会再显示百分比），
-             * 但字段本身留着会变成一颗定时炸弹：将来任何一处把 EndTime 清空（重跑、重置），
-             * 上一轮的 87% 就会莫名其妙地重新出现在界面上。收尾时清干净是唯一稳妥的做法。
-             */
-            task.ClearProgress();
-
-            task.Operation = StatusText.OpWaiting;
-
-            /*
-             * 进度文案只在"这一单没有失败 / 取消结论"时才写"完成"。
-             * 越界、超预算、递归部分完成这些分支自己写了 ProgressFailed，取消写的是"已取消"，
-             * 无条件覆盖会让任务详情窗口出现"状态：解压失败 / 进度：完成"这种自相矛盾的显示。
-             */
-            if (task.ProgressText != StatusText.ProgressFailed &&
-                task.ProgressText != StatusText.ProgressCancelled)
-            {
-                task.ProgressText = StatusText.ProgressCompleted;
-            }
-
-            task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
+            await new ExtractionNormalMode()
+                .FinishAsync(this, task, preflightSaidEncryptedHeaders, encryptedHeadersMessage, passwordConclusionNote)
+                .ConfigureAwait(true);
         }
 
         /// <summary>
@@ -1004,7 +926,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 把预检的"文件名已加密"结论恢复回来：条件收得最紧 —— 预检说过、而且这一层最后得到的**只是**"密码没通过"。
         /// </summary>
-        private void RestoreEncryptedHeadersConclusion(
+        internal void RestoreEncryptedHeadersConclusion(
             ArchiveTask task,
             bool preflightSaidEncryptedHeaders,
             string? encryptedHeadersMessage)
