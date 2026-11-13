@@ -1,5 +1,3 @@
-using ArchiveFixer.Engines;
-using ArchiveFixer.Password;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,80 +6,11 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Password;
 
 namespace ArchiveFixer.Packing
 {
-    /// <summary>打包用到的两个外部工具。</summary>
-    public enum PackToolKind
-    {
-        /// <summary>
-        /// 内置的 <c>tools\7zip\7z.exe</c>：建加密分卷、建**7z 外层容器**、以及列出 7z 外层容器的条目。
-        /// </summary>
-        SevenZip = 0,
-
-        /// <summary>本机已装的 <c>Rar.exe</c>（或退一档的 <c>WinRAR.exe</c>）—— **绝不分发**。</summary>
-        Rar = 1
-    }
-
-    /// <summary>一个打包步骤的进度（只带"到哪了"）。</summary>
-    public sealed class PackStepProgress
-    {
-        /// <summary>百分比未知（还在扫描 / 这一行没给百分比）。</summary>
-        public const int UnknownPercent = -1;
-
-        /// <summary>0–100；未知时是 <see cref="UnknownPercent"/>。</summary>
-        public int Percent { get; init; } = UnknownPercent;
-
-        /// <summary>当前条目 / 状态行（引擎给什么就是什么）。</summary>
-        public string Detail { get; init; } = string.Empty;
-    }
-
-    /// <summary>一个打包步骤（起一次外部进程）的结论。</summary>
-    public sealed class PackStepResult
-    {
-        public bool Success { get; init; }
-
-        public bool Cancelled { get; init; }
-
-        public bool TimedOut { get; init; }
-
-        public int ExitCode { get; init; }
-
-        /// <summary>标准输出（**已经过脱敏**：密码与 <c>-p</c> / <c>-hp</c> 开关都不会出现在这里）。</summary>
-        public string StandardOutput { get; init; } = string.Empty;
-
-        /// <summary>标准错误（同样已脱敏）。</summary>
-        public string StandardError { get; init; } = string.Empty;
-
-        /// <summary>给用户看的一句话（成功时为空）。</summary>
-        public string Message { get; init; } = string.Empty;
-
-        public TimeSpan Elapsed { get; init; }
-
-        /// <summary>两路输出拼起来（诊断用）。</summary>
-        public string CombinedOutput => string.IsNullOrWhiteSpace(StandardError)
-            ? StandardOutput
-            : StandardOutput + Environment.NewLine + StandardError;
-    }
-
-    /// <summary>
-    /// "起一次打包用的外部进程"这件事的抽象。
-    ///
-    /// <para>为什么要有接口：<see cref="PackingService"/> 里那些**判据**（没有 Rar.exe 时不许产生 rar、
-    /// 取消时不许留半个 rar、第二步失败时第一步的分卷必须还在）都可以在不碰真 WinRAR 的前提下验证 ——
-    /// 验收明确要求"用假的 runner 断言它没被调用"（docs/打包功能.md §9）。</para>
-    /// </summary>
-    public interface IPackProcessRunner
-    {
-        Task<PackStepResult> RunAsync(
-            PackToolKind tool,
-            IReadOnlyList<string> arguments,
-            string usedPassword,
-            IProgress<PackStepProgress>? progress,
-            CancellationToken cancellationToken,
-            string? workingDirectory = null);
-    }
-
     /// <summary>
     /// 打包用的进程运行器：起进程、收输出、报进度、取消时收尸。
     ///
