@@ -18,7 +18,7 @@
     "Extraction/ExtractionWorkspace.cs": 1423,
     "Extraction/OutputPlacement.cs": 959,
     "Extraction/ProcessArtifactLayout.cs": 715,
-    "Extraction/RecursiveExtractor.cs": 2433,
+    "Extraction/RecursiveExtractor.cs": 2420,
     "Extraction/ResultFinalizer.cs": 1510,
     "Extraction/VolumeCandidateDiscovery.cs": 1782,
     "Extraction/VolumeNameRepair.cs": 351,

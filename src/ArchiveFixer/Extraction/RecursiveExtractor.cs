@@ -1050,32 +1050,19 @@ namespace ArchiveFixer.Extraction
                  * ⛔ 拿不到清单 ⇒ **不拦**（与 <see cref="IsExpansionRatioExceededAsync"/> 的兜底同口径）：
                  * 加密头包 / 列目录失败时盘上那份清单根本不存在，凭"不知道"去拦会把正常包误杀。
                  */
-                if (listedThisCandidate is { Success: true })
+                if (listedThisCandidate is { Success: true }
+                    && RecursiveLayerBudget.FindSingleFileViolation(
+                        listedThisCandidate, _limits.MaxSingleFileSize) is string singleFileReason)
                 {
-                    (string largestEntryPath, long largestEntrySize) =
-                        ResourceBudget.FindLargestFileEntry(listedThisCandidate);
+                    Log("ERROR", $"{layerLabel}：{singleFileReason}");
 
-                    if (largestEntrySize > _limits.MaxSingleFileSize)
-                    {
-                        string singleFileReason = ResourceBudget.DescribeSingleFileOverLimit(
-                            largestEntrySize,
-                            largestEntryPath,
-                            _limits.MaxSingleFileSize);
-
-                        Log("ERROR", $"{layerLabel}：{singleFileReason}");
-
-                        /*
-                         * 报告里**不带这一层的逐条清单**：这一层一个字节都没解（拦在解压之前），
-                         * 拿一份"预期清单"去对账等于给部分完成发布递一把没有产物的尺子。
-                         */
-                        return LayerOutcome.Stop(
-                            BuildLayerReport(
-                                item,
-                                result: null,
-                                succeededPassword: null,
-                                overrideMessage: singleFileReason),
-                            RecursionStopReason.MaxSingleFileSizeReached);
-                    }
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(
+                            item,
+                            result: null,
+                            succeededPassword: null,
+                            overrideMessage: singleFileReason),
+                        RecursionStopReason.MaxSingleFileSizeReached);
                 }
 
                 if (unsafeSummary != null)
