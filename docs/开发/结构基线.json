@@ -55,7 +55,7 @@
     "ViewModels/ExtractionCoordinator.VolumeGatherStep.cs": 670,
     "ViewModels/ExtractionCoordinator.VolumeHandoffStep.cs": 589,
     "ViewModels/ExtractionCoordinator.VolumeSlotFillStep.cs": 770,
-    "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 905,
+    "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 688,
     "ViewModels/MainViewModel.cs": 1494,
     "ViewModels/OneClickCoordinator.cs": 1452,
     "ViewModels/PackingViewModel.cs": 1267,

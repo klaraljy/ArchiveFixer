@@ -209,102 +209,6 @@ namespace ArchiveFixer.ViewModels
             return unit;
         }
 
-        /// <summary>
-        /// 入口已定 ⇒ 同组其余片的任务先落“跟班”事实。
-        /// 这样它们开跑前就不会再撞“源文件已变化”，也不会各自解一遍整组。
-        /// </summary>
-        private void MarkFollowerTasksForGroup(VolumeGroupUnit unit, ArchiveTask? owner)
-        {
-            string ownerName = owner == null
-                ? unit.OwnerTaskFileName ?? unit.BaseName
-                : string.IsNullOrWhiteSpace(owner.DisplayFileName)
-                    ? owner.FileName
-                    : owner.DisplayFileName;
-
-            foreach (VolumeFacts piece in unit.Pieces)
-            {
-                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
-                    candidate != null
-                    && !ReferenceEquals(candidate, owner)
-                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
-                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
-
-                if (pieceTask == null)
-                {
-                    continue;
-                }
-
-                pieceTask.IsVolumeGroupFollower = true;
-                pieceTask.SettledWithGroupUnitName = ownerName;
-            }
-        }
-
-        /// <summary>
-        /// prepared 组的跟班标记：按**原始路径**找任务（⛔ 不拿临时标准名去找）。
-        /// </summary>
-        private void MarkFollowerTasksForPreparedGroup(
-            PreparedVolumeGroup prepared,
-            ArchiveTask owner)
-        {
-            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
-                ? owner.FileName
-                : owner.DisplayFileName;
-
-            foreach (PreparedVolumePiece piece in prepared.Pieces)
-            {
-                if (string.IsNullOrWhiteSpace(piece.OriginalPath))
-                {
-                    continue;
-                }
-
-                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
-                    candidate != null
-                    && !ReferenceEquals(candidate, owner)
-                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.OriginalPath)
-                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.OriginalPath)));
-
-                if (pieceTask == null)
-                {
-                    continue;
-                }
-
-                pieceTask.IsVolumeGroupFollower = true;
-                pieceTask.SettledWithGroupUnitName = ownerName;
-            }
-        }
-
-        /// <summary>入口没成功 ⇒ 先标过跟班的片不能继续显示“随整组解开”。</summary>
-        private void MarkFollowerTasksGroupFailed(VolumeGroupUnit unit, ArchiveTask owner)
-        {
-            string ownerName = string.IsNullOrWhiteSpace(owner.DisplayFileName)
-                ? owner.FileName
-                : owner.DisplayFileName;
-
-            foreach (VolumeFacts piece in unit.Pieces)
-            {
-                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
-                    candidate != null
-                    && !ReferenceEquals(candidate, owner)
-                    && candidate.IsVolumeGroupFollower
-                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
-                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
-
-                if (pieceTask == null || pieceTask.Outcome == TaskOutcome.Succeeded)
-                {
-                    continue;
-                }
-
-                pieceTask.Outcome = TaskOutcome.Skipped;
-                pieceTask.EndTime = ArchiveFixer.Helpers.Clock.Now;
-                pieceTask.MarkSkipped(string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    "同组入口「{0}」没有成功，这一片没有单独解（源包原样保留）。",
-                    ownerName));
-            }
-        }
 
         /// <summary>链接完成后回写 Unit（唯一写者：Service）。</summary>
         internal void MarkVolumeGroupLinked(VolumeGroupUnit? unit, IReadOnlyList<string>? linkedNames) =>
@@ -373,149 +277,6 @@ namespace ArchiveFixer.ViewModels
         /// 组成功后按「源包操作」收本组用户源片：只在 `DeleteInPlace` 档、且组齐全、
         /// owner 内容可证完整时执行；把**组级事实**（而非单片“旁边还有一片”）喂给删除闸门。
         /// </summary>
-        /// <summary>
-        /// **组已经解开**的统一出口：把组里每一片的原始路径在唯一账本里记成「已消费源包」，
-        /// 后续轮次的组分析不许再从留在盘上的用户原件重建同一组。
-        ///
-        /// <para>真机 125 批 926000008（运行期事实）：KeepInPlace 留下用户原件；组解开收场之后，
-        /// 下一轮用剩下的 4 片又重建了一个 `SizeAnomaly` 组（`缺=1`、`通用 ZIP 槽位 4 有两份不同文件`），
-        /// 把已经收场的跟班任务刷成「最终内容分卷组结构异常且缺片」⇒ 整单算失败。</para>
-        ///
-        /// <para>按**物理身份**标（改名前后是同一条账本记录）；判据只认路径/身份事实，
-        /// ⛔ 不看后缀、基名、内容格式。</para>
-        /// </summary>
-        private void MarkVolumeGroupPiecesConsumed(IEnumerable<string>? piecePaths)
-        {
-            foreach (string path in piecePaths ?? Enumerable.Empty<string>())
-            {
-                _firstStepFileLedger.MarkConsumedByIdentity(path);
-            }
-        }
-        private void ReclaimSucceededGroupSources(VolumeGroupUnit unit, ArchiveTask? ownerTask)
-        {
-            if (unit == null
-                || unit.State != VolumeGroupState.Succeeded
-                || unit.MissingNumbers.Count > 0)
-            {
-                return;
-            }
-
-            SourceHandlingMode handling = RunOptions?.SourceHandling
-                ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
-
-            if (handling != SourceHandlingMode.DeleteInPlace)
-            {
-                return;
-            }
-
-            ArchiveTask? owner = ownerTask ?? FindOwnerTask(unit);
-            ResultCompletenessVerdict? groupVerdict = owner != null
-                ? ResultCompletenessClassifier.Classify(owner)
-                : null;
-
-            if (groupVerdict == null || !groupVerdict.AllowsSourceRemoval)
-            {
-                return;
-            }
-
-            var logEntries = new List<(string Level, string Message)>();
-            var reclaimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            void Reclaim(ArchiveTask? task)
-            {
-                if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath)
-                    || !reclaimed.Add(task.CurrentPath))
-                {
-                    return;
-                }
-
-                PurgeLayerSourcePackage(
-                    task,
-                    verification: null,
-                    commit: null,
-                    logEntries,
-                    LayerPurgeTrigger.SourceHandlingDelete,
-                    reclaimVerdict: groupVerdict);
-            }
-
-            Reclaim(owner);
-
-            foreach (VolumeFacts piece in unit.Pieces)
-            {
-                if (piece.Source != VolumeHandoffSource.UserImported
-                    && !IsUserImportedSourcePath(piece.Path))
-                {
-                    continue;
-                }
-
-                ArchiveTask? pieceTask = SnapshotTaskTable(Tasks).FirstOrDefault(candidate =>
-                    candidate != null
-                    && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                    && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
-                        || FileIdentity.IsSamePhysicalFile(candidate.CurrentPath, piece.Path)));
-
-                Reclaim(pieceTask);
-            }
-
-            foreach ((string level, string message) in logEntries)
-            {
-                AppendLog(level, message);
-            }
-        }
-
-        private ArchiveTask? FindOwnerTask(VolumeGroupUnit unit)
-        {
-            if (unit == null || string.IsNullOrWhiteSpace(unit.OwnerTaskFileName))
-            {
-                return null;
-            }
-
-            /*
-             * ⛔ 2026-11-01 真机：同名文件在不同目录（2916/3100 都叫 `风景01.mp4`）时，
-             * 只按文件名找 owner 会把两组的 owner 认成同一单 ⇒ 链接账/源包结算串组。
-             * 先按**组的入口全路径/片路径**精确匹配，匹配不到才退回文件名（兼容入口被改名）。
-             */
-            ArchiveTask[] snapshot = SnapshotTaskTable(Tasks);
-
-            /*
-             * ⛔ 先认**入口**和**owner 文件名**，最后才允许按任意片路径兜底。
-             *
-             * 2026-11-08 真机：`aaa-L4` 四片里第一片是用户导入的 `.004`；旧写法把
-             * “any piece path matches” 放在文件名匹配之前，于是 `FindOwnerTask` 返回了
-             * `aaa-L4.7.....mkwz.004`（Outcome=Skipped），链尾整组被跳过，包装源包永远不结算。
-             * 片路径只能证明“这一单手里有片”，不能证明“它是 owner”。
-             */
-            ArchiveTask? byEntry = snapshot.FirstOrDefault(candidate =>
-                candidate != null
-                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                && !string.IsNullOrWhiteSpace(unit.EntryPath)
-                && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, unit.EntryPath));
-
-            if (byEntry != null)
-            {
-                return byEntry;
-            }
-
-            ArchiveTask? byName = snapshot.FirstOrDefault(candidate =>
-                candidate != null
-                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                && string.Equals(
-                    FileNameHelper.GetFileName(candidate.CurrentPath),
-                    unit.OwnerTaskFileName,
-                    StringComparison.OrdinalIgnoreCase));
-
-            if (byName != null)
-            {
-                return byName;
-            }
-
-            return snapshot.FirstOrDefault(candidate =>
-                candidate != null
-                && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
-                && unit.Pieces.Any(piece =>
-                    !string.IsNullOrWhiteSpace(piece.Path)
-                    && ArchiveFixer.Helpers.SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)));
-        }
 
 
         internal bool TrySettleVolumeGroup(ArchiveTask? task)
@@ -900,6 +661,28 @@ namespace ArchiveFixer.ViewModels
 
             return null;
         }
+        private ExtractionVolumeGroupSettlement? _volumeGroupSettlement;
+        private ExtractionVolumeGroupSettlement VolumeGroupSettlement =>
+            _volumeGroupSettlement ??= new ExtractionVolumeGroupSettlement(this);
+
+        private void MarkFollowerTasksForGroup(VolumeGroupUnit unit, ArchiveTask? owner) =>
+            VolumeGroupSettlement.MarkFollowerTasksForGroup(unit, owner);
+
+        private void MarkFollowerTasksForPreparedGroup(PreparedVolumeGroup prepared, ArchiveTask owner) =>
+            VolumeGroupSettlement.MarkFollowerTasksForPreparedGroup(prepared, owner);
+
+        private void MarkFollowerTasksGroupFailed(VolumeGroupUnit unit, ArchiveTask owner) =>
+            VolumeGroupSettlement.MarkFollowerTasksGroupFailed(unit, owner);
+
+        private void MarkVolumeGroupPiecesConsumed(IEnumerable<string>? piecePaths) =>
+            VolumeGroupSettlement.MarkVolumeGroupPiecesConsumed(piecePaths);
+
+        private void ReclaimSucceededGroupSources(VolumeGroupUnit unit, ArchiveTask? ownerTask) =>
+            VolumeGroupSettlement.ReclaimSucceededGroupSources(unit, ownerTask);
+
+        private ArchiveTask? FindOwnerTask(VolumeGroupUnit unit) =>
+            VolumeGroupSettlement.FindOwnerTask(unit);
+
     }
 }
 
