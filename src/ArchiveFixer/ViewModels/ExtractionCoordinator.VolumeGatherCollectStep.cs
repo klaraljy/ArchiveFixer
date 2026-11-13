@@ -622,7 +622,7 @@ namespace ArchiveFixer.ViewModels
             return false;
         }
 
-        private ArchiveTask? FindTaskByPath(string path)
+        internal ArchiveTask? FindTaskByPath(string path)
         {
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {

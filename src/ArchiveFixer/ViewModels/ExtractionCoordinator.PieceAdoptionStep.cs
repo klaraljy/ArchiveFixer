@@ -529,7 +529,7 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="ArchiveTask.VolumePaths"/> 的那几卷）一个字节不碰；续解任务自己的路径
         /// **不是**用户的原包 ⇒ 不在这道红线的保护范围内。</para>
         /// </summary>
-        private bool IsUserImportedSourcePath(string path)
+        internal bool IsUserImportedSourcePath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {

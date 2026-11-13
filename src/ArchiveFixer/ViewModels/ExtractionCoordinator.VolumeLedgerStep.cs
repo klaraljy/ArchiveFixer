@@ -408,7 +408,7 @@ namespace ArchiveFixer.ViewModels
         /// （`111.rar` 自己叫 `.rar`、可它吐出的那一片是 ZIP 族的 `111.z01`）。
         /// ⇒ **判据必须拿"它吐出的那一片"的名字去比族**（`BelongsToSameGroup` = 族 + 基名）。</para>
         /// </summary>
-        private readonly Dictionary<string, List<(ArchiveTask Task, string PieceName)>> _groupPieceProducers =
+        internal readonly Dictionary<string, List<(ArchiveTask Task, string PieceName)>> _groupPieceProducers =
             new(StringComparer.OrdinalIgnoreCase);
 
         /*
@@ -426,7 +426,7 @@ namespace ArchiveFixer.ViewModels
          * ⇒ 读写一律过这把锁，**读的一方拿快照**（⛔ 不把活列表交出去）。
          * ⛔ 只加互斥，判据一个字不改。
          */
-        private readonly object _groupPieceProducersGate = new();
+        internal readonly object _groupPieceProducersGate = new();
 
         /// <summary>这些生产者的源包**已经交给既有出口搬过了**（幂等：搬一次就够，⛔ 不重复搬）。</summary>
         internal readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
