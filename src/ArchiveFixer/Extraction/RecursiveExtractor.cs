@@ -1006,65 +1006,36 @@ namespace ArchiveFixer.Extraction
                  * 也不算"试过了"（`triedAny` 跟着退回去），候选总数 N 也跟着减 1 ——
                  * 否则日志里的「候选 i/N」会给出一个永远到不了的 N。
                  */
-                if (string.IsNullOrEmpty(candidate)
-                    && usableCandidates > 0
-                    && PasswordProbe.ShouldSkipEmptyPassword(listedThisCandidate))
+                EmptyPasswordSkip emptyPasswordSkip = RecursivePasswordSkipPolicy.Match(
+                    candidate, usableCandidates, listedThisCandidate);
+
+                if (emptyPasswordSkip != EmptyPasswordSkip.None)
                 {
                     passwordLedger.Skip("空密码按规则跳过");
                     triedAny = passwordLedger.Tried > 0;
                     layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
                     skippedCandidates++;
 
-                    Log(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.RecursionSkippedEmptyPasswordLogFormat,
-                            layerLabel,
-                            Math.Min(usableCandidates, _limits.MaxPasswordAttemptsPerLayer)));
-
-                    continue;
-                }
-
-                /*
-                 * ===== 加密头包也不试空密码（2026-10-05 只读审计；**只补"跳过"这一半**）=====
-                 *
-                 * 上一条靠"清单里的加密条目标记"判（列得出来才能判），而**文件名也加密**
-                 * （7z `-mhe=on` / RAR `-hp`）时**清单根本列不出来** —— 引擎在列目录这一步就报
-                 * "加密头"（结构化结论 <see cref="EngineErrorTypes.EncryptedHeaders"/>）。单层路径
-                 * 2026-09-26 就补了这一档（`ExtractionCoordinator` 里的 `lastListErrorType ==
-                 * SevenZipOutputParser.EncryptedHeadersErrorType`），递归这条路一直没接：
-                 * 出厂默认档下，一个 `-mhe` 的内层包先拿空密码白跑一整包。
-                 *
-                 * 判据只读引擎给的结构化错误类型（⛔ 不比中文、也不自己猜）；记账口径与上一条
-                 * **逐字相同**：没解过任何东西 ⇒ 不占尝试次数、不算"试过了"、候选总数 N 减 1。
-                 * 边界也相同：还有别的候选可试才跳（一个都不剩时照旧试空密码，
-                 * 否则收场会落到一句更难懂的"未知解压失败"）。
-                 *
-                 * ⚠ **本层的最终结论仍是"密码错误"那一档**（不会变成「文件名已加密」）：把结论也改掉
-                 * 属于新增状态，要同时改 StatusText / StatusToBrushConverter / TaskSummaryService /
-                 * TaskOutcomeClassifier 四处，超出本次修复范围 —— 如实记在报告里，别当成做完了。
-                 */
-                if (string.IsNullOrEmpty(candidate)
-                    && usableCandidates > 0
-                    && listedThisCandidate is { Success: false }
-                    && string.Equals(
-                        listedThisCandidate.ErrorType,
-                        EngineErrorTypes.EncryptedHeaders,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    passwordLedger.Skip("空密码按规则跳过");
-                    triedAny = passwordLedger.Tried > 0;
-                    layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
-                    skippedCandidates++;
-
-                    Log(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.RecursionSkippedEmptyPasswordEncryptedHeadersLogFormat,
-                            layerLabel,
-                            listedThisCandidate.ErrorType));
+                    if (emptyPasswordSkip == EmptyPasswordSkip.EncryptedEntry)
+                    {
+                        Log(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.RecursionSkippedEmptyPasswordLogFormat,
+                                layerLabel,
+                                Math.Min(usableCandidates, _limits.MaxPasswordAttemptsPerLayer)));
+                    }
+                    else
+                    {
+                        Log(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.RecursionSkippedEmptyPasswordEncryptedHeadersLogFormat,
+                                layerLabel,
+                                listedThisCandidate?.ErrorType ?? string.Empty));
+                    }
 
                     continue;
                 }
