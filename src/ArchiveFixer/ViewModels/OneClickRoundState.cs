@@ -26,5 +26,11 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>第二大步点名的入口任务（B 段产出；C 段排进下一轮）。</summary>
         internal List<ArchiveTask> VolumeEntryTasks { get; set; } = new();
+
+        /// <summary>第二大步点名时顺带补建的入口候选（B 段产出；B 段尾消费）。</summary>
+        internal List<InnerArchiveCandidate> SecondStepEntryCandidates { get; set; } = new();
+
+        /// <summary>第二大步里每个组的 Unit（与候选同序；B 段尾建链接时用）。</summary>
+        internal List<(VolumeCandidateDiscovery.VolumeCandidate Group, VolumeGroupUnit Unit)> SecondStepEntryGroups { get; set; } = new();
     }
 }
