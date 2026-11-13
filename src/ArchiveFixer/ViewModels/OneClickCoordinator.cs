@@ -226,6 +226,7 @@ namespace ArchiveFixer.ViewModels
         private readonly DialogService _dialogService;
         private readonly InnerLayerCollector _innerLayerCollector;
         private readonly OneClickBatchFinalizer _batchFinalizer;
+        private readonly OneClickRoundRunner _roundRunner;
 
         /// <summary>本次运行的不可变快照（阶段 4 影子：先冻结，尚未替换所有读取点）。</summary>
         internal RunSnapshot? CurrentRunSnapshot { get; private set; }
@@ -268,6 +269,7 @@ namespace ArchiveFixer.ViewModels
             _dialogService = dialogService;
             _innerLayerCollector = new InnerLayerCollector(vm, extractionCoordinator);
             _batchFinalizer = new OneClickBatchFinalizer(vm, extractionCoordinator);
+            _roundRunner = new OneClickRoundRunner(vm, extractionCoordinator, _batchFinalizer);
         }
 
         /// <summary>
@@ -642,38 +644,9 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<ArchiveTask> firstRoundTargets,
             OneClickRunOptions? runOptions = null)
         {
-            /*
-             * ⛔ 这一批只处理**还在任务列表里**的目标（2026-09-28 真机"只解一层就停"的守门）。
-             *
-             * 历史成因：一键处理开工前曾把无用物从列表里移掉，被移掉的任务既不在列表里、也不会被
-             * 解压循环碰到 ⇒ 收尾守卫把它们读成"这一轮有任务没轮到" ⇒ 误判成用户叫停。
-             * ⚠ 2026-11-01 起开工前**不再**移无用物（自动剔除只在文件夹导入那一次），但这条过滤
-             * **保留**：任何"清单拍下之后列表又变了"的路径（以后新加的）都靠它兜住。
-             *
-             * ⚠ 判据是**引用**（那个任务对象还在不在列表里），不按路径比 ——
-             * 同一个文件被重新导入会是一个新任务，路径一样但它不属于这一批。
-             */
-            var listedTasks = new HashSet<ArchiveTask>(Tasks);
-            List<ArchiveTask> rootTargets = firstRoundTargets.Where(listedTasks.Contains).ToList();
+            var state = new OneClickRunState();
 
-            AppendLog("INFO", $"一键处理开始，共 {rootTargets.Count} 个任务。");
-
-            OneClickRunOptions snapshotOptions = runOptions
-                ?? OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
-
-            RunStopToken stopToken = new();
-
-            _batchFinalizer.BeginBatch();
-
-            CurrentRunSnapshot = RunSnapshot.Capture(
-                rootTargets,
-                snapshotOptions,
-                _vm.SpaceTightMode,
-                _vm.SpaceTightKeepSource,
-                Settings.UseSpecificExtraction,
-                _vm.SelectedOutputDirectory,
-                _extractionCoordinator.SpecificExtractionPasswords,
-                stopToken);
+            CurrentRunSnapshot = _roundRunner.Prepare(state, firstRoundTargets, runOptions);
 
             /*
              * 特定解压 = 独立整理模式，不再由旧规则清单决定是否生效。
@@ -681,25 +654,16 @@ namespace ArchiveFixer.ViewModels
              */
             if (CurrentRunSnapshot.UseSpecificExtraction)
             {
-                return await RunSpecificBatchAsync(rootTargets, snapshotOptions, CurrentRunSnapshot).ConfigureAwait(true);
+                return await RunSpecificBatchAsync(state.RootTargets, state.SnapshotOptions!, CurrentRunSnapshot).ConfigureAwait(true);
             }
 
             // 处理过的任务按轮累加：汇总要算"本次一共处理了多少个"，只算第一轮会和实际不符。
-            var processed = new List<ArchiveTask>(rootTargets);
+            state.Processed = new List<ArchiveTask>(state.RootTargets);
 
             // 源文件（含分卷各卷）不算内层包：不能把用户最初给的那个 .mp4 / .7z.001 又加一遍。
-            HashSet<string> sourcePaths = BuildSourcePathSet(rootTargets);
+            state.SourcePaths = BuildSourcePathSet(state.RootTargets);
 
-            List<ArchiveTask> roundTargets = rootTargets.ToList();
-
-            int round = 0;
-            int continuationLayers = 0;
-            bool stopped = false;
-            string stoppedPhase = string.Empty;
-            bool hitRoundLimit = false;
-
-            // 撞到轮数上限时那几个"已经加进列表、这一批没解"的内层包（第 16 条追加：到顶要能一键继续）。
-            var pendingContinuation = new List<ArchiveTask>();
+            state.RoundTargets = state.RootTargets.ToList();
 
             /*
              * 「用户按过停止后续」这件事必须单独记一笔。
@@ -709,14 +673,12 @@ namespace ArchiveFixer.ViewModels
              * 并发位被占着时批量循环还会再启动一个任务，未必留下未处理的任务。
              * 订阅属性变更拿到的是"用户确实按过"这个事实，不依赖上面两条时序。
              */
-            bool stopRequested = false;
-
             void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
             {
                 if (e.PropertyName == nameof(MainViewModel.IsStopping) && _vm.IsStopping)
                 {
-                    stopToken.RequestStop();
-                    stopRequested = true;
+                    state.StopToken.RequestStop();
+                    state.StopRequested = true;
                 }
             }
 
@@ -724,22 +686,21 @@ namespace ArchiveFixer.ViewModels
 
             // 这一趟的工作区跟踪从零开始：一键处理一条链会跨多轮，链尾统一收空壳。
             _extractionCoordinator.BeginWorkspaceRun();
-
             try
             {
-                while (round < RoundLimit)
+                while (state.Round < RoundLimit)
                 {
-                    round++;
+                    state.Round++;
 
                     /*
                      * 给日志换一次来源上下文（⛔ 只影响日志记录，判据一个字不变）：
                      * 大测试要求"只看日志排查" ⇒ 每一行都要能回答"这是第几轮、哪一步"。
                      * 阶段先按本轮的入口步骤落"第一大步"；轮判定判出下一轮走第二大步时再改（见下面那一行）。
                      */
-                    _vm.UpdateLogRunContext(round: round, stage: "第一大步");
+                    _vm.UpdateLogRunContext(round: state.Round, stage: "第一大步");
 
                     // 第一步：识别（第 2 轮起只扫本轮新加进来的包）。
-                    await ScanRoundAsync(round, roundTargets);
+                    await ScanRoundAsync(state.Round, state.RoundTargets);
 
                     /*
                      * ⛔ 本轮"开跑时"的目标快照（2026-09-28 真机）。
@@ -757,7 +718,7 @@ namespace ArchiveFixer.ViewModels
                      * 保留这份快照的理由：它把"守卫只看本轮开跑时的目标"这条语义**写死**在这里，
                      * 以后谁要是把 roundTargets 改成实时清单（比如直接传 Tasks），守卫不会跟着一起错。
                      */
-                    List<ArchiveTask> roundStartTargets = roundTargets.ToList();
+                    List<ArchiveTask> roundStartTargets = state.RoundTargets.ToList();
 
                     /*
                      * 第二步：修正伪装后缀。只处理确实需要改的。
@@ -778,20 +739,20 @@ namespace ArchiveFixer.ViewModels
                      * 收尾阶段任何一次全目录遍历都会让窗口卡住（本项目最容易出卡死的一块）。
                      */
                     (HashSet<string> existingFiles, HashSet<string> unreadableDirectories) =
-                        await SnapshotCandidateDirectoriesAsync(roundTargets);
+                        await SnapshotCandidateDirectoriesAsync(state.RoundTargets);
 
                     // 第三步：解压（密码本、旁路说明文件、分卷守卫都在解压流程里生效）。
                     // 走**整理路径**的入口：定稿 + 校验通过 + 未取消之后按设置处理源包
                     // （默认移入其余物，决策 D-9/D-11/D-12）。手动「只解压」按钮走的
                     // StartExtractAsync 是地基路径，永远不动源包 —— 两者只在这一件事上不同。
-                    AppendLog("INFO", round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {round} 层开始解压。");
+                    AppendLog("INFO", state.Round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {state.Round} 层开始解压。");
 
                     /*
                      * ⚠ `continuationRound`（2026-10-05 口径 2）：第 2 轮起**不清**"缺卷留到最后再判"
                      * 的那份名单（第 1 轮没解出来的第 1 卷很可能这一轮才出现）。
                      * ⛔ 它不改任何解压行为、更不是第二套轮数 —— 轮数仍然只有 `RoundLimit` 一个出口。
                      */
-                    await _extractionCoordinator.StartExtractForOneClickAsync(runOptions, continuationRound: round > 1);
+                    await _extractionCoordinator.StartExtractForOneClickAsync(runOptions, continuationRound: state.Round > 1);
 
                     /*
                      * 组级最终内容判决：owner 已经落终态才回填；空输出/未逐条核对一律不判 Verified。
@@ -809,10 +770,10 @@ namespace ArchiveFixer.ViewModels
                     //    它们**按设计**就是没有机器终态的（先记缺口、等批末再判）—— 老写法把它们读成
                     //    "没轮到" ⇒ 这一轮判成"被停止" ⇒ 链尾整段不跑 ⇒ **补判永远不发生**，
                     //    汇总还把一单"缺末片"报成「没轮到」。判据只读那份名单（事实位）。
-                    if (stopRequested
+                    if (state.StopRequested
                         || roundStartTargets.Any(t => !OneClickBatchFinalizer.IsHandled(t) && !_extractionCoordinator.IsDeferredVolumeDeficit(t)))
                     {
-                        stopped = true;
+                        state.Stopped = true;
                         break;
                     }
 
@@ -827,7 +788,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     ArchiveFixer.Services.UiActivity.Mark(
                         "第一大步产物扫描",
-                        detail: $"第 {round} 轮，扫描新产物");
+                        detail: $"第 {state.Round} 轮，扫描新产物");
 
                     /*
                      * 产物扫描的正文全部是文件系统只读判定（不碰 UI 集合、不写任务状态），
@@ -837,15 +798,15 @@ namespace ArchiveFixer.ViewModels
                      */
                     (List<InnerArchiveCandidate> innerArchives, List<string> scanLog) =
                         await Task.Run(() => _innerLayerCollector.CollectAsync(
-                            round,
-                            roundTargets,
+                            state.Round,
+                            state.RoundTargets,
                             existingFiles,
                             unreadableDirectories,
-                            sourcePaths)).ConfigureAwait(true);
+                            state.SourcePaths)).ConfigureAwait(true);
 
                     ArchiveFixer.Services.UiActivity.Mark(
                         "轮判定",
-                        detail: $"第 {round} 轮，分类扫描结果");
+                        detail: $"第 {state.Round} 轮，分类扫描结果");
 
                     /*
                      * ===== 轮判定（用户 2026-10-11 定的轮次模型，本程序的基石）=====
@@ -865,7 +826,7 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog(
                         roundSummary.Step == RoundProductClassifier.NextStep.Finished ? "INFO" : "INFO",
-                        "一键处理：" + roundSummary.Describe(round));
+                        "一键处理：" + roundSummary.Describe(state.Round));
 
                     /*
                      * 轮判定说了下一轮从哪一步开始 ⇒ 顺手把日志上下文里的"阶段"改成它
@@ -888,7 +849,7 @@ namespace ArchiveFixer.ViewModels
                         inputs: $"单一压缩包={roundSummary.SinglePackages.Count} 个；分卷={roundSummary.VolumeEntries.Count} 组；"
                                 + $"其余都是内容物={roundSummary.ContentCount} 个",
                         verdict: roundSummary.Step.ToString(),
-                        action: roundSummary.Describe(round),
+                        action: roundSummary.Describe(state.Round),
                         level: "INFO");
 
                     /*
@@ -1290,8 +1251,8 @@ namespace ArchiveFixer.ViewModels
                     }
                     catch (OperationCanceledException)
                     {
-                        stopped = true;
-                        stoppedPhase = "第二大步解析/试开";
+                        state.Stopped = true;
+                        state.StoppedPhase = "第二大步解析/试开";
                         break;
                     }
                     catch (Exception probeError)
@@ -1846,10 +1807,10 @@ namespace ArchiveFixer.ViewModels
                      * 第二大步在当前这一轮已经干完（解析/试开/命名都结束），这是"暂停会不会又跑起来"的最后一道闸：
                      * 用户在这段里按过暂停/停止当前 ⇒ 在这里停下，绝不再进下一批 21 GB 解压（真机 2026-11-10）。
                      */
-                    if (stopToken.IsStopRequested || secondStepWork.Token.IsCancellationRequested)
+                    if (state.StopToken.IsStopRequested || secondStepWork.Token.IsCancellationRequested)
                     {
-                        stopped = true;
-                        stoppedPhase = "第二大步解析/试开/命名";
+                        state.Stopped = true;
+                        state.StoppedPhase = "第二大步解析/试开/命名";
                         break;
                     }
 
@@ -1864,13 +1825,13 @@ namespace ArchiveFixer.ViewModels
                          * 结果第二层根本没跑，汇总却照样打印"一键处理完成：成功 N"。
                          * 有这一行日志（以及上面那串逐条明细），用户（和我们）才有能对照的线索。
                          */
-                        AppendLog("INFO", $"一键处理：第 {round} 层没有发现可继续解压的内层包，到此结束。");
+                        AppendLog("INFO", $"一键处理：第 {state.Round} 层没有发现可继续解压的内层包，到此结束。");
                         break;
                     }
 
-                    if (round >= RoundLimit)
+                    if (state.Round >= RoundLimit)
                     {
-                        hitRoundLimit = true;
+                        state.HitRoundLimit = true;
 
                         /*
                          * 用户 2026-09-24 第 16 条追加：到顶**不能静默停下**。
@@ -1883,7 +1844,7 @@ namespace ArchiveFixer.ViewModels
                          */
                         try
                         {
-                            pendingContinuation = await AddInnerTasksAsync(innerArchives);
+                            state.PendingContinuation = await AddInnerTasksAsync(innerArchives);
                         }
                         catch (Exception ex)
                         {
@@ -1892,9 +1853,9 @@ namespace ArchiveFixer.ViewModels
 
                         AppendLog(
                             "WARN",
-                            $"一键处理：第 {round + 1} 层还有 {innerArchives.Count} 个内层包，"
+                            $"一键处理：第 {state.Round + 1} 层还有 {innerArchives.Count} 个内层包，"
                             + $"但已达到 {RoundLimit} 轮上限，本批先停在这里 —— "
-                            + $"{pendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {RoundLimit} 轮）。");
+                            + $"{state.PendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {RoundLimit} 轮）。");
 
                         /*
                          * ===== 到顶这一支也必须取消已处理任务的勾选（2026-10-05 只读审计）=====
@@ -1908,7 +1869,7 @@ namespace ArchiveFixer.ViewModels
                          * 顺序安全：`processed` 里只有**已经解过**的任务，`pendingContinuation`
                          * （刚 AddInnerTasksAsync 加进来的那些）不在其中 —— 它们照旧保持勾选。
                          */
-                        DeselectProcessedTasks(processed);
+                        DeselectProcessedTasks(state.Processed);
 
                         break;
                     }
@@ -1925,7 +1886,7 @@ namespace ArchiveFixer.ViewModels
                          * 判据与做法收在 DeselectProcessedTasks 一处：到顶停下那一支走的是**同一个出口**
                          * （2026-10-05 只读审计 —— 那一支过去漏了这一步，"继续解"会把最后一轮重解一遍）。
                          */
-                        DeselectProcessedTasks(processed);
+                        DeselectProcessedTasks(state.Processed);
 
                         nextRound = await AddInnerTasksAsync(innerArchives);
 
@@ -1953,11 +1914,11 @@ namespace ArchiveFixer.ViewModels
                     if (nextRound.Count == 0)
                     {
                         // 内层包全都已经在任务列表里了（路径重复）：再跑一轮只会空转。
-                        AppendLog("WARN", $"一键处理：第 {round + 1} 层的 {innerArchives.Count} 个内层包没能加进任务列表，停止续解。");
+                        AppendLog("WARN", $"一键处理：第 {state.Round + 1} 层的 {innerArchives.Count} 个内层包没能加进任务列表，停止续解。");
                         break;
                     }
 
-                    continuationLayers++;
+                    state.ContinuationLayers++;
 
                     /*
                      * ===== 轮判定「分卷 ⇒ 下一轮按第二大步只解一层」：已整段停用（用户 2026-10-24）=====
@@ -1977,110 +1938,23 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog(
                         "INFO",
-                        $"一键处理：第 {round + 1} 层发现 {innerArchives.Count} 个内层包，继续解" +
+                        $"一键处理：第 {state.Round + 1} 层发现 {innerArchives.Count} 个内层包，继续解" +
                         (string.IsNullOrWhiteSpace(continuationTarget)
                             ? "。"
                             : $"（产物归入同一个输出目录：{continuationTarget}，不再另建文件夹）。"));
 
-                    processed.AddRange(nextRound);
-                    sourcePaths.UnionWith(BuildSourcePathSet(nextRound));
-                    roundTargets = nextRound;
+                    state.Processed.AddRange(nextRound);
+                    state.SourcePaths.UnionWith(BuildSourcePathSet(nextRound));
+                    state.RoundTargets = nextRound;
                 }
             }
             finally
             {
                 _vm.PropertyChanged -= OnViewModelPropertyChanged;
-                stopToken.Dispose();
+                state.StopToken.Dispose();
             }
 
-            /*
-             * 链结束后的**源包补搬**（2026-09-22 修掉的真实缺陷）。
-             *
-             * 用户的真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出内层分卷，
-             * 一个内容物都没有 —— 最外层那一轮因此没法按"内容物已定稿"把源包搬进其余物，
-             * 而真正产出内容物的是续解子任务，子任务按设计跳过源包处理。
-             * 于是最外层那一轮把源包记账成"留到链结束后补搬"（SourcePackageMoveState.DeferredToChainEnd），
-             * 由这里 —— **只有这里知道链什么时候结束** —— 补做一次。
-             *
-             * 链没跑完时一律不补搬（源包留在原地）：
-             * · 被「停止后续」打断 / 有任务没轮到：这是取消语义，不该再动用户的源文件；
-             * · 撞到轮数上限：更深的包还没解，内容物可能不全，不能在此时把源包搬走。
-             * 两种情况都写 WARN 说明原因，绝不静默。
-             */
-            stopRequested |= stopToken.IsStopRequested;
-
-            await _batchFinalizer.CompleteRootSourcePackagesAsync(
-                rootTargets,
-                processed,
-                stopped || stopRequested,
-                hitRoundLimit,
-                runOptions);
-
-            /*
-             * 链尾解压/组终态已经全部落定，回填一次内容组最终事实。
-             * 只读组/任务已有事实，不扫 Pending、不按文件存在性猜。
-             */
-            _extractionCoordinator.FinalizeContentGroups(processed);
-
-            /*
-             * ===== 交界处批末对账（D 段，2026-10-24）=====
-             *
-             * 只打事实行：`[第二大步·交接] 本批交接 N 份（在盘 / 已不在）｜已消费 M｜待处理 K`
-             * 与每组一行 `[第二大步·结论] 基名：…`；⛔ 不搬、不删、不改名。
-             * 批末收卷（`HarvestRememberedGroupVolumesForBatch`）仍停用（不在本段范围内）。
-             */
-            _extractionCoordinator.AppendVolumeHandoffBatchSummary();
-
-            _batchFinalizer.FinalizeBatch();
-
-            string summary = _batchFinalizer.BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count, stoppedPhase);
-
-            AppendLog("INFO", summary);
-
-            /*
-             * ===== 空间曲线的**补记那一针**（用户 2026-10-02 真机）=====
-             *
-             * 批末那条曲线的"收"是在**上面这次其余物处理之前**打的（`StartExtractAsync` 收尾时就写了），
-             * 而其余物的删除发生在那之后 —— 真机日志因此写着「起 31.85 GiB → 最低 20.55 GiB → 收 26.3 GiB」，
-             * 可随后 10 份其余物被彻底删除（合计约 6 GB）⇒ 真实收尾约 32.4 GiB。
-             * 用户按日志读会以为这一批净吃掉 5.5 GB（实际净省 0.5 GB）。
-             *
-             * 所以**其余物处理完之后**再补一针真实可用空间。三条纪律：
-             * ① 这一针走的是本批那个侦察器自己的探测函数（不是第二套取数）；
-             * ② 文案由 `SpaceTrendMonitor` 产出（不是第二套曲线）；
-             * ③ 没有侦察器（手动档 / 单包重试）时什么都不写 —— 绝不编一个数字。
-             */
-            _extractionCoordinator.RecordSpaceTrendPostscript("其余物处理之后");
-
-            /*
-             * 批末的**一份**结论（用户 2026-09-30 第 3 条："严重度管颜色、诊断管文字，
-             * 两者都从同一份任务终态算出来，⛔ 不许各算一遍"）：
-             * 颜色（Severity）与"出错在哪"那份文字清单（Text）都从**这一个**对象里取 ——
-             * 下面给 OneClickOutcome 的两项就是它的两个字段，不存在第二份快照。
-             *
-             * 判据与排版全在 Models\BatchSummaryDiagnostics.cs（唯一出口），
-             * ⛔ 这里与窗口里都不判断"哪一组、算不算失败"。
-             */
-            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(processed);
-
-            return new OneClickOutcome
-            {
-                Rounds = round,
-                ContinuationLayers = continuationLayers,
-                Stopped = stopped,
-                HitRoundLimit = hitRoundLimit,
-                PendingContinuationCount = pendingContinuation.Count,
-                Summary = summary,
-                Diagnostics = report.Text,
-                DiagnosticLines = report.Lines,
-
-                /*
-                 * 严重度从**这一批真正处理过的全部任务**算（根任务 + 所有续解子任务，
-                 * 就是上面那个 processed 清单）：判据是机器终态，⛔ 不比中文文案。
-                 * 空批（processed 为空）会得到 Success —— "什么都没发生"用蓝色最诚实。
-                 */
-                Severity = report.Severity
-            };
+            return await _roundRunner.BuildOutcomeAsync(state).ConfigureAwait(true);
         }
 
         /// <summary>
