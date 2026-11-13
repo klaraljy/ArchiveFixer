@@ -296,5 +296,41 @@ namespace ArchiveFixer.Extraction
             return result;
         }
 
+        /*
+         * ===== 失败收尾段（RecursiveResultBuilder）的宿主出口 =====
+         *
+         * 这一段过去全部写在本类实例方法里，直接用私有字段；搬类之后只把**它本来就在用**的
+         * 那几个出口按 internal 露出来（行为一个字不改：清法、报告、停因观察口、写穿字段都同一份）。
+         * ⛔ 不新增判据、不新增状态。
+         */
+
+        /// <summary>交给换引擎兜底与清单恢复的主引擎（与候选循环用的是**同一个**实例）。</summary>
+        internal IArchiveEngine Engine => _engine;
+
+        /// <summary>递归上限：点名"哪几条候选没试到"时要用每层密码尝试上限。</summary>
+        internal RecursionLimits Limits => _limits;
+
+        /// <summary>
+        /// 换引擎兜底那句结论（"已换 WinRAR 再试过一遍" / "没找到 WinRAR，所以没换引擎再试"）。
+        ///
+        /// <para>⚠ **写穿到实例字段**、不放进收尾段的局部量：本方法可能被
+        /// <see cref="TryCarveEmbeddedInnerArchiveAsync"/> 递归重入，外层收尾时整份回写会把
+        /// 内层刚写下的那句话覆盖掉（同一层里两句话只有一句成立）。</para>
+        /// </summary>
+        internal string PasswordFallbackNote
+        {
+            get => _passwordFallbackNote;
+            set => _passwordFallbackNote = value;
+        }
+
+        /// <summary>
+        /// 「本层已在更精确的分支里报过停因」——同样**写穿实例字段**（理由同上：重入时外层不许覆盖）。
+        /// 调用方 <see cref="ExtractAsync"/> 读一次后会清回 false。
+        /// </summary>
+        internal void MarkExactStopReasonReported()
+        {
+            _exactStopReasonReported = true;
+        }
+
     }
 }

@@ -20,7 +20,7 @@ namespace ArchiveFixer.Extraction
              /// 写一条日志。没有日志出口时（单元测试直接 new）什么也不做；
              /// 日志出口自己抛异常时也吞掉 —— 写日志失败绝不该影响任务结论。
              /// </summary>
-        private void Log(string level, string message)
+        internal void Log(string level, string message)
         {
             try
             {

@@ -330,7 +330,7 @@ namespace ArchiveFixer.Extraction
         /// （那个目录是协调器给的、在它自己的暂存目录下，不随本类的工作区一起消失）。
         /// ⛔ 只复制、⛔ 不改名、⛔ 不删原件（本类照旧按原口径处置自己的东西）。</para>
         /// </summary>
-        private void RememberUnresolvedVolumePiece(string? path)
+        internal void RememberUnresolvedVolumePiece(string? path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -1763,310 +1763,33 @@ namespace ArchiveFixer.Extraction
 
             if (succeededPassword == null)
             {
-                /*
-                 * 收尾取"走得最远的那一次"的失败（`informativeFailure`，可能为 null）——
-                 * 见上面那一大段说明：最后一次候选往往只是"连门都没进去"，它会把真原因盖掉。
-                 *
-                 * ⚠ 两义那一档**优先**（`ambiguousPasswordFailure`）：它是"引擎自己说两种可能都有"
-                 * 那次的原话，比"最后一次错密码"信息量大得多，也是结论能同时保留两种可能的唯一来源。
-                 */
-                ArchiveOperationResult? conclusion =
-                    ambiguousPasswordFailure ?? informativeFailure ?? lastFailure;
-
-                RecursionStopReason reason = ResolvePasswordStopReason(
-                    candidates.Count - skippedCandidates,
-                    passwordLedger.Tried,
-                    conclusion,
-                    triedAny);
-
-                /*
-                 * ===== 换引擎再试一遍（用户 2026-10-05 拍板"补"；唯一实现 PasswordEngineFallback）=====
-                 *
-                 * <para><b>真机现场</b>（AGENTS.md §11.5 最后一条）：同一个包、同一条密码 ——
-                 * WinRAR 6.11 退出码 0、两卷原样解出；内置 7-Zip 26.03 退出码 2、<c>Wrong password</c>、
-                 * 一个字节都没出来。候选循环只用 7-Zip，而 <c>WrongPassword</c> 落在"不换引擎"那一档
-                 * ⇒ 程序把"这个引擎吃不下这个 ZIP"如实报成了「密码错误 / 达到上限」——一条假结论。</para>
-                 *
-                 * <para>⛔ **正常路径一个字不改**：循环**内部**遇到 <c>WrongPassword</c> 照旧换下一个候选、
-                 * 照旧不换引擎（省时间）。而且这一档**只在**"循环跑完 + 失败是密码类 + 归档确实加密 +
-                 * 本机有 WinRAR"四条同时成立时才动，用的还是**同一批候选**（<c>triedCandidates</c>）。</para>
-                 *
-                 * <para>位置：紧跟候选循环之后、结论组装之前。命中 ⇒ 按"这个密码是对的"走
-                 * <see cref="FinishSuccessfulLayerAsync"/>（与循环里成功那一支**同一个出口**）；
-                 * 没命中 ⇒ 落到下面那段**原样的**失败结论（⛔ 一个字都不改，只多一句"已经换引擎试过"）。</para>
-                 */
-                bool passwordClassFailure =
-                    conclusion != null &&
-                    (conclusion.IsWrongPassword || conclusion.IsNeedPassword || conclusion.IsPasswordOrCorrupted) &&
-                    reason is RecursionStopReason.WrongPassword
-                        or RecursionStopReason.PasswordAttemptsExceeded
-                        or RecursionStopReason.PasswordOrCorrupted;
-
-                PasswordFallbackTriggerFacts fallbackFacts = new()
-                {
-                    AlreadySucceeded = false,
-                    PasswordClassFailure = passwordClassFailure,
-                    ArchiveEncrypted = sawEncryptedArchive,
-
-                    /*
-                     * "候选跑完" = 该试的都试了（每层上限内）：试过的个数 ≥ min(候选数 − 被跳过的, 每层上限)。
-                     * ⛔ 一条都没试（没候选 / 上限 0）不算 —— 那时兜底无事可做。
-                     */
-                    CandidatesFinished = triedCandidates.Count > 0
-                        && reason is RecursionStopReason.WrongPassword
-                            or RecursionStopReason.PasswordAttemptsExceeded
-                            or RecursionStopReason.PasswordOrCorrupted,
-
-                    UserAskedToStop = StopRequested?.Invoke() == true,
-                    HasCandidates = triedCandidates.Count > 0,
-                    EngineAvailable = PasswordEngineFallback.IsEngineAvailable,
-
-                    /*
-                     * ===== 主引擎写出过字节 ⇒ 不认 WinRAR 的命中（2026-10-05 实测，见那个属性的说明）=====
-                     *
-                     * `informativeFailure` 就是"某一次候选失败时，这一层的产物目录里已经留下了字节"
-                     * （同一个事实位，见上面 `informativeFailure` 那一段）—— 它非空即"主引擎进得去这一份的
-                     * 数据流"。而 WinRAR 用错密码时也会按原大小把乱码写进同一个目录（名字 / 大小 /
-                     * 时间戳与真产物一样）⇒ 这一档两个引擎给不出可分辨的证据 ⇒ 判不出 ⇒ 不换引擎、结论照旧。
-                     */
-                    MainEngineWroteBytes = informativeFailure != null
-                };
-
-                if (PasswordEngineFallback.ShouldFallBack(fallbackFacts))
-                {
-                    PasswordEngineFallbackOutcome fallback = await PasswordEngineFallback
-                        .TryAsync(new PasswordFallbackRequest
+                return await RecursiveResultBuilder.BuildFailureAsync(
+                        this,
+                        new LayerFailureContext
                         {
+                            Item = item,
                             ArchivePath = archivePath,
-                            Candidates = triedCandidates,
-                            TargetDirectory = item.Layer.OutputPath,
-                            Label = layerLabel,
-                            FailedEngineName = ResolveFailedEngineName(conclusion),
-                            FailedErrorType = conclusion?.DetectedErrorType,
-
-                            // 与循环里同一个清法（⛔ 不在这里另写一份"怎么清"）。
-                            ResetTarget = _ =>
-                            {
-                                TryResetLayerOutputDirectory(item.Layer.OutputPath);
-                                return Task.CompletedTask;
-                            },
-
-                            DescribeCandidate = DescribeCandidate,
-                            Log = Log,
-                            MainEngine = _engine,
-                            CancellationToken = cancellationToken
-                        })
-                        .ConfigureAwait(false);
-
-                    if (fallback.Succeeded)
-                    {
-                        succeededPassword = fallback.HitPassword;
-
-                        /*
-                         * 这一层**不是主引擎解的** ⇒ 报告里不带主引擎那次的结果（`success: null` 让状态
-                         * 落在既有的「解压成功」上，与直读那条近路同一种做法）。
-                         * 清单照旧取"这一层列过的那一份"：列目录与密码无关，能列出来的包任何候选都列得出来；
-                         * 列不出来的（`-mhe`）本来就是 Unavailable ⇒ 下游落"判不出 ⇒ 什么都不做"。
-                         */
-                        success = null;
-
-                        /*
-                         * 换引擎兜底解开了，主引擎之前没能列出清单 —— 现在密码已经由兜底确认，
-                         * 必须拿这个密码再向主引擎要一次清单；不能把“加密头列不出”永久当成
-                         * “完整性无法确认”，否则成功链里的内层过程物永远删不掉。
-                         */
-                        LayerManifest recoveredManifest;
-                        IReadOnlyList<(string Path, long Size)> fallbackEntries =
-                            PartialPublishPlanner.ToManifestEntries(fallback.ManifestListing);
-
-                        if (fallback.ManifestListing is { Success: true })
-                        {
-                            // 清单与实际解压引擎同源：优先于主引擎（7z）的清单。
-                            recoveredManifest = LayerManifest.From(fallback.ManifestListing);
-                            lastListedEntries = fallbackEntries;
-                        }
-                        else
-                        {
-                            recoveredManifest = listedAnyCandidate && candidateManifest.Available
-                                ? candidateManifest
-                                : LayerManifest.Unavailable("这一层没能列出清单（换引擎兜底解开的，主引擎没列出过）");
-                        }
-
-                        if (!recoveredManifest.Available && !string.IsNullOrEmpty(fallback.HitPassword))
-                        {
-                            EncryptedHeaderManifestRecoveryResult recovered = await EncryptedHeaderManifestRecovery
-                                .TryRelistAsync(
-                                    _engine,
-                                    archivePath,
-                                    fallback.HitPassword,
-                                    cancellationToken,
-                                    message => Log("INFO", $"{layerLabel}：{message}"))
-                                .ConfigureAwait(false);
-
-                            if (recovered.Manifest.Available)
-                            {
-                                recoveredManifest = recovered.Manifest;
-                                lastListedEntries = recovered.Entries;
-                            }
-                        }
-
-                        layerManifest = recoveredManifest;
-
-                        return await FinishSuccessfulLayerAsync(
-                                item,
-                                success,
-                                layerManifest,
-                                succeededPassword,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-
-                    _passwordFallbackNote = fallback.Note;
-                }
-                else if (PasswordEngineFallback.ShouldReportMissingEngine(fallbackFacts))
-                {
-                    /*
-                     * 判据成立、本机没有 WinRAR ⇒ 不跑，**但必须说清**（用户 2026-10-05 口径：
-                     * ⛔ 不许静默跳过、⛔ 不许把没跑过的兜底说成跑过了）。
-                     */
-                    _passwordFallbackNote = PasswordEngineFallback
-                        .ReportMissingEngine(layerLabel, ResolveFailedEngineName(conclusion), Log)
-                        .Note;
-                }
-                else if (PasswordEngineFallback.ShouldReportIndistinguishableEvidence(fallbackFacts))
-                {
-                    /*
-                     * 判据成立、但**主引擎已经写出过字节** ⇒ 不换引擎（证据分辨不出来，
-                     * 见 `PasswordFallbackTriggerFacts.MainEngineWroteBytes`）。
-                     * ⛔ 什么都不做、⛔ 结论一个字都不改，只写一行如实说明（不许静默跳过）。
-                     */
-                    PasswordEngineFallback.ReportIndistinguishableEvidence(
-                        layerLabel,
-                        ResolveFailedEngineName(conclusion),
-                        Log);
-                }
-
-                /*
-                 * ===== 收尾那行要点名"哪几条候选没试到"（用户 2026-10-05 真机第七批，要求 ①）=====
-                 *
-                 * 与单层路**同一个出口**（`PasswordCandidateGap`）：候选共 12 个、每层上限 10 ⇒
-                 * **第 11 条从没被试过**，只写一句「达到密码尝试上限」用户看不出是哪一条。
-                 * ⛔ 只在**真被每层上限截断**时才说（`PasswordAttemptsExceeded`）——
-                 * 用户点了「停止后续」时剩余候选同样没试到，但那是另一回事（循环里已经写过它）。
-                 *
-                 * ⚠ 序号从**循环自己的计数**接着往下数（`triedCandidates.Count + 1`）：
-                 * 被跳过的空密码不占序号（循环里那行"候选 i/N"也是这么数的），
-                 * 拿列表下标当序号会与日志里已经出现过的那几行对不上。
-                 */
-                if (reason == RecursionStopReason.PasswordAttemptsExceeded)
-                {
-                    int firstUntriedIndex = Math.Min(candidates.Count, lastConsumedCandidateIndex + 1);
-
-                    PasswordCandidateGap.Gap? untriedCandidates = PasswordCandidateGap.Describe(
-                        candidates,
-                        firstUntriedIndex,
-                        triedCandidates.Count + 1,
-                        (value, ordinal) => DescribeCandidate?.Invoke(value, ordinal)
-                            ?? $"尝试密码候选第 {ordinal} 项：******");
-
-                    if (untriedCandidates.HasValue)
-                    {
-                        Log(
-                            "WARN",
-                            PasswordCandidateGap.BuildLogLine(
-                                layerLabel,
-                                _limits.MaxPasswordAttemptsPerLayer,
-                                untriedCandidates.Value));
-
-                        _passwordFallbackNote = _passwordFallbackNote
-                            + PasswordCandidateGap.BuildConclusionSuffix(untriedCandidates.Value);
-                    }
-                }
-
-                /*
-                 * ===== 「文件名已加密」在递归路也要成立（2026-10-05 用户拍板）=====
-                 *
-                 * 现场：同一个 `-mhe` / `-hp` 的包，单层路报「文件名已加密」，而递归路
-                 * （出厂默认档 = 展开所有分支）报「密码错误」—— 用户被指去翻密码本，
-                 * 而他要做的是"先给它一个密码"（这个包连内容清单都读不出来）。
-                 *
-                 * 判据 = 四件事**同时**成立：
-                 * ① 收尾本来就落在**「密码错误」**那一档（候选全试完了都不对）；
-                 * ② 这一层从头到尾**一次都没列成功**；③ 引擎说的是**加密头**（结构化错误类型，⛔ 不比中文）；
-                 * ④ 没出现过别的列目录错误（证据混了 ⇒ 判不出 ⇒ 退回既有口径）。
-                 *
-                 * ⚠ ① 是照单层路径**逐字对齐**的：那边恢复这个结论的条件是
-                 * `preflightSaidEncryptedHeaders && (密码错误 || 解压失败)`，而它**刻意不覆盖**
-                 * 「达到密码尝试上限」（那边原话："那是更具体的结论，不动"）—— 候选还有剩、再试就能开，
-                 * 说成"文件名已加密"会把用户从"去补候选"引开。同理也不覆盖两义与损坏（各自断言了别的原因）。
-                 */
-                (RecursionStopReason failureReason, string? failureMessage, bool exactReported) =
-                    RecursiveFailureClassifier.ApplyEncryptedHeaders(
-                        reason,
-                        listedAnyCandidate,
-                        sawEncryptedHeadersListFailure,
-                        sawOtherListFailure,
-                        layerLabel,
-                        encryptedHeadersListMessage,
+                            LayerLabel = layerLabel,
+                            Candidates = candidates,
+                            SkippedCandidates = skippedCandidates,
+                            TriedCandidateCount = passwordLedger.Tried,
+                            TriedAny = triedAny,
+                            LastConsumedCandidateIndex = lastConsumedCandidateIndex,
+                            TriedCandidates = triedCandidates,
+                            SawEncryptedArchive = sawEncryptedArchive,
+                            AmbiguousPasswordFailure = ambiguousPasswordFailure,
+                            InformativeFailure = informativeFailure,
+                            LastFailure = lastFailure,
+                            CandidateManifest = candidateManifest,
+                            ListedAnyCandidate = listedAnyCandidate,
+                            SawEncryptedHeadersListFailure = sawEncryptedHeadersListFailure,
+                            SawOtherListFailure = sawOtherListFailure,
+                            EncryptedHeadersListMessage = encryptedHeadersListMessage,
+                            LastListedEntries = lastListedEntries
+                        },
                         (r, m) => ReportStopReason(r, m),
-                        Log);
-
-                reason = failureReason;
-                string? encryptedHeadersMessage = failureMessage;
-                bool encryptedHeadersConclusion = exactReported;
-
-                if (exactReported)
-                {
-                    _exactStopReasonReported = true;
-                }
-
-                /*
-                 * ⚠ 2026-10-13（困难批 `run-23232323` / `run-21212121`，运行期定案）：**候选试完 / 试满上限
-                 * 之后还要问一次"这一份到底是什么"** —— 这是同一个出口的**第三处**（前两处：`:2150`
-                 * 「密码对了但数据坏了」、`:2318`「引擎报错」）。
-                 *
-                 * <para><b>逐字现场</b>（`run-23232323`，第 1 层开 `bbb-L2`）：真密码在候选第 7 条上、
-                 * **确实被试过了**（日志逐字 `第 0 层：bbb-W0-0.zip：开始解压，密码候选 7/9，尝试密码列表第 7 项`；
-                 * 候选顺序就是**密码本顺序**，用户的密码在第 7 行 ⇒ 位置 8（含空密码那一档），在每层上限 10 之内），
-                 * 可引擎照样一个字节都解不出来（手上只有这一卷）⇒ 10 条试完落
-                 * `RecursionStopReason.PasswordAttemptsExceeded` ⇒ `bbb-W0-0.zip：产物校验未通过：输出目录是空目录，
-                 * 没有产物` ⇒ 整单「解压失败」+ 那一片被扔掉。</para>
-                 *
-                 * <para>⇒ 判据与处置**逐字同前两处**（唯一出口 <see cref="IsPieceOfIncompleteGroup"/>）：
-                 * 可证"这一份是某个还没凑齐的分卷组的一员" ⇒ 结论是**缺卷**（跳过语义），⛔ 不是失败；
-                 * 片记下来（<see cref="RememberUnresolvedVolumePiece"/>），交给跨链/批末那一套去凑。</para>
-                 *
-                 * <para>⛔ 判据没有放宽：内容判不出 / 可证不是分卷成员 ⇒ 照旧走引擎给的那一档（这一处一个字不改）。</para>
-                 */
-                if (IsPieceOfIncompleteGroup(archivePath))
-                {
-                    Log(
-                        "WARN",
-                        $"{layerLabel}：这一片属于某个分卷组、而同组的入口包不在这一层 ⇒ "
-                        + "按「缺卷」处理（⛔ 不是「解压失败」）—— 片原样留着，交给批末/跨链那一套去凑。");
-
-                    RememberUnresolvedVolumePiece(archivePath);
-
-                    return LayerOutcome.Stop(
-                        BuildLayerReport(
-                            item,
-                            result: null,
-                            succeededPassword: null,
-                            overrideMessage: null,
-                            manifestEntries: lastListedEntries,
-                            overrideStatus: StatusText.VolumeMissing),
-                        RecursionStopReason.MissingVolume);
-                }
-
-                RecursionLayerReport failureReport = BuildLayerReport(
-                    item,
-                    conclusion,
-                    succeededPassword: null,
-                    overrideMessage: encryptedHeadersMessage,
-                    manifestEntries: lastListedEntries,
-                    overrideStatus: encryptedHeadersConclusion ? StatusText.EncryptedHeaders : null);
-
-                return LayerOutcome.Stop(failureReport, reason);
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             return await FinishSuccessfulLayerAsync(

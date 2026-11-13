@@ -17,7 +17,7 @@ namespace ArchiveFixer.Extraction
 {
     public sealed partial class RecursiveExtractor
     {        /// <summary>停因判定观察口：⛔ 不改判据；观察者自己抛异常也不影响解压。</summary>
-        private void ReportStopReason(
+        internal void ReportStopReason(
             RecursionStopReason reason,
             string message,
             [CallerFilePath] string sourceFile = "",

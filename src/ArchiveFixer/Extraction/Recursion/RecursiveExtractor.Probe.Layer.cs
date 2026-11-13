@@ -17,7 +17,7 @@ namespace ArchiveFixer.Extraction
 {
     public sealed partial class RecursiveExtractor
     {
-        private async Task<LayerOutcome> FinishSuccessfulLayerAsync(
+        internal async Task<LayerOutcome> FinishSuccessfulLayerAsync(
             WorkItem item,
             ArchiveOperationResult? success,
             LayerManifest layerManifest,

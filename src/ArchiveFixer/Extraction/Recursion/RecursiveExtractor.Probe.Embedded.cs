@@ -609,7 +609,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 判定"全都没解开"时到底是密码错误还是达到尝试上限（规则 5 与规则 6 的分界）。
         /// </summary>
-        private static RecursionStopReason ResolvePasswordStopReason(
+        internal static RecursionStopReason ResolvePasswordStopReason(
             int candidateCount,
             int attempts,
             ArchiveOperationResult? lastFailure,

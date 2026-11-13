@@ -499,7 +499,7 @@ namespace ArchiveFixer.Extraction
         /// 清不掉（被占用 / 权限 / 路径过长）**不抛异常** —— 清不动最多让这一次尝试按旧垃圾判废，
         /// 由结果校验兜底，不该因为一次清理失败就把整层判死。</para>
         /// </summary>
-        private static void TryResetLayerOutputDirectory(string? directory)
+        internal static void TryResetLayerOutputDirectory(string? directory)
         {
             if (string.IsNullOrWhiteSpace(directory))
             {

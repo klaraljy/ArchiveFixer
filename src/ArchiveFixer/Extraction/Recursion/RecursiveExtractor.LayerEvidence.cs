@@ -118,7 +118,7 @@ namespace ArchiveFixer.Extraction
         /// 引擎最后一次给的往往是"密码错误"那一档（那是候选循环的驱动信号），
         /// 直接照抄会让层报告与结论自相矛盾。</para>
         /// </summary>
-        private RecursionLayerReport BuildLayerReport(
+        internal RecursionLayerReport BuildLayerReport(
             WorkItem item,
             ArchiveOperationResult? result,
             string? succeededPassword,
@@ -182,7 +182,7 @@ namespace ArchiveFixer.Extraction
         /// 结论里点名"是哪个引擎报的密码错"（换引擎兜底那一档要用）。
         /// 优先取**引擎自己盖的戳**（不变量 14），取不到才退回注入的那个引擎实例的显示名。
         /// </summary>
-        private string ResolveFailedEngineName(ArchiveOperationResult? result)
+        internal string ResolveFailedEngineName(ArchiveOperationResult? result)
         {
             if (!string.IsNullOrWhiteSpace(result?.EngineDisplayName))
             {
