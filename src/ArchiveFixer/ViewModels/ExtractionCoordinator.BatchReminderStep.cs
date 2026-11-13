@@ -616,7 +616,7 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
-            LogReminderFindings(facts.Junk, facts.NoUsablePassword);
+            BatchReminderMessages.LogReminderFindings(facts.Junk, facts.NoUsablePassword);
 
             /*
              * ⛔ 2026-11-01（用户口径）：这里**不再把无用物移出任务列表**。
@@ -638,7 +638,7 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
-            ReminderAnswer answer = await AskReminderAsync(BuildReminderMessage(facts.Junk, facts.NoUsablePassword))
+            ReminderAnswer answer = await AskReminderAsync(ExtractionBatchReminderMessages.BuildReminderMessage(facts.Junk, facts.NoUsablePassword))
                 .ConfigureAwait(false);
 
             if (answer.OptionChecked)
@@ -655,96 +655,9 @@ namespace ArchiveFixer.ViewModels
             return answer.Confirmed;
         }
 
-        /// <summary>批首写一条 WARN，把两段的结论都落进日志（数量 + 前几条名字）。</summary>
-        private void LogReminderFindings(SourceJunkScanResult junk, IReadOnlyList<ArchiveTask> noPassword)
-        {
-            string junkPart = junk.HasAnything
-                ? string.Format(
-                    StatusText.JunkReminderLogFoundFormat,
-                    junk.TotalCount,
-                    string.Join("、", junk.SampleNames))
-                : StatusText.JunkReminderLogNoneText;
-
-            string passwordPart = noPassword.Count > 0
-                ? string.Format(
-                    StatusText.JunkReminderLogFoundFormat,
-                    noPassword.Count,
-                    string.Join(
-                        "、",
-                        noPassword.Take(MaxPasswordFailureNamesInDialog).Select(DisplayNameOf)))
-                : StatusText.JunkReminderLogNoneText;
-
-            AppendLog("WARN", string.Format(StatusText.JunkReminderLogFormat, junkPart, passwordPart));
-        }
-
-        /// <summary>
-        /// 拼提醒正文。三段话的顺序见 <see cref="StatusText"/> 里那一组的说明（**不要重排**）：
-        /// ① 这些文件是什么 → ② 本程序不会动它们 → ③ 解压完你自己判断要不要删。
-        /// </summary>
-        private static string BuildReminderMessage(SourceJunkScanResult junk, IReadOnlyList<ArchiveTask> noPassword)
-        {
-            var builder = new StringBuilder();
-
-            builder.AppendLine(StatusText.JunkReminderIntro);
-
-            if (junk.HasAnything)
-            {
-                builder.AppendLine();
-                builder.AppendLine(StatusText.JunkReminderJunkHeader);
-                builder.AppendLine(string.Format(StatusText.JunkReminderJunkCountFormat, junk.TotalCount));
-
-                foreach (IGrouping<string, SourceJunkItem> group in
-                         junk.Items.GroupBy(item => item.DirectoryPath, StringComparer.OrdinalIgnoreCase))
-                {
-                    builder.AppendLine("  " + group.Key);
-
-                    foreach (SourceJunkItem item in group)
-                    {
-                        // 目录要标出来（第 32 条）：真实资源包把密码提示做成一个文件夹，
-                        // 与"说明.txt"混在一起不标就分不清哪个是文件夹。
-                        builder.AppendLine("    " + item.FileName + (item.IsDirectory ? "（文件夹）" : string.Empty));
-                    }
-                }
-
-                if (junk.ExtraCount > 0)
-                {
-                    builder.AppendLine(string.Format(StatusText.JunkReminderJunkMoreFormat, junk.ExtraCount));
-                }
-
-                if (junk.Truncated)
-                {
-                    builder.AppendLine(StatusText.JunkReminderTruncatedNote);
-                }
-
-                builder.AppendLine(StatusText.JunkReminderJunkFooter);
-            }
-
-            if (noPassword.Count > 0)
-            {
-                builder.AppendLine();
-                builder.AppendLine(string.Format(StatusText.JunkReminderPasswordHeaderFormat, noPassword.Count));
-
-                foreach (ArchiveTask task in noPassword.Take(MaxPasswordFailureNamesInDialog))
-                {
-                    builder.AppendLine("    " + DisplayNameOf(task));
-                }
-
-                if (noPassword.Count > MaxPasswordFailureNamesInDialog)
-                {
-                    builder.AppendLine(string.Format(
-                        StatusText.JunkReminderPasswordMoreFormat,
-                        noPassword.Count - MaxPasswordFailureNamesInDialog));
-                }
-
-                builder.AppendLine(StatusText.JunkReminderPasswordOutcome);
-                builder.AppendLine(StatusText.JunkReminderPasswordExit);
-            }
-
-            return builder.ToString().TrimEnd();
-        }
 
         /// <summary>任务在提示里的显示名（文件名优先，退回完整路径）。</summary>
-        private static string DisplayNameOf(ArchiveTask task) =>
+        internal static string DisplayNameOf(ArchiveTask task) =>
             string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName;
 
         /// <summary>
@@ -824,6 +737,10 @@ namespace ArchiveFixer.ViewModels
         private readonly object _outputFolderLock = new();
 
         private bool _outputFolderOpenedThisBatch;
+
+        private ExtractionBatchReminderMessages? _batchReminderMessages;
+        private ExtractionBatchReminderMessages BatchReminderMessages =>
+            _batchReminderMessages ??= new ExtractionBatchReminderMessages(this);
 
     }
 }

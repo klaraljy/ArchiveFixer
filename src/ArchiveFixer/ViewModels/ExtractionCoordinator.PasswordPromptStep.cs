@@ -578,7 +578,7 @@ namespace ArchiveFixer.ViewModels
 
 
         /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
-        private const int MaxPasswordFailureNamesInDialog = 10;
+        internal const int MaxPasswordFailureNamesInDialog = 10;
 
 
     }

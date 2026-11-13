@@ -273,7 +273,7 @@ namespace ArchiveFixer.ViewModels
                  * 必须在**动手之前**说，而且与确认框里那句用**同一份判据、同一段文案**
                  * （见 EvaluateMultiLayerSpaceRisk / StatusText.MultiLayerSpaceRiskFormat）。
                  */
-                LogMultiLayerSpaceRisk(plan);
+                MultiLayerSpaceRiskReporter.LogMultiLayerSpaceRisk(plan);
 
                 _spaceLedger = new SpaceReservationLedger(
                     ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)),

@@ -655,30 +655,6 @@ namespace ArchiveFixer.ViewModels
                 availableBytes: plan.AvailableBytes);
         }
 
-        /// <summary>那句话（日志与确认框**同一段文案**，免得两处说法分叉）。</summary>
-        internal static string DescribeMultiLayerSpaceRisk(MultiLayerSpaceRisk risk)
-        {
-            return string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.MultiLayerSpaceRiskFormat,
-                risk.MaxLayers,
-                TaskSpaceEstimate.FormatSize(risk.TotalDemandBytes),
-                TaskSpaceEstimate.FormatSize(risk.AvailableBytes),
-                TaskSpaceEstimate.FormatSize(risk.ShortfallBytes));
-        }
-
-        /// <summary>批首那一条 WARN（用户要求"开工前就要看得见"；不成立时一个字都不写）。</summary>
-        private void LogMultiLayerSpaceRisk(ExtractionSchedulePlan plan)
-        {
-            MultiLayerSpaceRisk risk = EvaluateMultiLayerSpaceRisk(plan);
-
-            if (!risk.Applies)
-            {
-                return;
-            }
-
-            AppendLog("WARN", DescribeMultiLayerSpaceRisk(risk));
-        }
 
         /// <summary>
         /// 拿开工时申请的预留与精确需求对一次账：不够就加、多了就还。
@@ -800,6 +776,13 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
 
         private int _spaceLimit = int.MaxValue;
+
+        private ExtractionMultiLayerSpaceRiskReporter? _multiLayerSpaceRiskReporter;
+        private ExtractionMultiLayerSpaceRiskReporter MultiLayerSpaceRiskReporter =>
+            _multiLayerSpaceRiskReporter ??= new ExtractionMultiLayerSpaceRiskReporter(this);
+
+        internal static string DescribeMultiLayerSpaceRisk(MultiLayerSpaceRisk risk) =>
+            ExtractionMultiLayerSpaceRiskReporter.DescribeMultiLayerSpaceRisk(risk);
 
     }
 }
