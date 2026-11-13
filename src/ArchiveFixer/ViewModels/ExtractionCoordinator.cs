@@ -257,7 +257,7 @@ namespace ArchiveFixer.ViewModels
         private OneClickRunOptions? _runOptions;
 
         /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
-        private OneClickRunOptions? RunOptions => _runOptions;
+        internal OneClickRunOptions? RunOptions => _runOptions;
 
         /*
          * ===== 手动档「解压到当前文件夹」的运行期开关（用户 2026-09-27）=====

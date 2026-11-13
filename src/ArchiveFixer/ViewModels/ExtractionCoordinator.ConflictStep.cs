@@ -31,7 +31,7 @@ namespace ArchiveFixer.ViewModels
             CancellationToken cancellationToken) =>
             _conflictStep.AskConflictAsync(task, message, detail, cancellationToken);
 
-        private Task<ConflictResolution> ResolveConflictAsync(
+        internal Task<ConflictResolution> ResolveConflictAsync(
             ArchiveTask task,
             ConflictTargetKind kind,
             string targetPath,

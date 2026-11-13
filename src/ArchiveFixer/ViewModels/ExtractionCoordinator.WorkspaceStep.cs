@@ -35,7 +35,7 @@ namespace ArchiveFixer.ViewModels
         internal void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false) =>
             _workspaceStep.CleanupFailedTaskWorkspace(task, keepWorkspace);
 
-        private bool HasProductEntriesOutsideWorkspace(string directory) =>
+        internal bool HasProductEntriesOutsideWorkspace(string directory) =>
             _workspaceStep.HasProductEntriesOutsideWorkspace(directory);
 
         /// <summary>单测注入：目标目录 → 假盘根（默认 = <see cref="System.IO.Path.GetPathRoot(string)"/>）。</summary>

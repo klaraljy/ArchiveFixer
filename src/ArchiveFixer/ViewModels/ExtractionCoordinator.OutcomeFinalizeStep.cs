@@ -25,7 +25,7 @@ namespace ArchiveFixer.ViewModels
     /// <summary>任务终态收口（启动前停止 / 落点违规注记 / 没结论就按事实补一个；第 13 块，同一 partial 类）。</summary>
     internal sealed partial class ExtractionCoordinator
     {
-        private void MarkStoppedBeforeExtract(
+        internal void MarkStoppedBeforeExtract(
             ArchiveTask task,
             string status,
             string errorMessage,
