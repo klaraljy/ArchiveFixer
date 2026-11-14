@@ -4,14 +4,6 @@ using System.Linq;
 
 namespace ArchiveFixer.Engines
 {
-    /// <summary>一次引擎调用的种类。</summary>
-    public enum ExtractionAttemptKind
-    {
-        List = 0,
-        Test = 1,
-        Extract = 2
-    }
-
     /// <summary>
     /// 一次引擎尝试的**结构化事实**。阶段 5 影子：先把现有 <see cref="ArchiveOperationResult"/>
     /// 能说清的事实收进来，与旧结果逐项对比；确认无差异后再替换调用方的状态解释。
