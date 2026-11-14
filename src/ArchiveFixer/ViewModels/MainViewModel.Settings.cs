@@ -42,7 +42,26 @@ public partial class MainViewModel
 
     internal bool AutoSaveSettingsIfChanged() => SettingsPersistence.AutoSaveSettingsIfChanged();
 
-    private bool WriteSettingsToDisk(string what) => SettingsPersistence.WriteSettingsToDisk(what);
+    internal bool WriteSettingsToDisk(string what) => SettingsPersistence.WriteSettingsToDisk(what);
+    internal void RaiseSettingsChanged() => OnPropertyChanged(nameof(Settings));
+
+    internal void RaiseRunAtFullSpeedChanged() => OnPropertyChanged(nameof(RunAtFullSpeed));
+
+    internal SettingsService SettingsService => _settingsService;
+    internal void RaiseTabRequested(int index) => TabRequested?.Invoke(index);
+
+    public void EnterBusy() => Busy.Enter();
+    public void ExitBusy() => Busy.Exit();
+    internal bool SetIsBusyRaw(bool value) => SetProperty(ref _isBusy, value, nameof(IsBusy));
+
+    private void ApplyEngineSettings() => EngineSettingsApplier.Apply(this);
+    internal void SaveOneClickOptionsAsDefaults(OneClickRunOptions options) => OneClickOptionsStore.SaveAsDefaults(this, options);
+    internal void SaveSkipOneClickConfirm(bool skip) => OneClickOptionsStore.SaveSkipConfirm(this, skip);
+    internal void SetSelectedOutputDirectoryRaw(string value)
+    {
+        _selectedOutputDirectory = value;
+        OnPropertyChanged(nameof(SelectedOutputDirectory));
+    }
 
     public void RefreshPasswordBookSummary()
     {
@@ -158,6 +177,7 @@ public partial class MainViewModel
     internal ScanCoordinator ScanCoordinator => _scanCoordinator;
 
     internal RenameCoordinator RenameCoordinator => _renameCoordinator;
+    internal OneClickCoordinator OneClickCoordinator => _oneClickCoordinator;
 
     internal PathService PathService => _pathService;
 
@@ -171,6 +191,16 @@ public partial class MainViewModel
     private MainCommandSet Commands => _commands ??= new MainCommandSet();
     private ManualOperationCoordinator? _manualOperation;
     private ManualOperationCoordinator ManualOperation => _manualOperation ??= new ManualOperationCoordinator(this);
+    private SettingsCommandsCoordinator? _settingsCommands;
+    private SettingsCommandsCoordinator SettingsCommands => _settingsCommands ??= new SettingsCommandsCoordinator(this);
+
+    private BusyStateCoordinator? _busyState;
+    private BusyStateCoordinator Busy => _busyState ??= new BusyStateCoordinator(this);
+
+    private SpaceTextCoordinator? _spaceText;
+    private SpaceTextCoordinator SpaceText => _spaceText ??= new SpaceTextCoordinator(this);
+    private OutputLocationCoordinator? _outputLocation;
+    private OutputLocationCoordinator OutputLocation => _outputLocation ??= new OutputLocationCoordinator(this);
     private SpaceAdviceCoordinator? _spaceAdvice;
     private SpaceAdviceCoordinator Space => _spaceAdvice ??= new SpaceAdviceCoordinator(this);
     private TaskActionCoordinator? _taskActions;
@@ -208,7 +238,6 @@ public partial class MainViewModel
     /// <see cref="AutoSaveSettingsIfChanged"/>，行为完全一样。</para>
     /// </summary>
 
-
     /// <summary>
     /// 「改了就自动存」的本体：设置与上一次落盘那份不同 → 校验 → 写盘 → 记账。
     ///
@@ -216,7 +245,6 @@ public partial class MainViewModel
     /// 与设置页「保存」同一套判据），并写一条 WARN 说清"改好就会立刻存"，绝不把不可用的值写进去；
     /// ②写盘失败只写 WARN，绝不弹框、绝不崩（自动保存不该打断用户手上的事）。</para>
     /// </summary>
-
 
     /// <summary>
     /// 把设置写进磁盘并更新指纹 —— **写盘的唯一出口**（自动保存与"用户显式选择"几条路都走它）。
@@ -231,7 +259,6 @@ public partial class MainViewModel
     /// 与那一格无关 —— 把它也拦下会让"我明明点了却没记住"重现，那正是用户 2026-09-26
     /// 第 1 条最反感的事。</para>
     /// </summary>
-
 
     /*
      * 「底栏那一行设置状态」整块删除（用户 2026-09-26）：
@@ -272,7 +299,6 @@ public partial class MainViewModel
     /// <summary>
     /// 关窗前的最后一次落盘（自动保存是 800 ms 一跳，用户可能改完就关）。
     /// </summary>
-
 
     /// <summary>
     /// ①页「输出位置」那一格显示的那个值（用户 2026-09-25 第 27 条）。
@@ -437,19 +463,11 @@ public partial class MainViewModel
     /// <para>⛔ 凡是写 <c>ExtractToOriginalDirectory</c> / <c>CustomOutputDirectory</c> 的地方，
     /// 收尾都必须走这里（①页选择、①页开关、确认框"保存为默认"、②页各处）。</para>
     /// </summary>
-    private void NotifyOutputPlacementChangedEverywhere()
-    {
-        // ②页：让那几个控件按新值重新求值。
-        SettingsEditor?.NotifyOutputPlacementChanged();
-
-        // ①页：那一行文本 / ToolTip / 开关。
-        RaiseOutputLocationChanged();
-    }
 
     /// <summary>
     /// 输出位置相关的那几个展示属性一起通知（一处写、三处显示同一份事实）。
     /// </summary>
-    private void RaiseOutputLocationChanged()
+    internal void RaiseOutputLocationChanged()
     {
         OnPropertyChanged(nameof(OutputLocationDisplay));
         OnPropertyChanged(nameof(OutputLocationToolTip));
@@ -483,19 +501,6 @@ public partial class MainViewModel
     /// 要搬进那一格的地址；<c>null</c> = 取 <c>Settings.CustomOutputDirectory</c>。
     /// 传空串是合法的（「记住上次输出目录」关掉时就是"这一格空着"，**不是**"把设置抹掉"）。
     /// </param>
-    private void SyncOutputLocationFromSettings(string? rememberedDirectory = null)
-    {
-        string folder = rememberedDirectory ?? Settings?.CustomOutputDirectory ?? string.Empty;
-
-        if (!string.Equals(_selectedOutputDirectory, folder, StringComparison.Ordinal))
-        {
-            _selectedOutputDirectory = folder;
-            OnPropertyChanged(nameof(SelectedOutputDirectory));
-            RefreshOutputPaths();
-        }
-
-        RaiseOutputLocationChanged();
-    }
 
     /// <summary>
     /// 设置编辑器（②③④⑥四页）里落点相关的属性变了 → 把①页那一行拉回来。
@@ -503,41 +508,8 @@ public partial class MainViewModel
     /// <para>只认这三个名字（<c>OutputPlacement</c> / <c>CustomOutputDirectory</c> / <c>Settings</c>），
     /// 别的属性一个都不碰 —— 设置页每敲一个字符都会发通知，整片刷新会把界面拖卡。</para>
     /// </summary>
-    private void OnSettingsEditorPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e == null)
-        {
-            return;
-        }
-
-        if (string.Equals(e.PropertyName, nameof(SettingsViewModel.OutputPlacement), StringComparison.Ordinal) ||
-            string.Equals(e.PropertyName, nameof(SettingsViewModel.CustomOutputDirectory), StringComparison.Ordinal) ||
-            string.Equals(e.PropertyName, nameof(SettingsViewModel.Settings), StringComparison.Ordinal))
-        {
-            SyncOutputLocationFromSettings();
-        }
-    }
 
     /// <summary>①页右键菜单那一项：把**完整**路径复制走（界面上显示的是中间省略过的）。</summary>
-    private void CopyOutputLocation()
-    {
-        if (Settings == null || Settings.ExtractToOriginalDirectory ||
-            string.IsNullOrWhiteSpace(SelectedOutputDirectory))
-        {
-            AppendLog("INFO", StatusText.OutputLocationCopyNothingLog);
-            return;
-        }
-
-        if (LogExport.CopySanitizedToClipboard(SelectedOutputDirectory))
-        {
-            AppendLog(
-                "INFO",
-                string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.OutputLocationCopyLogFormat,
-                    SelectedOutputDirectory));
-        }
-    }
 
     private WorkspaceCoordinator? _workspaceCoordinator;
 
@@ -624,17 +596,17 @@ public partial class MainViewModel
     }
 
     /// <summary>「继续解」能不能点：有剩下的内层包，而且现在不忙。</summary>
-    private bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
+    internal bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
 
-    private void RemoveTask(object? parameter) => TaskActions.RemoveTask(parameter);
+    internal void RemoveTask(object? parameter) => TaskActions.RemoveTask(parameter);
 
-    private void RemoveCheckedTasks() => TaskActions.RemoveCheckedTasks();
+    internal void RemoveCheckedTasks() => TaskActions.RemoveCheckedTasks();
 
-    private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
+    internal List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
         IReadOnlyList<ArchiveTask>? targets = null)
         => TaskActions.BuildVolumeRepairCandidates(targets);
 
-    private bool CanRenameBySuggestionAndRetry() => TaskActions.CanRenameBySuggestionAndRetry();
+    internal bool CanRenameBySuggestionAndRetry() => TaskActions.CanRenameBySuggestionAndRetry();
 
     internal Task RenameBySuggestionAndRetryAsync(IReadOnlyList<ArchiveTask>? targets = null)
         => TaskActions.RenameBySuggestionAndRetryAsync(targets);
@@ -647,21 +619,21 @@ public partial class MainViewModel
     internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
         => TaskActions.RemoveTasksBySourcePaths(paths);
 
-    private void CopyTaskInfo(object? parameter) => TaskActions.CopyTaskInfo(parameter);
+    internal void CopyTaskInfo(object? parameter) => TaskActions.CopyTaskInfo(parameter);
 
-    private void CopyTaskPath(object? parameter) => TaskActions.CopyTaskPath(parameter);
+    internal void CopyTaskPath(object? parameter) => TaskActions.CopyTaskPath(parameter);
 
-    private void CopyTaskError(object? parameter) => TaskActions.CopyTaskError(parameter);
+    internal void CopyTaskError(object? parameter) => TaskActions.CopyTaskError(parameter);
 
     internal void ExplainNoRow() => TaskActions.ExplainNoRow();
 
     internal static string BuildTaskInfoText(ArchiveTask task) => TaskActionCoordinator.BuildTaskInfoText(task);
 
-    private Task InspectCheckedArchivesAsync() => TaskActions.InspectCheckedArchivesAsync();
+    internal Task InspectCheckedArchivesAsync() => TaskActions.InspectCheckedArchivesAsync();
 
-    private Task TryPasswordsForCheckedArchivesAsync() => TaskActions.TryPasswordsForCheckedArchivesAsync();
+    internal Task TryPasswordsForCheckedArchivesAsync() => TaskActions.TryPasswordsForCheckedArchivesAsync();
 
-    private Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
+    internal Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
         => TaskActions.RunInspectAsync(tryPasswords, singleTask);
 
     internal static string DescribeInspectResult(ArchiveInspectResult result, bool tryPasswords)
@@ -670,19 +642,19 @@ public partial class MainViewModel
     internal static string SummarizeInspectResult(ArchiveInspectResult result, bool tryPasswords)
         => TaskActionCoordinator.SummarizeInspectResult(result, tryPasswords);
 
-    private void CopyCurrentVolumeGroupPaths() => TaskActions.CopyCurrentVolumeGroupPaths();
+    internal void CopyCurrentVolumeGroupPaths() => TaskActions.CopyCurrentVolumeGroupPaths();
 
-    private Task AddCurrentOutputFolderToTasksAsync() => TaskActions.AddCurrentOutputFolderToTasksAsync();
+    internal Task AddCurrentOutputFolderToTasksAsync() => TaskActions.AddCurrentOutputFolderToTasksAsync();
 
-    private void OpenCheckedSourceDirectory() => TaskActions.OpenCheckedSourceDirectory();
+    internal void OpenCheckedSourceDirectory() => TaskActions.OpenCheckedSourceDirectory();
 
-    private bool OpenTaskDirectory(object? parameter) => TaskActions.OpenTaskDirectory(parameter);
+    internal bool OpenTaskDirectory(object? parameter) => TaskActions.OpenTaskDirectory(parameter);
 
-    private bool OpenTaskOutputDirectory(object? parameter) => TaskActions.OpenTaskOutputDirectory(parameter);
+    internal bool OpenTaskOutputDirectory(object? parameter) => TaskActions.OpenTaskOutputDirectory(parameter);
 
-    private void OpenTaskArtifactDirectory(object? parameter) => TaskActions.OpenTaskArtifactDirectory(parameter);
+    internal void OpenTaskArtifactDirectory(object? parameter) => TaskActions.OpenTaskArtifactDirectory(parameter);
 
-    private bool IsRowInList(object? parameter) => TaskActions.IsRowInList(parameter);
+    internal bool IsRowInList(object? parameter) => TaskActions.IsRowInList(parameter);
 
     internal void RebuildTaskIndex() => TaskActions.RebuildTaskIndex();
 
@@ -690,18 +662,18 @@ public partial class MainViewModel
 
     private TaskCollectionCoordinator TaskCollection => _taskCollection ??= new TaskCollectionCoordinator(this);
 
-    private bool CanRunNormalCommand() => TaskCollection.CanRunNormalCommand();
+    internal bool CanRunNormalCommand() => TaskCollection.CanRunNormalCommand();
 
-    private bool CanStartExtract() => TaskCollection.CanStartExtract();
+    internal bool CanStartExtract() => TaskCollection.CanStartExtract();
 
-    private bool CanRunCurrentTaskManual() => TaskCollection.CanRunCurrentTaskManual();
+    internal bool CanRunCurrentTaskManual() => TaskCollection.CanRunCurrentTaskManual();
 
-    private ArchiveTask? ResolveManualExtractionTarget()
+    internal ArchiveTask? ResolveManualExtractionTarget()
         => TaskCollection.ResolveManualExtractionTarget();
 
-    private bool CanChangeTaskSelection() => TaskCollection.CanChangeTaskSelection();
+    internal bool CanChangeTaskSelection() => TaskCollection.CanChangeTaskSelection();
 
-    private bool CanRemoveSelectedTasks() => TaskCollection.CanRemoveSelectedTasks();
+    internal bool CanRemoveSelectedTasks() => TaskCollection.CanRemoveSelectedTasks();
 
     private void HookTaskSelectionTracking() => TaskCollection.HookTaskSelectionTracking();
 
@@ -716,19 +688,21 @@ public partial class MainViewModel
 
     public void InvertTaskSelection() => TaskCollection.InvertTaskSelection();
 
-    private void SelectSoleTask(object? parameter) => TaskCollection.SelectSoleTask(parameter);
+    internal void SelectSoleTask(object? parameter) => TaskCollection.SelectSoleTask(parameter);
 
     public void ClearTasks() => TaskCollection.ClearTasks();
 
     public void RemoveSelectedTasks() => TaskCollection.RemoveSelectedTasks();
 
     private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
+    internal void NotifyOutputPlacementChangedEverywhere() => OutputLocation.NotifyOutputPlacementChangedEverywhere();
+
+    internal void OnSettingsEditorPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        => OutputLocation.OnSettingsEditorPropertyChanged(sender, e);
+
+    internal void CopyOutputLocation() => OutputLocation.CopyOutputLocation();
+    internal void SyncOutputLocationFromSettings(string? rememberedDirectory = null)
+        => OutputLocation.SyncOutputLocationFromSettings(rememberedDirectory);
+
 }
-
-
-
-
-
-
-
 

@@ -57,22 +57,7 @@ public partial class MainViewModel
     /// 没勾任务时给出提示而不是算一个空结论。
     /// </summary>
 
-
     /// <summary>把"当前档位"那句话刷新一遍（界面绑定它）。</summary>
-    internal void RefreshSpaceModeText()
-    {
-        if (Settings == null)
-        {
-            return;
-        }
-
-        // 这一句现在只说"源包 + 其余物"两档（2026-09-25 第 32 条：危险模式与自测凭证整块退役）。
-        SpaceModeText = _extractionCoordinator?.DescribeSpaceMode() ?? string.Empty;
-
-        RefreshSpaceTightOverrideText();
-
-        ParallelAdviceText = "点「按设备算建议」查看源/落点盘的并发建议（只提示，不会改你选的值）";
-    }
 
     /// <summary>
     /// ②③页那条**本次被「空间不足」模式覆盖**的提示（模式关着时为空 = 整行收起）。
@@ -94,20 +79,6 @@ public partial class MainViewModel
     public bool HasSpaceTightOverride => !string.IsNullOrWhiteSpace(SpaceTightOverrideText);
 
     /// <summary>把那条覆盖提示按当前开关刷一遍（开关一动、进页面时都要刷）。</summary>
-    internal void RefreshSpaceTightOverrideText()
-    {
-        /*
-         * 两条提示**各说各的**（用户 2026-09-27 加了「不删原包」安全档）：
-         * 会删源包那一档说"会删"，安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
-         */
-        SpaceTightOverrideText = !SpaceTightMode
-            ? string.Empty
-            : SpaceTightKeepSource
-                ? StatusText.SpaceTightKeepSourceOverrideNotice
-                : StatusText.SpaceTightOverrideNotice;
-
-        OnPropertyChanged(nameof(HasSpaceTightOverride));
-    }
 
     /// <summary>
     /// ①页那个**黄色「空间不足」开关**（用户 2026-09-27 拍板）。
@@ -250,9 +221,6 @@ public partial class MainViewModel
     /// <param name="tasks">要体检的任务（空 / null = 什么都不做）。</param>
     /// <param name="trigger">触发来源（进日志，用户事后要能回答"这句是什么时候说的"）。</param>
 
-
-
-
     public TaskSummary Summary
     {
         get => _summary;
@@ -277,9 +245,19 @@ public partial class MainViewModel
     }
     internal void SetParallelAdviceText(string value) => ParallelAdviceText = value;
 
-    private Task RefreshParallelAdviceAsync() => Space.RefreshParallelAdviceAsync();
+    internal Task RefreshParallelAdviceAsync() => Space.RefreshParallelAdviceAsync();
 
     internal Task CheckSpaceForTasksAsync(IReadOnlyList<ArchiveTask>? tasks, string trigger)
         => Space.CheckSpaceForTasksAsync(tasks, trigger);
+
+    internal void SetSpaceModeText(string value) => SpaceModeText = value;
+
+    internal void SetSpaceTightOverrideText(string value) => SpaceTightOverrideText = value;
+
+    internal void NotifySpaceTightOverrideChanged() => OnPropertyChanged(nameof(HasSpaceTightOverride));
+
+    internal void RefreshSpaceModeText() => SpaceText.RefreshSpaceModeText();
+
+    internal void RefreshSpaceTightOverrideText() => SpaceText.RefreshSpaceTightOverrideText();
 }
 

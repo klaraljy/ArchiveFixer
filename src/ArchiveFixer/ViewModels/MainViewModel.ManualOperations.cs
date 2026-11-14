@@ -177,7 +177,7 @@ public partial class MainViewModel
 
     private void RefreshManualDistribution() => ManualOperation.RefreshManualDistribution();
 
-    private Task FindVolumeSiblingsAsync() => ManualOperation.FindVolumeSiblingsAsync();
+    internal Task FindVolumeSiblingsAsync() => ManualOperation.FindVolumeSiblingsAsync();
 
     internal void SetManualDistributionTitle(string value) => ManualDistributionTitle = value;
 

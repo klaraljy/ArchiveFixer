@@ -26,7 +26,6 @@ using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-
 /// <summary>
 /// 主窗口 ViewModel。
 /// 
@@ -100,7 +99,6 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>上一批撞到层数上限后还剩多少个内层包没解（见 <see cref="PendingContinuationCount"/>）。</summary>
     private int _pendingContinuationCount;
-    private int _busyNesting;
     private bool _isStopping;
     private bool _runAtFullSpeed;
     private string _selectedOutputDirectory = string.Empty;
@@ -211,58 +209,6 @@ public partial class MainViewModel : ViewModelBase
     /// 两个外部工具（7z.exe / UnRAR.exe）的路径、引擎优先级、保留受损文件**只**通过这里生效，
     /// 别处不许再拼路径、也不许再各读一遍设置（AGENTS.md §3.1）。
     /// </summary>
-    private void ApplyEngineSettings()
-    {
-        /*
-         * 一次调用把三件事推给引擎层：两条外部工具路径 + 引擎优先级 + 保留受损文件。
-         *
-         * 为什么必须调它（这是上一批交付里**唯一**没接上的那一环）：
-         * EngineRuntimeSettings 的默认值虽然"正确可用"，但用户改了优先级之后，
-         * 引擎层要能从运行时设置里读到新顺序 —— 不推的话，「先是 UnRAR、再是 7-Zip」
-         * 就只是一句写在设置界面上的话，真正干活的仍然是写死的那个引擎。
-         * 设置窗口保存时也会推一次（两条路幂等，谁先谁后都不会打架）。
-         */
-        EngineRuntimeSettings.Apply(_settings);
-
-        /*
-         * 数据根**固定**是 %LOCALAPPDATA%\ArchiveFixer（用户 2026-10-29：与安装目录解耦）。
-         *
-         * ⛔ 这里刻意**不写** `_pathService.DataRootDirectory = ...`：
-         * 它本来就是 <see cref="PathService.DefaultDataRootDirectory"/>，而测试装配时会把
-         * DataRootDirectory 指到临时目录 —— 在这里"顺手复位成默认值"会把测试的数据根
-         * 顶回程序目录（真实后果：用例往测试输出目录里写日志 / 设置）。
-         * 数据根只有一个出口：PathService 自己的默认值。
-         */
-
-        /*
-         * 工作区根（用户 2026-09-30：**唯一来源 = 这一单的目标目录**）。
-         *
-         * ⚠ 真正"落在目标目录里"的解析发生在**每批开工前**
-         * （ExtractionCoordinator.ApplyBatchWorkspaceRoot）—— 只有那时才知道这一批会处理哪些包、
-         * 目标目录在哪。启动 / 保存设置时根本还没有这一批的任务，所以这里只能取"当前生效的那个根"
-         * （本次会话用过的，见 WorkspaceRootIndex.SessionRoots；没有就是老位置 <数据根>\work）。
-         *
-         * ⚠ 这里**只服务于 ③ 页的残留扫描与启动日志**，不是这一批真正会用的根。
-         * ⛔ 批首解析不出来时整批停手（绝不在这里替它挑一个盘）。
-         *
-         * ⚠ 递归核心的工作区根是进程级静态（它自己会再挂一层 "recursive"），必须跟着一起换 ——
-         * 不换的话递归那几百 MB 又会回到程序盘（那正是早先要改掉的老行为）。
-         */
-        _pathService.WorkDirectory = ResolveStartupWorkspaceRoot();
-        RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
-
-        /*
-         * 「启用日志文件」真正生效的地方：关掉之后只留屏幕日志，不再往 data\logs 追加。
-         * 之前这个开关在设置窗口里躺着，勾不勾都不影响写盘 —— 属于"改了没用"的开关。
-         * LogService 内部对写失败也会自行降级（置 false），这里只管用户的选择。
-         */
-        _logService.EnableFileLog = _settings?.EnableLog ?? true;
-
-        // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
-        _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
-        DurationHistory.DataRootDirectory = _pathService.DataRootDirectory;
-        ToolLocator.Default.Invalidate();
-    }
 
     /*
      * ⛔ 这里原来还有一个 `ReloadSettingsFromEffectiveDataRoot(loadedFrom)` 的"第二步读"，
@@ -286,18 +232,6 @@ public partial class MainViewModel : ViewModelBase
     /// 那是 2026-09-30 之前的工作区（升级前那批残留还在那儿，用户实测攒过 5.7 GB），
     /// 扫它是为了清得掉，⛔ 绝不是"下一批就放这儿"。</para>
     /// </summary>
-    private string ResolveStartupWorkspaceRoot()
-    {
-        foreach (string remembered in WorkspaceRootIndex.SessionRoots)
-        {
-            if (!string.IsNullOrWhiteSpace(remembered))
-            {
-                return remembered;
-            }
-        }
-
-        return _pathService.WorkDirectory;
-    }
 
     /// <summary>
     /// ③「清理与删除」页与启动日志**实际要扫的**工作区根（**只给测试与排障读**）。
@@ -369,7 +303,6 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>把"当前密码本"摘要刷新成 PasswordService 的真实状态（不猜、不缓存）。</summary>
 
-
     /// <summary>
     /// 记忆读不出来时，在摘要那一行后面挂一句**短**提示（明细在密码列表窗口的提示条上）。
     ///
@@ -377,12 +310,10 @@ public partial class MainViewModel : ViewModelBase
     /// 用户很容易理解成"程序把我密码弄丢了"。这里必须说清"是读不出来、已忽略、文件没被动"。</para>
     /// </summary>
 
-
     /// <summary>
     /// 摘要那一行的 ToolTip：**可以写完整路径**（界面是给用户自己核对的），
     /// 但它只显示、绝不进日志（§8：个人路径不入日志）。
     /// </summary>
-
 
     public bool ShowPassword
     {
@@ -423,15 +354,6 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>
     /// 进入"忙"的一层。只处理嵌套深度，不改变别的状态。
     /// </summary>
-    public void EnterBusy()
-    {
-        _busyNesting++;
-
-        if (_busyNesting == 1)
-        {
-            SetBusyFlag(true);
-        }
-    }
 
     /// <summary>
     /// 退出"忙"的一层。只有深度回到 0 才真的把标志复位。
@@ -439,34 +361,6 @@ public partial class MainViewModel : ViewModelBase
     /// 多退一次（没有对应的 EnterBusy）会被夹住在 0：宁可当成"不忙"，
     /// 也绝不能让计数变成负数 —— 那样之后所有 Enter/Exit 都配不平，界面会**永久灰掉**。
     /// </summary>
-    public void ExitBusy()
-    {
-        if (_busyNesting <= 0)
-        {
-            _busyNesting = 0;
-            return;
-        }
-
-        _busyNesting--;
-
-        if (_busyNesting == 0)
-        {
-            SetBusyFlag(false);
-        }
-    }
-
-    private void SetBusyFlag(bool value)
-    {
-        if (SetProperty(ref _isBusy, value, nameof(IsBusy)))
-        {
-            /*
-             * 忙闲一变就重问所有命令的可用性：动磁盘的那一批要跟着灰 / 亮。
-             * ⚠ 「移除勾选的」**不看忙闲**（判据 = 只看有没有勾选的，见 CanRemoveSelectedTasks），
-             * 所以这里不再单独通知它的 ToolTip —— 那句话是常量，跟忙闲一个字都不差。
-             */
-            RaiseAllCommandCanExecuteChanged();
-        }
-    }
 
     /// <summary>
     /// 「移除勾选的」那颗按钮的 ToolTip（常量文案，见 <see cref="StatusText.RemoveCheckedTasksHint"/>）。
@@ -535,8 +429,6 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-
-
     /*
      * ============================ 勾选的批量操作（用户 2026-09-22 追加需求） ============================
      *
@@ -566,7 +458,6 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>只勾选指定的那一个（右键菜单「只勾选这一个」），其余全部取消勾选。</summary>
     public ICommand SelectSoleTaskCommand => Commands.SelectSoleTaskCommand;
 
-
     /// <summary>
     /// 供界面拖拽等入口调用，实际导入逻辑在扫描协调器中。
     ///
@@ -581,29 +472,6 @@ public partial class MainViewModel : ViewModelBase
     {
         return _scanCoordinator.AddPathsAsync(paths, mode);
     }
-
-    /// <summary>
-    /// 启动时报告上次没做完的工作区。
-    ///
-    /// 递归解压被中断或取消时，产物会留在工作区（刻意不发布、不清理，见不变量 12）。
-    /// 启动时不提醒一句，用户永远不会知道这些东西还在占磁盘。
-    /// 这里只报告，**不自动删**：删工作区必须先经用户确认（不变量 13）。
-    /// </summary>
-    /// <summary>
-    /// 启动时自动加载密码本。
-    /// 用户反复强调过：导入一次就该一直有效，不该每次重导。
-    /// 文件不在了只写一条 WARN，不弹窗打扰。
-    ///
-    /// <para><b>2026-09-24 起顺序改了（用户真机反馈）</b>：以前是"直接从密码本 txt 重建列表"，
-    /// 于是手工加的条目与手工调的顺序重启即丢，而且导入第二本会把"自动加载哪一本"换成第二本
-    /// （第一本的条目全不见）。现在的顺序是：</para>
-    /// <list type="number">
-    /// <item><description><b>先加载记忆</b>（列表内容 / 顺序 / 启用状态 / 手工条目 / 墓碑 / 记住的密码本）；</description></item>
-    /// <item><description><b>再按记住的顺序逐本合并</b>密码本：只补"列表里还没有的值"，跳过墓碑。</description></item>
-    /// </list>
-    /// <para>日志只写条数与文件名（§8：个人路径不入日志；明文任何情况下都不写）。</para>
-    /// </summary>
-
 
     public void UpdateSummary()
     {
@@ -642,182 +510,7 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-
-    /// <summary>
-    /// 把「一键处理 · 本次选项」里勾了「存为默认」的那一组选择写回设置（规格 §9.2 硬要求②）。
-    ///
-    /// <para>
-    /// ⚠ 这是**整个本次选项功能里唯一**写 <c>appsettings.json</c> 的地方，
-    /// 而且只有用户显式勾选之后才会被调用（<c>OneClickCoordinator.RunAsync</c> 里那一个分支）。
-    /// 没勾时这条路径根本不会执行 —— 所以"不勾就不许改设置文件"不是靠自觉，是靠调用图。
-    /// </para>
-    ///
-    /// <para>
-    /// 落点只写 <see cref="AppSettings.PlacementMode"/>；源包处理由
-    /// <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 ——
-    /// 与②「解压方式」/③「清理与删除」页写的是同一套字符串口径，不新造第三种表示法。
-    /// </para>
-    /// <para>
-    /// 落点无效（选了"指定位置"却没填路径）时**不写落点**，但源包处理照写：
-    /// 那一项本来就与路径无关，因为一个空路径把它一起丢掉才是意外。
-    /// （终端落法 2026-09-27 已从设置里删除，这里不再有它。）
-    /// </para>
-    /// </summary>
-    internal void SaveOneClickOptionsAsDefaults(OneClickRunOptions options)
-    {
-        if (options == null || Settings == null)
-        {
-            return;
-        }
-
-        if (options.IsPlacementValid)
-        {
-            bool custom = OutputPlacement.UsesCustomRoot(options.PlacementMode);
-
-            /*
-             * 落点的真值是用户可见的两个布尔 + 自定义根；PlacementMode 只是为了兼容旧配置保留。
-             * 这里必须把三者同时写成一致状态，不能只写 PlacementMode：
-             * 下一次启动会从布尔重新派生，单写 enum 会被 Normalize 立刻纠正回旧落点。
-             */
-            Settings.ExtractToOriginalDirectory = !custom;
-            Settings.KeepArchiveNameFolder = true;
-            Settings.PlacementMode = options.PlacementMode;
-
-            /*
-             * 自定义根只在"指定位置"两档下才有意义，也只在非空时才写 ——
-             * 空串写进去等于把用户上次选的目录抹掉（而落点那两档并不需要它）。
-             */
-            if (custom && !string.IsNullOrWhiteSpace(options.CustomRoot))
-            {
-                Settings.CustomOutputDirectory = options.CustomRoot.Trim();
-
-                // 主界面"输出目录"那一格与设置保持同一个值（它同时也是解压管线用的那个）。
-                _selectedOutputDirectory = Settings.CustomOutputDirectory;
-                OnPropertyChanged(nameof(SelectedOutputDirectory));
-            }
-        }
-
-        // 终端落法那一档**已退役**（用户 2026-09-27 删除）：弹窗里不再有它，也不写回设置。
-        Settings.SourceHandling = AppSettings.ToSourceHandlingValue(options.SourceHandling);
-
-        /*
-         * 「删除操作」那一档（2026-09-25 第 33 条补）：弹窗的折叠区里也能改它，
-         * 勾了「存为默认」就一起写回 —— 否则用户下次会发现"我在弹窗里选的没被记住"。
-         */
-        Settings.RestHandlingAfterVerify = RestHandlingModes.Normalize(options.RestHandling);
-
-        Settings.Normalize();
-
-        /*
-         * 确认框里改过落点、又选了「保存为默认」→ ①页那一行与②页那几个控件都要跟着走
-         * （这里也是直接写 Settings 的路径之一，2026-09-25 第 31 条同一口径）。
-         */
-        NotifyOutputPlacementChangedEverywhere();
-
-        if (!WriteSettingsToDisk("把本次选项存为默认"))
-        {
-            _dialogService.ShowError("把本次选项存为默认失败：设置文件写不进去（磁盘只读 / 被占用？）。");
-            return;
-        }
-
-        OnPropertyChanged(nameof(Settings));
-        RefreshOutputPaths();
-        UpdateSummary();
-
-        AppendLog("INFO", $"本次选项已写入设置（{_settingsService.SettingsFilePath}）。");
-    }
-
-    /// <summary>
-    /// 记下"一键处理的确认框以后不再弹"（用户 2026-09-24 第 17 条："这个可以选中以后不弹出"）。
-    ///
-    /// <para>与 <see cref="SaveOneClickOptionsAsDefaults"/> 是两条独立的写设置路径：
-    /// 那一条写的是落点 / 终端落法 / 源包处理，这一条只写
-    /// <see cref="AppSettings.SkipOneClickConfirm"/> 一个布尔。两者都**只在用户显式勾选之后**执行。</para>
-    ///
-    /// <para>写失败不让流程停：确认框已经点过「开始处理」，用户要的是把这一批跑完 ——
-    /// 记不下"不再问"最多让他下次再点一次确认，不该变成"一键处理失败"。</para>
-    /// </summary>
-    internal void SaveSkipOneClickConfirm(bool skip)
-    {
-        if (Settings == null || Settings.SkipOneClickConfirm == skip)
-        {
-            return;
-        }
-
-        Settings.SkipOneClickConfirm = skip;
-
-        if (!WriteSettingsToDisk("「以后不再询问」"))
-        {
-            return;
-        }
-
-        // ②页那个同义开关绑的是 SettingsEditor.Settings（POCO 不发通知）—— 不喊这一声它还显示着"会弹"。
-        OnPropertyChanged(nameof(Settings));
-        SettingsEditor?.NotifyProcessingOptionsChanged();
-    }
-
-    internal void RefreshOutputPaths()
-    {
-        var options = new ExtractOptions
-        {
-            ExtractToOriginalDirectory = Settings.ExtractToOriginalDirectory,
-            CustomOutputDirectory = SelectedOutputDirectory,
-            KeepArchiveNameFolder = Settings.KeepArchiveNameFolder,
-            TestBeforeExtract = Settings.TestBeforeExtract,
-            OverwriteMode = Settings.OverwriteMode,
-            UseGlobalPassword = Settings.UseGlobalPasswordForAllTasks,
-            GlobalPassword = GlobalPassword,
-            TryPasswordList = true,
-            CancelOnFirstSuccess = true
-        };
-
-        options.Normalize();
-
-        foreach (ArchiveTask task in Tasks)
-        {
-            /*
-             * 已经解压完的任务**不再重算**。
-             *
-             * 它们的 OutputPath 是解压管线回写的**实际落点**（输出目录已存在时可能是 xxx(1)），
-             * 按"打算输出到哪"重算会把它写回原定目录：界面"输出目录"列与「打开输出目录」
-             * 都会指向一个空目录，报告里的落点也不再是产物真正所在的地方。
-             * 实测路径：第 2 轮的一键处理会重扫新加进来的内层包，而重扫会对**整个列表**
-             * 调一次这里，把第 1 轮任务刚写回的实际落点冲掉（用户再也看不到 xxx(1)）。
-             * 只有还没产出结果的任务才该跟着设置走。
-             */
-            if (HasExtractionResult(task))
-            {
-                continue;
-            }
-
-            try
-            {
-                /*
-                 * 这里**只算落点、不碰磁盘**：`BuildOutputPath` → `OutputPlacement` 是纯函数
-                 * （2026-09-27 起连"目录里是不是只有这一个包"都不用问了 —— 塌缩退役之后
-                 * 它不再需要任何目录枚举），所以本方法放在 UI 线程上也安全。
-                 * 真实落点仍以解压管线回写的 task.OutputPath 为准（输出目录已存在时可能是 xxx(1)）。
-                 */
-                task.OutputPath = _pathService.BuildOutputPath(task, options);
-            }
-            catch
-            {
-                task.OutputPath = string.Empty;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 这个任务是否已经有解压产物（落点已由解压管线写回，不能再按设置重算）。
-    /// 「部分完成」也算：产物确实落在那个目录里，只是不完整。
-    /// </summary>
-    private static bool HasExtractionResult(ArchiveTask task)
-    {
-        return task.Status is
-            StatusText.ExtractSuccess or
-            StatusText.Overwritten or
-            StatusText.PartiallyCompleted;
-    }
+    internal void RefreshOutputPaths() => OutputPathRefresher.Refresh(this);
 
     /// <summary>
     /// 「设置」入口（旧菜单「工具 → 设置...」）：设置已经搬进⑥选项卡，
@@ -827,23 +520,8 @@ public partial class MainViewModel : ViewModelBase
     /// 删掉它等于悄悄改掉 MainViewModel 的对外形状；保留成"切页"语义，
     /// 任何旧调用点仍然得到正确结果。</para>
     /// </summary>
-    private void OpenSettings()
-    {
-        RequestTab(SettingsTabIndex, "设置已经搬进「设置」选项卡（原来的设置窗口已退休）。");
-    }
 
     /// <summary>见 <see cref="OpenSettings"/>：打包整页搬进⑤选项卡。</summary>
-    private void OpenPacking()
-    {
-        RequestTab(PackingTabIndex, "打包已经搬进「打包」选项卡（原来的打包窗口已退休）。");
-    }
-
-    private void RequestTab(int index, string log)
-    {
-        AppendLog("INFO", log);
-
-        TabRequested?.Invoke(index);
-    }
 
     /// <summary>
     /// 打包那边改了它自己的两档（原包 / 其余物 / 落点）之后落盘 ——
@@ -852,66 +530,24 @@ public partial class MainViewModel : ViewModelBase
     /// <para>⛔ 只写打包那三个字段（它们在 <c>PackingEditor.Settings</c> 上，与解压侧各存各的），
     /// 这里不碰任何解压设置；写失败也不弹窗（打包本身已经跑完了，没道理为一个落盘失败打断他）。</para>
     /// </summary>
-    private void SavePackingSettings()
-    {
-        /*
-         * 与自动保存**同一道闸门**：设置里有非法值（工具路径指向一个不存在的文件）时先不落盘并说清 ——
-         * ⛔ 打包这条路不许变成"把非法设置偷偷写进盘"的后门（那一格决定引擎，写进去下次启动就照它走）。
-         */
-        string? blocked = SettingsEditor?.DescribeAutoSaveBlock();
 
-        if (!string.IsNullOrEmpty(blocked))
-        {
-            AppendLog("WARN", "打包的选择还没写进设置（改成合法值之后会自动存）：" + blocked);
-            return;
-        }
+    internal void OpenSettings() => SettingsCommands.OpenSettings();
 
-        WriteSettingsToDisk("打包的选择");
-    }
+    internal void OpenPacking() => SettingsCommands.OpenPacking();
+
+    internal void SavePackingSettings() => SettingsCommands.SavePackingSettings();
+
+    internal void ResetSettings() => SettingsCommands.ResetSettings();
 
     // 「保存设置」这个动作**整块退役**（用户 2026-09-26："你那个按钮和最下面一个框……都要删除"）：
     // 现在改任何一项都会自动落盘（AutoSaveSettingsIfChanged），
     // 校验判据搬到 SettingsEditor.DescribeAutoSaveBlock()，保存后的连带动作搬到
     // ApplySettingsSideEffectsAfterSave()。⛔ 不再留一个"要用户点一下"的入口。
 
-    private void ResetSettings()
-    {
-        bool confirm = _dialogService.ShowConfirm("确定要恢复默认设置吗？");
-
-        if (!confirm)
-        {
-            return;
-        }
-
-        Settings = _settingsService.ResetToDefault();
-
-        // ⛔ 恢复默认也是"搬值"：走 SyncOutputLocationFromSettings，不许让 setter 把落点档位再改一遍。
-        SyncOutputLocationFromSettings();
-        RefreshOutputPaths();
-
-        /*
-         * 恢复默认会把并发档、落点、源包/其余物那几档一起改回默认值 ——
-         * 那几个展示属性是"包在设置外面"的（AppSettings 不发通知），
-         * 不显式刷新的话页面上还会停着改之前那句话。
-         *
-         * ⚠ ②页那个「全速」勾选框也是这一类（2026-09-26 同步审计逮到）：它的 getter 读
-         * `Settings.RunAtFullSpeed`，恢复默认把它清成 false —— 不通知的话界面还勾着"全速"，
-         * 而真正干活的那一套已经按并发档排队了。
-         */
-        OnPropertyChanged(nameof(Settings));
-        OnPropertyChanged(nameof(RunAtFullSpeed));
-        RefreshSpaceModeText();
-        NotifyOutputPlacementChangedEverywhere();
-        SettingsEditor?.NotifyProcessingOptionsChanged();
-        SettingsEditor?.NotifyRememberedBooksChanged();
-
-        AppendLog("INFO", "已恢复默认设置");
-    }
-
     /// <summary>
     /// 打开密码列表窗口（④密码页的「密码列表管理…」）。
     /// </summary>
-    private void OpenPasswordList()
+    internal void OpenPasswordList()
     {
         var vm = new PasswordListViewModel(_passwordService, _dialogService);
 
@@ -1034,26 +670,8 @@ public partial class MainViewModel : ViewModelBase
         return () => listViewModel.Passwords.CollectionChanged -= OnPasswordsChanged;
     }
 
+    internal void OpenOutputDirectory() => OutputLocation.OpenOutputDirectory();
 
-    private void OpenOutputDirectory()
-    {
-        string directory = SelectedOutputDirectory;
-
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            directory = Tasks.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.OutputPath))?.OutputPath ?? string.Empty;
-        }
-
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            _dialogService.ShowWarning(
-                "还没有可打开的输出目录。"
-                + "先在「设置 → 输出位置」里选一档（或先对某个包跑一次解压），再回来打开。");
-            return;
-        }
-
-        _pathService.OpenDirectory(directory);
-    }
 
     /// <summary>
     /// 「定稿完成后打开输出目录」的落地（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>，**默认关**）。
@@ -1124,7 +742,7 @@ public partial class MainViewModel : ViewModelBase
     /// <para>现在：目录在就打开；不在就**如实说清为什么不在**（工作区只跟目标目录走，
     /// 成功那一趟连壳都会收掉，所以这里通常什么都不会有）。</para>
     /// </summary>
-    private void OpenWorkDirectory()
+    internal void OpenWorkDirectory()
     {
         string workDirectory = _pathService.WorkDirectory;
 
@@ -1160,7 +778,6 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-
     /// <summary>
     /// 结果写日志（规格 §3.2 要求每条删除都留"路径 + 理由 + 条目数 + 总大小"）。
     ///
@@ -1190,7 +807,7 @@ public partial class MainViewModel : ViewModelBase
             $"实际成功 {outcome.SuccessCount} 项、失败 {outcome.FailureCount} 项。");
     }
 
-    private void OpenLogDirectory()
+    internal void OpenLogDirectory()
     {
         try
         {
@@ -1203,7 +820,7 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private void SelectOutputDirectory()
+    internal void SelectOutputDirectory()
     {
         try
         {
@@ -1275,7 +892,6 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-
     /// <summary>
     /// 整份替换任务列表（导入路径、以及"先清空再加"那两步）的**唯一收口**。
     ///
@@ -1314,8 +930,7 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private void RaiseAllCommandCanExecuteChanged() => Commands.RaiseAll();
-
+    internal void RaiseAllCommandCanExecuteChanged() => Commands.RaiseAll();
 
 }
 
