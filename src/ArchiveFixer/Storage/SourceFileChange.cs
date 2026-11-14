@@ -46,8 +46,8 @@ namespace ArchiveFixer.Storage
                 SourceChangeKind.Size =>
                     string.Format(
                         StatusText.SourceChangeSizeFormat,
-                        TaskSpaceEstimate.FormatSize(PreviousLength),
-                        TaskSpaceEstimate.FormatSize(CurrentLength)),
+                        SizeFormat.Format(PreviousLength),
+                        SizeFormat.Format(CurrentLength)),
 
                 SourceChangeKind.LastWriteTime =>
                     string.Format(

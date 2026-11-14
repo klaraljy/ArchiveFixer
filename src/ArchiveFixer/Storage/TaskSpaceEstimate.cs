@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Engines;
@@ -266,32 +265,7 @@ namespace ArchiveFixer.Storage
         /// 把字节数说成人话。**口径必须与 <c>SpaceChecker</c> / <c>ResourceBudget</c> 一致** ——
         /// 三处各写一套换算时，同一块盘在界面上会出现两个不同的数字（历史上因此被投诉过）。
         /// </summary>
-        internal static string FormatSize(long bytes)
-        {
-            long value = bytes > 0 ? bytes : 0L;
-            double gib = value / 1024d / 1024d / 1024d;
-
-            if (gib >= 1d)
-            {
-                return gib.ToString("0.##", CultureInfo.InvariantCulture) + " GiB";
-            }
-
-            double mib = value / 1024d / 1024d;
-
-            if (mib >= 1d)
-            {
-                return mib.ToString("0.##", CultureInfo.InvariantCulture) + " MiB";
-            }
-
-            double kib = value / 1024d;
-
-            if (kib >= 1d)
-            {
-                return kib.ToString("0.##", CultureInfo.InvariantCulture) + " KiB";
-            }
-
-            return value.ToString(CultureInfo.InvariantCulture) + " 字节";
-        }
+        internal static string FormatSize(long bytes) => SizeFormat.Format(bytes);
     }
 
 }

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Models
 {
@@ -576,8 +575,8 @@ namespace ArchiveFixer.Models
                 return string.Format(
                     CultureInfo.CurrentCulture,
                     StatusText.BatchDiagnosticsSpaceDetailFormat,
-                    TaskSpaceEstimate.FormatSize(task.SpaceBlocked.RequiredBytes),
-                    TaskSpaceEstimate.FormatSize(task.SpaceBlocked.ShortfallBytes));
+                    SizeFormat.Format(task.SpaceBlocked.RequiredBytes),
+                    SizeFormat.Format(task.SpaceBlocked.ShortfallBytes));
             }
 
             if (task.MissingVolumeNames.Count > 0)
