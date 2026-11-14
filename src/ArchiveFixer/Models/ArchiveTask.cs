@@ -1,4 +1,3 @@
-using ArchiveFixer.Extraction;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;

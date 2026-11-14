@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>L3 的预期清单**从哪来**（机器可判；日志/证据只读它，⛔ 不比中文）。</summary>
     public enum ManifestExpectationSource

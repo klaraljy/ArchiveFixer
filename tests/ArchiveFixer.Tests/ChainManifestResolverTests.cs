@@ -3,6 +3,7 @@ using ArchiveFixer.Extraction;
 using System;
 using System.Collections.Generic;
 using Xunit;
+using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Tests
 {

@@ -1,6 +1,6 @@
 using ArchiveFixer.Engines;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 一次 L3 裁决：这一单拿**哪一层**的清单当预期，或者**为什么取不到**。
@@ -10,6 +10,9 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public sealed class ManifestExpectation
     {
+        /// <summary>不是任何一层（取值与 ChainManifestResolver.NoLayer 一致）；只用于 LayerDepth。</summary>
+        internal const int NoLayer = -1;
+
         /// <summary>兜底值 = **取不到清单**（⛔ 漏赋值只会变成"不核对、不删源"，不会变成"敢删"）。</summary>
         public static ManifestExpectation None { get; } = new()
         {
@@ -23,7 +26,7 @@ namespace ArchiveFixer.Extraction
         public ArchiveListResult? Expected { get; init; }
 
         /// <summary>清单来自哪一层（-1 = 不是某一层的清单）。</summary>
-        public int LayerDepth { get; init; } = ChainManifestResolver.NoLayer;
+        public int LayerDepth { get; init; } = NoLayer;
 
         /// <summary>那一层的说法（`第 1 层：Sociology.7z`）。</summary>
         public string LayerLabel { get; init; } = string.Empty;
