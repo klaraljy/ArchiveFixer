@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 这次导入时用户选中的是**文件**还是**文件夹**（用户 2026-09-24 第 13 条四条规则的第 1 个维度）。
