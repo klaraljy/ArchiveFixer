@@ -115,208 +115,17 @@ public partial class MainViewModel
     /// 手动操作弹窗打开/切换当前任务时，刷新目录分布。
     /// 没指定输出位置 = 看源包所在目录；指定了输出位置 = 看那个目录，但这里只展示，不操作。
     /// </summary>
-    private void RefreshManualDistribution()
-    {
-        ManualDistributionTitle = "文件分布";
-        ManualDistributionPath = string.Empty;
-        ManualDistributionEmptyText = string.Empty;
-        ManualDistributionEntries = Array.Empty<ManualDistributionEntry>();
-        ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
-        ManualVolumeSearchText = "尚未查找同组文件。";
 
-        ArchiveTask? task = SelectedTask;
 
-        if (task == null)
-        {
-            ManualDistributionEmptyText = "先在主界面选中一个任务。";
-            NotifyManualDistributionChanged();
-            return;
-        }
 
-        bool useOutput = !Settings.ExtractToOriginalDirectory
-            && !string.IsNullOrWhiteSpace(Settings.CustomOutputDirectory);
 
-        string sourceEntry = task.VolumePaths.Count > 0
-            ? task.VolumePaths[0]
-            : task.CurrentPath;
-
-        string? root = useOutput
-            ? Settings.CustomOutputDirectory
-            : Path.GetDirectoryName(sourceEntry);
-
-        ManualDistributionTitle = useOutput
-            ? "输出位置文件分布"
-            : "原位置文件分布（入口包所在目录）";
-        ManualDistributionPath = root ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
-        {
-            ManualDistributionEmptyText = useOutput
-                ? "指定的输出目录尚不存在；不会为了展示而创建它。"
-                : "找不到当前源包所在目录。";
-            NotifyManualDistributionChanged();
-            return;
-        }
-
-        try
-        {
-            var entries = new List<ManualDistributionEntry>();
-
-            foreach (FileSystemInfo info in new DirectoryInfo(root)
-                         .EnumerateFileSystemInfos()
-                         .OrderBy(item => item is DirectoryInfo ? 0 : 1)
-                         .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
-                         .Take(500))
-            {
-                bool directory = info is DirectoryInfo;
-                entries.Add(new ManualDistributionEntry
-                {
-                    Name = info.Name,
-                    Kind = directory ? "文件夹" : "文件",
-                    SizeText = directory ? "-" : FormatFileSize(info),
-                    ModifiedText = info.LastWriteTime.ToString("yyyy-MM-dd HH:mm"),
-                    FullPath = info.FullName
-                });
-            }
-
-            ManualDistributionEntries = entries;
-            ManualDistributionEmptyText = entries.Count == 0 ? "这个目录是空的。" : string.Empty;
-        }
-        catch (Exception ex)
-        {
-            ManualDistributionEmptyText = "读取目录失败：" + ex.Message;
-        }
-
-        NotifyManualDistributionChanged();
-    }
-
-    private async Task FindVolumeSiblingsAsync()
-    {
-        ArchiveTask? task = SelectedTask;
-
-        if (task == null)
-        {
-            return;
-        }
-
-        ManualVolumeSearchText = "正在按基名查找同组文件…";
-        ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
-        NotifyManualVolumeChanged();
-
-        string entryPath = task.VolumePaths.Count > 0
-            ? task.VolumePaths[0]
-            : task.CurrentPath;
-        string? entryDirectory = Path.GetDirectoryName(entryPath);
-
-        var roots = new List<string>();
-
-        void AddRoot(string? root)
-        {
-            if (!string.IsNullOrWhiteSpace(root)
-                && Directory.Exists(root)
-                && !roots.Contains(root, StringComparer.OrdinalIgnoreCase))
-            {
-                roots.Add(root);
-            }
-        }
-
-        // 先扫入口包所在目录的上一级（可以覆盖同一下载目录下的多个子文件夹），
-        // 再扫用户指定输出目录；都只读，不移动任何文件。
-        AddRoot(entryDirectory);
-        AddRoot(Path.GetDirectoryName(entryDirectory));
-        AddRoot(string.IsNullOrWhiteSpace(Settings.CustomOutputDirectory)
-            ? null
-            : Settings.CustomOutputDirectory);
-
-        try
-        {
-            List<string> found = await Task.Run(() =>
-            {
-                var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (string root in roots)
-                {
-                    try
-                    {
-                        foreach (string file in Directory.EnumerateFiles(
-                                     root,
-                                     "*",
-                                     SearchOption.AllDirectories))
-                        {
-                            if (paths.Count >= 20000)
-                            {
-                                break;
-                            }
-
-                            if (LegacyVolumeNames.BelongsToSameGroup(
-                                    Path.GetFileName(file),
-                                    Path.GetFileName(task.CurrentPath)))
-                            {
-                                paths.Add(file);
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // 单个目录无权限/被占用：跳过它，其他根继续。
-                    }
-
-                    if (paths.Count >= 20000)
-                    {
-                        break;
-                    }
-                }
-
-                paths.Add(task.CurrentPath);
-                return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
-            }).ConfigureAwait(true);
-
-            var entries = new List<ManualDistributionEntry>(found.Count);
-
-            foreach (string path in found)
-            {
-                try
-                {
-                    var file = new FileInfo(path);
-                    entries.Add(new ManualDistributionEntry
-                    {
-                        Name = file.Name,
-                        Kind = path.Equals(task.CurrentPath, StringComparison.OrdinalIgnoreCase)
-                            ? "当前"
-                            : "同组",
-                        SizeText = FormatFileSize(file),
-                        ModifiedText = file.Exists
-                            ? file.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
-                            : "-",
-                        FullPath = path
-                    });
-                }
-                catch
-                {
-                }
-            }
-
-            ManualVolumeCandidates = entries;
-            ManualVolumeSearchText = entries.Count <= 1
-                ? "没有按基名找到其他同组文件。"
-                : $"按基名找到 {entries.Count} 个同组文件（含当前）；只是提示，不会自动搬移。";
-        }
-        catch (Exception ex)
-        {
-            ManualVolumeCandidates = Array.Empty<ManualDistributionEntry>();
-            ManualVolumeSearchText = "查找同组失败：" + ex.Message;
-        }
-
-        NotifyManualVolumeChanged();
-    }
-
-    private void NotifyManualVolumeChanged()
+    internal void NotifyManualVolumeChanged()
     {
         OnPropertyChanged(nameof(ManualVolumeCandidates));
         OnPropertyChanged(nameof(ManualVolumeSearchText));
     }
 
-    private static string FormatFileSize(FileSystemInfo info)
+    internal static string FormatFileSize(FileSystemInfo info)
     {
         try
         {
@@ -345,7 +154,7 @@ public partial class MainViewModel
         }
     }
 
-    private void NotifyManualDistributionChanged()
+    internal void NotifyManualDistributionChanged()
     {
         OnPropertyChanged(nameof(ManualDistributionTitle));
         OnPropertyChanged(nameof(ManualDistributionPath));
@@ -542,5 +351,21 @@ public partial class MainViewModel
     /// **危险模式**入口（红色按钮）：确认 → 自测（并发数 × 2 个文件）→ 通过才开启。
     /// 已经开着时点它 = 关闭（关闭是安全方向，不需要二次确认）。
     /// </summary>
+
+    private void RefreshManualDistribution() => ManualOperation.RefreshManualDistribution();
+
+    private Task FindVolumeSiblingsAsync() => ManualOperation.FindVolumeSiblingsAsync();
+
+    internal void SetManualDistributionTitle(string value) => ManualDistributionTitle = value;
+
+    internal void SetManualDistributionPath(string value) => ManualDistributionPath = value;
+
+    internal void SetManualDistributionEmptyText(string value) => ManualDistributionEmptyText = value;
+
+    internal void SetManualDistributionEntries(IReadOnlyList<ManualDistributionEntry> value) => ManualDistributionEntries = value;
+
+    internal void SetManualVolumeCandidates(IReadOnlyList<ManualDistributionEntry> value) => ManualVolumeCandidates = value;
+
+    internal void SetManualVolumeSearchText(string value) => ManualVolumeSearchText = value;
 
 }
