@@ -50,6 +50,85 @@ public partial class MainViewModel
         _dialogService,
         _cleanupService);
 
+    private LogCoordinator? _logCoordinator;
+
+    private LogCoordinator Log => _logCoordinator ??= new LogCoordinator(_logService, Logs);
+
+    public void AppendLog(string message) => Log.AppendLog(message);
+
+    public void MarkOperationStartForLog(string operationName) => Log.MarkOperationStartForLog(operationName);
+
+    public void UpdateLogRunContext(
+        string? batch = null,
+        int? round = null,
+        string? sample = null,
+        string? stage = null,
+        string? task = null,
+        int? layer = null)
+        => Log.UpdateLogRunContext(batch, round, sample, stage, task, layer);
+
+    public void CriterionLog(
+        string criterion,
+        string inputs,
+        string verdict,
+        string action = "",
+        string file = "",
+        string identity = "",
+        string level = "INFO",
+        string errorCode = "",
+        string component = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => Log.CriterionLog(
+            criterion, inputs, verdict, action, file, identity, level, errorCode, component,
+            sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
+
+    public void AppendLog(
+        string level,
+        string message,
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => Log.AppendLog(level, message, sourceFile, sourceLine, caller);
+
+    public void AppendDiagnosticLog(
+        string level,
+        string message,
+        string errorCode,
+        string component,
+        string taskPath = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => Log.AppendDiagnosticLog(
+            level, message, errorCode, component, taskPath,
+            sourceFile, sourceLine, caller);
+
+    internal void AppendLogFileOnly(string level, string message) => Log.AppendLogFileOnly(level, message);
+
+    private LogExportCoordinator? _logExportCoordinator;
+
+    private LogExportCoordinator LogExport => _logExportCoordinator ??= new LogExportCoordinator(
+        () => Tasks,
+        () => Logs,
+        () => OutputLocationForLog,
+        WriteClipboardText,
+        what => WriteSettingsToDisk(what),
+        (level, message) => AppendLog(level, message),
+        _extractionCoordinator,
+        _taskSummaryService,
+        _logService,
+        _dialogService,
+        _clipboardService,
+        Settings);
+
+    internal IReadOnlyList<string> BuildLogExportHeader() => LogExport.BuildHeader();
+
+    internal IReadOnlyList<string> BuildLogExportSections() => LogExport.BuildSections();
+
+    internal virtual bool WriteClipboardText(string sanitizedText) => _clipboardService.CopyText(sanitizedText);
+
     private PasswordBookCoordinator PasswordBook => _passwordBookCoordinator ??= new PasswordBookCoordinator(
         _passwordService,
         _pathService,
@@ -486,7 +565,7 @@ public partial class MainViewModel
             return;
         }
 
-        if (CopySanitizedToClipboard(SelectedOutputDirectory))
+        if (LogExport.CopySanitizedToClipboard(SelectedOutputDirectory))
         {
             AppendLog(
                 "INFO",

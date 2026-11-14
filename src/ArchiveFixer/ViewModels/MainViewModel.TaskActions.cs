@@ -453,7 +453,7 @@ public partial class MainViewModel
     {
         if (parameter is ArchiveTask task)
         {
-            CopySanitizedToClipboard(BuildTaskInfoText(task));
+            LogExport.CopySanitizedToClipboard(BuildTaskInfoText(task));
             return;
         }
 
@@ -464,7 +464,7 @@ public partial class MainViewModel
     {
         if (parameter is ArchiveTask task)
         {
-            CopySanitizedToClipboard(task.CurrentPath);
+            LogExport.CopySanitizedToClipboard(task.CurrentPath);
             return;
         }
 
@@ -475,7 +475,7 @@ public partial class MainViewModel
     {
         if (parameter is ArchiveTask task)
         {
-            CopySanitizedToClipboard(task.ErrorMessage);
+            LogExport.CopySanitizedToClipboard(task.ErrorMessage);
             return;
         }
 
@@ -613,7 +613,7 @@ public partial class MainViewModel
 
         string text = string.Join(Environment.NewLine, paths);
 
-        if (CopySanitizedToClipboard(text))
+        if (LogExport.CopySanitizedToClipboard(text))
         {
             AppendLog("INFO", $"已复制当前任务同组路径（{paths.Count()} 条）。");
         }

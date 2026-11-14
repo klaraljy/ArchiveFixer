@@ -324,11 +324,11 @@ public partial class MainViewModel
         OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
 
         ImportPasswordBookCommand = new RelayCommand(PasswordBook.Import, CanRunNormalCommand);
-        ExportLogCommand = new RelayCommand(ExportLog);
-        ExportDiagnosticBundleCommand = new RelayCommand(ExportDiagnosticBundle);
-        ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
-        CopyFailedListCommand = new RelayCommand(CopyFailedList);
-        ExportFailedListCommand = new RelayCommand(ExportFailedList);
+        ExportLogCommand = new RelayCommand(LogExport.ExportLog);
+        ExportDiagnosticBundleCommand = new RelayCommand(LogExport.ExportDiagnosticBundle);
+        ExportAllLogsCommand = new RelayCommand(LogExport.ExportAllLogs);
+        CopyFailedListCommand = new RelayCommand(LogExport.CopyFailedList);
+        ExportFailedListCommand = new RelayCommand(LogExport.ExportFailedList);
         OpenCheckedSourceDirectoryCommand = new RelayCommand(OpenCheckedSourceDirectory, CanRunNormalCommand);
         InspectArchiveCommand = new AsyncRelayCommand(InspectCheckedArchivesAsync, CanRunNormalCommand);
         TryPasswordsCommand = new AsyncRelayCommand(TryPasswordsForCheckedArchivesAsync, CanRunNormalCommand);
@@ -616,4 +616,5 @@ public partial class MainViewModel
         _lastSavedSettingsJson = _settingsService.Serialize(_settings);
     }
 }
+
 
