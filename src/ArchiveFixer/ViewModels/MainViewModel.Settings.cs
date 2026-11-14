@@ -575,4 +575,91 @@ public partial class MainViewModel
                     SelectedOutputDirectory));
         }
     }
+
+    private WorkspaceCoordinator? _workspaceCoordinator;
+
+    private WorkspaceCoordinator Workspace => _workspaceCoordinator ??= new WorkspaceCoordinator(
+        ResolveWorkspaceScanRoots,
+        UpdateWorkspaceLeftoverState,
+        RaiseAllCommandCanExecuteChanged,
+        (level, message) => AppendLog(level, message),
+        _dialogService);
+
+    private void UpdateWorkspaceLeftoverState(long totalBytes, bool hasLeftovers, string banner)
+    {
+        WorkspaceLeftoverTotalBytes = totalBytes;
+        HasWorkspaceLeftovers = hasLeftovers;
+        WorkspaceLeftoverBanner = banner;
+    }
+
+    /// <summary>
+    /// 界面上那一行"工作区残留：N 个目录，共 X"（空 = 没有残留，整行不显示）。
+    /// </summary>
+    public string WorkspaceLeftoverBanner
+    {
+        get => _workspaceLeftoverBanner;
+        private set => SetProperty(ref _workspaceLeftoverBanner, value);
+    }
+
+    /// <summary>有没有工作区残留（界面据此显示/隐藏那一行与「清理工作区」）。</summary>
+    public bool HasWorkspaceLeftovers
+    {
+        get => _hasWorkspaceLeftovers;
+        private set => SetProperty(ref _hasWorkspaceLeftovers, value);
+    }
+
+    /// <summary>残留一共占多少字节（界面提示用）。</summary>
+    public long WorkspaceLeftoverTotalBytes
+    {
+        get => _workspaceLeftoverTotalBytes;
+        private set => SetProperty(ref _workspaceLeftoverTotalBytes, value);
+    }
+
+    /// <summary>
+    /// 上一批一键处理撞到层数上限、还剩多少内层包没解（用户 2026-09-24 第 16 条追加）。
+    /// </summary>
+    public int PendingContinuationCount => _pendingContinuationCount;
+
+    /// <summary>要不要显示「继续解」那一行 / 那个按钮。</summary>
+    public bool HasPendingContinuation => _pendingContinuationCount > 0;
+
+    /// <summary>「继续解」那一行的文案（按钮与提示共用一份措辞：<c>StatusText.ContinueOneClick*</c>）。</summary>
+    public string PendingContinuationText => !HasPendingContinuation
+        ? string.Empty
+        : string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            StatusText.ContinueOneClickHintFormat,
+            _oneClickCoordinator?.RoundLimit ?? 5,
+            _pendingContinuationCount);
+
+    /// <summary>「继续解」按钮上的文案。</summary>
+    public string ContinueOneClickButtonText => !HasPendingContinuation
+        ? string.Empty
+        : string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            StatusText.ContinueOneClickTextFormat,
+            _pendingContinuationCount);
+
+    /// <summary>一键处理收尾时把"还剩几个内层包"报进来（0 = 没有待续解的）。</summary>
+    internal void ReportPendingContinuation(int count)
+    {
+        int normalized = Math.Max(0, count);
+
+        if (_pendingContinuationCount == normalized)
+        {
+            return;
+        }
+
+        _pendingContinuationCount = normalized;
+
+        OnPropertyChanged(nameof(PendingContinuationCount));
+        OnPropertyChanged(nameof(HasPendingContinuation));
+        OnPropertyChanged(nameof(PendingContinuationText));
+        OnPropertyChanged(nameof(ContinueOneClickButtonText));
+
+        RaiseAllCommandCanExecuteChanged();
+    }
+
+    /// <summary>「继续解」能不能点：有剩下的内层包，而且现在不忙。</summary>
+    private bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
 }

@@ -424,7 +424,7 @@ public partial class MainViewModel
          * 工作区清理：只在"确实有残留"且当前没有跑批时可点。
          * 跑批中清理会在 UI 线程同步递归删目录，既卡界面又可能删到正在用的工作区。
          */
-        ClearWorkspaceLeftoversCommand = new RelayCommand(ClearWorkspaceLeftovers, () => HasWorkspaceLeftovers && !IsBusy);
+        ClearWorkspaceLeftoversCommand = new RelayCommand(Workspace.Clear, () => HasWorkspaceLeftovers && !IsBusy);
 
         // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
         // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
@@ -600,7 +600,7 @@ public partial class MainViewModel
             AppendLog("INFO", router.DescribeDispatch());
         }
 
-        LogLeftoverWorkspaces();
+        Workspace.LogLeftover();
         PasswordBook.AutoLoad();
 
         UpdateSummary();

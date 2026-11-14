@@ -40,7 +40,7 @@ public partial class MainViewModel
 
         Tasks.Remove(task);
         RebuildTaskIndex();
-        LogLeftoverWorkspaces();
+        Workspace.LogLeftover();
         PasswordBook.AutoLoad();
 
         UpdateSummary();

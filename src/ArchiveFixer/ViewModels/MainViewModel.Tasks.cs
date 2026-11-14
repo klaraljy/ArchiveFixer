@@ -385,7 +385,7 @@ public partial class MainViewModel
         }
 
         Tasks.Clear();
-        LogLeftoverWorkspaces();
+        Workspace.LogLeftover();
         PasswordBook.AutoLoad();
 
         UpdateSummary();
@@ -426,7 +426,7 @@ public partial class MainViewModel
         }
 
         RebuildTaskIndex();
-        LogLeftoverWorkspaces();
+        Workspace.LogLeftover();
         PasswordBook.AutoLoad();
 
         UpdateSummary();
