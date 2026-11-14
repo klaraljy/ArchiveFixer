@@ -1,20 +1,6 @@
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Models;
-using ArchiveFixer.Password;
-using ArchiveFixer.Security;
-using ArchiveFixer.Storage;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace ArchiveFixer.Models
-{    /// <summary>为什么会停。<b>不要</b>把它压成"成功/失败"两态：这里的每一项都对应不同的用户动作。</summary>
+{
+    /// <summary>为什么会停。<b>不要</b>把它压成"成功/失败"两态：这里的每一项都对应不同的用户动作。</summary>
     public enum RecursionStopReason
     {
         None,
@@ -57,7 +43,7 @@ namespace ArchiveFixer.Models
         PasswordAttemptsExceeded,
 
         /// <summary>
-        /// 解压途中**磁盘写满**（引擎报 <see cref="Engines.EngineErrorTypes.NoDiskSpace"/>）。
+        /// 解压途中**磁盘写满**（引擎报 <see cref="ArchiveFixer.Engines.EngineErrorTypes.NoDiskSpace"/>）。
         ///
         /// <para>为什么要单列一条（用户 2026-09-27 真机：递归内层包撞空间不足，批末诊断却归到"其他"）：
         /// 归档本身没有任何问题，用户要做的是**清空间 / 换盘**，而不是去怀疑包坏了或改权限 ——
@@ -75,7 +61,7 @@ namespace ArchiveFixer.Models
         /// <para>为什么必须与 <see cref="WrongPassword"/> 分开：用户要做的动作完全不同 ——
         /// 密码错误是"去核对 / 补密码本"，而这一档是"**先给它一个密码，它才肯把内容清单给你看**"。
         /// 判据与单层路径同一套（列目录失败 + 引擎给的结构化错误类型是
-        /// <see cref="EngineErrorTypes.EncryptedHeaders"/>，⛔ 不比中文）；
+        /// <see cref="ArchiveFixer.Engines.EngineErrorTypes.EncryptedHeaders"/>，⛔ 不比中文）；
         /// ⛔ 只要**任何一个候选成功列出过清单**，这一档就不成立（那时失败在解压阶段，
         /// 结论照旧走密码错误 / 两义 / 损坏）。</para>
         /// </summary>
