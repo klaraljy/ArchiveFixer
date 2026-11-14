@@ -1,85 +1,56 @@
 using ArchiveFixer.Packing;
-using ArchiveFixer.Password;
-
-using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Threading;
 
 namespace ArchiveFixer.Services;
 
 /// <summary>
-/// 对话框服务。
+/// 对话框服务（公开 API 的**薄转发**）。
 ///
-/// 职责：
-/// 1. 封装打开文件 / 文件夹 / 保存文件对话框。
-/// 2. 封装信息、警告、错误、确认提示 —— 一律走自绘的
-///    <c>AppDialogWindow</c>，不再用系统 MessageBox（灰底、字挤、正文无法复制）。
+/// <para>按职责拆成协作类，本类只保留签名、语义与线程契约：</para>
+/// <list type="bullet">
+/// <item><description>文件 / 文件夹选择 → <see cref="FileDialogPresenter"/>（原生 <c>Microsoft.Win32</c> 对话框）。</description></item>
+/// <item><description>信息 / 警告 / 错误 / 异常 / 批末汇总 / 空间提示 → <see cref="InformationDialogPresenter"/>。</description></item>
+/// <item><description>确认 / 解压前提醒 / 是-否-取消 → <see cref="ConfirmationDialogPresenter"/>。</description></item>
+/// <item><description>危险确认（实心红主按钮） → <see cref="DestructiveConfirmPresenter"/>。</description></item>
+/// <item><description>同名冲突六档询问 → <see cref="ConflictDecisionPresenter"/>。</description></item>
+/// <item><description>打包确认 / 密码选单 → <see cref="AuxiliaryDialogPresenter"/>。</description></item>
+/// <item><description>无 UI 宿主降级（测试替身那一档） → <see cref="DialogFallbackLog"/>；
+/// 线程模型 → <see cref="DialogUiThread"/>；窗口创建与显示 → <see cref="AppDialogWindowHost"/>。</description></item>
+/// </list>
 ///
-/// 线程模型（这一条是硬约束，历史上"卡死"就出在这里）：
-/// · **无 UI 宿主**（单元测试、控制台宿主）：一律降级为"写降级日志 + 返回默认值"，
-///   绝不抛异常、绝不等待 —— 过去直接调 <c>MessageBox.Show</c> 在没有 WPF 宿主的进程里
-///   会抛 <see cref="InvalidOperationException"/>，把一次"提示"变成一次任务失败。
-/// · **UI 线程调用**：直接 <c>ShowDialog()</c>。它内部是嵌套消息泵，界面照常刷新、不会死锁。
-/// · **后台线程调用**：值返回的方法用 <c>Dispatcher.InvokeAsync</c>（**不是**同步
-///   <c>Dispatcher.Invoke</c>）派发，并带**有界等待**；通知类方法用 <c>BeginInvoke</c> 投递即返回，
-///   不占用后台线程。任何一步失败都只写日志，不向上抛。
+/// <para><b>线程模型（硬约束，历史上"卡死"就出在这里）</b>：</para>
+/// <list type="bullet">
+/// <item><description><b>无 UI 宿主</b>（单元测试、控制台宿主）：一律降级为"写降级日志 + 返回默认值"，
+/// 绝不抛异常、绝不等待 —— 过去直接调 <c>MessageBox.Show</c> 在没有 WPF 宿主的进程里
+/// 会抛 <see cref="InvalidOperationException"/>，把一次"提示"变成一次任务失败。</description></item>
+/// <item><description><b>UI 线程调用</b>：直接 <c>ShowDialog()</c>。它内部是嵌套消息泵，界面照常刷新、不会死锁。</description></item>
+/// <item><description><b>后台线程调用</b>：值返回的方法用 <c>Dispatcher.InvokeAsync</c>（**不是**同步
+/// <c>Dispatcher.Invoke</c>）派发，并带**有界等待**；通知类方法用 <c>BeginInvoke</c> 投递即返回，
+/// 不占用后台线程。任何一步失败都只写日志，不向上抛。</description></item>
+/// </list>
 ///
-/// 公开方法签名保持不变（调用方很多）；只换实现，并额外提供一个带"不再提示"选项的重载。
-///
-/// 另有一个专项询问：<see cref="ShowConflictDecisionAsync"/> —— 同名冲突的六档询问
-/// （覆盖 / 跳过 / 自动重命名 × 这一个 / 整批，✕ = 取消本批）。它同样遵守上面这套线程规则。
+/// <para>公开方法签名保持不变（调用方很多）；<c>virtual</c> 的位置也保持不变 ——
+/// 测试靠 override 注入"用户点了确定 / 取消""用户选好了哪个文件"，
+/// 这一档是无界面宿主里唯一能端到端钉住真实路径的办法。</para>
 /// </summary>
 public class DialogService
 {
-    /// <summary>
-    /// 后台线程等待用户点击对话框的上限。
-    ///
-    /// 为什么有上限：这个 API 是同步的（要拿用户的答案），后台线程必须等；
-    /// 万一 UI 线程已经忙死或已开始关闭，**不能无限等**（那就是"死等"）。
-    /// 超时后按"用户没有确认"处理并写日志 —— 与 ShowConfirm 返回 false 的语义一致。
-    /// </summary>
-    private static readonly TimeSpan BackgroundWaitTimeout = TimeSpan.FromMinutes(5);
-
-    private static readonly object FallbackLock = new();
-    private static readonly List<string> FallbackEntries = new();
-
     /// <summary>无 UI 宿主时是否把降级记录写进 <c>data\logs\dialog-fallback.log</c>。</summary>
-    public static bool FallbackFileLoggingEnabled { get; set; } = true;
-
-    /// <summary>
-    /// 降级日志的数据根（2026-11-01：以前写死 <c>&lt;程序目录&gt;\data\logs</c>，
-    /// 与固定数据根 <c>%LOCALAPPDATA%\ArchiveFixer</c> 分成了两处；现在跟 PathService 走）。
-    /// 静态是因为写降级日志的那个方法是静态入口；PathService 默认根会读测试覆盖变量。
-    /// </summary>
-    private static readonly PathService FallbackPathService = new();
-
-    /// <summary>本进程内发生过的降级记录（最近的在前）。测试与排障用。</summary>
-    public static IReadOnlyList<string> FallbackLog
+    public static bool FallbackFileLoggingEnabled
     {
-        get
-        {
-            lock (FallbackLock)
-            {
-                return FallbackEntries.ToArray();
-            }
-        }
+        get => DialogFallbackLog.FileLoggingEnabled;
+        set => DialogFallbackLog.FileLoggingEnabled = value;
     }
+
+    /// <summary>本进程内发生过的降级记录（按发生顺序，最近的在后）。测试与排障用。</summary>
+    public static IReadOnlyList<string> FallbackLog => DialogFallbackLog.Snapshot;
 
     /// <summary>清空降级记录（测试用）。</summary>
-    public static void ClearFallbackLog()
-    {
-        lock (FallbackLock)
-        {
-            FallbackEntries.Clear();
-        }
-    }
+    public static void ClearFallbackLog() => DialogFallbackLog.Clear();
 
     // ------------------------------------------------------------------ 文件对话框
 
@@ -87,30 +58,7 @@ public class DialogService
     /// 打开文件选择对话框。
     /// 支持多选。
     /// </summary>
-    public List<string> ShowOpenFileDialog()
-    {
-        return ShowFileDialog(
-            () =>
-            {
-                var dialog = new OpenFileDialog
-                {
-                    Title = "选择文件",
-                    Multiselect = true,
-                    CheckFileExists = true,
-                    CheckPathExists = true,
-                    Filter =
-                        "所有文件 (*.*)|*.*|" +
-                        "压缩包 (*.zip;*.rar;*.7z;*.gz;*.bz2;*.xz;*.tar)|*.zip;*.rar;*.7z;*.gz;*.bz2;*.xz;*.tar|" +
-                        "伪装常见文件 (*.jpg;*.png;*.pdf;*.mp4;*.txt)|*.jpg;*.jpeg;*.png;*.gif;*.pdf;*.mp4;*.txt"
-                };
-
-                return dialog.ShowDialog() == true
-                    ? dialog.FileNames.ToList()
-                    : new List<string>();
-            },
-            "ShowOpenFileDialog",
-            new List<string>());
-    }
+    public List<string> ShowOpenFileDialog() => FileDialogPresenter.ShowOpenFileDialog();
 
     /// <summary>
     /// 打开单文件选择对话框。
@@ -122,36 +70,17 @@ public class DialogService
         string title = "选择文件",
         string filter = "所有文件 (*.*)|*.*")
     {
-        return ShowFileDialog(
-            () =>
-            {
-                var dialog = new OpenFileDialog
-                {
-                    Title = title,
-                    Multiselect = false,
-                    CheckFileExists = true,
-                    CheckPathExists = true,
-                    Filter = filter
-                };
-
-                return dialog.ShowDialog() == true ? dialog.FileName : string.Empty;
-            },
-            "ShowOpenSingleFileDialog",
-            string.Empty);
+        return FileDialogPresenter.ShowOpenSingleFileDialog(title, filter);
     }
 
     /// <summary>
     /// 选择文件夹。
-    /// .NET 8 WPF 可使用 Microsoft.Win32.OpenFolderDialog。
     ///
     /// <para><c>virtual</c> 与 <see cref="ShowOpenSingleFileDialog"/> 同理（2026-09-25 第 31 条）：
     /// 无界面宿主下本方法一律返回空串，测试注入不了"用户挑好了哪个目录"，
     /// 于是①页「选择…」那条**真实路径**没法被端到端钉住 —— 而"两处落点不同步"的缺陷正是从这条路进来的。</para>
     /// </summary>
-    public virtual string ShowFolderBrowserDialog()
-    {
-        return ShowFolderBrowserDialog("选择文件夹", string.Empty);
-    }
+    public virtual string ShowFolderBrowserDialog() => ShowFolderBrowserDialog("选择文件夹", string.Empty);
 
     /// <summary>
     /// 带标题 / 初始目录的那一版（⑤打包页「选择…」用：标题要说清是"最终压缩包放在哪"）。
@@ -160,90 +89,29 @@ public class DialogService
     /// 测试只要 override 这一版就能钉住两条"选择…"的真实路径。</para>
     /// </summary>
     public virtual string ShowFolderBrowserDialog(string title, string initialDirectory)
-    {
-        return ShowFileDialog(
-            () =>
-            {
-                var dialog = new OpenFolderDialog
-                {
-                    Title = string.IsNullOrWhiteSpace(title) ? "选择文件夹" : title,
-                    Multiselect = false
-                };
-
-                if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
-                {
-                    dialog.InitialDirectory = initialDirectory;
-                }
-
-                return dialog.ShowDialog() == true ? dialog.FolderName : string.Empty;
-            },
-            "ShowFolderBrowserDialog",
-            string.Empty);
-    }
+        => FileDialogPresenter.ShowFolderBrowserDialog(title, initialDirectory);
 
     /// <summary>
     /// **打包的小确认弹窗**（用户 2026-09-26 第 46 条）：只显示"最终压缩包放在哪 + 原包操作 + 其余物操作"。
     ///
     /// <para>返回用户确认后的那一套选择；用户取消时返回 <c>null</c>（⛔ 一个字节都不许提前动）。
-    /// <c>virtual</c> 与 <see cref="ShowFolderBrowserDialog"/> 同理：无界面宿主下返回 <c>null</c>，
+    /// <c>virtual</c> 与 <see cref="ShowFolderBrowserDialog()"/> 同理：无界面宿主下返回 <c>null</c>，
     /// 测试注入不了"他点了哪几档"——而"选了什么就必须照着做什么"这件事必须能被端到端钉住。</para>
     /// </summary>
     public virtual PackingRunOptions? ShowPackingConfirm(PackingConfirmRequest request)
-    {
-        return ShowFileDialog<PackingRunOptions?>(
-            () =>
-            {
-                IPackingConfirmWindow? window = DialogWindowFactories.PackingConfirm?.Invoke(request);
-
-                return window != null && window.ShowDialog() == true ? window.Result : null;
-            },
-            "ShowPackingConfirm",
-            null);
-    }
+        => AuxiliaryDialogPresenter.ShowPackingConfirm(request);
 
     /// <summary>
     /// 「从密码列表里选」的小窗口（用户 2026-09-26 第 46 条）。
     /// 返回选中那条；取消 / 列表为空时返回空串。⛔ 不做任何记账、不写日志。
     /// </summary>
     public virtual string ShowPasswordPicker(string title, IReadOnlyList<string> passwords)
-    {
-        if (passwords == null || passwords.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        return ShowFileDialog(
-            () =>
-            {
-                IPasswordPickerWindow? window = DialogWindowFactories.PasswordPicker?.Invoke(title, passwords);
-
-                return window != null && window.ShowDialog() == true ? window.Picked ?? string.Empty : string.Empty;
-            },
-            "ShowPasswordPicker",
-            string.Empty);
-    }
+        => AuxiliaryDialogPresenter.ShowPasswordPicker(title, passwords);
 
     /// <summary>
     /// 选择多个文件夹。
     /// </summary>
-    public List<string> ShowMultiFolderBrowserDialog()
-    {
-        return ShowFileDialog(
-            () =>
-            {
-                var dialog = new OpenFolderDialog
-                {
-                    Title = "选择文件夹",
-                    Multiselect = true
-                };
-
-                return dialog.ShowDialog() == true
-                    ? dialog.FolderNames.ToList()
-                    : new List<string>();
-            },
-            "ShowMultiFolderBrowserDialog",
-            new List<string>());
-    }
+    public List<string> ShowMultiFolderBrowserDialog() => FileDialogPresenter.ShowMultiFolderBrowserDialog();
 
     /// <summary>
     /// 选择保存文件路径。
@@ -259,27 +127,7 @@ public class DialogService
         string defaultFileName = "",
         string? initialDirectory = null)
     {
-        return ShowFileDialog(
-            () =>
-            {
-                var dialog = new SaveFileDialog
-                {
-                    Title = title,
-                    Filter = filter,
-                    FileName = defaultFileName,
-                    AddExtension = true,
-                    OverwritePrompt = true
-                };
-
-                if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
-                {
-                    dialog.InitialDirectory = initialDirectory;
-                }
-
-                return dialog.ShowDialog() == true ? dialog.FileName : string.Empty;
-            },
-            "ShowSaveFileDialog",
-            string.Empty);
+        return FileDialogPresenter.ShowSaveFileDialog(title, filter, defaultFileName, initialDirectory);
     }
 
     // ------------------------------------------------------------------ 提示类对话框
@@ -288,10 +136,7 @@ public class DialogService
     /// 确认对话框（是 / 否）。
     /// 无 UI 宿主时返回 false（默认"不确认"，任何破坏性分支都不会被执行）。
     /// </summary>
-    public bool ShowConfirm(string message)
-    {
-        return ShowConfirm(message, string.Empty, false, out _);
-    }
+    public bool ShowConfirm(string message) => ShowConfirm(message, string.Empty, false, out _);
 
     /// <summary>
     /// 带"不再提示"一类的可选项位的确认对话框。
@@ -319,7 +164,7 @@ public class DialogService
     ///
     /// <para><b>为什么需要它</b>：「写回密码本…」的确认框必须**逐条列出将要写入的密码明文**
     /// （用户 2026-09-24 明确要求，界面上给他看是应该的），但正文 <c>Message</c> 会被无界面宿主的
-    /// 降级日志原样记下来（见 <see cref="LogFallback"/>）。明文密码只能走 Detail —— 它只显示、不记日志。
+    /// 降级日志原样记下来；明文密码只能走 Detail —— 它只显示、不记日志。
     /// 顺带的好处是长清单不撑高对话框（Detail 区有自己的高度上限 + 滚动条）。</para>
     ///
     /// <para><c>virtual</c> 是为了让测试能注入"用户点了确定 / 点了取消"的假对话框：
@@ -335,53 +180,27 @@ public class DialogService
         string detail,
         out bool optionChecked)
     {
-        bool checkedState = optionCheckedByDefault;
-
-        var request = new AppDialogRequest
-        {
-            Title = "确认",
-            Message = message,
-            Detail = detail ?? string.Empty,
-            Icon = AppDialogIcon.Question,
-            Buttons = AppDialogButtons.YesNo,
-            YesText = "确定",
-            NoText = "取消",
-            OptionText = optionText,
-            OptionChecked = optionCheckedByDefault
-        };
-
-        bool confirmed = ShowValueDialog(
-            request,
-            window =>
-            {
-                checkedState = window.IsOptionChecked;
-                return window.Result == MessageBoxResult.Yes;
-            },
-            "ShowConfirm",
-            fallback: false);
-
-        optionChecked = confirmed && checkedState;
-        return confirmed;
+        return ConfirmationDialogPresenter.ShowConfirm(
+            message,
+            optionText,
+            optionCheckedByDefault,
+            detail,
+            out optionChecked);
     }
 
     /// <summary>
     /// 「解压前的提醒」专用确认框：标题 / 两个按钮 / 勾选项的文案全部由调用方给
-    /// （文案的唯一来源是 <c>StatusText</c>），而且**无 UI 宿主时按「继续」处理**
-    /// （<c>fallback: true</c>）。
+    /// （文案的唯一来源是 <c>StatusText</c>），而且**无 UI 宿主时按「继续」处理**。
     ///
-    /// <para><b>为什么降级方向与上面那个 <see cref="ShowConfirm(string, string, bool, out bool)"/>
-    /// 正好相反</b>：那一个的语义是"要不要执行一个有副作用的动作"，没人点就必须按"不做"处理；
-    /// 而这里只是一条**纯提示**，它拦住的是一整批解压。降级成"取消"的后果是所有无界面宿主
-    /// （单元测试、控制台宿主、被别的程序调起的管线）一启动就被这条提醒拦死，而且没人看得到原因 ——
-    /// 那才是真正的事故。所以这里显式定义成"没人点 = 继续"。</para>
-    ///
-    /// <para>勾选项在无界面宿主下恒为 false（<c>confirmed &amp;&amp; checkedState</c>，而 checkedState
-    /// 就是传进来的默认值）："本次运行不再提示"是一个**用户意图**，程序不许替用户勾上。</para>
+    /// <para>降级方向与 <see cref="ShowConfirm(string, string, bool, out bool)"/> 故意相反：
+    /// 那一个的语义是"要不要执行一个有副作用的动作"，没人点就必须按"不做"处理；
+    /// 而这里只是一条**纯提示**，它拦住的是一整批解压 —— 降级成"取消"会让所有无界面宿主一启动就被拦死，
+    /// 而且没人看得到原因。所以这里显式定义成"没人点 = 继续"。</para>
     /// </summary>
     /// <param name="title">标题（空 = 用 <see cref="AppDialogRequest"/> 的默认标题）。</param>
     /// <param name="yesText">主按钮文案（写动作本身："继续处理"）。</param>
     /// <param name="noText">次按钮文案（"先不处理"）。</param>
-    /// <param name="optionChecked">用户最终是否勾选（未确认 / 无界面宿主时恒为 false）。</param>
+    /// <param name="optionChecked">用户最终是否勾选（按复选框本身的状态回传）。</param>
     public virtual bool ShowReminderConfirm(
         string title,
         string message,
@@ -391,50 +210,14 @@ public class DialogService
         bool optionCheckedByDefault,
         out bool optionChecked)
     {
-        bool checkedState = optionCheckedByDefault;
-
-        var request = new AppDialogRequest
-        {
-            Message = message,
-            Icon = AppDialogIcon.Question,
-            Buttons = AppDialogButtons.YesNo,
-            YesText = yesText,
-            NoText = noText,
-            OptionText = optionText ?? string.Empty,
-            OptionChecked = optionCheckedByDefault
-        };
-
-        if (!string.IsNullOrWhiteSpace(title))
-        {
-            request.Title = title;
-        }
-
-        bool confirmed = ShowValueDialog(
-            request,
-            window =>
-            {
-                checkedState = window.IsOptionChecked;
-                return window.Result == MessageBoxResult.Yes;
-            },
-            "ShowReminderConfirm",
-            fallback: true);
-
-        /*
-         * ⛔ `optionChecked` 必须是**复选框本身的状态**，与用户按了哪个按钮无关（2026-09-28 真机）。
-         *
-         * 老写法 `optionChecked = confirmed && checkedState`：本对话框的语义是
-         * 「是 = 保留全部（知道了）/ 否 = 从列表里移除这些」，用户**点了"从列表里移除"并勾上
-         * "以后不再提醒"** 时 `confirmed == false`，勾选状态被这一句直接丢掉 →
-         * `RemindJunkAfterImport` 永远回不到 false，下次导入又弹一遍。
-         *
-         * 真机证据：日志有 `已按提醒里的选择，把 N 个无用物从任务列表里移除`，
-         * 但**没有**那条"已记住不再提醒"的日志；`appsettings.json` 里 `RemindJunkAfterImport` 始终是 true。
-         *
-         * ⚠ 只改这一处：另外三个（ShowConfirm / ShowDestructiveConfirm…）的 Yes 是"动手那个"，
-         * 用户选否时勾选状态本来就没有意义，保持原样。
-         */
-        optionChecked = checkedState;
-        return confirmed;
+        return ConfirmationDialogPresenter.ShowReminderConfirm(
+            title,
+            message,
+            yesText,
+            noText,
+            optionText,
+            optionCheckedByDefault,
+            out optionChecked);
     }
 
     /// <summary>
@@ -442,19 +225,7 @@ public class DialogService
     /// 无 UI 宿主时返回 <see cref="MessageBoxResult.Cancel"/>（最保守的一档）。
     /// </summary>
     public MessageBoxResult ShowYesNoCancel(string message)
-    {
-        return ShowValueDialog(
-            new AppDialogRequest
-            {
-                Title = "确认",
-                Message = message,
-                Icon = AppDialogIcon.Question,
-                Buttons = AppDialogButtons.YesNoCancel
-            },
-            window => window.Result,
-            "ShowYesNoCancel",
-            MessageBoxResult.Cancel);
-    }
+        => ConfirmationDialogPresenter.ShowYesNoCancel(message);
 
     /// <summary>
     /// 危险操作的二次确认：主按钮用实心红，且文案写清动作本身（"清空""删除"），
@@ -463,29 +234,13 @@ public class DialogService
     /// <param name="message">正文，建议写清"会发生什么、能不能撤销"。</param>
     /// <param name="confirmText">主按钮文案。</param>
     public bool ShowDestructiveConfirm(string message, string confirmText = "确定")
-    {
-        return ShowValueDialog(
-            new AppDialogRequest
-            {
-                Title = "危险操作确认",
-                Message = message,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.YesNo,
-                Destructive = true,
-                YesText = string.IsNullOrWhiteSpace(confirmText) ? "确定" : confirmText,
-                NoText = "取消"
-            },
-            window => window.Result == MessageBoxResult.Yes,
-            "ShowDestructiveConfirm",
-            fallback: false);
-    }
+        => DestructiveConfirmPresenter.ShowDestructiveConfirm(message, confirmText);
 
     /// <summary>
     /// 危险操作的**二次确认**（红色 + 勾选框）。
     ///
     /// 为什么需要它：规格 §3.2 的"彻底删除"档要求同时满足"界面红色标识"与"二次确认（勾选/输入）"，
-    /// 而这两件事在原来的两个 API 里各占一半（<see cref="ShowDestructiveConfirm"/> 只有红色，
-    /// <see cref="ShowConfirm(string, string, bool, out bool)"/> 只有勾选框）。
+    /// 而这两件事在原来的两个 API 里各占一半：只带红色的确认只有红，只带勾选框的确认只有勾选框。
     /// 少任何一半都不满足规格：只有红色 = 一次点掉就永久删除；只有勾选框 = 危险动作看起来像普通询问。
     /// </summary>
     /// <param name="message">正文，写清"会发生什么、能不能撤销"。</param>
@@ -499,46 +254,21 @@ public class DialogService
         string optionText,
         out bool optionChecked)
     {
-        bool checkedState = false;
-
-        bool confirmed = ShowValueDialog(
-            new AppDialogRequest
-            {
-                Title = "危险操作确认",
-                Message = message,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.YesNo,
-                Destructive = true,
-                YesText = string.IsNullOrWhiteSpace(confirmText) ? "确定" : confirmText,
-                NoText = "取消",
-                OptionText = optionText ?? string.Empty,
-                OptionChecked = false
-            },
-            window =>
-            {
-                checkedState = window.IsOptionChecked;
-                return window.Result == MessageBoxResult.Yes;
-            },
-            "ShowDestructiveConfirm",
-            fallback: false);
-
-        optionChecked = confirmed && checkedState;
-        return confirmed;
+        return DestructiveConfirmPresenter.ShowDestructiveConfirm(
+            message,
+            confirmText,
+            optionText,
+            out optionChecked);
     }
 
     /// <summary>
     /// 危险操作确认 + **可选的**危险档勾选框（用户 2026-09-22 拍板的"其余物删除确认用勾选"）。
     ///
-    /// <para>
-    /// 与 <see cref="ShowDestructiveConfirm(string, string, string, out bool)"/> 的区别只有一处，
+    /// <para>与 <see cref="ShowDestructiveConfirm(string, string, string, out bool)"/> 的区别只有一处，
     /// 但很关键：<b>不勾选也能确认</b>。语义是"默认走安全档（移入回收站），勾上才切到激进档"——
-    /// 勾选框在这里是**档位选择**，不是"必须承认才能继续"的确认位。
-    /// 上一版把两者混用，导致用户不勾就没法走默认的回收站档。
-    /// </para>
-    /// <para>
-    /// 激进档自己的二次确认（红色 + "我知道不可恢复"必勾）由调用方在拿到
-    /// <paramref name="optionChecked"/> == true 之后再弹一次，本方法不代劳。
-    /// </para>
+    /// 勾选框在这里是**档位选择**，不是"必须承认才能继续"的确认位。</para>
+    /// <para>激进档自己的二次确认（红色 + "我知道不可恢复"必勾）由调用方在拿到
+    /// <paramref name="optionChecked"/> == true 之后再弹一次，本方法不代劳。</para>
     /// </summary>
     /// <param name="optionChecked">用户最终是否勾选（未确认时恒为 false）。</param>
     public bool ShowDestructiveConfirmWithOption(
@@ -548,31 +278,12 @@ public class DialogService
         bool optionCheckedByDefault,
         out bool optionChecked)
     {
-        bool checkedState = optionCheckedByDefault;
-
-        bool confirmed = ShowValueDialog(
-            new AppDialogRequest
-            {
-                Title = "危险操作确认",
-                Message = message,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.YesNo,
-                Destructive = true,
-                YesText = string.IsNullOrWhiteSpace(confirmText) ? "确定" : confirmText,
-                NoText = "取消",
-                OptionText = optionText ?? string.Empty,
-                OptionChecked = optionCheckedByDefault
-            },
-            window =>
-            {
-                checkedState = window.IsOptionChecked;
-                return window.Result == MessageBoxResult.Yes;
-            },
-            "ShowDestructiveConfirmWithOption",
-            fallback: false);
-
-        optionChecked = confirmed && checkedState;
-        return confirmed;
+        return DestructiveConfirmPresenter.ShowDestructiveConfirmWithOption(
+            message,
+            confirmText,
+            optionText,
+            optionCheckedByDefault,
+            out optionChecked);
     }
 
     // ------------------------------------------------------------------ 同名冲突询问（Ask 档）
@@ -595,252 +306,42 @@ public class DialogService
         public bool Destructive { get; init; } = true;
     }
 
-    /// <summary>勾上它 = 对后续所有同名冲突都照此办理（本批不再询问）。决策 D-4 的前提就是这一勾。</summary>
-    private const string ConflictApplyToAllText = "对后面所有同名冲突都照此办理（本批不再询问）";
-
-    /// <summary>当前正显示着的冲突询问窗口（取消时要能把它关掉，否则用户会对着一个已经作废的框点）。</summary>
-    private static readonly object ConflictDialogLock = new();
-
-    private static IAppDialogWindow? _activeConflictDialog;
-
     /// <summary>
     /// 同名冲突询问：**一次问清"这一个 / 整批"怎么处理**（照 WinRAR 六档的精神，按批量场景裁剪）。
     ///
-    /// <para>
-    /// 六个选项 = 三个按钮 × 勾选框两态：
-    /// 「覆盖 / 跳过 / 自动重命名」与「覆盖全部 / 跳过全部 / 全部自动重命名」；
-    /// 直接关掉窗口（标题栏 ✕）= **取消本批**（等价于既有取消语义）。
-    /// 为什么是 3 个按钮：自绘对话框最多同时放三个按钮（<c>Views/AppDialogWindow</c> 不归本轮改动管），
-    /// 用"勾选框 = 全部"正好覆盖 WinRAR 六档的语义，而且比六个按钮更好读。
-    /// </para>
-    /// <para>
-    /// <b>线程与降级</b>（与 <see cref="ShowValueDialog{T}"/> 同一口径，历史卡死就出在这一段）：
-    /// </para>
-    /// <list type="bullet">
-    /// <item><description><b>无 UI 宿主</b>（<c>Application.Current == null</c>，单元测试 / 控制台宿主）：
-    /// 写一条降级日志并返回 <c>null</c> —— **不弹窗、不死等**，调用方按保守档（自动重命名，绝不覆盖）继续。</description></item>
-    /// <item><description><b>UI 线程</b>：直接 <c>ShowDialog()</c>（内部是嵌套消息泵，界面照常刷新）。</description></item>
-    /// <item><description><b>后台线程</b>：<c>Dispatcher.InvokeAsync</c>（**不是**同步 <c>Invoke</c>，那会阻塞调用线程并放大死锁）
-    /// + 有界等待；等待期间**响应取消令牌**（用户点了取消就把窗口关掉并返回 null）。</description></item>
-    /// </list>
-    /// <para>
-    /// 返回 <c>null</c> 的语义是"没问到答案"（无界面宿主 / 被取消 / 超时）：
-    /// 调用方**必须**按保守档处理，绝不允许把它当成"用户同意覆盖"。
-    /// </para>
+    /// <para>六个选项 = 三个按钮（覆盖 / 跳过 / 自动重命名）× 勾选框两态（这一个 / 全部）；
+    /// 直接关掉窗口（标题栏 ✕）= **取消本批**。</para>
+    /// <para>返回 <c>null</c> 的语义是"没问到答案"（无界面宿主 / 被取消 / 超时）：
+    /// 调用方**必须**按保守档处理，绝不允许把它当成"用户同意覆盖"。</para>
     /// </summary>
     public virtual Task<ConflictDecision?> ShowConflictDecisionAsync(
         ConflictPrompt prompt,
         CancellationToken cancellationToken = default)
     {
-        prompt ??= new ConflictPrompt();
-
-        Dispatcher? dispatcher = TryGetUiDispatcher();
-
-        if (dispatcher == null)
-        {
-            LogFallback(
-                "ShowConflictDecision",
-                prompt.Message,
-                "当前宿主没有 WPF 界面，同名冲突询问无法进行，已按保守档（自动重命名，绝不覆盖）处理");
-
-            return Task.FromResult<ConflictDecision?>(null);
-        }
-
-        try
-        {
-            if (dispatcher.CheckAccess())
-            {
-                return Task.FromResult(ShowConflictDecisionModal(prompt));
-            }
-
-            DispatcherOperation<ConflictDecision?> operation =
-                dispatcher.InvokeAsync(() => ShowConflictDecisionModal(prompt));
-
-            return AwaitConflictDialogAsync(operation, prompt, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            LogFallback("ShowConflictDecision", prompt.Message, "显示同名冲突询问失败：" + ex.Message);
-            return Task.FromResult<ConflictDecision?>(null);
-        }
+        return ConflictDecisionPresenter.ShowAsync(prompt, cancellationToken);
     }
 
     /// <summary>
-    /// 后台线程那条路：拿答案，但**绝不无限等**，也绝不无视取消令牌。
-    /// </summary>
-    private static async Task<ConflictDecision?> AwaitConflictDialogAsync(
-        DispatcherOperation<ConflictDecision?> operation,
-        ConflictPrompt prompt,
-        CancellationToken cancellationToken)
-    {
-        Task<ConflictDecision?> dialog = operation.Task;
-
-        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        using CancellationTokenRegistration registration = cancellationToken.CanBeCanceled
-            ? cancellationToken.Register(() => cancelled.TrySetResult(true))
-            : default;
-
-        // 有界等待：对话框先有结果就把这个计时器取消掉，别让一个 5 分钟的定时器白挂着。
-        using var timeoutCts = new CancellationTokenSource(BackgroundWaitTimeout);
-        Task timeout = Task.Delay(BackgroundWaitTimeout, timeoutCts.Token);
-
-        Task finished = await Task.WhenAny(dialog, cancelled.Task, timeout).ConfigureAwait(false);
-
-        if (finished == dialog)
-        {
-            return await dialog.ConfigureAwait(false);
-        }
-
-        // 取消 / 超时：把窗口关掉（它已经作废了），返回 null 让调用方走保守档。
-        CloseActiveConflictDialog(operation.Dispatcher);
-
-        LogFallback(
-            "ShowConflictDecision",
-            prompt.Message,
-            finished == cancelled.Task
-                ? "同名冲突询问期间被取消，已按保守档处理（绝不覆盖）"
-                : $"等待用户响应超过 {BackgroundWaitTimeout.TotalMinutes:0} 分钟，已按保守档处理（绝不覆盖）");
-
-        return null;
-    }
-
-    /// <summary>
-    /// 在 UI 线程上显示冲突询问并读回答案。
-    ///
-    /// 六个选项的映射：Yes=覆盖、No=跳过、Cancel=自动重命名，勾选框 = 全部；
-    /// ✕ 关窗时 <c>Result</c> 停在默认的 Cancel 而
-    /// <c>DialogResult</c> **始终是 null**（按钮那条路会显式把它置成 false）——
-    /// 这就是"取消本批"与"自动重命名"的区分点。
-    /// </summary>
-    private static ConflictDecision? ShowConflictDecisionModal(ConflictPrompt prompt)
-    {
-        var request = new AppDialogRequest
-        {
-            Title = "同名冲突",
-            Message = prompt.Message,
-            Subtitle = prompt.Subtitle,
-            Detail = prompt.Detail,
-            Icon = AppDialogIcon.Question,
-            Buttons = AppDialogButtons.YesNoCancel,
-            Destructive = prompt.Destructive,
-            YesText = "覆盖",
-            NoText = "跳过",
-            CancelText = "自动重命名",
-            OptionText = ConflictApplyToAllText,
-            OptionChecked = false
-        };
-
-        IAppDialogWindow? window = DialogWindowFactories.AppDialog?.Invoke(request);
-
-        if (window == null)
-        {
-            LogFallback("ShowConflictDecision", prompt.Message, "宿主没有注册对话框窗口实现，已按保守档处理（绝不覆盖）");
-            return null;
-        }
-
-        window.AttachOwner();
-
-        /*
-         * 默认按钮（回车）不能是「覆盖」：AppDialogWindow 对 YesNoCancel 一律把 Yes 设为默认，
-         * 而这里的 Yes 正是危险动作「覆盖」。模态框可能在用户打字时弹出来，回车即覆盖
-         * 等于把"默认不得覆盖"（不变量 3）做反了。所以显式把默认按钮换成「跳过」。
-         */
-        window.ApplyConflictDefaults();
-
-        lock (ConflictDialogLock)
-        {
-            _activeConflictDialog = window;
-        }
-
-        try
-        {
-            window.ShowDialog();
-        }
-        finally
-        {
-            lock (ConflictDialogLock)
-            {
-                _activeConflictDialog = null;
-            }
-        }
-
-        bool applyToAll = window.IsOptionChecked;
-
-        return MapConflictAnswer(window.Result, window.DialogResult, applyToAll);
-    }
-
-    /// <summary>
-    /// 六档询问的**答案映射**（唯一实现处；抽成静态方法是为了能脱离窗口单测）。
+    /// 六档询问的**答案映射**（唯一实现在 <see cref="ConflictDecisionPresenter"/>；抽成纯函数是为了能脱离窗口单测）。
     ///
     /// 六个选项 = 三个按钮 × 勾选框两态：
     /// Yes=覆盖、No=跳过、Cancel=自动重命名，勾选框 = 对整批都照此办理；
-    /// ✕ 关窗（<paramref name="dialogResult"/> 为 null —— 两条按钮路径都会显式写 DialogResult）
-    /// = **取消本批**，勾选框不改变这个结论。
+    /// ✕ 关窗（<paramref name="dialogResult"/> 为 null）= **取消本批**，勾选框不改变这个结论。
     /// </summary>
     internal static ConflictDecision MapConflictAnswer(
         MessageBoxResult result,
         bool? dialogResult,
         bool applyToAll)
     {
-        switch (result)
-        {
-            case MessageBoxResult.Yes:
-                return ScopeConflictChoice(ConflictChoice.Overwrite, applyToAll);
-
-            case MessageBoxResult.No:
-                return ScopeConflictChoice(ConflictChoice.Skip, applyToAll);
-
-            case MessageBoxResult.Cancel when dialogResult is null:
-                return ConflictDecision.Once(ConflictChoice.CancelBatch);
-
-            case MessageBoxResult.Cancel:
-                return ScopeConflictChoice(ConflictChoice.AutoRename, applyToAll);
-
-            default:
-                // 未知结果（理论上到不了）：按最保守的"取消本批"处理，绝不落到"覆盖"。
-                return ConflictDecision.Once(ConflictChoice.CancelBatch);
-        }
+        return ConflictDecisionPresenter.MapAnswer(result, dialogResult, applyToAll);
     }
 
-    private static ConflictDecision ScopeConflictChoice(ConflictChoice choice, bool applyToAll) =>
-        applyToAll ? ConflictDecision.ForAll(choice) : ConflictDecision.Once(choice);
-
-    /// <summary>把已经作废的冲突询问窗口关掉（必须在 UI 线程上做）。</summary>
-    private static void CloseActiveConflictDialog(Dispatcher dispatcher)
-    {
-        try
-        {
-            dispatcher.BeginInvoke(
-                new Action(() =>
-                {
-                    IAppDialogWindow? window;
-
-                    lock (ConflictDialogLock)
-                    {
-                        window = _activeConflictDialog;
-                    }
-
-                    try
-                    {
-                        window?.Close();
-                    }
-                    catch
-                    {
-                        // 关不掉也只是留一个框，绝不允许把降级路径变成新的失败。
-                    }
-                }));
-        }
-        catch
-        {
-            // 投递失败同上：降级路径不允许再制造失败。
-        }
-    }
+    // ------------------------------------------------------------------ 提示类对话框（续）
 
     /// <summary>
     /// **批末汇总**（用户 2026-09-29：这个框要按结果分颜色）。
     ///
-    /// <para>与 <see cref="ShowInfo(string)"/> 的唯一区别是那个 <paramref name="severity"/>：
+    /// <para>与 <see cref="ShowInfo"/> 的唯一区别是那个 <paramref name="severity"/>：
     /// 窗口按它在顶部放一条色带（蓝 = 全成功 / 橙 = 有部分完成或跳过 / 红 = 有失败），
     /// 正文照旧白底黑字。判定**不在这里**（⛔ 对话框不许读中文状态去猜），
     /// 它来自 <see cref="ArchiveFixer.Models.BatchSummarySeverityRules"/> 那一个出口。</para>
@@ -849,58 +350,17 @@ public class DialogService
     /// 而不是只能读降级日志。</para>
     /// </summary>
     public virtual void ShowBatchSummary(string message, ArchiveFixer.Models.BatchSummarySeverity severity)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = severity switch
-                {
-                    ArchiveFixer.Models.BatchSummarySeverity.Failed => "一键处理汇总（有失败）",
-                    ArchiveFixer.Models.BatchSummarySeverity.Partial => "一键处理汇总（有没做成的）",
-                    _ => "一键处理汇总"
-                },
-
-                /*
-                 * 图标跟着严重度走：它同时决定这个框的**提醒强度**
-                 * （AppDialogWindow.ResolveAttention：Warning / Error = 强提醒，Info = 响一声）。
-                 * 一批全成功还要"闪 + 连响三声"就是骚扰。
-                 */
-                Icon = severity switch
-                {
-                    ArchiveFixer.Models.BatchSummarySeverity.Failed => AppDialogIcon.Error,
-                    ArchiveFixer.Models.BatchSummarySeverity.Partial => AppDialogIcon.Warning,
-                    _ => AppDialogIcon.Info
-                },
-                Message = message,
-                Buttons = AppDialogButtons.Ok,
-                SummarySeverity = severity
-            },
-            "ShowBatchSummary");
-    }
+        => InformationDialogPresenter.ShowBatchSummary(message, severity);
 
     /// <summary>
     /// **中途因空间不足被拦下**的那一次提示（用户 2026-09-29 第 2 条）。
     ///
-    /// <para>它必须是**纯提示、一个按钮、不阻塞后续任务**：一键处理的红线是"批中间不许要用户点一下
-    /// 才能继续"，而空间门拦下单个任务之后**整批照常在跑**（不变量 9：单个任务失败不中断整批）。
-    /// 所以这里走**非模态**窗口（<c>Show()</c>，不是 <c>ShowDialog()</c>）——
-    /// 窗口浮在那儿让他看得见，批一秒都不停。</para>
-    ///
-    /// <para>调用方负责"同一批只弹一次"（合并计数）：这里只管弹，不判断该不该弹。</para>
+    /// <para>它是**纯提示、一个按钮、不阻塞后续任务**：一键处理的红线是"批中间不许要用户点一下
+    /// 才能继续"，所以走**非模态**窗口（<c>Show()</c>）——窗口浮在那儿让他看得见，批一秒都不停。
+    /// 调用方负责"同一批只弹一次"（合并计数）：这里只管弹，不判断该不该弹。</para>
     /// </summary>
     public void ShowSpaceBlockedNotice(string message)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "磁盘空间不足",
-                Message = message,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowSpaceBlockedNotice",
-            modeless: true);
-    }
+        => InformationDialogPresenter.ShowSpaceBlockedNotice(message);
 
     /// <summary>
     /// 信息提示。
@@ -908,34 +368,12 @@ public class DialogService
     /// <para><c>virtual</c> 与其他可注入对话框同理：测试要能直接断言"弹的是哪一档"，
     /// 而不是只能读降级日志（模态框还会把用例卡死）。</para>
     /// </summary>
-    public virtual void ShowInfo(string message)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "提示",
-                Message = message,
-                Icon = AppDialogIcon.Info,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowInfo");
-    }
+    public virtual void ShowInfo(string message) => InformationDialogPresenter.ShowInfo(message);
 
     /// <summary>
     /// 警告提示。
     /// </summary>
-    public void ShowWarning(string message)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "警告",
-                Message = message,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowWarning");
-    }
+    public void ShowWarning(string message) => InformationDialogPresenter.ShowWarning(message);
 
     /// <summary>
     /// **空间体检**那一个警告框（用户 2026-09-27："还可以弄一个弹窗，因为这个比较危险"）。
@@ -945,332 +383,26 @@ public class DialogService
     /// 那些名字与数字塞进正文会把框撑高到看不完，而它们正是用户要照着清理的清单。</para>
     ///
     /// <para><c>virtual</c> 与其他可注入对话框同理：让测试能看见"到底弹了什么"，
-    /// 而不是只能读降级日志。无界面宿主（单元测试 / 控制台宿主）由 <see cref="ShowNotification"/>
-    /// 自己降级成一条记录 —— 不弹窗、不死等。</para>
+    /// 无界面宿主（单元测试 / 控制台宿主）由降级出口记一条 —— 不弹窗、不死等。</para>
     /// </summary>
     public virtual void ShowSpaceShortageWarning(string message, string detail)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "空间不足",
-                Message = message,
-                Detail = detail ?? string.Empty,
-                Icon = AppDialogIcon.Warning,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowSpaceShortageWarning");
-    }
+        => InformationDialogPresenter.ShowSpaceShortageWarning(message, detail);
 
     /// <summary>
     /// 错误提示。
     ///
-    /// <para><c>virtual</c> 与 <see cref="ShowConfirm(string, string, bool, string, out bool)"/> 同理：
-    /// 让测试能看见"到底报了哪一条错"，而不是只能看降级日志。</para>
+    /// <para><c>virtual</c> 与其他可注入对话框同理：让测试能看见"到底报了哪一条错"，
+    /// 而不是只能看降级日志。</para>
     /// </summary>
-    public virtual void ShowError(string message)
-    {
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "错误",
-                Message = message,
-                Icon = AppDialogIcon.Error,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowError");
-    }
+    public virtual void ShowError(string message) => InformationDialogPresenter.ShowError(message);
 
     /// <summary>
     /// 异常提示。
     ///
-    /// ⚠ 正文过 <see cref="PasswordMasker.Sanitize"/>：异常文本可能夹带命令行片段
+    /// ⚠ 正文与明细都过 <see cref="ArchiveFixer.Password.PasswordMasker.Sanitize"/>：异常文本可能夹带命令行片段
     /// （7z 的 <c>-p&lt;明文密码&gt;</c> 就写在参数里，异常消息经常把整条命令带出来），
     /// 弹窗与日志同一口径 —— 密码只存内存，任何出口都不得出现明文（AGENTS.md §6 第 5 条）。
     /// </summary>
     public void ShowException(Exception ex, string prefix = "发生异常")
-    {
-        string message = ex == null
-            ? prefix
-            : $"{prefix}：{ex.Message}";
-
-        // 类型名单独一行：用户回报问题时"是什么异常"比"异常说了什么"更管用，
-        // 而且不夹带堆栈（堆栈里有路径，太长也不该塞进对话框正文）。
-        string detail = ex == null
-            ? string.Empty
-            : ex.GetType().FullName ?? ex.GetType().Name;
-
-        ShowNotification(
-            new AppDialogRequest
-            {
-                Title = "错误",
-                Message = PasswordMasker.Sanitize(message),
-                Detail = PasswordMasker.Sanitize(detail),
-                Icon = AppDialogIcon.Error,
-                Buttons = AppDialogButtons.Ok
-            },
-            "ShowException");
-    }
-
-    // ------------------------------------------------------------------ 内部：线程与降级
-
-    /// <summary>
-    /// 值返回型对话框：拿用户的答案。
-    /// </summary>
-    private static T ShowValueDialog<T>(
-        AppDialogRequest request,
-        Func<IAppDialogWindow, T> read,
-        string context,
-        T fallback)
-    {
-        Dispatcher? dispatcher = TryGetUiDispatcher();
-
-        if (dispatcher != null && DialogWindowFactories.AppDialog == null)
-        {
-            LogFallback(context, request.Message, "宿主没有注册对话框窗口实现，已按无界面宿主降级");
-            return fallback;
-        }
-
-        if (dispatcher == null)
-        {
-            LogFallback(context, request.Message, "当前宿主没有 WPF 界面，已按默认值处理");
-            return fallback;
-        }
-
-        try
-        {
-            if (dispatcher.CheckAccess())
-            {
-                // UI 线程：ShowDialog 自己跑嵌套消息泵，界面不会卡住。
-                return ShowModal(request, read);
-            }
-
-            // 后台线程：InvokeAsync（不是同步 Invoke，那会阻塞调用线程并放大死锁）+ 有界等待。
-            DispatcherOperation<T> operation = dispatcher.InvokeAsync(() => ShowModal(request, read));
-
-            if (operation.Task.Wait(BackgroundWaitTimeout))
-            {
-                return operation.Task.GetAwaiter().GetResult();
-            }
-
-            LogFallback(
-                context,
-                request.Message,
-                $"等待用户响应超过 {BackgroundWaitTimeout.TotalMinutes:0} 分钟，已按默认值处理");
-            return fallback;
-        }
-        catch (Exception ex)
-        {
-            LogFallback(context, request.Message, "显示对话框失败：" + ex.Message);
-            return fallback;
-        }
-    }
-
-    /// <summary>
-    /// 通知型对话框（没有返回值）：后台线程投递即返回，不阻塞调用方。
-    /// </summary>
-    /// <param name="modeless">
-    /// true = 用**非模态**窗口（<c>Show()</c>）—— 调用方在跑批，不能被一个提示卡住
-    /// （见 <see cref="ShowSpaceBlockedNotice"/>）。false = 原来的模态 <c>ShowDialog()</c>。
-    ///
-    /// <para>两者在**后台线程**上的行为一致：都是 <c>BeginInvoke</c> 投递完立刻返回 ——
-    /// 非模态那一档真正解决的是"**UI 线程**上调用时不卡住批处理"。</para>
-    /// </param>
-    private static void ShowNotification(AppDialogRequest request, string context, bool modeless = false)
-    {
-        Dispatcher? dispatcher = TryGetUiDispatcher();
-
-        if (dispatcher == null)
-        {
-            LogFallback(context, request.Message, "当前宿主没有 WPF 界面，仅记录日志");
-            return;
-        }
-
-        if (dispatcher.CheckAccess())
-        {
-            try
-            {
-                if (modeless)
-                {
-                    ShowModeless(request);
-                }
-                else
-                {
-                    ShowModal(request, window => window.Result);
-                }
-            }
-            catch (Exception ex)
-            {
-                LogFallback(context, request.Message, "显示对话框失败：" + ex.Message);
-            }
-
-            return;
-        }
-
-        try
-        {
-            dispatcher.BeginInvoke(
-                new Action(() =>
-                {
-                    try
-                    {
-                        if (modeless)
-                        {
-                            ShowModeless(request);
-                        }
-                        else
-                        {
-                            ShowModal(request, window => window.Result);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        LogFallback(context, request.Message, "显示对话框失败：" + ex.Message);
-                    }
-                }));
-        }
-        catch (Exception ex)
-        {
-            LogFallback(context, request.Message, "投递对话框失败：" + ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// 文件对话框同样要能在无 UI 宿主下安全降级（测试会构造本服务）。
-    /// </summary>
-    private static T ShowFileDialog<T>(Func<T> show, string context, T fallback)
-    {
-        Dispatcher? dispatcher = TryGetUiDispatcher();
-
-        if (dispatcher == null)
-        {
-            LogFallback(context, "(文件对话框)", "当前宿主没有 WPF 界面，返回空结果");
-            return fallback;
-        }
-
-        try
-        {
-            if (dispatcher.CheckAccess())
-            {
-                return show();
-            }
-
-            DispatcherOperation<T> operation = dispatcher.InvokeAsync(show);
-
-            return operation.Task.Wait(BackgroundWaitTimeout)
-                ? operation.Task.GetAwaiter().GetResult()
-                : fallback;
-        }
-        catch (Exception ex)
-        {
-            LogFallback(context, "(文件对话框)", "显示失败：" + ex.Message);
-            return fallback;
-        }
-    }
-
-    /// <summary>
-    /// 在 UI 线程上创建并模态显示统一对话框。
-    /// </summary>
-    private static T ShowModal<T>(AppDialogRequest request, Func<IAppDialogWindow, T> read)
-    {
-        IAppDialogWindow window = DialogWindowFactories.AppDialog!.Invoke(request);
-
-        window.AttachOwner();
-        window.ShowDialog();
-
-        return read(window);
-    }
-
-    /// <summary>
-    /// 在 UI 线程上创建并**非模态**显示统一对话框（<c>Show()</c>，不跑嵌套消息泵、不等用户）。
-    ///
-    /// <para>为什么需要它：批处理跑在 UI 线程上，"中途发现空间不足"这类**纯提示**要是用
-    /// <c>ShowDialog()</c>，就会把整批卡在"等用户点确定"上 —— 而一键档的红线正是
-    /// "批中间不许要用户点一下才能继续"（AGENTS.md §11）。非模态窗口浮在旁边，
-    /// 批一秒都不停，用户回来照样看得见。</para>
-    ///
-    /// <para>关窗路径不用改：<c>AppDialogWindow</c> 在非模态下设置 <c>DialogResult</c>
-    /// 会抛 <see cref="InvalidOperationException"/>，它自己已经捕获并回落到 <c>Close()</c>。</para>
-    /// </summary>
-    private static void ShowModeless(AppDialogRequest request)
-    {
-        if (DialogWindowFactories.AppDialog == null)
-        {
-            LogFallback("ShowModeless", request.Message, "宿主没有注册对话框窗口实现，已按无界面宿主降级");
-            return;
-        }
-
-        IAppDialogWindow window = DialogWindowFactories.AppDialog.Invoke(request);
-
-        window.AttachOwner();
-        window.Show();
-    }
-
-
-    private static Dispatcher? TryGetUiDispatcher()
-    {
-        Application? app = Application.Current;
-
-        if (app == null)
-        {
-            return null;
-        }
-
-        Dispatcher? dispatcher = app.Dispatcher;
-
-        if (dispatcher == null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
-        {
-            return null;
-        }
-
-        return dispatcher;
-    }
-
-    /// <summary>
-    /// 无 UI 宿主 / 超时 / 显示失败时的唯一出口：记一条降级记录，然后返回默认值。
-    ///
-    /// 记录前过一遍 <see cref="PasswordMasker.Sanitize"/> —— 提示文案里可能夹带
-    /// "密码：xxx" 这种内容，日志里不得出现明文（AGENTS.md §6 第 5 条）。
-    /// 写日志本身也必须吞掉所有异常：降级路径不允许再制造新的失败。
-    /// </summary>
-    private static void LogFallback(string context, string message, string reason)
-    {
-        string line =
-            $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [{context}] {reason}｜" +
-            PasswordMasker.Sanitize(message);
-
-        lock (FallbackLock)
-        {
-            FallbackEntries.Add(line);
-
-            if (FallbackEntries.Count > 200)
-            {
-                FallbackEntries.RemoveAt(0);
-            }
-        }
-
-        if (!FallbackFileLoggingEnabled)
-        {
-            return;
-        }
-
-        try
-        {
-            string directory = Path.Combine(FallbackPathService.DataRootDirectory, "logs");
-
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.AppendAllText(
-                Path.Combine(directory, "dialog-fallback.log"),
-                line + Environment.NewLine,
-                Encoding.UTF8);
-        }
-        catch
-        {
-            // 降级日志写不进去也不允许影响调用方。
-        }
-    }
+        => InformationDialogPresenter.ShowException(ex, prefix);
 }

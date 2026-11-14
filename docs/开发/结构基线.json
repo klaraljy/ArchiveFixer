@@ -7,16 +7,11 @@
   "large_files": {
     "Detection/VolumeGroupDetector.cs": 1075,
     "Engines/ToolLocator.cs": 1026,
-    "Engines/WinRar/UnRarProcessRunner.cs": 1108,
-    "Extraction/ExtractionWorkspace.cs": 1318,
     "Extraction/ProcessArtifactLayout.cs": 715,
     "Extraction/RecursiveExtractor.cs": 1044,
     "Extraction/VolumeNameRepair.cs": 351,
     "Extraction/VolumeProbeVerifier.cs": 1003,
-    "Models/AppSettings.cs": 1257,
     "Models/ArchiveTask.cs": 1833,
-    "Services/DialogService.cs": 1321,
-    "Services/PlacementStep.cs": 1344,
     "Storage/PasswordListStore.cs": 744,
     "Storage/RecycleBinService.cs": 466,
     "ViewModels/ExtractionCoordinator.BatchReminderStep.cs": 747,
@@ -33,10 +28,7 @@
     "ViewModels/ExtractionCoordinator.VolumeSlotFillStep.cs": 770,
     "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 688,
     "ViewModels/MainViewModel.cs": 1494,
-    "ViewModels/OneClickCoordinator.cs": 1308,
-    "ViewModels/PackingViewModel.cs": 1250,
-    "ViewModels/RenameCoordinator.cs": 829,
-    "ViewModels/SettingsViewModel.cs": 1361
+    "ViewModels/RenameCoordinator.cs": 829
   },
   "multi_type_files": {}
 }

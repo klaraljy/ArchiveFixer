@@ -2,14 +2,10 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Packing;
 using ArchiveFixer.Services;
-using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 
@@ -28,14 +24,21 @@ namespace ArchiveFixer.ViewModels;
 ///
 /// <para><b>密码只存内存</b>：不写设置、不进日志（日志只写"已设置密码"）。界面上的
 /// 「复制密码」是给用户自己用的出口。</para>
+///
+/// <para><b>按职责拆开</b>（2026-11 结构收口）：本类只留 XAML 绑定的属性与公开 API 的薄转发，
+/// 逻辑分别落在 <see cref="PackingOptionsCoordinator"/>（选项 / 请求 / 输入校验）、
+/// <see cref="PackingCommandSet"/>（命令）、<see cref="PackingPlacementCoordinator"/>（落点）、
+/// <see cref="PackingRunCoordinator"/>（执行状态与真跑流程）、
+/// <see cref="PackingSummaryComposer"/>（摘要 / 外层容器结论 / 结果区）里。
+/// 页面状态仍然只由本类持有，协作类通过 internal 接缝写它 —— 绑定的名字与类型一个都没动。</para>
 /// </summary>
 public class PackingViewModel : ViewModelBase
 {
-    private readonly PackingService _service;
+    private readonly PackingPlacementCoordinator _placement;
+    private readonly PackingSummaryComposer _summary;
+    private readonly PackingRunCoordinator _run;
+    private readonly PackingCommandSet _commands;
     private readonly DialogService _dialogService;
-    private readonly PathService _pathService;
-    private readonly ClipboardService _clipboardService;
-    private readonly ToolLocator _tools;
 
     private string _sourceFolder = string.Empty;
 
@@ -51,19 +54,11 @@ public class PackingViewModel : ViewModelBase
 
     private PackOuterContainer _outerContainer = PackOuterContainer.Rar;
 
-    /// <summary>本次运行的那一套选择（落点 / 原包 / 其余物），由小确认弹窗回填。</summary>
-    private PackingRunOptions _runOptions = new();
-
-    /// <summary>最近一次算出来的规划（摘要 / 确认弹窗预览都用它）。</summary>
-    private PackingPlan? _lastPlan;
-
     /// <summary>设置对象（打包那几档要记住；⛔ 与解压侧各存各的）。</summary>
     private AppSettings _settings = new();
 
     /// <summary>密码列表（"从密码列表里选"那个按钮从这里取；由主界面注入）。</summary>
     private Func<IReadOnlyList<string>>? _passwordListProvider;
-
-    /// <summary>从密码列表挑一条的弹窗（默认走 <see cref="DialogService"/>；测试可注入）。</summary>
 
     private string _summaryText = string.Empty;
     private string _placementText = string.Empty;
@@ -85,10 +80,6 @@ public class PackingViewModel : ViewModelBase
     private PackingNoticeKind _noticeKind = PackingNoticeKind.None;
     private string _noticeText = string.Empty;
 
-    private CancellationTokenSource? _cancellation;
-
-    private string _lastUsedPassword = string.Empty;
-
     public PackingViewModel()
         : this(new PackingService(), new DialogService(), new PathService(), new ClipboardService())
     {
@@ -101,20 +92,20 @@ public class PackingViewModel : ViewModelBase
         ClipboardService? clipboardService = null,
         ToolLocator? tools = null)
     {
-        _service = service ?? new PackingService();
-        _dialogService = dialogService ?? new DialogService();
-        _pathService = pathService ?? new PathService();
-        _clipboardService = clipboardService ?? new ClipboardService();
-        _tools = tools ?? _service.Tools;
+        PackingService resolvedService = service ?? new PackingService();
+        PathService resolvedPaths = pathService ?? new PathService();
+        ClipboardService resolvedClipboard = clipboardService ?? new ClipboardService();
+        ToolLocator resolvedTools = tools ?? resolvedService.Tools;
 
-        BrowseFolderCommand = new RelayCommand(BrowseSourceFolder);
-        BrowseFileCommand = new RelayCommand(BrowseSourceFile);
-        PickPlacementDirectoryCommand = new RelayCommand(PickPlacementDirectory);
-        RefreshSummaryCommand = new RelayCommand(RefreshSummary);
-        StartCommand = new AsyncRelayCommand(StartAsync, () => !IsRunning);
-        CancelCommand = new RelayCommand(Cancel, () => IsRunning);
-        CopyPasswordCommand = new RelayCommand(CopyPassword);
-        OpenOutputFolderCommand = new RelayCommand(OpenOutputFolder);
+        _dialogService = dialogService ?? new DialogService();
+
+        PackingOptionsCoordinator options = new(this, resolvedTools);
+
+        _placement = new PackingPlacementCoordinator(this, _dialogService);
+        _summary = new PackingSummaryComposer(this, resolvedTools, options);
+        _run = new PackingRunCoordinator(
+            this, options, _summary, resolvedService, _dialogService, resolvedPaths, resolvedClipboard);
+        _commands = new PackingCommandSet(this);
 
         LoadPlacementFromSettings();
         RefreshSummary();
@@ -146,7 +137,7 @@ public class PackingViewModel : ViewModelBase
             _settings = value ?? new AppSettings();
 
             // 设置变了（①页「输出位置」也是一份共享真值）→ 页面那两档与那行「落点」都要跟着重读。
-            LoadPlacementFromSettings();
+            _placement.LoadFromSettings();
             RefreshPlacementSummary();
         }
     }
@@ -391,7 +382,7 @@ public class PackingViewModel : ViewModelBase
     public string SummaryText
     {
         get => _summaryText;
-        private set => SetProperty(ref _summaryText, value ?? string.Empty);
+        internal set => SetProperty(ref _summaryText, value ?? string.Empty);
     }
 
     /// <summary>
@@ -431,7 +422,7 @@ public class PackingViewModel : ViewModelBase
                 OnPropertyChanged(nameof(PlacementIsFollowDefault));
                 OnPropertyChanged(nameof(PlacementIsEditable));
 
-                PersistPlacement();
+                _placement.Persist();
                 RefreshPlacementSummary();
             }
         }
@@ -445,7 +436,7 @@ public class PackingViewModel : ViewModelBase
         {
             if (SetProperty(ref _customPlacementDirectory, value ?? string.Empty))
             {
-                PersistPlacement();
+                _placement.Persist();
                 RefreshPlacementSummary();
             }
         }
@@ -455,62 +446,7 @@ public class PackingViewModel : ViewModelBase
     public bool PlacementIsEditable => PlacementIsCustom;
 
     /// <summary>「选择…」：挑一个目录（⛔ 只改设置，**不建目录** —— 与①页同一口径）。</summary>
-    public void PickPlacementDirectory()
-    {
-        string? picked = _dialogService.ShowFolderBrowserDialog(
-            "选择最终压缩包放在哪",
-            string.IsNullOrWhiteSpace(CustomPlacementDirectory) ? SourceFolder : CustomPlacementDirectory);
-
-        if (string.IsNullOrWhiteSpace(picked))
-        {
-            return;
-        }
-
-        // 挑了目录 = 用户要"指定位置"，顺手把那一档切过去（他不会希望挑了却不生效）。
-        _placementIsCustom = true;
-        OnPropertyChanged(nameof(PlacementIsCustom));
-        OnPropertyChanged(nameof(PlacementIsFollowDefault));
-        OnPropertyChanged(nameof(PlacementIsEditable));
-
-        CustomPlacementDirectory = picked;
-    }
-
-    /// <summary>把页面上的两档写回设置（"相应的保存记忆操作"）。</summary>
-    private void PersistPlacement()
-    {
-        if (_settings == null)
-        {
-            return;
-        }
-
-        _settings.PackTargetMode = (PlacementIsCustom
-            ? PackingTargetMode.Custom
-            : PackingTargetMode.Local).ToString();
-
-        _settings.PackCustomOutputDirectory = CustomPlacementDirectory ?? string.Empty;
-
-        SettingsChanged?.Invoke();
-    }
-
-    /// <summary>把设置里那一套读进页面（打开⑤页 / 换设置对象时）。</summary>
-    private void LoadPlacementFromSettings()
-    {
-        string saved = _settings?.PackTargetMode ?? string.Empty;
-
-        _placementIsCustom = PackingRunOptions.ParseTargetMode(saved) == PackingTargetMode.Custom;
-        _customPlacementDirectory = _settings?.PackCustomOutputDirectory ?? string.Empty;
-
-        OnPropertyChanged(nameof(PlacementIsCustom));
-        OnPropertyChanged(nameof(PlacementIsFollowDefault));
-        OnPropertyChanged(nameof(PlacementIsEditable));
-
-        /*
-         * ⚠ 目录那一格也要通知（2026-09-26 真机逮到）：上面只是改了**字段**，
-         * 而那一格绑的是属性 —— 不通知的话，⑥页「恢复默认设置」之后⑤页那个「指定位置」框
-         * 还显示着上一次的路径（灰着、不可改），与"现在没有指定位置"这个事实正好相反。
-         */
-        OnPropertyChanged(nameof(CustomPlacementDirectory));
-    }
+    public void PickPlacementDirectory() => _placement.PickDirectory();
 
     /// <summary>
     /// 页面上这几档 → 一套请求选项（⛔ 唯一出口：预览、弹窗抬头、真跑都引它）。
@@ -518,84 +454,26 @@ public class PackingViewModel : ViewModelBase
     /// <para>落点取**页面**上那两档：默认 = **源旁边**（用户原话："默认放在源文件目录旁边"），
     /// 指定位置 = 这一页挑的那个目录。</para>
     /// </summary>
-    internal PackingRunOptions BuildPlacementOptions()
-    {
-        PackingRunOptions saved = PackingRunOptions.FromSettings(_settings);
-
-        return new PackingRunOptions
-        {
-            TargetMode = PlacementIsCustom ? PackingTargetMode.Custom : PackingTargetMode.Local,
-            CustomOutputDirectory = CustomPlacementDirectory ?? string.Empty,
-            SourceHandling = saved.SourceHandling,
-            RestHandling = saved.RestHandling
-        };
-    }
+    internal PackingRunOptions BuildPlacementOptions() => _placement.BuildOptions();
 
     /// <summary>重算那行「落点」（很便宜：只解析路径，不扫源目录）。</summary>
-    private void RefreshPlacementSummary()
-    {
-        if (string.IsNullOrWhiteSpace(SourceFolder))
-        {
-            PlacementSummaryText = "落点：还没选源 —— 先选一个文件夹（或一个文件）。";
-            return;
-        }
+    private void RefreshPlacementSummary() => PlacementSummaryText = _placement.Describe();
 
-        PackingSourceResolution resolution = PackingSourceResolver.Resolve(SourceFolder);
-
-        if (!resolution.Success)
-        {
-            PlacementSummaryText = "落点：" + resolution.Reason;
-            return;
-        }
-
-        PackingRunOptions options = BuildPlacementOptions();
-        string directory = PackingPaths.ResolveTargetDirectory(resolution, options);
-
-        PlacementSummaryText = options.TargetMode switch
-        {
-            PackingTargetMode.Custom => $"落点：指定位置 —— {directory}",
-            _ => $"落点：默认（源旁边）—— {directory}"
-        };
-    }
+    /// <summary>把设置里那一套读进页面（打开⑤页 / 换设置对象时）。只改状态与通知，不写回设置。</summary>
+    private void LoadPlacementFromSettings() => _placement.LoadFromSettings();
 
     /// <summary>落点：B 与结果 rar 会落在哪儿。</summary>
     public string PlacementText
     {
         get => _placementText;
-        private set => SetProperty(ref _placementText, value ?? string.Empty);
+        internal set => SetProperty(ref _placementText, value ?? string.Empty);
     }
 
     /// <summary>这台机器上能不能做外层 rar。</summary>
-    public bool RarAvailable
-    {
-        get
-        {
-            try
-            {
-                return _tools.RarExists;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
+    public bool RarAvailable => _summary.RarAvailable;
 
     /// <summary>内置 7-Zip 在不在（自动回退到 7z 外层时要用）。</summary>
-    public bool SevenZipAvailable
-    {
-        get
-        {
-            try
-            {
-                return _tools.SevenZipExists;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
+    public bool SevenZipAvailable => _summary.SevenZipAvailable;
 
     /// <summary>
     /// 外层容器**实际会用哪一个**（第 46 条：没装 WinRAR 就自动改用 7z）。
@@ -605,27 +483,13 @@ public class PackingViewModel : ViewModelBase
     /// 结果区都必须写**实际**会产出的那个文件名 —— 否则没装 WinRAR 的机器上会写着
     /// <c>1111.rar</c>、跑完却得到 <c>1111.7z</c>（界面撒谎）。</para>
     /// </summary>
-    public PackingOuterContainerResolution EffectiveOuterContainer =>
-        PackingOuterContainerResolver.Resolve(OuterContainer, RarAvailable, SevenZipAvailable);
+    public PackingOuterContainerResolution EffectiveOuterContainer => _summary.EffectiveOuterContainer;
 
     /// <summary>实际会做的容器。</summary>
     public PackOuterContainer EffectiveContainer => EffectiveOuterContainer.Effective;
 
     /// <summary>Rar.exe 的现状那句话（"用的哪一个、从哪来的" / "没找到，期望位置在哪"）。</summary>
-    public string RarStatusText
-    {
-        get
-        {
-            try
-            {
-                return _tools.DescribeRarResolution();
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-    }
+    public string RarStatusText => _summary.RarStatusText;
 
     /// <summary>
     /// 没有 Rar.exe（界面据此把那一格画成警告色）。
@@ -642,12 +506,12 @@ public class PackingViewModel : ViewModelBase
     public bool IsRunning
     {
         get => _isRunning;
-        private set
+        internal set
         {
             if (SetProperty(ref _isRunning, value))
             {
                 OnPropertyChanged(nameof(IsNotRunning));
-                RaiseCommandStates();
+                _commands.RaiseRunStateCommands();
             }
         }
     }
@@ -658,21 +522,21 @@ public class PackingViewModel : ViewModelBase
     public int ProgressPercent
     {
         get => _progressPercent;
-        private set => SetProperty(ref _progressPercent, value < 0 ? 0 : value > 100 ? 100 : value);
+        internal set => SetProperty(ref _progressPercent, value < 0 ? 0 : value > 100 ? 100 : value);
     }
 
     /// <summary>当前步骤（<see cref="StatusText"/> 里的常量）。</summary>
     public string CurrentStepText
     {
         get => _currentStepText;
-        private set => SetProperty(ref _currentStepText, value ?? string.Empty);
+        internal set => SetProperty(ref _currentStepText, value ?? string.Empty);
     }
 
     /// <summary>当前步骤的明细（引擎正在处理什么；拿不到就是空的）。</summary>
     public string ProgressDetailText
     {
         get => _progressDetailText;
-        private set => SetProperty(ref _progressDetailText, value ?? string.Empty);
+        internal set => SetProperty(ref _progressDetailText, value ?? string.Empty);
     }
 
     // ────────────────────────── 结果 ──────────────────────────
@@ -680,33 +544,33 @@ public class PackingViewModel : ViewModelBase
     public bool HasResult
     {
         get => _hasResult;
-        private set => SetProperty(ref _hasResult, value);
+        internal set => SetProperty(ref _hasResult, value);
     }
 
     public string ResultTitle
     {
         get => _resultTitle;
-        private set => SetProperty(ref _resultTitle, value ?? string.Empty);
+        internal set => SetProperty(ref _resultTitle, value ?? string.Empty);
     }
 
     public string ResultText
     {
         get => _resultText;
-        private set => SetProperty(ref _resultText, value ?? string.Empty);
+        internal set => SetProperty(ref _resultText, value ?? string.Empty);
     }
 
     /// <summary>结果类别：Success / Warning / Error（决定结果区配色）。</summary>
     public string ResultKind
     {
         get => _resultKind;
-        private set => SetProperty(ref _resultKind, value ?? string.Empty);
+        internal set => SetProperty(ref _resultKind, value ?? string.Empty);
     }
 
     /// <summary>外层产物的路径（"不做外层" / 失败时为空的）。</summary>
     public string ResultOuterPath
     {
         get => _resultOuterPath;
-        private set
+        internal set
         {
             if (SetProperty(ref _resultOuterPath, value ?? string.Empty))
             {
@@ -722,7 +586,7 @@ public class PackingViewModel : ViewModelBase
     public ObservableCollection<PackingVolumeRow> Volumes { get; } = new();
 
     /// <summary>本次打包用过的密码还在内存里（「复制密码」按钮据此可用）。</summary>
-    public bool CanCopyPassword => PackingPasswordPolicy.IsUsable(_lastUsedPassword);
+    public bool CanCopyPassword => _run.CanCopyPassword;
 
     /// <summary>B 会保留的那句提醒。</summary>
     public string KeepFolderHint => StatusText.PackKeepFolderHint;
@@ -732,7 +596,7 @@ public class PackingViewModel : ViewModelBase
     public PackingNoticeKind NoticeKind
     {
         get => _noticeKind;
-        private set
+        internal set
         {
             if (SetProperty(ref _noticeKind, value))
             {
@@ -754,7 +618,7 @@ public class PackingViewModel : ViewModelBase
     public string NoticeText
     {
         get => _noticeText;
-        private set
+        internal set
         {
             if (SetProperty(ref _noticeText, value ?? string.Empty))
             {
@@ -768,23 +632,23 @@ public class PackingViewModel : ViewModelBase
     // ────────────────────────── 命令 ──────────────────────────
 
     /// <summary>选**文件夹**（主用法）。</summary>
-    public ICommand BrowseFolderCommand { get; }
+    public ICommand BrowseFolderCommand => _commands.BrowseFolderCommand;
 
     /// <summary>选**单个文件**（第 46 条：会在它旁边建同名文件夹再打包）。</summary>
-    public ICommand BrowseFileCommand { get; }
+    public ICommand BrowseFileCommand => _commands.BrowseFileCommand;
 
     /// <summary>「选择…」：挑最终压缩包放在哪个目录（**落点的选择在页面上**，用户 2026-09-26 追加）。</summary>
-    public ICommand PickPlacementDirectoryCommand { get; }
+    public ICommand PickPlacementDirectoryCommand => _commands.PickPlacementDirectoryCommand;
 
-    public ICommand RefreshSummaryCommand { get; }
+    public ICommand RefreshSummaryCommand => _commands.RefreshSummaryCommand;
 
-    public ICommand StartCommand { get; }
+    public ICommand StartCommand => _commands.StartCommand;
 
-    public ICommand CancelCommand { get; }
+    public ICommand CancelCommand => _commands.CancelCommand;
 
-    public ICommand CopyPasswordCommand { get; }
+    public ICommand CopyPasswordCommand => _commands.CopyPasswordCommand;
 
-    public ICommand OpenOutputFolderCommand { get; }
+    public ICommand OpenOutputFolderCommand => _commands.OpenOutputFolderCommand;
 
     // ────────────────────────── 动作 ──────────────────────────
 
@@ -810,440 +674,86 @@ public class PackingViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// 重算摘要（扫一遍源的文件数与总大小）。
-    /// ⚠ 大文件夹上这一次扫描是要花时间的，所以它绑在"选完源 / 点重算"上，**不是**每敲一个字符就跑。
-    /// </summary>
-    public void RefreshSummary()
-    {
-        var request = BuildRequest(new PackingRunOptions());
-
-        if (!PackingPlan.TryCreate(request, out PackingPlan? plan, out string error) || plan == null)
-        {
-            SummaryText = string.IsNullOrWhiteSpace(SourceFolder) ? "先选一个文件夹（或一个文件）。" : error;
-            PlacementText = string.Empty;
-            _lastPlan = null;
-            return;
-        }
-
-        _lastPlan = plan;
-
-        PackingOuterContainerResolution outer = EffectiveOuterContainer;
-
-        // ⛔ 要外层却连内置 7-Zip 都没有（程序装坏了那种）：**不许写成"不做外层、结果就是分卷"** ——
-        //    服务那边会直接报"没法生成任何外层容器"，界面先说清楚，别让他确认一件做不成的事。
-        if (outer.Impossible)
-        {
-            SummaryText =
-                $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
-                + Environment.NewLine
-                + "外层容器：做不出来 —— 本机既没有 Rar.exe，也没有可用的 7-Zip。";
-            PlacementText = $"请先修好 7-Zip（程序目录 tools\\7zip：{_tools.SevenZipExePath}），否则打不了包。";
-
-            return;
-        }
-
-        string outerNote = outer.FellBackToSevenZip
-            ? "（本机没有 Rar.exe，自动改用 7z —— 无需额外安装）"
-            : string.Empty;
-
-        SummaryText =
-            $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
-            + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个条目读不到大小）" : string.Empty)
-            + Environment.NewLine
-            + $"内层 7z 分卷：{plan.DescribeVolumePlan()}"
-            + Environment.NewLine
-            + $"外层：1 个 {outer.Effective.ShortName()} 文件{outerNote}"
-            + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}";
-
-        PlacementText = outer.Effective.HasOuterArtifact()
-            ? $"最终产物：{OuterPathFor(plan, outer.Effective)}"
-            : $"不做外层容器：结果就是 {plan.OutputFolder} 里的分卷";
-    }
+    /// <summary>重算摘要（扫一遍源的文件数与总大小；算法在 <see cref="PackingSummaryComposer"/>）。</summary>
+    public void RefreshSummary() => _summary.Refresh();
 
     /// <summary>
     /// 按**实际生效的容器**取最终产物的完整路径（`.rar` 还是 `.7z` 由它决定）。
     /// ⛔ 不许各处自己按 <c>plan.OuterContainer</c>（= 请求里那个）拼路径。
     /// </summary>
     internal static string OuterPathFor(PackingPlan plan, PackOuterContainer effectiveContainer) =>
-        effectiveContainer switch
-        {
-            PackOuterContainer.SevenZip => plan.SevenZipOuterPath,
-            PackOuterContainer.None => string.Empty,
-            _ => plan.RarPath
-        };
+        PackingSummaryComposer.OuterPathFor(plan, effectiveContainer);
 
     /// <summary>
-    /// 开始打包（用户 2026-09-26 第 46 条的流程）：
-    /// **先弹小确认弹窗**（落点 / 原包操作 / 其余物操作）→ 用户确认 → 才动任何字节。
+    /// 开始打包：校验 → 小确认弹窗 → 写设置 → 调服务 → 回填结果（流程在 <see cref="PackingRunCoordinator"/>）。
     ///
     /// <para>⛔ 顺序是硬要求：没有确认之前**一个字节都不许动**（连输出文件夹都不建）；
     /// 用户取消 = 什么都没发生（设置也不写回，因为他没确认）。</para>
     /// </summary>
-    public async Task StartAsync()
-    {
-        if (IsRunning)
-        {
-            return;
-        }
-
-        ClearNotice();
-        ClearResult();
-
-        if (string.IsNullOrWhiteSpace(SourceFolder))
-        {
-            Warn("请先选择要打包的文件夹（或一个文件）。");
-            return;
-        }
-
-        string passwordError = PackingPasswordPolicy.IsUsable(Password)
-            ? string.Empty
-            : PackingPasswordPolicy.RequiredMessage;
-
-        if (passwordError.Length > 0)
-        {
-            Warn(passwordError);
-            return;
-        }
-
-        if (!PasswordsAreSame && !PackingPasswordPolicy.IsUsable(OuterPassword))
-        {
-            Warn(PackingPasswordPolicy.OuterRequiredMessage);
-            return;
-        }
-
-        /*
-         * 要外层、却连内置 7-Zip 都拿不到（程序装坏了那种）→ **先拦下**，
-         * 别让他确认一件注定失败的事（服务那边也会报同一件事，这里只是不浪费他一次点击）。
-         */
-        if (EffectiveOuterContainer.Impossible)
-        {
-            Warn(
-                "本机既没有 Rar.exe，也没有可用的 7-Zip —— 打不了包。"
-                + $"请检查程序目录里的 tools\\7zip（{_tools.SevenZipExePath}），或重新解压一份程序。");
-
-            return;
-        }
-
-        /*
-         * 先用**页面上那一套**（落点由⑤页选、两档操作由设置记得的那一套）算一遍规划，
-         * 弹窗要把"最终产物在哪"显示出来。
-         *
-         * ⚠ 2026-09-26 追加改口径（用户原话："选择还是得放在页面"）：落点的**选择**在⑤页，
-         * 弹窗里那块只**显示**（不再有本地/指定位置的单选）。
-         */
-        PackingRunOptions initial = BuildPlacementOptions();
-
-        if (!PackingPlan.TryCreate(BuildRequest(initial), out PackingPlan? previewPlan, out string planError)
-            || previewPlan == null)
-        {
-            Warn(planError);
-            return;
-        }
-
-        // ───────── 小确认弹窗（取消 = 什么都不做）─────────
-        //
-        // ⚠ 弹窗里那句"最终产物"必须按**实际生效的容器**写（没装 WinRAR 时是 `.7z`）。
-        PackingRunOptions? confirmed = _dialogService.ShowPackingConfirm(
-            PackingConfirmRequest.FromPlan(previewPlan, initial, EffectiveContainer));
-
-        if (confirmed == null)
-        {
-            Info("已取消：什么都没做（源与其余物一个字节都没动）。");
-            return;
-        }
-
-        /*
-         * 只有弹窗里那**两档操作**来自弹窗；落点始终是⑤页上那一套（⛔ 弹窗不许偷偷改落点）。
-         * 合并之后写回设置（"相应的保存记忆操作"）。
-         */
-        PackingRunOptions merged = new()
-        {
-            TargetMode = initial.TargetMode,
-            CustomOutputDirectory = initial.CustomOutputDirectory,
-            SourceHandling = confirmed.SourceHandling,
-            RestHandling = confirmed.RestHandling
-        };
-
-        merged.SaveTo(_settings);
-        SettingsChanged?.Invoke();
-
-        _runOptions = merged;
-
-        if (!PackingPlan.TryCreate(BuildRequest(merged), out PackingPlan? plan, out string error) || plan == null)
-        {
-            Warn(error);
-            return;
-        }
-
-        _lastUsedPassword = Password;
-        OnPropertyChanged(nameof(CanCopyPassword));
-
-        // 到这一步才真的开始干活：给操作日志打一条"本次操作开始：打包"
-        // （⛔ 取消 / 规划被拒时一次都不许触发 —— 这条也钉在用例里）。
-        OperationStarted?.Invoke();
-
-        IsRunning = true;
-        ProgressPercent = 0;
-        CurrentStepText = StatusText.PackStepPreparing;
-
-        _cancellation = new CancellationTokenSource();
-
-        var progress = new Progress<PackingProgress>(p =>
-        {
-            CurrentStepText = p.StepText;
-
-            if (p.Percent >= 0)
-            {
-                ProgressPercent = p.Percent;
-            }
-
-            ProgressDetailText = p.Detail;
-        });
-
-        var request = BuildRequest(merged);
-
-        PackingResult result;
-
-        try
-        {
-            result = await _service.PackAsync(request, LogSink, progress, _cancellation.Token);
-        }
-        catch (Exception ex)
-        {
-            // 引擎层已经把可预期的失败都收成了结果；这里兜的是"连结果都没拿到的意外"。
-            result = new PackingResult
-            {
-                State = PackingState.Failed,
-                Message = StatusText.PackFailed,
-                FailureReason = "打包过程中出现意外错误：" + PackProcessRunner.DescribeTool(PackToolKind.SevenZip)
-                                 + " 调用链抛异常 —— "
-                                 + PackPasswordGuard.Sanitize(ex.Message, request.Password)
-            };
-        }
-        finally
-        {
-            _cancellation?.Dispose();
-            _cancellation = null;
-            IsRunning = false;
-        }
-
-        ApplyResult(result, plan);
-    }
-
-    /// <summary>按当前输入 + 那一套选择造请求（**唯一出口**：摘要、预览、真正开跑都用它）。</summary>
-    private PackingRequest BuildRequest(PackingRunOptions options) => new()
-    {
-        SourceFolder = SourceFolder,
-
-        // 分卷大小 0 = 自动（第 46 条：按卷数算），落点与命名由 PackingPaths 推。
-        VolumeSizeBytes = 0,
-        Password = Password,
-        OuterPassword = PasswordsAreSame ? string.Empty : OuterPassword,
-        OuterContainer = OuterContainer,
-        RunOptions = options ?? new PackingRunOptions()
-    };
+    public Task StartAsync() => _run.StartAsync();
 
     /// <summary>取消（只杀自己启动的那个 PID 及其子进程）。</summary>
-    public void Cancel()
-    {
-        try
-        {
-            _cancellation?.Cancel();
-            CurrentStepText = StatusText.PackCancelled;
-        }
-        catch
-        {
-            // 令牌可能已经释放：取消是个"尽力而为"的动作，不抛给界面。
-        }
-    }
+    public void Cancel() => _run.Cancel();
 
     /// <summary>把本次用的密码复制到剪贴板（用户自己也要用）。</summary>
-    public void CopyPassword()
-    {
-        if (!CanCopyPassword)
-        {
-            Warn("这次还没有设置过密码，没有可复制的内容。");
-            return;
-        }
-
-        /*
-         * ⚠ 这里**刻意不过 PasswordMasker.Sanitize**：它会把长得像 "password: xxx" 的密码
-         * 整段换成占位符，用户复制到的就不是自己的密码了。密码进剪贴板是用户主动点的，
-         * 也正是设计里给的出口（docs/打包功能.md §3）。
-         */
-        if (_clipboardService.CopyText(_lastUsedPassword))
-        {
-            Info("密码已复制到剪贴板（请自行妥善保存；程序不落盘、日志里也不记）。");
-        }
-        else
-        {
-            Warn("复制到剪贴板失败（剪贴板被别的程序占着？）。密码仍然留在本窗口内存里。");
-        }
-    }
+    public void CopyPassword() => _run.CopyPassword();
 
     /// <summary>打开输出文件夹（优先打开结果所在的那一层）。</summary>
-    public void OpenOutputFolder()
-    {
-        string? directory = null;
+    public void OpenOutputFolder() => _run.OpenOutputFolder();
 
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(ResultOuterPath))
-            {
-                directory = Path.GetDirectoryName(ResultOuterPath);
-            }
+    /// <summary>每次开跑前把结果区清空（结果状态由 <see cref="PackingSummaryComposer"/> 写）。</summary>
+    internal void ClearResult() => _summary.ClearResult();
 
-            if (string.IsNullOrWhiteSpace(directory))
-            {
-                directory = OutputFolder;
-            }
-
-            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-            {
-                Warn("输出文件夹还不存在：" + (directory ?? string.Empty));
-                return;
-            }
-
-            _pathService.OpenDirectory(directory);
-        }
-        catch (Exception ex)
-        {
-            Warn("打开输出文件夹失败：" + PackPasswordGuard.Sanitize(ex.Message, null));
-        }
-    }
-
-    private void ApplyResult(PackingResult result, PackingPlan plan)
-    {
-        Volumes.Clear();
-
-        foreach (PackingVolume volume in result.Volumes)
-        {
-            Volumes.Add(new PackingVolumeRow
-            {
-                FileName = volume.FileName,
-                SizeText = TaskSpaceEstimate.FormatSize(volume.Bytes)
-            });
-        }
-
-        HasResult = true;
-        ResultOuterPath = result.OuterPath ?? string.Empty;
-
-        switch (result.State)
-        {
-            case PackingState.Succeeded:
-                ResultKind = "Success";
-                ResultTitle = result.OuterContainer.HasOuterArtifact()
-                    ? StatusText.PackSuccess
-                    : StatusText.PackPartialVolumesOnly;
-                Info(result.Describe());
-                break;
-
-            case PackingState.Cancelled:
-                ResultKind = "Warning";
-                ResultTitle = StatusText.PackCancelled;
-                Warn(result.Describe());
-                break;
-
-            default:
-                ResultKind = "Error";
-                ResultTitle = StatusText.PackFailed;
-                Error(result.Describe());
-                break;
-        }
-
-        /*
-         * 结果区要把**实际产物**说全：外层是什么容器、落在哪个文件；不做外层时也要说清
-         * "就是 B 里这几个分卷"，失败时更要说清"外层没生成"—— 而不是留一个空白的路径行让用户猜。
-         */
-        string outerLine;
-
-        if (!string.IsNullOrWhiteSpace(result.OuterPath))
-        {
-            outerLine = $"外层产物（{result.OuterContainer.ShortName()}）：{result.OuterPath}";
-        }
-        else if (result.OuterContainer.HasOuterArtifact())
-        {
-            outerLine = $"外层产物：没有生成（这次选的容器是「{result.OuterContainer.ShortName()}」）。";
-        }
-        else
-        {
-            outerLine = "没有外层容器文件（选的是「不做外层容器」）。";
-        }
-
-        /*
-         * ⛔ 结果区**不许撒谎**（第 46 条收尾自查抓到的第 6 处）：
-         * 原来这里无条件写"分卷在：<文件夹>（N 个）"+「其余物按你选的档留着了，自己删掉就行」——
-         * 而**默认档就是把那个文件夹彻底删掉**，于是他跑完看到的是一句"分卷在 X、你可以自己删 X"，
-         * 那个 X 已经不存在了。现在按**收尾那句机器结论**分档说。
-         */
-        string volumesLine;
-
-        if (result.CleanupNote.Contains("已彻底删除", StringComparison.Ordinal))
-        {
-            volumesLine = "其余物（分卷文件）：已按你选的档彻底删除（不再占空间）。";
-        }
-        else if (result.CleanupNote.Contains("已移入回收站", StringComparison.Ordinal))
-        {
-            volumesLine = "其余物（分卷文件）：已按你选的档移入回收站（可还原）。";
-        }
-        else if (result.Success && Directory.Exists(plan.OutputFolder))
-        {
-            volumesLine = $"其余物（分卷文件）：{plan.OutputFolder}（{result.Volumes.Count} 个分卷）";
-        }
-        else if (Directory.Exists(plan.OutputFolder))
-        {
-            volumesLine = $"未完成的分卷文件还在：{plan.OutputFolder}（{result.Volumes.Count} 个）"
-                        + "—— 这次中途停下了，这些分卷可能不完整；重试前请先清空它。";
-        }
-        else
-        {
-            volumesLine = "没有生成任何分卷。";
-        }
-
-        // 「其余物留着」那句提示只在**真的留着**的时候才出现（失败 / 取消时收尾根本没跑）。
-        bool restKept = result.Success && result.CleanupNote.Contains("保留", StringComparison.Ordinal);
-
-        ResultText = result.Describe() + Environment.NewLine
-            + outerLine + Environment.NewLine
-            + volumesLine
-            + (restKept ? Environment.NewLine + StatusText.PackKeepFolderHint : string.Empty);
-
-        ProgressPercent = result.Success ? 100 : ProgressPercent;
-        CurrentStepText = result.Success ? StatusText.PackSuccess : ResultTitle;
-    }
-
-    private void ClearResult()
-    {
-        HasResult = false;
-        ResultTitle = string.Empty;
-        ResultText = string.Empty;
-        ResultKind = string.Empty;
-        ResultOuterPath = string.Empty;
-        Volumes.Clear();
-    }
-
-    private void ClearNotice()
+    internal void ClearNotice()
     {
         NoticeKind = PackingNoticeKind.None;
         NoticeText = string.Empty;
     }
 
-    private void Info(string text) => ShowNotice(PackingNoticeKind.Info, text);
+    internal void Info(string text) => ShowNotice(PackingNoticeKind.Info, text);
 
-    private void Warn(string text) => ShowNotice(PackingNoticeKind.Warning, text);
+    internal void Warn(string text) => ShowNotice(PackingNoticeKind.Warning, text);
 
-    private void Error(string text) => ShowNotice(PackingNoticeKind.Error, text);
+    internal void Error(string text) => ShowNotice(PackingNoticeKind.Error, text);
 
-    private void ShowNotice(PackingNoticeKind kind, string text)
+    internal void ShowNotice(PackingNoticeKind kind, string text)
     {
         NoticeKind = kind;
         NoticeText = text;
     }
 
-    private void RaiseCommandStates()
+    // ────────────────────────── 协作类写页面状态的接缝 ──────────────────────────
+
+    /// <summary>把设置里那套落点搬进页面：只改字段与通知，⛔ 不写回设置（换设置对象时走这里）。</summary>
+    internal void ApplyPlacementFromSettings(bool isCustom, string directory)
     {
-        (StartCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        (CancelCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        _placementIsCustom = isCustom;
+        _customPlacementDirectory = directory ?? string.Empty;
+
+        OnPropertyChanged(nameof(PlacementIsCustom));
+        OnPropertyChanged(nameof(PlacementIsFollowDefault));
+        OnPropertyChanged(nameof(PlacementIsEditable));
+
+        /*
+         * ⚠ 目录那一格也要通知（2026-09-26 真机逮到）：上面只是改了**字段**，
+         * 而那一格绑的是属性 —— 不通知的话，⑥页「恢复默认设置」之后⑤页那个「指定位置」框
+         * 还显示着上一次的路径（灰着、不可改），与"现在没有指定位置"这个事实正好相反。
+         */
+        OnPropertyChanged(nameof(CustomPlacementDirectory));
     }
+
+    /// <summary>用户挑了「指定位置」的目录：切到那一档并把目录填进去（只写设置，不建目录）。</summary>
+    internal void ApplyPlacementPicked(string directory)
+    {
+        _placementIsCustom = true;
+
+        OnPropertyChanged(nameof(PlacementIsCustom));
+        OnPropertyChanged(nameof(PlacementIsFollowDefault));
+        OnPropertyChanged(nameof(PlacementIsEditable));
+
+        CustomPlacementDirectory = directory ?? string.Empty;
+    }
+
+    /// <summary>「本次密码」变了：重问一次「复制密码」的可用性。</summary>
+    internal void NotifyCanCopyPasswordChanged() => OnPropertyChanged(nameof(CanCopyPassword));
 }
