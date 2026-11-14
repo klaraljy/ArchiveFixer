@@ -1,3 +1,5 @@
+using ArchiveFixer.Models;
+
 namespace ArchiveFixer.Extraction
 {
     /// <summary>一层的执行结果：要么成功（带报告，可以继续），要么停下（带报告 + 停因）。</summary>

@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 输出的落点模式（规格 <c>docs/输出与整理模型.md</c> §1.1）。**只剩两档**。

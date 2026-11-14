@@ -16,7 +16,7 @@ namespace ArchiveFixer.Tests
             var candidates = new List<string?> { null, "pw" };
             var options = new OneClickRunOptions
             {
-                PlacementMode = ArchiveFixer.Extraction.OutputPlacementMode.CustomRootPerArchive,
+                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = @"D:\out",
                 SourceHandling = SourceHandlingMode.DeleteInPlace
             };

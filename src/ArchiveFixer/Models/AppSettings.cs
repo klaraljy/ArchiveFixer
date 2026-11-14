@@ -51,7 +51,7 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 新落点模式的唯一持久化格；null = 旧配置，读入时由两个旧布尔迁移一次。
         /// </summary>
-        public ArchiveFixer.Extraction.OutputPlacementMode? PlacementMode { get; set; }
+        public OutputPlacementMode? PlacementMode { get; set; }
 
         /// <summary>
         /// 同名冲突处理档（<see cref="ConflictActions"/> 的四个值之一）。
