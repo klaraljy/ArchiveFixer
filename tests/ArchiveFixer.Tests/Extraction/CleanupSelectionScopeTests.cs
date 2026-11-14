@@ -509,7 +509,7 @@ public class CleanupSelectionScopeTests : IDisposable
         var first = new ArchiveTask(@"C:\t\222.7z", 1) { OutputPath = @"C:\t\out\222" };
         var second = new ArchiveTask(@"C:\t\333.7z", 2) { OutputPath = @"C:\t\out\333" };
 
-        var plans = new List<MainViewModel.CleanupTaskPlan>
+        var plans = new List<CleanupTaskPlan>
         {
             new()
             {
@@ -551,7 +551,7 @@ public class CleanupSelectionScopeTests : IDisposable
         Assert.Equal(3000, merged.TotalBytes);
         Assert.Equal(1, merged.SourcePackageCount);
 
-        string text = MainViewModel.BuildCleanupConfirmText(
+        string text = CleanupDecisionPlanner.BuildCleanupConfirmText(
             "删除其余物",
             plans,
             merged,
@@ -570,7 +570,7 @@ public class CleanupSelectionScopeTests : IDisposable
         Assert.Contains("需要重新下载", text, StringComparison.Ordinal);
 
         // 单个任务时保持旧格式（不多出一段清单）—— 老用户看到的字不该因为批处理而变。
-        string single = MainViewModel.BuildCleanupConfirmText(
+        string single = CleanupDecisionPlanner.BuildCleanupConfirmText(
             "删除其余物",
             new[] { plans[0] },
             plans[0].Preview!,
@@ -586,7 +586,7 @@ public class CleanupSelectionScopeTests : IDisposable
         var first = new ArchiveTask(@"C:\t\222.7z", 1);
         var second = new ArchiveTask(@"C:\t\333.7z", 2);
 
-        var tally = new MainViewModel.BatchCleanupTally();
+        var tally = new CleanupDecisionPlanner.BatchCleanupTally();
 
         tally.Record(first, new CleanupOutcome
         {
@@ -613,7 +613,7 @@ public class CleanupSelectionScopeTests : IDisposable
         Assert.Equal(1, tally.FailedTaskCount);
         Assert.Equal(2, tally.FailedItemCount);
 
-        string summary = MainViewModel.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 2, tally);
+        string summary = CleanupDecisionPlanner.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 2, tally);
 
         Assert.Contains("成功 1 个", summary, StringComparison.Ordinal);
         Assert.Contains("失败 1 个", summary, StringComparison.Ordinal);
@@ -621,13 +621,13 @@ public class CleanupSelectionScopeTests : IDisposable
         Assert.Contains("333.7z", summary, StringComparison.Ordinal);
 
         // 只跑一个任务成功时：没有失败就不列"没删掉的原因"。
-        var clean = new MainViewModel.BatchCleanupTally();
+        var clean = new CleanupDecisionPlanner.BatchCleanupTally();
         clean.Record(first, new CleanupOutcome { Attempted = true, SuccessCount = 3, Message = "OK" });
 
         Assert.False(clean.HasAnyFailure);
         Assert.DoesNotContain(
             "没删掉的原因",
-            MainViewModel.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 1, clean),
+            CleanupDecisionPlanner.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 1, clean),
             StringComparison.Ordinal);
     }
 
@@ -637,7 +637,7 @@ public class CleanupSelectionScopeTests : IDisposable
         var first = new ArchiveTask(@"C:\t\222.7z", 1);
         var second = new ArchiveTask(@"C:\t\333.7z", 2);
 
-        var plans = new List<MainViewModel.CleanupTaskPlan>
+        var plans = new List<CleanupTaskPlan>
         {
             new() { Task = first, SkipReason = "还没有输出目录（先解压一次）" },
             new() { Task = second, SkipReason = "其余物目录里没有可删的东西" }
@@ -942,3 +942,4 @@ public class CleanupSelectionScopeTests : IDisposable
         }
     }
 }
+

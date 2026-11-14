@@ -27,8 +27,12 @@ using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
-{        /// <summary>整批清理的计数器（成功/失败任务数、条目数、释放字节数、失败原因）。</summary>
+/// <summary>
+/// 清理决策/汇总的纯逻辑（无 UI、无命令）。
+/// </summary>
+internal static class CleanupDecisionPlanner
+{
+    /// <summary>整批清理的计数器（成功/失败任务数、条目数、释放字节数、失败原因）。</summary>
     internal sealed class BatchCleanupTally
     {
         private readonly List<string> _failureReasons = new();
@@ -422,3 +426,4 @@ public partial class MainViewModel
         return OutputPlacement.LandsInSourceDirectory(sourceArchivePath, outputDirectory);
     }
 }
+

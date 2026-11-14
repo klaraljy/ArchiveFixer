@@ -126,19 +126,19 @@ public partial class MainViewModel
             /*
              * ② **一次**确认（红色）。档位语义：⛔ 2026-10-15 起手工清理**只剩一个动作**
              * （彻底删除 —— 回收站那一档整条下线），所以这里不再有"默认档 / 另一档"之说，
-             * 档位构造仍然只有 DeriveCleanupDecision 一处实现。
+             * 档位构造仍然只有 DeriveCleanupDecision.CleanupDecision 一处实现。
              */
-            CleanupDecision decision = requestedMode is { } forcedMode
-                ? new CleanupDecision
+            CleanupDecisionPlanner.CleanupDecision decision = requestedMode is { } forcedMode
+                ? new CleanupDecisionPlanner.CleanupDecision
                 {
                     DefaultMode = forcedMode,
                     OptionMode = forcedMode,
-                    ConfirmText = BuildCleanupConfirmText(title, actionable, merged, forcedMode, scopeNote),
+                    ConfirmText = CleanupDecisionPlanner.BuildCleanupConfirmText(title, actionable, merged, forcedMode, scopeNote),
                     ConfirmButtonText = forcedMode == DeleteMode.Permanent ? "彻底删除" : "移入回收站",
                     OptionText = string.Empty,
                     OptionCheckedByDefault = false
                 }
-                : DeriveCleanupDecision(
+                : CleanupDecisionPlanner.DeriveCleanupDecision(
                     merged,
                     title,
                     scopeNote,
@@ -169,7 +169,7 @@ public partial class MainViewModel
                  * 批里每删一个都问一遍不是更安全，只是更烦；真正的红线是"不可逆操作必须显式确认"。
                  */
                 bool acknowledged = _dialogService.ShowDestructiveConfirm(
-                    BuildCleanupConfirmText(title, actionable, merged, DeleteMode.Permanent, scopeNote),
+                    CleanupDecisionPlanner.BuildCleanupConfirmText(title, actionable, merged, DeleteMode.Permanent, scopeNote),
                     "彻底删除",
                     "我知道彻底删除不可恢复，这些内容不会进回收站",
                     out bool irreversibleAcknowledged);
@@ -184,7 +184,7 @@ public partial class MainViewModel
             }
 
             // ④ 逐个执行（后台）。**单个任务失败不中断整批**：这一条记 ERROR 之后继续下一个。
-            var tally = new BatchCleanupTally();
+            var tally = new CleanupDecisionPlanner.BatchCleanupTally();
 
             foreach (CleanupTaskPlan plan in actionable)
             {
@@ -209,7 +209,7 @@ public partial class MainViewModel
             }
 
             // ⑤ 汇总一次：成功 N / 失败 M（各自原因）/ 释放字节数。
-            string summary = BuildBatchCleanupSummary(title, mode, actionable.Count, tally);
+            string summary = CleanupDecisionPlanner.BuildBatchCleanupSummary(title, mode, actionable.Count, tally);
 
             /*
              * 有任何一项没删掉（或整批一项都没成功）就绝不能显示成"全部成功"
@@ -239,30 +239,7 @@ public partial class MainViewModel
     /// "没有可删的"提示里点名，免得用户以为程序把它漏了。
     /// </para>
     /// </summary>
-    internal sealed class CleanupTaskPlan
-    {
-        public ArchiveTask? Task { get; init; }
 
-        public CleanupPreview? Preview { get; init; }
-
-        /// <summary>共享输出目录的作用域提醒（单任务那份，合并时汇总成一句）。</summary>
-        public string ScopeNote { get; init; } = string.Empty;
-
-        /// <summary>没得删的原因（为空表示这是可执行的目标）。</summary>
-        public string SkipReason { get; init; } = string.Empty;
-
-        public bool IsActionable => Preview is { HasTarget: true };
-
-        /// <summary>这个任务那一份的作用范围（给确认框里逐个列出用）。</summary>
-        public string DescribeTarget()
-        {
-            string name = Task?.FileName ?? "（未知任务）";
-
-            return Preview == null
-                ? $"· {name}：{SkipReason}"
-                : $"· {name} → {Preview.ScopePath}（顶层 {Preview.ItemCount} 项 / {Preview.EntryCount} 个条目 / {Preview.TotalBytes} 字节）";
-        }
-    }
 
     /// <summary>预览一个清理目标（后台线程干活；界面线程只拿结论）。</summary>
     private async Task<CleanupTaskPlan> BuildCleanupPlanAsync(
@@ -290,7 +267,7 @@ public partial class MainViewModel
             Task = task,
             Preview = preview,
             SkipReason = preview.HasTarget ? string.Empty : preview.Message,
-            ScopeNote = BuildSharedScopeNote(scope, task, preview)
+            ScopeNote = CleanupDecisionPlanner.BuildSharedScopeNote(scope, task, preview)
         };
     }
 

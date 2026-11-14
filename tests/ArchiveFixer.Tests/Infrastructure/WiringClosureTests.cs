@@ -607,7 +607,7 @@ public class WiringClosureTests : IDisposable
         Assert.Contains("222.rar", preview.SourcePackageNames);
         Assert.Contains("1 个源包文件", preview.Message, StringComparison.Ordinal);
 
-        string confirmText = MainViewModel.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
+        string confirmText = CleanupDecisionPlanner.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
 
         Assert.Contains("含 1 个源包文件", confirmText, StringComparison.Ordinal);
         Assert.Contains("需要重新下载", confirmText, StringComparison.Ordinal);
@@ -737,17 +737,17 @@ public class WiringClosureTests : IDisposable
          */
         var task = new ArchiveTask(PathOf(@"111\222\333.rar")) { OutputPath = PathOf(@"111\222") };
 
-        string artifactNote = MainViewModel.BuildSharedScopeNote(CleanupScope.Artifacts, task);
+        string artifactNote = CleanupDecisionPlanner.BuildSharedScopeNote(CleanupScope.Artifacts, task);
 
         Assert.Contains("只删本任务那一份", artifactNote, StringComparison.Ordinal);
         Assert.Contains("不会碰别的包", artifactNote, StringComparison.Ordinal);
-        Assert.Contains("源包所在目录", MainViewModel.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
+        Assert.Contains("源包所在目录", CleanupDecisionPlanner.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
 
         // 普通模式（输出目录是包子目录）：不提这句。
         task.OutputPath = PathOf(@"111\222\333");
 
-        Assert.Equal(string.Empty, MainViewModel.BuildSharedScopeNote(CleanupScope.Artifacts, task));
-        Assert.Equal(string.Empty, MainViewModel.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
+        Assert.Equal(string.Empty, CleanupDecisionPlanner.BuildSharedScopeNote(CleanupScope.Artifacts, task));
+        Assert.Equal(string.Empty, CleanupDecisionPlanner.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
     }
 
     [Fact]
@@ -765,7 +765,7 @@ public class WiringClosureTests : IDisposable
             Items = new[] { "a.7z", "b.7z" }
         };
 
-        string recycleText = MainViewModel.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
+        string recycleText = CleanupDecisionPlanner.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
 
         Assert.Contains(@"D:\out\其余物", recycleText, StringComparison.Ordinal);
         Assert.Contains("顶层 3 项", recycleText, StringComparison.Ordinal);
@@ -773,7 +773,7 @@ public class WiringClosureTests : IDisposable
         Assert.Contains("回收站", recycleText, StringComparison.Ordinal);
         Assert.DoesNotContain("无法恢复", recycleText, StringComparison.Ordinal);
 
-        string permanentText = MainViewModel.BuildCleanupConfirmText(
+        string permanentText = CleanupDecisionPlanner.BuildCleanupConfirmText(
             "删除其余物", preview, DeleteMode.Permanent, "作用域共用提醒");
 
         Assert.Contains("无法恢复", permanentText, StringComparison.Ordinal);

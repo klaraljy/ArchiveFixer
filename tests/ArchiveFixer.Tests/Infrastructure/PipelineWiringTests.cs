@@ -82,7 +82,7 @@ public class PipelineWiringTests : IDisposable
     {
         var preview = MakePreview();
 
-        MainViewModel.CleanupDecision decision = MainViewModel.DeriveCleanupDecision(
+        CleanupDecisionPlanner.CleanupDecision decision = CleanupDecisionPlanner.DeriveCleanupDecision(
             preview,
             "删除其余物",
             scopeNote: null);
