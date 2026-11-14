@@ -24,5 +24,8 @@ public static class DialogWindowFactories
     /// 未注入时按“无窗口宿主”处理（单测/控制台不弹窗）。
     /// </summary>
     public static Func<object, bool?>? PasswordList { get; set; }
+
+    /// <summary>创建「改名…」小窗；参数是默认后缀，返回 null = 用户取消。</summary>
+    public static Func<string, ArchiveFixer.Models.RenameDialogResult?>? RenameDialog { get; set; }
 }
 
