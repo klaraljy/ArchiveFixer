@@ -482,16 +482,18 @@ public static partial class VolumeGatherPlanner
                 continue;
             }
 
-            if (!FileIdentity.IsSamePhysicalFile(byIndex[seatIndex].Path, piece.Path))
+            if (byIndex.TryGetValue(seatIndex, out var existing)
+                && !FileIdentity.IsSamePhysicalFile(existing.Path, piece.Path))
             {
                 ambiguousIndex = true;
             }
         }
 
-        if (!hasEntry || ambiguousIndex || byIndex.Count == 0 || !byIndex.ContainsKey(1))
+        bool hasVolumeOne = byIndex.TryGetValue(1, out var volumeOne);
+        if (!hasEntry || ambiguousIndex || byIndex.Count == 0 || !hasVolumeOne)
         {
             return NotApplicable(
-                $"卷号那一档过不去：入口在池子里={hasEntry}；同号两份候选={ambiguousIndex}；池子={byIndex.Count} 份；有第 1 卷={byIndex.ContainsKey(1)}");
+                $"卷号那一档过不去：入口在池子里={hasEntry}；同号两份候选={ambiguousIndex}；池子={byIndex.Count} 份；有第 1 卷={hasVolumeOne}");
         }
 
         /*
@@ -582,7 +584,7 @@ public static partial class VolumeGatherPlanner
          * 调用方手上那个路径是开工之前抓下来的，改了它就等于带着一个失效的路径往下走
          * （改名是「还原」工序的活，不是这一档的）。第 1 卷名字不标准 ⇒ 这一组不收（一个字节都不动）。
          */
-        string baselinePath = byIndex[1].Path;
+        string baselinePath = volumeOne!.Path;
         string baselineDirectory = Path.GetDirectoryName(baselinePath) ?? string.Empty;
 
         if (!SamePath(baselinePath, Path.Combine(baselineDirectory, targetNames[1])))

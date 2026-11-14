@@ -24,7 +24,7 @@ public static class LogSanitizer
             @"(?i)(^|\s)-p[^\s]+",
             m =>
             {
-                string prefix = m.Value.StartsWith(" ") ? " " : string.Empty;
+                string prefix = m.Value.StartsWith(' ') ? " " : string.Empty;
                 return prefix + "-p******";
             });
 

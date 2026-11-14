@@ -224,7 +224,7 @@ internal static class UnRarListParser
 
         if (!isDirectory && block.TryGetValue("Size", out string? sizeText))
         {
-            long.TryParse(sizeText, out size);
+            _ = long.TryParse(sizeText, out size);
             parsed.TotalUncompressedSize += size;
         }
 

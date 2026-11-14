@@ -77,11 +77,7 @@ internal sealed partial class ExtractionCoordinator
              * 「这一批没轮到它」，并且**明确告诉用户再点一次就会解**。
              */
             task.Outcome = TaskOutcome.Skipped;
-            task.MarkSkipped(
-                string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.VolumeDeficitChainEndNotRunText,
-                    task.FileName));
+            task.MarkSkipped(StatusText.VolumeDeficitChainEndNotRunText);
         }
 
         foreach (ArchiveTask task in pending)

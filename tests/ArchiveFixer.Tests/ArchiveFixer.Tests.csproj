@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <UseWPF>true</UseWPF>
+    <!-- 产品代码走 Recommended；测试名保留中文/下划线，不在测试项目放大 CA1707 噪声。 -->
+    <AnalysisMode>Default</AnalysisMode>
   </PropertyGroup>
 
   <ItemGroup>

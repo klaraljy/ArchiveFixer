@@ -13,6 +13,8 @@ namespace ArchiveFixer.Storage;
 /// </summary>
 public sealed class PasswordMetadataStore
 {
+    private static readonly JsonSerializerOptions MetadataJsonOptions = new() { WriteIndented = true };
+
     public const string FileName = "passwords.meta.json";
 
     public string DataRootDirectory { get; set; } = string.Empty;
@@ -96,7 +98,7 @@ public sealed class PasswordMetadataStore
 
             string json = JsonSerializer.Serialize(
                 entries.ToList(),
-                new JsonSerializerOptions { WriteIndented = true });
+                MetadataJsonOptions);
 
             File.WriteAllText(temp, json, new UTF8Encoding(false));
             File.Move(temp, path, overwrite: true);

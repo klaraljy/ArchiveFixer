@@ -14,6 +14,25 @@ indent_style = space
 indent_size = 4
 tab_width = 4
 
+# M2 分析器基线：产品项目启用 Recommended；以下大规模/低收益规则先降为 suggestion，
+# 逐条原因和偿还阶段见 docs/开发/分析器例外.md。⛔ 不许用整类 NoWarn 压制。
+dotnet_diagnostic.CA1863.severity = suggestion
+dotnet_diagnostic.CA1822.severity = suggestion
+dotnet_diagnostic.CA1305.severity = suggestion
+dotnet_diagnostic.CA1859.severity = suggestion
+dotnet_diagnostic.CA1068.severity = suggestion
+dotnet_diagnostic.CA1865.severity = suggestion
+dotnet_diagnostic.CA1805.severity = suggestion
+dotnet_diagnostic.CA1861.severity = suggestion
+dotnet_diagnostic.CA2249.severity = suggestion
+dotnet_diagnostic.CA1510.severity = suggestion
+dotnet_diagnostic.CA1826.severity = suggestion
+dotnet_diagnostic.CA1001.severity = suggestion
+dotnet_diagnostic.CA1870.severity = suggestion
+dotnet_diagnostic.CA1845.severity = suggestion
+dotnet_diagnostic.CA2016.severity = suggestion
+dotnet_diagnostic.CA1707.severity = none
+
 # 现代 C#：file-scoped 已是全仓事实；M1 完成后升为 error。
 csharp_style_namespace_declarations = file_scoped:error
 csharp_using_directive_placement = outside_namespace:warning
@@ -64,6 +83,24 @@ dotnet_naming_style.underscore_camel_case.capitalization = camel_case
 [*.{csproj,props,targets,slnx,xml,json,yml,yaml}]
 indent_style = space
 indent_size = 2
+
+# 规则误报/平台约束的定点例外；只到文件，不扩大到目录。
+[src/ArchiveFixer/Extraction/SlotScheduler.cs]
+# 静态模拟方法必须放在泛型调度器上，调用点按 T 绑定；拆出去只会增加一处转发。
+dotnet_diagnostic.CA1000.severity = none
+
+[src/ArchiveFixer/Storage/RecycleBin/ShellDeleteExecutor.cs]
+# Windows Shell API 的 P/Invoke 签名由系统 ABI 固定，不能为了 CA1838 改 StringBuilder。
+dotnet_diagnostic.CA1838.severity = none
+
+[src/ArchiveFixer/Extraction/ZipAesCrypto.cs]
+# ZIP AES 规范固定 PBKDF2-HMAC-SHA1 + HMAC-SHA1；换 SHA256 会读不了标准 AES 包。
+dotnet_diagnostic.CA5350.severity = none
+dotnet_diagnostic.CA5379.severity = none
+
+[src/ArchiveFixer/Detection/SevenZipByteBudgetVerdict.cs]
+# Short 表示“字节数不足”，不是类型名；改名会破坏现有证据语义。
+dotnet_diagnostic.CA1720.severity = none
 
 [*.md]
 trim_trailing_whitespace = false

@@ -21,8 +21,7 @@ public static class ConcurrencyProfileStore
             ? string.Empty
             : Path.GetFullPath(targetRoot).TrimEnd('\\').ToUpperInvariant();
 
-        using var sha = SHA256.Create();
-        byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(normalized + "|" + device));
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized + "|" + device));
         return Convert.ToHexString(hash, 0, 12).ToLowerInvariant();
     }
 

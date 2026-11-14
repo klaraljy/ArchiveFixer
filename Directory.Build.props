@@ -10,8 +10,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
 
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- M2 再切 Recommended；先保持当前零警告基线，避免一次性引入 4k 条未分类警告。 -->
-    <AnalysisMode>Default</AnalysisMode>
+    <!-- 产品代码先开 Recommended；测试项目在 csproj 里降回 Default，避免 CA1707 淹没中文测试名。 -->
+    <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

@@ -21,6 +21,7 @@ namespace ArchiveFixer.Services;
 /// </summary>
 public class LogService
 {
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new() { WriteIndented = true };
     /// <summary>
     /// 日志 / 报告里时间戳的**固定格式**（不随系统区域设置、也不随系统日历变）。
     ///
@@ -709,7 +710,7 @@ public class LogService
 
             File.WriteAllText(
                 Path.Combine(_currentOperationDirectory, "manifest.json"),
-                JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
+                JsonSerializer.Serialize(manifest, ManifestJsonOptions),
                 Encoding.UTF8);
         }
         catch
@@ -1467,7 +1468,7 @@ public class LogService
             || verdict.Contains("失败", StringComparison.Ordinal)
             || verdict.Contains("未通过", StringComparison.Ordinal)
             || verdict.Contains("不完整", StringComparison.Ordinal)
-            || verdict.Contains("缺", StringComparison.Ordinal)
+            || verdict.Contains('缺')
             || verdict.Contains("判不出", StringComparison.Ordinal);
         string code = string.IsNullOrWhiteSpace(errorCode)
             ? (negative ? DiagnosticCodes.Decision : string.Empty)

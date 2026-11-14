@@ -1724,7 +1724,7 @@ public static class VolumeCandidateDiscovery
                 && char.IsAsciiDigit(extension[2])
                 && char.IsAsciiDigit(extension[3]))
             {
-                disks.Add((int.Parse(extension.Substring(2, 2), System.Globalization.CultureInfo.InvariantCulture), item));
+                disks.Add((int.Parse(extension.AsSpan(2, 2), System.Globalization.CultureInfo.InvariantCulture), item));
                 continue;
             }
 

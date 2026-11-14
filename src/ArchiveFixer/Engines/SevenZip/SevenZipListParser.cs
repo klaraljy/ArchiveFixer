@@ -141,7 +141,7 @@ internal static class SevenZipListParser
 
         if (!isDirectory && block.TryGetValue("Size", out string? sizeText))
         {
-            long.TryParse(sizeText, out size);
+            _ = long.TryParse(sizeText, out size);
             totalSize += size;
         }
 

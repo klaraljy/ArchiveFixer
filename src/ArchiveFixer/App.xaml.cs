@@ -397,7 +397,7 @@ public partial class App : Application
             }
 
             new ArchiveFixer.Services.DialogService().ShowException(
-                ex ?? new Exception("未知异常"),
+                ex ?? new InvalidOperationException("未知异常"),
                 "程序发生未处理的界面异常（已记录日志）");
         }
         catch
