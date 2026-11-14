@@ -524,6 +524,7 @@ namespace ArchiveFixer.Tests
     /// 与真机那一份同一种形状；密码是本用例现造的占位值（⛔ 与用户的密码本无关）。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
+    [Trait("Category", "RealSample")]
     public class WinRarFallbackSingleLayerEndToEndTests : IDisposable
     {
         private const string FixturePassword = "ArchiveFixer-AES-Probe-2026";

@@ -26,6 +26,7 @@ namespace ArchiveFixer.Tests
     /// 只把 <c>RarEncryptionReader.Read</c> 改成恒返回 Unknown → 同样全红，而
     /// "没加密的不许误报"那几条照旧绿（它们本来就不该红 —— 这正是"宁可漏报不误报"的接线证明）。</para>
     /// </summary>
+    [Trait("Category", "Stress")]
     public class RarEncryptionReaderTests : IDisposable
     {
         private readonly string _root;

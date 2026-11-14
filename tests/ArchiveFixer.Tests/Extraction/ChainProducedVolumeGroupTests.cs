@@ -34,6 +34,7 @@ namespace ArchiveFixer.Tests
     /// 忽略 `IsConsumedSource`）⇒ 本类用例必须失败。
     /// </para>
     /// </summary>
+    [Trait("Category", "Stress")]
     public class ChainProducedVolumeGroupTests
     {
         [Fact]

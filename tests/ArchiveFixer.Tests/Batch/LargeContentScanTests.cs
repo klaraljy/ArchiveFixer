@@ -17,6 +17,7 @@ namespace ArchiveFixer.Tests
     /// 不允许对每个图片再走内容识别/FileNature 全量事实。
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
+    [Trait("Category", "Stress")]
     public sealed class LargeContentScanTests
     {
         private const int ContentFileCount = 4000;
@@ -25,14 +26,11 @@ namespace ArchiveFixer.Tests
         public async Task 大批内容物_不逐张做内容识别()
         {
             const string sampleId = "999000098";
-            string sampleDir = Path.Combine(Batch120Operation.BackupBatchRoot, sampleId);
+            string sampleRoot = Path.Combine(TestPaths.TempRoot, "large-content-" + Guid.NewGuid().ToString("N"));
+            string sampleDir = Path.Combine(sampleRoot, "backup", sampleId);
             string sourceDir = Path.Combine(sampleDir, "原包");
             string sourceZip = Path.Combine(sourceDir, "内容包.zip");
-
-            if (Directory.Exists(sampleDir))
-            {
-                Directory.Delete(sampleDir, recursive: true);
-            }
+            string runRoot = Path.Combine(sampleRoot, "run");
 
             Directory.CreateDirectory(sourceDir);
             WriteContentZip(sourceZip, ContentFileCount);
@@ -58,7 +56,12 @@ namespace ArchiveFixer.Tests
             ContentAdmission.ResetProbeCallsForTests();
             ArchiveDetectService.ResetProbeCallsForTests();
 
-            Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId);
+            Batch120RunRecord record = await Batch120Operation.RunOneAsync(
+                sampleId,
+                Path.Combine(sampleRoot, "backup"),
+                Path.Combine(runRoot, "测试位置"),
+                Path.Combine(runRoot, "指定位置"),
+                Path.Combine(runRoot, "日志"));
             long archiveProbeCalls = ArchiveDetectService.ProbeCalls;
 
             try
@@ -88,9 +91,9 @@ namespace ArchiveFixer.Tests
             {
                 try
                 {
-                    if (Directory.Exists(sampleDir))
+                    if (Directory.Exists(sampleRoot))
                     {
-                        Directory.Delete(sampleDir, recursive: true);
+                        Directory.Delete(sampleRoot, recursive: true);
                     }
                 }
                 catch

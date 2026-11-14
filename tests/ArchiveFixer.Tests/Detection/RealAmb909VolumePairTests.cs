@@ -101,6 +101,7 @@ namespace ArchiveFixer.Tests
     /// —— 老代码只认"列得出清单"，于是把"缺密码"误报成「分卷缺失」（见 <c>VolumeProbeVerifier</c> 的注释）。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
+    [Trait("Category", "RealSample")]
     public class RealAmb909VolumePairTests : IDisposable
     {
         /// <summary>真机那两个文件的字节数（**事实**，写在 AGENTS.md §11 与真机日志里）。</summary>

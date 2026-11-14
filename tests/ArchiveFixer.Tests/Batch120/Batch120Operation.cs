@@ -134,9 +134,22 @@ namespace ArchiveFixer.Tests.Batch120
         // 第一大步账本不再放共享 static：每次运行随 Batch120RunRecord 携带，
         // 同一测试 RunOneAsync 返回的记录读得到，跨测试并行不互覆。
 
-        public static async Task<Batch120RunRecord> RunOneAsync(string sampleId, bool? keepLogs = null)
+        public static Task<Batch120RunRecord> RunOneAsync(string sampleId, bool? keepLogs = null)
+            => RunOneAsync(sampleId, BackupBatchRoot, TestBatchRoot, SpecifiedBatchRoot, RecordRoot, keepLogs);
+
+        /// <summary>
+        /// 指定样本根/运行根的入口：给不需要 125 批备份的快速测试用（例如 LargeContentScanTests），
+        /// 避免测试把 <c>测试\备份位置</c> 当 scratch。
+        /// </summary>
+        public static async Task<Batch120RunRecord> RunOneAsync(
+            string sampleId,
+            string backupBatchRoot,
+            string testBatchRoot,
+            string specifiedBatchRoot,
+            string recordRoot,
+            bool? keepLogs = null)
         {
-            string backupSample = Path.Combine(BackupBatchRoot, sampleId);
+            string backupSample = Path.Combine(backupBatchRoot, sampleId);
             string backupPackage = Path.Combine(backupSample, "原包");
             string recipePath = Path.Combine(backupSample, "recipe.json");
             if (!Directory.Exists(backupPackage))
@@ -172,10 +185,10 @@ namespace ArchiveFixer.Tests.Batch120
                 spaceReserveBytes = recipe["space"]!["reserveBytes"]?.GetValue<long>() ?? 0;
             }
 
-            string workspace = Path.Combine(TestBatchRoot, sampleId);
-            string specifiedRoot = Path.Combine(SpecifiedBatchRoot, sampleId);
-            ResetDirectory(workspace, TestBatchRoot);
-            ResetDirectory(specifiedRoot, SpecifiedBatchRoot);
+            string workspace = Path.Combine(testBatchRoot, sampleId);
+            string specifiedRoot = Path.Combine(specifiedBatchRoot, sampleId);
+            ResetDirectory(workspace, testBatchRoot);
+            ResetDirectory(specifiedRoot, specifiedBatchRoot);
             Directory.CreateDirectory(workspace);
             Directory.CreateDirectory(specifiedRoot);
             CopyDirectory(backupPackage, Path.Combine(workspace, "原包"));
@@ -291,10 +304,10 @@ namespace ArchiveFixer.Tests.Batch120
                     try
                     {
                         string logSource = Path.Combine(dataRoot, "logs");
-                        string logTarget = Path.Combine(RecordRoot, "logs-" + sampleId);
+                        string logTarget = Path.Combine(recordRoot, "logs-" + sampleId);
                         if (Directory.Exists(logSource))
                         {
-                            Directory.CreateDirectory(RecordRoot);
+                            Directory.CreateDirectory(recordRoot);
                             if (Directory.Exists(logTarget))
                             {
                                 Directory.Delete(logTarget, recursive: true);
@@ -319,8 +332,8 @@ namespace ArchiveFixer.Tests.Batch120
                 }
             }
 
-            Directory.CreateDirectory(RecordRoot);
-            string recordPath = Path.Combine(RecordRoot, sampleId + ".json");
+            Directory.CreateDirectory(recordRoot);
+            string recordPath = Path.Combine(recordRoot, sampleId + ".json");
             File.WriteAllText(recordPath, JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
             return record;
         }

@@ -41,6 +41,7 @@ namespace ArchiveFixer.Tests
     /// CI 上没有 WinRAR 时，这一组会全绿跳过，其余单元用例照旧覆盖参数、解析与优先级。
     /// </para>
     /// </summary>
+    [Trait("Category", "RealSample")]
     public class UnRarRealSampleTests : IDisposable
     {
         /// <summary>测试用密码。**占位符**，不是任何真实密码（AGENTS.md §8）。</summary>

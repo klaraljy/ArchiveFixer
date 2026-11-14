@@ -24,6 +24,7 @@ namespace ArchiveFixer.Tests
     /// 1. 校验没通过时**一个源文件都不许删**；
     /// 2. 开关关闭时同样一个都不许删。
     /// </summary>
+    [Trait("Category", "Stress")]
     public class BatchPipelineTests : IDisposable
     {
         private const string BookPasswordA = "BatchPassA1";

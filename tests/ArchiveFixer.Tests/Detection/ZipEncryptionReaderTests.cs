@@ -26,6 +26,7 @@ namespace ArchiveFixer.Tests
     /// <see cref="ZIP_混合_有加密条目就必须报加密"/> **立刻变红**（都判成"不知道"）；
     /// 恢复后全绿。现场记录见 <c>docs/真机事故复盘.md</c>。</para>
     /// </summary>
+    [Trait("Category", "Stress")]
     public class ZipEncryptionReaderTests : IDisposable
     {
         private readonly string _root;

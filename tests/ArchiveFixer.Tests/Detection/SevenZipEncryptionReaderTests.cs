@@ -26,6 +26,7 @@ namespace ArchiveFixer.Tests
     /// <see cref="SevenZip_多卷_给整组卷才读得出头加密"/> **立刻变红**；
     /// 把"明文头 MainStreamsInfo 里找 AES"去掉，<see cref="SevenZip_p_只加密数据_读出来是数据加密"/> 变红。</para>
     /// </summary>
+    [Trait("Category", "Stress")]
     public class SevenZipEncryptionReaderTests : IDisposable
     {
         private readonly string _root;

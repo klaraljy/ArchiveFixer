@@ -29,6 +29,7 @@ namespace ArchiveFixer.Tests
     /// <para>合成样本一律用**本机 WinRAR**（<c>-afzip -v</c>）现造真跨盘 zip —— 顺序的真值来自 WinRAR 自己写下的
     /// 盘号，⛔ 不来自我们的读数（否则就是拿结论当判据）。本机没装 WinRAR 的用例自己跳过、⛔ 不伪装成验过。</para>
     /// </summary>
+    [Trait("Category", "Stress")]
     public class SpannedZipIndexTests : IDisposable
     {
         private readonly string _root;

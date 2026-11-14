@@ -27,6 +27,7 @@ namespace ArchiveFixer.Tests
     /// ② 定稿前那一组必须被改成标准卷名 <c>X.zip</c> + <c>X.z01</c>，改完 7-Zip 真的解得开 ——
     /// 用例只动自己复制出来的副本，样本原件一个字节都不碰。</para>
     /// </summary>
+    [Trait("Category", "RealSample")]
     public sealed class RealSplitZipTailAcceptanceTests : IDisposable
     {
         /// <summary>样本目录的环境变量名（与 <c>ARCHIVEFIXER_REAL_SAMPLE_DIR</c> 同一套约定）。</summary>

@@ -146,6 +146,7 @@ namespace ArchiveFixer.Tests
     /// **验不到"解出来的字节与原件一致"** —— 那一步卡在密码上，如实断言成「密码错误 + 输出目录一个字节都没有」。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
+    [Trait("Category", "RealSample")]
     public class RealVolumeSampleTests : IDisposable
     {
         private readonly string _root;

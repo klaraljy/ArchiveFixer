@@ -28,6 +28,7 @@ namespace ArchiveFixer.Tests
     /// （7z 路径 / 递归工作区根目录），必须和其他测试集串行，并在装配后立刻还原。
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
+    [Trait("Category", "Stress")]
     public partial class ExtractionPipelineFixTests : IDisposable
     {
         private readonly ITestOutputHelper _output;
