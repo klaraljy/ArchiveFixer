@@ -5,14 +5,6 @@ using System;
 
 namespace ArchiveFixer.Services
 {
-    /// <summary>进度/心跳这一步要问宿主的事（只有两件事：写普通日志、写"绕开成功就丢缓冲"的心跳）。</summary>
-    internal interface IProgressHeartbeatHost
-    {
-        void AppendLog(string level, string message);
-
-        void AppendHeartbeat(string message);
-    }
-
     /// <summary>
     /// 长任务心跳 + 进度日志档位 + 引擎长时间无输出的提示（第 15 轮③：
     /// 从 <c>ExtractionCoordinator.ProgressHeartbeatStep.cs</c> 搬成独立类）。
