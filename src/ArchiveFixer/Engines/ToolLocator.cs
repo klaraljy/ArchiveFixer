@@ -882,7 +882,7 @@ namespace ArchiveFixer.Engines
 
             if (priority == null || priority.Count == 0)
             {
-                return DescribeEngineId(EngineIds.SevenZip);
+                return DescribeEngineId(ArchiveFixer.Models.EngineIds.SevenZip);
             }
 
             return string.Join(" → ", priority.Select(DescribeEngineId));
@@ -890,12 +890,12 @@ namespace ArchiveFixer.Engines
 
         private static string DescribeEngineId(string id)
         {
-            if (string.Equals(id, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(id, ArchiveFixer.Models.EngineIds.WinRar, StringComparison.OrdinalIgnoreCase))
             {
                 return "UnRAR（RAR 系）";
             }
 
-            if (string.Equals(id, EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(id, ArchiveFixer.Models.EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase))
             {
                 return "7-Zip";
             }

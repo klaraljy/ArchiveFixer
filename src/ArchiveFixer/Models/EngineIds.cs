@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ArchiveFixer.Engines
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 引擎标识的**唯一词表**（写进设置、写进报告、用于机器判定的那一份）。

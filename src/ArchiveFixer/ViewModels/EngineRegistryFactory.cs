@@ -1,5 +1,6 @@
 using ArchiveFixer.Engines;
 using System;
+using ArchiveFixer.Models;
 
 namespace ArchiveFixer.ViewModels
 {
