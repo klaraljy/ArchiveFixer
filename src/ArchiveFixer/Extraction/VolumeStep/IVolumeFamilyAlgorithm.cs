@@ -15,12 +15,4 @@ namespace ArchiveFixer.Extraction
 
         FamilyResult Evaluate(VolumeGroupUnit unit);
     }
-
-    /// <summary>族算法的结论（唯一输出形状）。</summary>
-    public sealed record FamilyResult(
-        PreparedGroupState Verdict,
-        IReadOnlyList<string> OrderedPieces,
-        IReadOnlyList<int> MissingNumbers,
-        CanonicalNamePlan? NamePlan,
-        string Evidence);
 }
