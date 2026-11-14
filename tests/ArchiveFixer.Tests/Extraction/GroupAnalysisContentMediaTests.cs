@@ -6,6 +6,7 @@ using System.Threading;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using Xunit;
+using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **边界 resolver 的输入**（共用骨架）：账本、基名、源层、临时入口根、密码候选、日志。

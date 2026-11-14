@@ -173,7 +173,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+            ArchiveFixer.Extraction.VolumeStep.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
             _volumeStepGroupWork.Remove(task);
         }
 
@@ -182,7 +182,7 @@ namespace ArchiveFixer.ViewModels
         {
             foreach (VolumeStepGroupWork work in _volumeStepGroupWork.Values)
             {
-                ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+                ArchiveFixer.Extraction.VolumeStep.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
             }
 
             _volumeStepGroupWork.Clear();
@@ -267,7 +267,7 @@ namespace ArchiveFixer.ViewModels
              * prepared 组的标准名硬链接在源卷临时入口目录里：收完片把这一组自己的空壳也删掉。
              * TryDelete 只认 `.ArchiveFixer.work\group-entry` 下的目录，普通源层目录一律不碰。
              */
-            bool removedEntryDirectory = ArchiveFixer.Extraction.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
+            bool removedEntryDirectory = ArchiveFixer.Extraction.VolumeStep.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
 
             /*
              * 入口层链接不是物理片的全部名字：同一组的过程物可能散在多个包装输出目录。

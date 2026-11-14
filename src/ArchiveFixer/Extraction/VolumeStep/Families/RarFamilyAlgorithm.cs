@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **RAR 族专属算法**（2026-10-24 重建，P1）。

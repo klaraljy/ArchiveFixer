@@ -1,7 +1,7 @@
 using System;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **第二大步拿到的一片原始事实**（用户 2026-10-24 口径：底层给事实，族算法下结论）。

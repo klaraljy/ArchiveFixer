@@ -1,6 +1,6 @@
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>一个基名的族选择结论。</summary>
     public sealed class VolumeFamilySelection

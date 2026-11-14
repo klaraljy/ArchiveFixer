@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **边界解析管线**（共用骨架）：按基名仲裁族，再交给对应的族 resolver。

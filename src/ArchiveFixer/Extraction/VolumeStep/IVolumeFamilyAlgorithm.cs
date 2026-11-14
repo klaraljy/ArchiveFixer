@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **分卷专属算法的统一契约**（一族的全部职责就在这四件事）：

@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **族专属边界 resolver**（共用骨架的唯一接口）。

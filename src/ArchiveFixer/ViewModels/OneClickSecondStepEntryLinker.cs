@@ -149,7 +149,7 @@ namespace ArchiveFixer.ViewModels
                         standardFamily: fastFamily);
 
                 if (preUnit != null
-                    && preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing)
+                    && preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Missing)
                 {
                     /*
                      * 组事实层落最终组失败：不点名、不链接、不解压、不删源包。
@@ -168,10 +168,10 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 if (preUnit != null
-                    && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
-                        || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly))
+                    && (preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Unknown
+                        || preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.SizeAnomaly))
                 {
-                    if (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly
+                    if (preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.SizeAnomaly
                         && preUnit.MissingNumbers.Count > 0)
                     {
                         _extractionCoordinator.RecordFinalGroupFailure(
@@ -220,8 +220,8 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 不在这里解压、不搬片、不改名；⛔ owner 只补写一次。
                      */
                     if (preUnit != null
-                        && (preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
-                            || preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned)
+                        && (preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Complete
+                            || preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.OwnerAssigned)
                         && File.Exists(originalEntryPath))
                     {
                         /*
@@ -307,7 +307,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 bool freshUnitAfterFactsChanged =
                     preUnit != null
-                    && preUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Complete
+                    && preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Complete
                     && string.IsNullOrWhiteSpace(preUnit.OwnerTaskFileName);
 
                 if (!freshUnitAfterFactsChanged
@@ -344,9 +344,9 @@ namespace ArchiveFixer.ViewModels
                         .ConfigureAwait(false);
 
                 if (committedUnit != null
-                    && (committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Missing
-                        || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.Unknown
-                        || committedUnit.State == ArchiveFixer.Extraction.VolumeGroupState.SizeAnomaly))
+                    && (committedUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Missing
+                        || committedUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Unknown
+                        || committedUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.SizeAnomaly))
                 {
                     AppendLog(
                         "INFO",

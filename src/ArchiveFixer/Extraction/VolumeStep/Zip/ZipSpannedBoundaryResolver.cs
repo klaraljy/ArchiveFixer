@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>跨盘 ZIP 专属 resolver（末片 `.zip` 是入口）。</summary>
     public sealed class ZipSpannedBoundaryResolver : IVolumeBoundaryResolver

@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **第二大步的组事实服务**（2026-10-24 重建，用户口径：一组一个不可变 Unit、唯一写者）。

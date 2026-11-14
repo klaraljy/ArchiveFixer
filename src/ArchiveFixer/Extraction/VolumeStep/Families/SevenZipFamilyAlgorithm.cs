@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **7z 分卷族算法**（第二大步 P4，当前真实链条的总闸门）。

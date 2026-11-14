@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **边界 resolver 的统一产物**（共用骨架）：族、顺序、标准名、原始映射、结论。

@@ -8,6 +8,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using Xunit;
+using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

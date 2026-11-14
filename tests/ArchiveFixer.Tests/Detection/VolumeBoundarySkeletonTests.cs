@@ -9,6 +9,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using Xunit;
+using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

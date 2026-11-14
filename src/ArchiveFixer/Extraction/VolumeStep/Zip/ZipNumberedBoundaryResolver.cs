@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>通用 ZIP 分片专属 resolver（第 1 片 `.zip.001` 是入口）。</summary>
     public sealed class ZipNumberedBoundaryResolver : IVolumeBoundaryResolver

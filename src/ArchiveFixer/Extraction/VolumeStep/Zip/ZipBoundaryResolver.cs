@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **ZIP 族边界 resolver 的共用核**：跨盘/通用两族只差「末片怎么认、标准名怎么拼」。

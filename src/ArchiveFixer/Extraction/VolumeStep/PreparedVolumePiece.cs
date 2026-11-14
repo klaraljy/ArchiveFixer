@@ -1,6 +1,6 @@
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **标准名 -> 原始片**的一条映射。

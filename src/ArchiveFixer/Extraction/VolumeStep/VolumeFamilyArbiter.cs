@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **族仲裁**（共用骨架）：只回答"同基名的这些账本项属于哪一族"。

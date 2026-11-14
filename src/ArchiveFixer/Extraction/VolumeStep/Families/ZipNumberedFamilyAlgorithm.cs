@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **ZIP 通用分片族算法**（`.zip.001..00N` 裸切，第二大步 P3）。

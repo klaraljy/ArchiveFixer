@@ -8,7 +8,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **7z 族边界 resolver**（共用骨架下的第一个族实现，2026-10-27）。

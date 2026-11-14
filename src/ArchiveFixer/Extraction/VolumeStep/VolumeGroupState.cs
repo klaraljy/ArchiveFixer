@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **一组分卷的生命周期状态**（第二大步唯一写者 = <see cref="VolumeGroupService"/>）。

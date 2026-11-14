@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using ArchiveFixer.Helpers;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **临时组入口目录**（共用骨架）：把一组的标准名做成硬链接，供 VolumeCandidateDiscovery/引擎读取。

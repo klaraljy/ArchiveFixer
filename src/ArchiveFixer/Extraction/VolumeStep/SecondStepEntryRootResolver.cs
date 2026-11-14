@@ -5,7 +5,7 @@ using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Models;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// 第二大步「目标工作区根」的唯一解析出口。

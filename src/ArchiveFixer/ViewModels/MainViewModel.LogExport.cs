@@ -264,11 +264,11 @@ namespace ArchiveFixer.ViewModels
 
                     sections.Add(
                         $"组「{unit.BaseName}」｜族={unit.Family?.ToString() ?? "判不出"}"
-                        + $"｜状态={unit.State}｜完整={unit.State is ArchiveFixer.Extraction.VolumeGroupState.Complete
-                            or ArchiveFixer.Extraction.VolumeGroupState.OwnerAssigned
-                            or ArchiveFixer.Extraction.VolumeGroupState.Linked
-                            or ArchiveFixer.Extraction.VolumeGroupState.Extracting
-                            or ArchiveFixer.Extraction.VolumeGroupState.Succeeded}"
+                        + $"｜状态={unit.State}｜完整={unit.State is ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Complete
+                            or ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.OwnerAssigned
+                            or ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Linked
+                            or ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Extracting
+                            or ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.Succeeded}"
                         + $"｜片={unit.Pieces.Count}｜入口={entryName}"
                         + $"｜owner={unit.OwnerTaskFileName ?? "未定"}"
                         + $"｜缺片={missing}"

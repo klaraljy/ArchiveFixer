@@ -3,6 +3,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using Xunit;
 using ArchiveFixer.Models;
+using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

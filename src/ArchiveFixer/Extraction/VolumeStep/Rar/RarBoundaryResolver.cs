@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **RAR 族边界 resolver**（2026-10-27，三类分开）。

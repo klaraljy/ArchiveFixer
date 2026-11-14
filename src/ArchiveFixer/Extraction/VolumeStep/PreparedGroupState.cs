@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>**一组已经由族专属 resolver 解析完的结论**（共用骨架）。</summary>
     public enum PreparedGroupState

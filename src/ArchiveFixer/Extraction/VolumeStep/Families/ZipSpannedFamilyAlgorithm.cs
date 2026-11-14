@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using ArchiveFixer.Detection;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction.VolumeStep
 {
     /// <summary>
     /// **跨盘 ZIP 族算法**（第二大步 P2）。
