@@ -114,6 +114,68 @@ public sealed class CodeStructureGuardTests
     }
 
     [Fact]
+    public void 源文件必须使用file_scoped命名空间()
+    {
+        var failures = new List<string>();
+
+        foreach (string file in EnumerateSourceFiles())
+        {
+            string relative = RelativeSourcePath(file);
+            string[] lines = File.ReadAllLines(file);
+            bool hasNamespace = lines.Any(line => line.TrimStart().StartsWith("namespace ", StringComparison.Ordinal));
+            if (!hasNamespace)
+            {
+                continue;
+            }
+
+            bool fileScoped = lines.Any(line => FileScopedNamespacePattern.IsMatch(line));
+            bool blockScoped = lines.Any(line => Regex.IsMatch(line, @"^\s*namespace\s+[^;{]+$"));
+
+            if (!fileScoped || blockScoped)
+            {
+                failures.Add(relative);
+            }
+        }
+
+        Assert.True(failures.Count == 0, "源文件必须使用 file-scoped namespace：" + string.Join("；", failures));
+    }
+
+    [Fact]
+    public void 反向分层引用不能重新出现()
+    {
+        var failures = new List<string>();
+
+        CheckForbiddenUsings("Models", new[] { "ArchiveFixer.Extraction", "ArchiveFixer.Services", "ArchiveFixer.Views" }, failures);
+        CheckForbiddenUsings("Services", new[] { "ArchiveFixer.Views" }, failures);
+        CheckForbiddenUsings("Storage", new[] { "ArchiveFixer.Extraction" }, failures);
+
+        Assert.True(failures.Count == 0, "分层反向引用：" + string.Join("；", failures));
+    }
+
+    private static void CheckForbiddenUsings(string directory, string[] forbidden, List<string> failures)
+    {
+        string root = Path.Combine(FindRepoRoot(), "src", "ArchiveFixer", directory);
+
+        foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string text = File.ReadAllText(file);
+            foreach (string prefix in forbidden)
+            {
+                if (text.Contains("using " + prefix, StringComparison.Ordinal))
+                {
+                    failures.Add(RelativeSourcePath(file) + " -> " + prefix);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void 基线不能登记不存在的文件()
     {
         StructureBaseline baseline = LoadBaseline();
