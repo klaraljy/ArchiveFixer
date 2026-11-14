@@ -14,8 +14,8 @@ indent_style = space
 indent_size = 4
 tab_width = 4
 
-# 现代 C#：file-scoped 是目标；M1 机械迁移完成后把 severity 升为 error。
-csharp_style_namespace_declarations = file_scoped:warning
+# 现代 C#：file-scoped 已是全仓事实；M1 完成后升为 error。
+csharp_style_namespace_declarations = file_scoped:error
 csharp_using_directive_placement = outside_namespace:warning
 
 # M1 排序 using 时再打开；现在打开会让现有文件全部触发 IMPORTS。
