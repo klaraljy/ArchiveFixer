@@ -6,26 +6,6 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>收拢决策：这一次要不要把这一组搬到入口包那一层。</summary>
-    public enum VolumeGatherAction
-    {
-        /// <summary>不搬（一个字节都不动）。</summary>
-        Leave,
-
-        /// <summary>整组搬到入口包那一层。</summary>
-        Gather
-    }
-
-    /// <summary>收拢计划（纯数据；⛔ 这里不动盘上任何东西）。</summary>
-    public sealed record VolumeGatherPlan(
-        VolumeGatherAction Action,
-        string Reason,
-        IReadOnlyList<string> Pieces)
-    {
-        public static VolumeGatherPlan Leave(string reason)
-            => new(VolumeGatherAction.Leave, reason, Array.Empty<string>());
-    }
-
     /// <summary>
     /// **分卷收拢的决策器**（用户 2026-10-17 拍板的四步里的 ②分组 + ③硬链接试开证实；
     /// 执行仍然交给既有搬运出口，⛔ 本类不动盘）。
