@@ -25,7 +25,6 @@
     "Helpers/ExtensionHelper.cs": 2353,
     "Models/AppSettings.cs": 1257,
     "Models/ArchiveTask.cs": 2451,
-    "Models/StatusText.cs": 3564,
     "Packing/PackingService.cs": 941,
     "Services/ArchiveDetectService.cs": 1538,
     "Services/DialogService.cs": 1321,
