@@ -33,7 +33,7 @@ namespace ArchiveFixer.Services
         /// ⚠ 与 <c>Models/OperationLogItem.TimeText</c> 用的是**同一个格式**：屏幕日志那一行也是
         /// <c>yyyy-MM-dd HH:mm:ss</c>。既有日志解析按这个格式写的，改这里必须连着看那里（口径只能有一份）。
         /// </summary>
-        public const string TimestampFormat = "yyyy-MM-dd HH:mm:ss";
+        public const string TimestampFormat = LogTimestampFormat.Timestamp;
 
         /// <summary>日志文件名里的紧凑时间戳格式（同样固定文化，避免区域日历换出别的年份）。</summary>
         public const string FileNameTimestampFormat = "yyyyMMdd_HHmmss";
@@ -44,7 +44,7 @@ namespace ArchiveFixer.Services
         /// </summary>
         public static string FormatTimestamp(DateTime value)
         {
-            return value.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+            return LogTimestampFormat.Format(value);
         }
 
         /// <summary>把时间按 <see cref="FileNameTimestampFormat"/> 格式化（日志文件名用）。</summary>
