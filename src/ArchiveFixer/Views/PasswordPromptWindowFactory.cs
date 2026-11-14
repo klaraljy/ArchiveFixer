@@ -1,7 +1,9 @@
 using ArchiveFixer.Helpers;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace ArchiveFixer.Views;
 
@@ -10,6 +12,23 @@ namespace ArchiveFixer.Views;
 /// </summary>
 internal static class PasswordPromptWindowFactory
 {
+    public static Task<string?> ShowOnUiThreadAsync(string message)
+    {
+        Dispatcher? dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher == null)
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            return Task.FromResult(Show(message));
+        }
+
+        return dispatcher.InvokeAsync(() => Show(message)).Task;
+    }
+
     public static string? Show(string message)
     {
         var window = new System.Windows.Window

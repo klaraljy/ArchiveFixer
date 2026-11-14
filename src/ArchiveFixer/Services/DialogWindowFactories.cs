@@ -28,7 +28,7 @@ public static class DialogWindowFactories
     /// <summary>创建「改名…」小窗；参数是默认后缀，返回 null = 用户取消。</summary>
     public static Func<string, ArchiveFixer.Models.RenameDialogResult?>? RenameDialog { get; set; }
 
-    /// <summary>创建「手动输入密码」小窗；返回 null = 跳过。</summary>
-    public static Func<string, string?>? PasswordPrompt { get; set; }
+    /// <summary>在 UI 线程显示「手动输入密码」；无界面宿主返回 null。</summary>
+    public static Func<string, System.Threading.Tasks.Task<string?>>? PasswordPromptAsync { get; set; }
 }
 

@@ -158,34 +158,10 @@ internal sealed partial class ExtractionCoordinator
     /// </summary>
     private Task<string?> ShowPasswordPromptOnUiThreadAsync(string message)
     {
-        System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
-
-        if (dispatcher == null)
+        if (DialogWindowFactories.PasswordPromptAsync is not { } show)
         {
-            // 无界面宿主（单测 / 控制台）：只写日志，绝不弹模态框 —— 那会阻塞调用方且没人点得掉。
             AppendLog("INFO", "当前宿主没有 WPF 界面，跳过「手动输入密码」这一步（不影响其它流程）。");
             return Task.FromResult<string?>(null);
-        }
-
-        if (dispatcher.CheckAccess())
-        {
-            return Task.FromResult(ShowPasswordPromptModal(message));
-        }
-
-        return dispatcher.InvokeAsync(() => ShowPasswordPromptModal(message)).Task;
-    }
-
-    /// <summary>
-    /// 密码输入小窗口本体（**只允许在 UI 线程上调用**）。
-    ///
-    /// 刻意**不设** <c>WindowStartupLocation</c> 以外的任何窗口行为：不置前、不最大化、不改尺寸。
-    /// 默认按钮是「跳过」而不是「确定」——回车不该把可能错的密码当真（同 Ask 档"默认不能是危险动作"）。
-    /// </summary>
-    private static string? ShowPasswordPromptModal(string message)
-    {
-        if (DialogWindowFactories.PasswordPrompt is not { } show)
-        {
-            return null;
         }
 
         return show(message);
