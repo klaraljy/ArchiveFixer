@@ -1,6 +1,6 @@
+using ArchiveFixer.Experimental.AutoConcurrency;
 using System;
 using System.Threading;
-using ArchiveFixer.Experimental.AutoConcurrency;
 using Xunit;
 
 namespace ArchiveFixer.Tests

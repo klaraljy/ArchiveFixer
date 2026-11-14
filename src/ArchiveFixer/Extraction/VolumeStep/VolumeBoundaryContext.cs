@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Generic;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
+using System;
+using System.Collections.Generic;
 
 namespace ArchiveFixer.Extraction.VolumeStep
 {

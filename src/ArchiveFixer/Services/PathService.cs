@@ -1,12 +1,12 @@
-using System;
-using System.Diagnostics;
-using System.IO;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
+using System;
+using System.Diagnostics;
+using System.IO;
 
 namespace ArchiveFixer.Services
 {

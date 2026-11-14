@@ -1,12 +1,12 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>归置计划。<b>只是计划</b>：本类型不代表磁盘上已经发生了任何移动。</summary>

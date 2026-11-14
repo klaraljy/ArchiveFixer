@@ -1,10 +1,10 @@
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Services;
 using ArchiveFixer.Views;
 using System;
 using System.IO;
 using System.Windows;
 using Xunit;
-using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Tests
 {

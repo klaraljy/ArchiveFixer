@@ -1,10 +1,10 @@
-using System;
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
+using System;
+using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

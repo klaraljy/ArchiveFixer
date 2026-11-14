@@ -1,15 +1,15 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
+using ArchiveFixer.Password;
+using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Models;
-using ArchiveFixer.ViewModels;
-using ArchiveFixer.Password;
-using ArchiveFixer.Services;
 using Xunit;
 
 namespace ArchiveFixer.Tests

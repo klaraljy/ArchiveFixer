@@ -1,6 +1,6 @@
-using System.Linq;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
+using System.Linq;
 
 namespace ArchiveFixer.Extraction
 {

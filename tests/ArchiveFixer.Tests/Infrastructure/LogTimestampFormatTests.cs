@@ -1,7 +1,7 @@
-using System;
-using System.Globalization;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System;
+using System.Globalization;
 using Xunit;
 
 namespace ArchiveFixer.Tests

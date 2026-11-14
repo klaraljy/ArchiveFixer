@@ -1,12 +1,12 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace ArchiveFixer.Extraction
 {    /// <summary>一条待归置项被跳过的原因。</summary>

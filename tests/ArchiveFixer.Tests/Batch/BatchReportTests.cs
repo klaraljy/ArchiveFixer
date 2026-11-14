@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Generic;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using System;
+using System.Collections.Generic;
 using Xunit;
 
 namespace ArchiveFixer.Tests

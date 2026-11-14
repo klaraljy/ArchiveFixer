@@ -1,14 +1,14 @@
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
+using ArchiveFixer.Password;
+using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Models;
-using ArchiveFixer.Password;
-using ArchiveFixer.Services;
-using ArchiveFixer.ViewModels;
 using Xunit;
 
 namespace ArchiveFixer.Tests

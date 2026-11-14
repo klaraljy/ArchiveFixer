@@ -1,9 +1,9 @@
-using System;
-using System.IO;
-using System.Text.Json;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
+using System;
+using System.IO;
+using System.Text.Json;
 using Xunit;
 
 namespace ArchiveFixer.Tests

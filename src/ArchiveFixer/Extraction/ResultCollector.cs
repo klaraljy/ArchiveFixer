@@ -1,10 +1,10 @@
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction
 {

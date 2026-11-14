@@ -1,10 +1,10 @@
-using System;
-using System.IO;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
+using System;
+using System.IO;
 using Xunit;
 
 namespace ArchiveFixer.Tests

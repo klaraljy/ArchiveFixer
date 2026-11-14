@@ -1,9 +1,9 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
 using Xunit;
 
 namespace ArchiveFixer.Tests

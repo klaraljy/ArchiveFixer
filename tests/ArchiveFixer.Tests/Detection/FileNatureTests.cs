@@ -1,8 +1,8 @@
+using ArchiveFixer.Detection;
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Detection;
 using Xunit;
 
 namespace ArchiveFixer.Tests

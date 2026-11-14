@@ -1,8 +1,8 @@
+using ArchiveFixer.Models;
 using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Converters
 {

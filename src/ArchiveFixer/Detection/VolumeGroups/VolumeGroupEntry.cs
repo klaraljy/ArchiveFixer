@@ -1,3 +1,4 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -6,7 +7,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {    /// <summary>目录里的一个文件（判定器的输入事实：路径 + 体积 + 时间 + 枚举次序）。</summary>

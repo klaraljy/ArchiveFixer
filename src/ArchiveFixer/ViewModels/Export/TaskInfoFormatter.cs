@@ -1,6 +1,6 @@
-using System.Text;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System.Text;
 
 namespace ArchiveFixer.ViewModels.Export
 {

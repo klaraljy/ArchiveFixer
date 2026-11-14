@@ -1,8 +1,8 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines.SevenZip;
 using System;
 using System.IO;
 using System.IO.Compression;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines.SevenZip;
 using Xunit;
 
 namespace ArchiveFixer.Tests

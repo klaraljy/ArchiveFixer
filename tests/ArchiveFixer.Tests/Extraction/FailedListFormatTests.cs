@@ -1,9 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Xunit;
 using Xunit.Abstractions;
 

@@ -1,8 +1,8 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction
 {

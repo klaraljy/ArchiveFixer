@@ -1,7 +1,7 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Diagnostics;
 using System.Threading;
-using ArchiveFixer.Helpers;
 using Xunit;
 
 namespace ArchiveFixer.Tests

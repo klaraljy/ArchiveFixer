@@ -1,9 +1,9 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
-using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
-using ArchiveFixer.Storage;
 using ArchiveFixer.Models;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

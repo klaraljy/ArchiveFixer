@@ -1,6 +1,6 @@
+using ArchiveFixer.Helpers;
 using System.Windows;
 using System.Windows.Media;
-using ArchiveFixer.Helpers;
 using Xunit;
 
 namespace ArchiveFixer.Tests

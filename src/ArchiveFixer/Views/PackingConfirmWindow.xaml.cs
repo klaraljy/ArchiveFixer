@@ -1,6 +1,6 @@
-using System.Windows;
 using ArchiveFixer.Packing;
 using ArchiveFixer.Services;
+using System.Windows;
 
 namespace ArchiveFixer.Views
 {

@@ -1,8 +1,8 @@
+using ArchiveFixer.Storage;
 using System;
 using System.IO;
 using System.Linq;
 using System.Text;
-using ArchiveFixer.Storage;
 using Xunit;
 
 namespace ArchiveFixer.Tests

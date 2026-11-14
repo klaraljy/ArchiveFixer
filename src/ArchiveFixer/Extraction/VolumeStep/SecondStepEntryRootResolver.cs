@@ -1,9 +1,9 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction.VolumeStep
 {

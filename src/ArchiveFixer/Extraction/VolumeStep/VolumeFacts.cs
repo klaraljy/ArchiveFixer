@@ -1,5 +1,5 @@
-using System;
 using ArchiveFixer.Detection;
+using System;
 
 namespace ArchiveFixer.Extraction.VolumeStep
 {

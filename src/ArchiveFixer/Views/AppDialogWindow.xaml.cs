@@ -1,8 +1,8 @@
+using ArchiveFixer.Services;
 using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Views
 {

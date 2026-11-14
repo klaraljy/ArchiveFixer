@@ -1,18 +1,30 @@
-# 统一换行：仓库内存 LF，检出时按平台转换，避免 CRLF/LF 反复互相覆盖
-* text=auto
+# 统一换行：仓库与工作区都按 LF 管理（M1 完成归一）。
+# 详见 E:\AF\规范性\修改方案-v2.md 的 4.1。
+* text=auto eol=lf
 
-*.cs        text diff=csharp
-*.xaml      text
-*.csproj    text
-*.slnx      text
-*.json      text
-*.md        text
-*.ps1       text
-*.gitignore text
-*.gitattributes text
+*.cs        text eol=lf diff=csharp
+*.xaml      text eol=lf
+*.csproj    text eol=lf
+*.props     text eol=lf
+*.targets   text eol=lf
+*.slnx      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.ps1       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
 
 # 二进制：不要做任何换行/编码转换
 *.exe       binary
 *.dll       binary
+*.pdb       binary
 *.png       binary
 *.ico       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.zip       binary
+*.7z        binary
+*.rar       binary

@@ -1,3 +1,6 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
@@ -5,9 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Models;
 using static ArchiveFixer.Extraction.VolumeNamePlanner;
 using static ArchiveFixer.Extraction.VolumeNameRestorer;
 

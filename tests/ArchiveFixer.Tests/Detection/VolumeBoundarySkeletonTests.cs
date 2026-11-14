@@ -1,3 +1,7 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Extraction.VolumeStep;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -5,11 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
 using Xunit;
-using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

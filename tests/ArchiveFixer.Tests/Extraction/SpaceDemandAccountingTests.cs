@@ -1,12 +1,12 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Models;
+using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Models;
-using ArchiveFixer.Security;
-using ArchiveFixer.Storage;
 using Xunit;
 using Xunit.Abstractions;
 

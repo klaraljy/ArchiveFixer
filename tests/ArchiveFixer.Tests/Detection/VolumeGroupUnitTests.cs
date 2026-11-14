@@ -1,6 +1,6 @@
-using System.Collections.Generic;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
+using System.Collections.Generic;
 using Xunit;
 
 namespace ArchiveFixer.Tests

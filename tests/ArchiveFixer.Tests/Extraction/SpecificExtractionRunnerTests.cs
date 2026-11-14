@@ -1,11 +1,11 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
 using Xunit;
 
 namespace ArchiveFixer.Tests

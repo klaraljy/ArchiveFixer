@@ -1,12 +1,12 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Extraction.VolumeStep;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Extraction;
 using Xunit;
-using ArchiveFixer.Extraction.VolumeStep;
 
 namespace ArchiveFixer.Tests
 {

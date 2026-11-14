@@ -1,10 +1,10 @@
+using ArchiveFixer.Models;
+using ArchiveFixer.Packing;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Models;
-using ArchiveFixer.Packing;
-using ArchiveFixer.Storage;
 using Xunit;
 
 namespace ArchiveFixer.Tests

@@ -1,9 +1,9 @@
+using ArchiveFixer.Detection;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using ArchiveFixer.Detection;
 using Xunit;
 
 namespace ArchiveFixer.Tests

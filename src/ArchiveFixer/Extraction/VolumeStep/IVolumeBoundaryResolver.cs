@@ -1,9 +1,9 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction.VolumeStep
 {

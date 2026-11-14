@@ -1,5 +1,5 @@
-using System.Globalization;
 using ArchiveFixer.Models;
+using System.Globalization;
 
 namespace ArchiveFixer.Extraction
 {

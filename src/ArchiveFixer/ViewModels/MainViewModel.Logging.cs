@@ -1,10 +1,10 @@
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
-using ArchiveFixer.Models;
-using ArchiveFixer.Services;
 
 namespace ArchiveFixer.ViewModels
 {

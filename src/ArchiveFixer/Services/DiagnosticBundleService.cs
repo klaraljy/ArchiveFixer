@@ -1,3 +1,6 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,9 +9,6 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Services
 {

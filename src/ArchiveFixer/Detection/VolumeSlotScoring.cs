@@ -1,8 +1,7 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {

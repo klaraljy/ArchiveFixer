@@ -1,7 +1,7 @@
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System.IO;
+using System.Linq;
 
 namespace ArchiveFixer.Tests;
 

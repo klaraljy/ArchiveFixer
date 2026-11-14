@@ -1,3 +1,11 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
+using ArchiveFixer.Password;
+using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
+using Microsoft.Win32.SafeHandles;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,14 +16,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
-using ArchiveFixer.Password;
-using ArchiveFixer.Services;
-using ArchiveFixer.ViewModels;
-using Microsoft.Win32.SafeHandles;
 
 namespace ArchiveFixer.Tests.Batch120
 {

@@ -1,20 +1,26 @@
 root = true
 
-# ArchiveFixer 现行风格：4 空格、Allman、using 在 namespace 外、block-scoped namespace。
-# 不切换 file-scoped namespace，不强制全仓换行，避免纯风格大 diff。
+# ArchiveFixer 现代化风格基线（M0）。
+# M1 会把 end_of_line 改为 lf、IDE0161 改为 error；大迁移前先保持现状可构建。
 
 [*]
 charset = utf-8
-insert_final_newline = unset
-trim_trailing_whitespace = false
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
 
 [*.cs]
 indent_style = space
 indent_size = 4
 tab_width = 4
 
-# 现有代码统一 block-scoped namespace
-csharp_style_namespace_declarations = block_scoped:suggestion
+# 现代 C#：file-scoped 是目标；M1 机械迁移完成后把 severity 升为 error。
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_using_directive_placement = outside_namespace:warning
+
+# M1 排序 using 时再打开；现在打开会让现有文件全部触发 IMPORTS。
+dotnet_sort_system_directives_first = false
+dotnet_separate_import_directive_groups = false
 
 # 大括号/换行
 csharp_new_line_before_open_brace = all
@@ -23,12 +29,15 @@ csharp_new_line_before_catch = true
 csharp_new_line_before_finally = true
 csharp_prefer_braces = true:suggestion
 
-# using 与类型关键字
-csharp_using_directive_placement = outside_namespace:suggestion
+# 类型/成员限定
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
 dotnet_style_predefined_type_for_locals_parameters_members = true:suggestion
 dotnet_style_predefined_type_for_member_access = true:suggestion
 
-# 命名（先 suggestion，避免一次性制造大量构建错误）
+# 命名：先 suggestion，M2 稳定后对新增代码升 warning
 dotnet_naming_rule.interfaces_should_begin_with_i.severity = suggestion
 dotnet_naming_rule.interfaces_should_begin_with_i.symbols = interfaces
 dotnet_naming_rule.interfaces_should_begin_with_i.style = begins_with_i
@@ -51,3 +60,10 @@ dotnet_naming_symbols.private_fields.applicable_kinds = field
 dotnet_naming_symbols.private_fields.applicable_accessibilities = private
 dotnet_naming_style.underscore_camel_case.required_prefix = _
 dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+[*.{csproj,props,targets,slnx,xml,json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

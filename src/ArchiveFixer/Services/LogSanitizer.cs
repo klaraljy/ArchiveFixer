@@ -1,5 +1,5 @@
-using System.Text.RegularExpressions;
 using ArchiveFixer.Password;
+using System.Text.RegularExpressions;
 
 namespace ArchiveFixer.Services
 {

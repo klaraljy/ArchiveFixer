@@ -1,7 +1,7 @@
+using ArchiveFixer.Models;
 using System;
 using System.IO;
 using System.Text.Json;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Services
 {

@@ -1,5 +1,5 @@
-using System.Threading;
 using ArchiveFixer.Storage;
+using System.Threading;
 
 namespace ArchiveFixer.Security
 {

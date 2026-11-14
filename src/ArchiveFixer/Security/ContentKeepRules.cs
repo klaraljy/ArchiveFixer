@@ -1,7 +1,7 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Security
 {

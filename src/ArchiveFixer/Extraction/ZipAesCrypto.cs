@@ -1,10 +1,10 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Extraction
 {

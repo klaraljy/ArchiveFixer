@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast (build/format/guard/tests)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: restore
+        run: dotnet restore ArchiveFixer.slnx
+
+      - name: build (warnings are errors)
+        run: dotnet build ArchiveFixer.slnx --no-restore --nologo -v minimal
+
+      - name: format
+        run: dotnet format ArchiveFixer.slnx --verify-no-changes --no-restore
+
+      - name: structure guard + fast tests
+        run: >
+          dotnet test tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
+          --no-build --nologo
+          --filter "FullyQualifiedName~CodeStructureGuardTests|Category!=RealSample&Category!=Stress&Category!=Forensics"
+          --logger "trx;LogFileName=fast.trx"
+          --results-directory TestResults
+
+      - name: upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-test-results
+          path: TestResults
+          if-no-files-found: ignore
+
+  extended:
+    name: extended (real samples/stress)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: restore
+        run: dotnet restore ArchiveFixer.slnx
+
+      - name: build
+        run: dotnet build ArchiveFixer.slnx --no-restore --nologo -v minimal
+
+      - name: full tests
+        run: >
+          dotnet test tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
+          --no-build --nologo
+          --logger "trx;LogFileName=extended.trx"
+          --results-directory TestResults
+
+      - name: upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-test-results
+          path: TestResults
+          if-no-files-found: ignore

@@ -1,9 +1,9 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Security
 {

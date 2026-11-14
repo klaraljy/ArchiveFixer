@@ -1,11 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

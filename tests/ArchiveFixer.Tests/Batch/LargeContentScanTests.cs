@@ -1,3 +1,6 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Services;
+using ArchiveFixer.Tests.Batch120;
 using System;
 using System.IO;
 using System.IO.Compression;
@@ -5,9 +8,6 @@ using System.Linq;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Services;
-using ArchiveFixer.Tests.Batch120;
 using Xunit;
 
 namespace ArchiveFixer.Tests

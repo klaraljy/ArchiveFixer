@@ -1,8 +1,8 @@
+using ArchiveFixer.Models;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using ArchiveFixer.Models;
-using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Packing
 {

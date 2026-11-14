@@ -1,8 +1,8 @@
-using System.IO;
-using System.Threading;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System.IO;
+using System.Threading;
 
 namespace ArchiveFixer.Tests;
 

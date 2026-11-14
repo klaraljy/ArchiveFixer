@@ -1,9 +1,9 @@
-using System;
-using System.IO;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
-using Xunit;
 using ArchiveFixer.Extraction.VolumeStep;
+using System;
+using System.IO;
+using Xunit;
 
 namespace ArchiveFixer.Tests
 {

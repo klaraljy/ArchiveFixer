@@ -1,9 +1,9 @@
-using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
-using Xunit;
-using ArchiveFixer.Models;
 using ArchiveFixer.Extraction.VolumeStep;
+using ArchiveFixer.Models;
+using System.Linq;
+using Xunit;
 
 namespace ArchiveFixer.Tests
 {

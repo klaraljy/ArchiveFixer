@@ -1,3 +1,4 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -6,7 +7,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {    /// <summary>证据权重。落结论时**只按权重与是否成立**，不按"名字像不像"。</summary>

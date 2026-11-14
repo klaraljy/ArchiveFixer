@@ -1,5 +1,5 @@
-using System;
 using ArchiveFixer.Models;
+using System;
 
 namespace ArchiveFixer.Extraction
 {

@@ -9,10 +9,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using static ArchiveFixer.Extraction.VolumeNamePlanner;
-
-using SpannedZipDiskGather = ArchiveFixer.Extraction.VolumeGatherPlanner.SpannedZipDiskGather;
-
 using GatherPiece = ArchiveFixer.Extraction.VolumeNameRepair.GatherPiece;
+using SpannedZipDiskGather = ArchiveFixer.Extraction.VolumeGatherPlanner.SpannedZipDiskGather;
 
 namespace ArchiveFixer.Extraction
 {

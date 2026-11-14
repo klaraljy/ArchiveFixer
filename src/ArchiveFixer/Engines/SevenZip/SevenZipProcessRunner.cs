@@ -1,7 +1,7 @@
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
-using ArchiveFixer.Password;
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

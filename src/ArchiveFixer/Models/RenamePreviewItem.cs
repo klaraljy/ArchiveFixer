@@ -1,8 +1,8 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Models
 {

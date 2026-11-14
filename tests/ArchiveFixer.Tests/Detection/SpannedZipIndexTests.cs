@@ -1,3 +1,7 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -5,10 +9,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Helpers;
 using Xunit;
 
 namespace ArchiveFixer.Tests

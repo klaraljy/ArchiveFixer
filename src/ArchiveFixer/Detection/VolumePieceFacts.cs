@@ -1,7 +1,6 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.IO;
-
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {

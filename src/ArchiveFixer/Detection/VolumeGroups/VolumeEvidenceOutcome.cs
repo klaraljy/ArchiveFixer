@@ -1,3 +1,4 @@
+using ArchiveFixer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -6,7 +7,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {    /// <summary>一条证据在这次判定里的结论。<see cref="Unknown"/> ≠ <see cref="NotSatisfied"/>（没取到 ≠ 不成立）。</summary>

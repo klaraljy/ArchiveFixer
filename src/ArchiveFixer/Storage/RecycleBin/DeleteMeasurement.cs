@@ -1,12 +1,12 @@
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Security;
+using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Security;
-using Microsoft.Win32;
 
 namespace ArchiveFixer.Storage
 {    /// <summary>目标的度量结果：条目数 + 总大小，用于删除日志（§3.2 要求日志报总大小）。</summary>

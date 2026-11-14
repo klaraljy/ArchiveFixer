@@ -1,5 +1,5 @@
-using System.Collections.Generic;
 using ArchiveFixer.Models;
+using System.Collections.Generic;
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>

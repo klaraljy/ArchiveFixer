@@ -1,7 +1,7 @@
-using System;
-using System.IO;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
+using System;
+using System.IO;
 
 namespace ArchiveFixer.Packing
 {    /// 落点规划（用户 2026-09-26 第 5/7 条）：最终 rar 与"装分卷的文件夹"分别落在哪、叫什么。

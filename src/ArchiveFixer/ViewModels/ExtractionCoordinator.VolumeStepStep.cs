@@ -1,13 +1,13 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.ViewModels
 {

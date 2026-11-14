@@ -1,3 +1,5 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Password;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -6,8 +8,6 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Password;
 
 namespace ArchiveFixer.Packing
 {

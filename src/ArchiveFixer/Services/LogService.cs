@@ -1,3 +1,6 @@
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -9,9 +12,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Password;
-using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Services
 {

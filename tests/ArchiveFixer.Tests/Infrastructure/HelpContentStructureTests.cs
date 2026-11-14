@@ -1,8 +1,8 @@
+using ArchiveFixer.Models;
+using ArchiveFixer.Views;
 using System;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Models;
-using ArchiveFixer.Views;
 using Xunit;
 
 namespace ArchiveFixer.Tests

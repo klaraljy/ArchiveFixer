@@ -1,7 +1,7 @@
-using System;
-using System.IO;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
+using System;
+using System.IO;
 
 namespace ArchiveFixer.Extraction
 {

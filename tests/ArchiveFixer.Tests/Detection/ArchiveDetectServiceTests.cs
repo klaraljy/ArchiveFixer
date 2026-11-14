@@ -1,5 +1,5 @@
-using System.IO;
 using ArchiveFixer.Services;
+using System.IO;
 
 namespace ArchiveFixer.Tests;
 

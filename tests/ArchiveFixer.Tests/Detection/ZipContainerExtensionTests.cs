@@ -1,10 +1,10 @@
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using System;
 using System.IO;
 using System.IO.Compression;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Models;
-using ArchiveFixer.Services;
 using Xunit;
 
 namespace ArchiveFixer.Tests

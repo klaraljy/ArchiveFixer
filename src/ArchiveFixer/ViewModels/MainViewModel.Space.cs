@@ -1,8 +1,8 @@
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
-using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
@@ -15,14 +15,14 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
-using System.Text;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels

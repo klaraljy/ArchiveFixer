@@ -1,10 +1,10 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Security;
-using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Tests
 {

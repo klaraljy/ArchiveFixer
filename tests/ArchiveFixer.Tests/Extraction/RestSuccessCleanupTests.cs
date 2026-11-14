@@ -1,7 +1,7 @@
-using System;
-using System.IO;
 using ArchiveFixer.Models;
 using ArchiveFixer.ViewModels;
+using System;
+using System.IO;
 using Xunit;
 
 namespace ArchiveFixer.Tests

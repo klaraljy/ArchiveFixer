@@ -1,3 +1,7 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -7,10 +11,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
 using Xunit;
 using Xunit.Abstractions;
 

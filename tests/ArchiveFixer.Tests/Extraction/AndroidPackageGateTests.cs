@@ -1,3 +1,8 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -6,11 +11,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Models;
-using ArchiveFixer.Services;
-using ArchiveFixer.ViewModels;
 using Xunit;
 using Xunit.Abstractions;
 

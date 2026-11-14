@@ -1,6 +1,6 @@
+using ArchiveFixer.Packing;
 using System;
 using System.Collections.Generic;
-using ArchiveFixer.Packing;
 
 namespace ArchiveFixer.Services
 {

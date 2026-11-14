@@ -1,9 +1,9 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Detection;
-using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Extraction
 {

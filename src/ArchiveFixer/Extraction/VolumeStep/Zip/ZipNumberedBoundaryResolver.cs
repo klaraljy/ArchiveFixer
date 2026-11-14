@@ -1,6 +1,6 @@
+using ArchiveFixer.Detection;
 using System.Threading;
 using System.Threading.Tasks;
-using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction.VolumeStep
 {

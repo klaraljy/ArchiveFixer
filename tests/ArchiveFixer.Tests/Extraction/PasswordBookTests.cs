@@ -1,11 +1,11 @@
+using ArchiveFixer.Helpers;
+using ArchiveFixer.Password;
+using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using ArchiveFixer.Helpers;
-using ArchiveFixer.Password;
-using ArchiveFixer.Services;
 using Xunit;
 
 namespace ArchiveFixer.Tests

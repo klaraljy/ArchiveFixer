@@ -1,9 +1,7 @@
-using System.Collections.Generic;
-using System.Linq;
-
 using ArchiveFixer.Detection;
 using ArchiveFixer.ViewModels;
-
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

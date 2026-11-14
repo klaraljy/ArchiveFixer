@@ -1,12 +1,12 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Engines.WinRar;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

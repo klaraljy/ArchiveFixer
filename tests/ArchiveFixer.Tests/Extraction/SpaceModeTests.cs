@@ -1,13 +1,13 @@
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Models;
-using ArchiveFixer.Services;
-using ArchiveFixer.Storage;
 using Xunit;
-using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Tests
 {

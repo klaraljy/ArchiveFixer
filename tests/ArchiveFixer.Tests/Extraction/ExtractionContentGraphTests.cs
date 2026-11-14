@@ -1,12 +1,11 @@
-using System;
-using System.IO;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
-using Xunit;
-
-using ArchiveFixer.ViewModels;
 using ArchiveFixer.Extraction.VolumeStep;
+using ArchiveFixer.Models;
+using ArchiveFixer.ViewModels;
+using System;
+using System.IO;
+using Xunit;
 
 namespace ArchiveFixer.Tests
 {

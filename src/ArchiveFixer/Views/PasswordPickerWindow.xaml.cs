@@ -1,7 +1,7 @@
+using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
 using System.Windows;
-using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Views
 {

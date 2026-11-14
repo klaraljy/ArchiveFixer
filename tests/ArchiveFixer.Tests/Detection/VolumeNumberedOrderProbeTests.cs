@@ -1,10 +1,10 @@
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Extraction;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Threading.Tasks;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
 using Xunit;
 
 namespace ArchiveFixer.Tests

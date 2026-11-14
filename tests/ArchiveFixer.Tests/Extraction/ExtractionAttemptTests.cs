@@ -1,6 +1,6 @@
+using ArchiveFixer.Engines;
 using System;
 using System.Linq;
-using ArchiveFixer.Engines;
 using Xunit;
 
 namespace ArchiveFixer.Tests

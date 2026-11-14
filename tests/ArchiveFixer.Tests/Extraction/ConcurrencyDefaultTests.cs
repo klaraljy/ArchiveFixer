@@ -1,9 +1,9 @@
-using System;
-using System.IO;
-using System.Linq;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
+using System;
+using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

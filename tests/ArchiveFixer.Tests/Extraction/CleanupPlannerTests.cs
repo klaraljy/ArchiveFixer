@@ -1,5 +1,5 @@
-using System.Linq;
 using ArchiveFixer.Extraction;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

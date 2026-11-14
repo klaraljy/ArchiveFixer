@@ -1,11 +1,11 @@
-using System;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ArchiveFixer.Engines.SevenZip
 {

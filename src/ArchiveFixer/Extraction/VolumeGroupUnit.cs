@@ -1,6 +1,6 @@
+using ArchiveFixer.Detection;
 using System;
 using System.Collections.Generic;
-using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {

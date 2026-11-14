@@ -1,5 +1,5 @@
-using System;
 using ArchiveFixer.Helpers;
+using System;
 
 namespace ArchiveFixer.Detection
 {

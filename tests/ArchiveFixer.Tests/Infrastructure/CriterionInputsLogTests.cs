@@ -1,9 +1,9 @@
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Models;
 using Xunit;
 using Xunit.Abstractions;
 

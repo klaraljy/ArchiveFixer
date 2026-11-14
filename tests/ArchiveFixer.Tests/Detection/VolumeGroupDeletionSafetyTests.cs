@@ -1,9 +1,8 @@
+using ArchiveFixer.Extraction;
+using ArchiveFixer.ViewModels;
 using System;
 using System.IO;
-using ArchiveFixer.ViewModels;
 using Xunit;
-
-using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Tests
 {

@@ -1,7 +1,7 @@
-using System.Linq;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests

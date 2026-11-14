@@ -1,8 +1,8 @@
-using System.Collections.Generic;
-using System.Linq;
 using ArchiveFixer.Converters;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace ArchiveFixer.Tests
