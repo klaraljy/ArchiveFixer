@@ -543,7 +543,7 @@ public class CleanupSelectionScopeTests : IDisposable
             }
         };
 
-        CleanupPreview merged = MainViewModel.MergeCleanupPreviews(CleanupScope.Artifacts, plans);
+        CleanupPreview merged = CleanupCoordinator.MergeCleanupPreviews(CleanupScope.Artifacts, plans);
 
         // 合计：条目数与字节数相加；作用范围不止一个目录时不再假装是一个。
         Assert.Equal(5, merged.ItemCount);
@@ -643,7 +643,7 @@ public class CleanupSelectionScopeTests : IDisposable
             new() { Task = second, SkipReason = "其余物目录里没有可删的东西" }
         };
 
-        string text = MainViewModel.BuildNothingToCleanText("删除其余物", plans);
+        string text = CleanupCoordinator.BuildNothingToCleanText("删除其余物", plans);
 
         Assert.Contains("2 个任务都没有可删的东西", text, StringComparison.Ordinal);
         Assert.Contains("222.7z", text, StringComparison.Ordinal);
@@ -942,4 +942,5 @@ public class CleanupSelectionScopeTests : IDisposable
         }
     }
 }
+
 

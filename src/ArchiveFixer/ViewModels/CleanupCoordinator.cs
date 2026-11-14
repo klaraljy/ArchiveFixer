@@ -1,71 +1,86 @@
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
-using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
-{        /// <summary>
-         /// 其余物/空文件夹的删除流程（③「清理与删除」页那三个按钮）：
-         /// **判定作用于谁 → 预览 → 红色确认（默认回收站，勾选框切激进档）→（激进档）二次确认 → 后台执行 → 写日志**。
-         ///
-         /// <para>
-         /// <b>选中口径（2026-09-24 用户第 12 条亲自拍板：一律只认勾选）</b>：这三个入口统一走
-         /// <see cref="ResolveCleanupTargets"/> —— 只作用于**勾选**的任务；一个都没勾就只提示
-         /// （<see cref="StatusText.NoCheckedTaskPromptFormat"/>），一个字节都不动。
-         /// ⛔ 曾经那条"一个都没勾时退回当前点中的那一行"的兜底**已删除**：用户原话
-         /// "你只需要操作我选中的文件，其他的不用管"，兜底等于替他决定要动哪些文件。
-         /// （早期还有一个反向缺陷：这三个入口只看当前行，勾了任务的用户反而收到"请先选中一个任务"。）
-         /// </para>
-         /// <para>
-         /// 多任务时**合并成一次确认**（用户 2026-09-22 拍板，原话："要合并成 1 次确认，不要有冗余操作"）：
-         /// 先把**全部**目标各预览一遍（后台），把"每个任务的作用范围 + 合计条目数/字节数 +
-         /// 哪些任务含源包"合成一个确认框，用户点一次就算数；确认之后逐个执行，
-         /// 单个任务失败不中断整批（不变量 9），最后给一次汇总（成功 N / 失败 M + 原因 + 释放字节数）。
-         /// 以前是"勾了 5 个就弹 5 次预览 + 5 次确认"，那正是用户说的冗余。
-         /// </para>
-         /// <para>
-         /// 「删除本目录全部其余物」保持整目录语义：同目录只算一次（<see cref="ExpandCleanupTargets"/>），
-         /// 所以它天然只会有一次确认，且确认框里点名"影响该目录下 N 个包"。
-         /// </para>
-         /// <para>
-         /// 线程纪律（本项目历史上因 UI 线程干重活卡死过）：
-         /// 预览统计与删除执行全部在 <see cref="Task.Run(System.Action)"/> 里；
-         /// 界面线程只做两件事 —— 弹确认框、把结论写进日志/提示。
-         /// </para>
-         /// <para>
-         /// 取消的语义：任何一步没确认，那一个任务就**什么都不做**（一个字节都不动），只留一条日志。
-         /// </para>
-         /// </summary>
-         /// <param name="scope">作用域类型（其余物 / 空文件夹）。</param>
-         /// <param name="deleteScope">
-         /// 作用域大小：只删每个目标任务自己那一份（默认），还是删整个共享目录下的全部。
-         /// 后者只由「删除本目录全部其余物…」这个显式入口传进来。
-         /// </param>
-    private async Task RunCleanupAsync(
+/// <summary>
+/// 清理执行：预览 → 确认 → 删除 → 汇总；UI 通过回调/对话框服务，不直接碰窗口。
+/// </summary>
+internal sealed class CleanupCoordinator
+{
+    private readonly Func<IReadOnlyList<ArchiveTask>> _tasks;
+    private readonly Func<string, string> _promptNoCheckedTask;
+    private readonly Action<string, string> _log;
+    private readonly Action _enterBusy;
+    private readonly Action _exitBusy;
+    private readonly Action<string, ArchiveTask, CleanupPreview, CleanupOutcome> _writeOutcome;
+    private readonly DialogService _dialogService;
+    private readonly MaintenanceCleanupService _cleanup;
+
+    public CleanupCoordinator(
+        Func<IReadOnlyList<ArchiveTask>> tasks,
+        Func<string, string> promptNoCheckedTask,
+        Action<string, string> log,
+        Action enterBusy,
+        Action exitBusy,
+        Action<string, ArchiveTask, CleanupPreview, CleanupOutcome> writeOutcome,
+        DialogService dialogService,
+        MaintenanceCleanupService cleanup)
+    {
+        _tasks = tasks;
+        _promptNoCheckedTask = promptNoCheckedTask;
+        _log = log;
+        _enterBusy = enterBusy;
+        _exitBusy = exitBusy;
+        _writeOutcome = writeOutcome;
+        _dialogService = dialogService;
+        _cleanup = cleanup;
+    }
+
+    /// <summary>
+    /// 其余物/空文件夹的删除流程（③「清理与删除」页那三个按钮）：
+    /// **判定作用于谁 → 预览 → 红色确认（默认回收站，勾选框切激进档）→（激进档）二次确认 → 后台执行 → 写日志**。
+    ///
+    /// <para>
+    /// <b>选中口径（2026-09-24 用户第 12 条亲自拍板：一律只认勾选）</b>：这三个入口统一走
+    /// <see cref="ResolveCleanupTargets"/> —— 只作用于**勾选**的任务；一个都没勾就只提示
+    /// （<see cref="StatusText.NoCheckedTaskPromptFormat"/>），一个字节都不动。
+    /// ⛔ 曾经那条"一个都没勾时退回当前点中的那一行"的兜底**已删除**：用户原话
+    /// "你只需要操作我选中的文件，其他的不用管"，兜底等于替他决定要动哪些文件。
+    /// （早期还有一个反向缺陷：这三个入口只看当前行，勾了任务的用户反而收到"请先选中一个任务"。）
+    /// </para>
+    /// <para>
+    /// 多任务时**合并成一次确认**（用户 2026-09-22 拍板，原话："要合并成 1 次确认，不要有冗余操作"）：
+    /// 先把**全部**目标各预览一遍（后台），把"每个任务的作用范围 + 合计条目数/字节数 +
+    /// 哪些任务含源包"合成一个确认框，用户点一次就算数；确认之后逐个执行，
+    /// 单个任务失败不中断整批（不变量 9），最后给一次汇总（成功 N / 失败 M + 原因 + 释放字节数）。
+    /// 以前是"勾了 5 个就弹 5 次预览 + 5 次确认"，那正是用户说的冗余。
+    /// </para>
+    /// <para>
+    /// 「删除本目录全部其余物」保持整目录语义：同目录只算一次（<see cref="ExpandCleanupTargets"/>），
+    /// 所以它天然只会有一次确认，且确认框里点名"影响该目录下 N 个包"。
+    /// </para>
+    /// <para>
+    /// 线程纪律（本项目历史上因 UI 线程干重活卡死过）：
+    /// 预览统计与删除执行全部在 <see cref="Task.Run(System.Action)"/> 里；
+    /// 界面线程只做两件事 —— 弹确认框、把结论写进日志/提示。
+    /// </para>
+    /// <para>
+    /// 取消的语义：任何一步没确认，那一个任务就**什么都不做**（一个字节都不动），只留一条日志。
+    /// </para>
+    /// </summary>
+    /// <param name="scope">作用域类型（其余物 / 空文件夹）。</param>
+    /// <param name="deleteScope">
+    /// 作用域大小：只删每个目标任务自己那一份（默认），还是删整个共享目录下的全部。
+    /// 后者只由「删除本目录全部其余物…」这个显式入口传进来。
+    /// </param>
+    internal async Task RunAsync(
         CleanupScope scope,
         ArtifactDeleteScope deleteScope,
         IReadOnlyList<ArchiveTask>? selectedTargets = null,
@@ -83,20 +98,20 @@ public partial class MainViewModel
                 ? "清理空文件夹"
                 : everything ? "删除本目录全部其余物" : "删除其余物";
 
-        CleanupTargetSelection selection = CleanupSelection.Resolve(Tasks, selectedTargets);
+        CleanupTargetSelection selection = CleanupSelection.Resolve(_tasks(), selectedTargets);
 
-        AppendLog(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
+        _log(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
 
         if (!selection.HasTarget)
         {
             // 一律只认勾选：一个都没勾就只提示、什么都不做（用户 2026-09-24 第 12 条）。
-            _dialogService.ShowWarning(PromptNoCheckedTask(title));
+            _dialogService.ShowWarning(_promptNoCheckedTask(title));
             return;
         }
 
         List<ArchiveTask> targets = CleanupSelection.Expand(selection, everything);
 
-        EnterBusy();
+        _enterBusy();
 
         try
         {
@@ -105,7 +120,7 @@ public partial class MainViewModel
 
             foreach (ArchiveTask task in targets)
             {
-                plans.Add(await BuildCleanupPlanAsync(scope, deleteScope, task));
+                plans.Add(await BuildPlanAsync(scope, deleteScope, task));
             }
 
             List<CleanupTaskPlan> actionable = plans.Where(plan => plan.IsActionable).ToList();
@@ -115,7 +130,7 @@ public partial class MainViewModel
                 // 没有可删的：一次提示说清每个任务为什么没得删（以前是每个任务一个提示框）。
                 string nothing = BuildNothingToCleanText(title, plans);
 
-                AppendLog("WARN", nothing.Replace(Environment.NewLine, " "));
+                _log("WARN", nothing.Replace(Environment.NewLine, " "));
                 _dialogService.ShowInfo(nothing);
                 return;
             }
@@ -153,7 +168,7 @@ public partial class MainViewModel
 
             if (!confirmed)
             {
-                AppendLog(
+                _log(
                     "INFO",
                     $"{title}：用户取消，{actionable.Count} 个任务一个字节都没动"
                     + "（本次只弹这一次确认，取消即整批不做）。");
@@ -176,7 +191,7 @@ public partial class MainViewModel
 
                 if (!acknowledged || !irreversibleAcknowledged)
                 {
-                    AppendLog(
+                    _log(
                         "INFO",
                         $"{title}：没有通过彻底删除的二次确认，{actionable.Count} 个任务一个字节都没动。");
                     return;
@@ -195,16 +210,16 @@ public partial class MainViewModel
                     CleanupPreview preview = plan.Preview!;
 
                     CleanupOutcome outcome = await Task.Run(() => scope == CleanupScope.EmptyFolders
-                        ? _cleanupService.CleanEmptyFolders(task.OutputPath, mode)
-                        : _cleanupService.CleanProcessArtifacts(task, mode, preview, deleteScope));
+                        ? _cleanup.CleanEmptyFolders(task.OutputPath, mode)
+                        : _cleanup.CleanProcessArtifacts(task, mode, preview, deleteScope));
 
-                    WriteCleanupOutcomeLog(title, task, preview, outcome);
+                    _writeOutcome(title, task, preview, outcome);
                     tally.Record(task, outcome);
                 }
                 catch (Exception ex)
                 {
                     tally.RecordException(task, ex.Message);
-                    AppendLog("ERROR", $"{title}（{task.FileName}）失败：" + ex.Message);
+                    _log("ERROR", $"{title}（{task.FileName}）失败：" + ex.Message);
                 }
             }
 
@@ -226,7 +241,7 @@ public partial class MainViewModel
         }
         finally
         {
-            ExitBusy();
+            _exitBusy();
         }
     }
 
@@ -242,7 +257,7 @@ public partial class MainViewModel
 
 
     /// <summary>预览一个清理目标（后台线程干活；界面线程只拿结论）。</summary>
-    private async Task<CleanupTaskPlan> BuildCleanupPlanAsync(
+    private async Task<CleanupTaskPlan> BuildPlanAsync(
         CleanupScope scope,
         ArtifactDeleteScope deleteScope,
         ArchiveTask task)
@@ -251,16 +266,16 @@ public partial class MainViewModel
         {
             const string reason = "还没有输出目录（先解压一次）";
 
-            AppendLog("WARN", $"清理：任务「{task.FileName}」{reason}，已跳过。");
+            _log("WARN", $"清理：任务「{task.FileName}」{reason}，已跳过。");
 
             return new CleanupTaskPlan { Task = task, SkipReason = reason };
         }
 
         CleanupPreview preview = await Task.Run(() => scope == CleanupScope.EmptyFolders
-            ? _cleanupService.PreviewEmptyFolders(task.OutputPath)
-            : _cleanupService.PreviewProcessArtifacts(task, deleteScope));
+            ? _cleanup.PreviewEmptyFolders(task.OutputPath)
+            : _cleanup.PreviewProcessArtifacts(task, deleteScope));
 
-        AppendLog(preview.HasTarget ? "INFO" : "WARN", $"清理（{task.FileName}）：{preview.Message}");
+        _log(preview.HasTarget ? "INFO" : "WARN", $"清理（{task.FileName}）：{preview.Message}");
 
         return new CleanupTaskPlan
         {
@@ -427,5 +442,5 @@ public partial class MainViewModel
 
         return builder.ToString().TrimEnd();
     }
-
 }
+

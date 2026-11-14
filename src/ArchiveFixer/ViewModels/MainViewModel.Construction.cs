@@ -385,20 +385,20 @@ public partial class MainViewModel
             AddCurrentOutputFolderToTasksAsync,
             CanRunCurrentTaskManual);
         CleanCurrentTaskArtifactsCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(
+            () => Cleanup.RunAsync(
                 CleanupScope.Artifacts,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask }),
             CanRunCurrentTaskManual);
         RecycleCurrentTaskArtifactsCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(
+            () => Cleanup.RunAsync(
                 CleanupScope.Artifacts,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask },
                 DeleteMode.RecycleBin),
             CanRunCurrentTaskManual);
         CleanCurrentTaskEmptyFoldersCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(
+            () => Cleanup.RunAsync(
                 CleanupScope.EmptyFolders,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask }),
@@ -429,15 +429,15 @@ public partial class MainViewModel
         // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
         // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
         CleanProcessArtifactsCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(CleanupScope.Artifacts, ArtifactDeleteScope.SelectedTask),
+            () => Cleanup.RunAsync(CleanupScope.Artifacts, ArtifactDeleteScope.SelectedTask),
             CanRunNormalCommand);
 
         CleanAllProcessArtifactsCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(CleanupScope.Artifacts, ArtifactDeleteScope.EverythingInDirectory),
+            () => Cleanup.RunAsync(CleanupScope.Artifacts, ArtifactDeleteScope.EverythingInDirectory),
             CanRunNormalCommand);
 
         CleanEmptyFoldersCommand = new AsyncRelayCommand(
-            () => RunCleanupAsync(CleanupScope.EmptyFolders, ArtifactDeleteScope.SelectedTask),
+            () => Cleanup.RunAsync(CleanupScope.EmptyFolders, ArtifactDeleteScope.SelectedTask),
             CanRunNormalCommand);
 
         /*
@@ -616,3 +616,4 @@ public partial class MainViewModel
         _lastSavedSettingsJson = _settingsService.Serialize(_settings);
     }
 }
+

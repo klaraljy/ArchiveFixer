@@ -38,6 +38,18 @@ public partial class MainViewModel
 
     private PasswordBookCoordinator? _passwordBookCoordinator;
 
+    private CleanupCoordinator? _cleanupCoordinator;
+
+    private CleanupCoordinator Cleanup => _cleanupCoordinator ??= new CleanupCoordinator(
+        () => Tasks,
+        PromptNoCheckedTask,
+        (level, message) => AppendLog(level, message),
+        EnterBusy,
+        ExitBusy,
+        WriteCleanupOutcomeLog,
+        _dialogService,
+        _cleanupService);
+
     private PasswordBookCoordinator PasswordBook => _passwordBookCoordinator ??= new PasswordBookCoordinator(
         _passwordService,
         _pathService,
