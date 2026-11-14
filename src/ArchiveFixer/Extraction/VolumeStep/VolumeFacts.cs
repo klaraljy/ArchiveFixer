@@ -3,14 +3,6 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>这条片事实有多硬：内容读出 &gt; 位置/名字推断 &gt; 判不出。</summary>
-    public enum VolumeFactConfidence
-    {
-        Unknown = 0,
-        Inferred = 1,
-        Content = 2
-    }
-
     /// <summary>
     /// **第二大步拿到的一片原始事实**（用户 2026-10-24 口径：底层给事实，族算法下结论）。
     ///

@@ -5,19 +5,6 @@ using ArchiveFixer.Detection;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>一个基名的族选择结论。</summary>
-    public sealed class VolumeFamilySelection
-    {
-        public VolumeNamingFamily? Family { get; init; }
-
-        /// <summary>同一基名下出现两种以上的强锚点 ⇒ 不混组。</summary>
-        public bool Conflict { get; init; }
-
-        public string Evidence { get; init; } = string.Empty;
-
-        public bool IsKnown => Family != null && !Conflict;
-    }
-
     /// <summary>
     /// **族仲裁**（共用骨架）：只回答"同基名的这些账本项属于哪一族"。
     ///
