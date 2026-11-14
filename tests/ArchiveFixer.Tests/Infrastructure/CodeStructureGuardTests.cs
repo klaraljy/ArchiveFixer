@@ -131,7 +131,7 @@ public sealed class CodeStructureGuardTests
                     continue;
                 }
 
-                if (Regex.IsMatch(text, @"new\s+\w*Window\b")
+                if (Regex.IsMatch(text, @"new\s+[\w.]+Window\b")
                     || text.Contains("Application.Current", StringComparison.Ordinal)
                     || text.Contains("MessageBox.", StringComparison.Ordinal))
                 {

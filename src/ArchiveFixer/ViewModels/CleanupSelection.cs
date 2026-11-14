@@ -6,39 +6,6 @@ using System.Linq;
 
 namespace ArchiveFixer.ViewModels;
 
-/// <summary>一次清理/列表命令"作用于谁"的来源。</summary>
-internal enum CleanupTargetSource
-{
-    /// <summary>一个都没勾 —— 什么都不做（提示用户先勾选）。</summary>
-    None = 0,
-
-    /// <summary>以**勾选**为准（批量清理的入口）。</summary>
-    Checked = 1,
-
-    /// <summary>只作用于当前选中的一行（右侧任务检查器）。</summary>
-    Selected = 2
-}
-
-/// <summary>
-/// 一次清理命令的目标解析结果。
-///
-/// <para>
-/// 抽成对象 + <see cref="Resolve"/> 这一个静态判定处，是为了让
-/// "这次用的是哪一种选中含义"能被**直接断言**（测试不必去猜弹了什么框、写了哪行日志）。
-/// </para>
-/// </summary>
-internal sealed class CleanupTargetSelection
-{
-    /// <summary>本次要处理的任务（按列表顺序；只看勾选）。</summary>
-    public IReadOnlyList<ArchiveTask> Tasks { get; init; } = Array.Empty<ArchiveTask>();
-
-    /// <summary>作用来源：勾选 / 一个都没勾。</summary>
-    public CleanupTargetSource Source { get; init; }
-
-    /// <summary>有没有可处理的目标。</summary>
-    public bool HasTarget => Tasks.Count > 0;
-}
-
 /// <summary>
 /// 解析一次命令作用于谁（**唯一判定处**）。
 ///
