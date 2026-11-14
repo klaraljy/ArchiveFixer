@@ -245,18 +245,18 @@ public partial class MainViewModel
                 ? _settings.CustomOutputDirectory ?? string.Empty
                 : string.Empty);
 
-        AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);
-        AddFolderCommand = new AsyncRelayCommand(_scanCoordinator.AddFolderAsync, CanRunNormalCommand);
-        AppendFilesCommand = new AsyncRelayCommand(_scanCoordinator.AppendFilesAsync, CanRunNormalCommand);
-        AppendFolderCommand = new AsyncRelayCommand(_scanCoordinator.AppendFolderAsync, CanRunNormalCommand);
-        ScanCommand = new AsyncRelayCommand(_scanCoordinator.ScanTasksAsync, CanRunNormalCommand);
-        ClearCommand = new RelayCommand(ClearTasks, CanRunNormalCommand);
-        RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRemoveSelectedTasks);
+        Commands.AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);
+        Commands.AddFolderCommand = new AsyncRelayCommand(_scanCoordinator.AddFolderAsync, CanRunNormalCommand);
+        Commands.AppendFilesCommand = new AsyncRelayCommand(_scanCoordinator.AppendFilesAsync, CanRunNormalCommand);
+        Commands.AppendFolderCommand = new AsyncRelayCommand(_scanCoordinator.AppendFolderAsync, CanRunNormalCommand);
+        Commands.ScanCommand = new AsyncRelayCommand(_scanCoordinator.ScanTasksAsync, CanRunNormalCommand);
+        Commands.ClearCommand = new RelayCommand(ClearTasks, CanRunNormalCommand);
+        Commands.RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRemoveSelectedTasks);
 
-        SmartRenameCommand = new AsyncRelayCommand(
+        Commands.SmartRenameCommand = new AsyncRelayCommand(
             () => _renameCoordinator.SmartRenameAsync(),
             CanRunNormalCommand);
-        ChangeNameCommand = new AsyncRelayCommand(
+        Commands.ChangeNameCommand = new AsyncRelayCommand(
             () => _renameCoordinator.ChangeNameAsync(),
             CanRunNormalCommand);
 
@@ -265,7 +265,7 @@ public partial class MainViewModel
          * 日志里会出现一行 `======== 本次操作开始：<名字> ========`，
          * 「导出日志」默认就从那一行开始导 —— 用户拿到的是**最近一次操作**的日志，不是一堆历史。
          */
-        OneClickProcessCommand = new AsyncRelayCommand(
+        Commands.OneClickProcessCommand = new AsyncRelayCommand(
             async () =>
             {
                 _logService.MarkOperationStart("一键处理");
@@ -277,7 +277,7 @@ public partial class MainViewModel
          * 「继续解」（第 16 条追加）：只在"上一批撞到层数上限、还剩内层包没解"时可点。
          * 与一键处理同一道忙碌守卫（CanRunNormalCommand）——两者不能同时跑。
          */
-        ContinueOneClickCommand = new AsyncRelayCommand(
+        Commands.ContinueOneClickCommand = new AsyncRelayCommand(
             async () =>
             {
                 _logService.MarkOperationStart("继续解");
@@ -285,7 +285,7 @@ public partial class MainViewModel
             },
             CanContinueOneClick);
 
-        StartExtractCommand = new AsyncRelayCommand(
+        Commands.StartExtractCommand = new AsyncRelayCommand(
             async () =>
             {
                 _logService.MarkOperationStart("解压");
@@ -301,16 +301,16 @@ public partial class MainViewModel
          * 可用性守卫与「只解压」逐字相同（闲着 + 至少勾了一个任务）：
          * 它同样按勾选办事，不勾就点不动，免得用户以为"点了没反应"。
          */
-        ExtractIntoSourceFolderCommand = new AsyncRelayCommand(
+        Commands.ExtractIntoSourceFolderCommand = new AsyncRelayCommand(
             async () =>
             {
                 _logService.MarkOperationStart(StatusText.ExtractIntoSourceFolderText);
                 await _extractionCoordinator.StartExtractAsync(extractIntoSourceFolder: true).ConfigureAwait(true);
             },
             CanStartExtract);
-        StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
-        CancelCurrentCommand = new RelayCommand(() => _extractionCoordinator.CancelCurrentTask(), () => IsBusy);
-        PauseAllOperationsCommand = new RelayCommand(
+        Commands.StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
+        Commands.CancelCurrentCommand = new RelayCommand(() => _extractionCoordinator.CancelCurrentTask(), () => IsBusy);
+        Commands.PauseAllOperationsCommand = new RelayCommand(
             () =>
             {
                 // 暂停 = 同一秒内掐断当前所有任务 + 不再启动后续；恢复只能重新按一键处理。
@@ -319,40 +319,40 @@ public partial class MainViewModel
             },
             () => IsBusy);
 
-        OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
-        OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
-        OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
+        Commands.OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
+        Commands.OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
+        Commands.OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
 
-        ImportPasswordBookCommand = new RelayCommand(PasswordBook.Import, CanRunNormalCommand);
-        ExportLogCommand = new RelayCommand(LogExport.ExportLog);
-        ExportDiagnosticBundleCommand = new RelayCommand(LogExport.ExportDiagnosticBundle);
-        ExportAllLogsCommand = new RelayCommand(LogExport.ExportAllLogs);
-        CopyFailedListCommand = new RelayCommand(LogExport.CopyFailedList);
-        ExportFailedListCommand = new RelayCommand(LogExport.ExportFailedList);
-        OpenCheckedSourceDirectoryCommand = new RelayCommand(OpenCheckedSourceDirectory, CanRunNormalCommand);
-        InspectArchiveCommand = new AsyncRelayCommand(InspectCheckedArchivesAsync, CanRunNormalCommand);
-        TryPasswordsCommand = new AsyncRelayCommand(TryPasswordsForCheckedArchivesAsync, CanRunNormalCommand);
+        Commands.ImportPasswordBookCommand = new RelayCommand(PasswordBook.Import, CanRunNormalCommand);
+        Commands.ExportLogCommand = new RelayCommand(LogExport.ExportLog);
+        Commands.ExportDiagnosticBundleCommand = new RelayCommand(LogExport.ExportDiagnosticBundle);
+        Commands.ExportAllLogsCommand = new RelayCommand(LogExport.ExportAllLogs);
+        Commands.CopyFailedListCommand = new RelayCommand(LogExport.CopyFailedList);
+        Commands.ExportFailedListCommand = new RelayCommand(LogExport.ExportFailedList);
+        Commands.OpenCheckedSourceDirectoryCommand = new RelayCommand(OpenCheckedSourceDirectory, CanRunNormalCommand);
+        Commands.InspectArchiveCommand = new AsyncRelayCommand(InspectCheckedArchivesAsync, CanRunNormalCommand);
+        Commands.TryPasswordsCommand = new AsyncRelayCommand(TryPasswordsForCheckedArchivesAsync, CanRunNormalCommand);
 
-        InspectCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.InspectCurrentTaskCommand = new AsyncRelayCommand(
             () => RunInspectAsync(tryPasswords: false, singleTask: SelectedTask),
             CanRunCurrentTaskManual);
-        TryPasswordsForCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.TryPasswordsForCurrentTaskCommand = new AsyncRelayCommand(
             () => RunInspectAsync(tryPasswords: true, singleTask: SelectedTask),
             CanRunCurrentTaskManual);
-        OpenCurrentSourceDirectoryCommand = new RelayCommand(
+        Commands.OpenCurrentSourceDirectoryCommand = new RelayCommand(
             () => { if (SelectedTask != null) OpenTaskDirectory(SelectedTask); },
             CanRunCurrentTaskManual);
-        SmartRenameCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.SmartRenameCurrentTaskCommand = new AsyncRelayCommand(
             () => _renameCoordinator.SmartRenameAsync(SelectedTask == null ? null : new[] { SelectedTask }),
             CanRunCurrentTaskManual);
-        ChangeNameCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.ChangeNameCurrentTaskCommand = new AsyncRelayCommand(
             () => _renameCoordinator.ChangeNameAsync(SelectedTask == null ? null : new[] { SelectedTask }),
             CanRunCurrentTaskManual);
-        RepairVolumeNameCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.RepairVolumeNameCurrentTaskCommand = new AsyncRelayCommand(
             () => RenameBySuggestionAndRetryAsync(SelectedTask == null ? null : new[] { SelectedTask }),
             () => CanRunCurrentTaskManual() && SelectedTask != null
                 && BuildVolumeRepairCandidates(new[] { SelectedTask }).Count > 0);
-        StartExtractCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.StartExtractCurrentTaskCommand = new AsyncRelayCommand(
             async () =>
             {
                 ArchiveTask? target = ResolveManualExtractionTarget();
@@ -361,7 +361,7 @@ public partial class MainViewModel
                 await _extractionCoordinator.StartExtractAsync(targetTasks: new[] { target }).ConfigureAwait(true);
             },
             CanRunCurrentTaskManual);
-        ExtractIntoSourceFolderCurrentTaskCommand = new AsyncRelayCommand(
+        Commands.ExtractIntoSourceFolderCurrentTaskCommand = new AsyncRelayCommand(
             async () =>
             {
                 ArchiveTask? target = ResolveManualExtractionTarget();
@@ -372,40 +372,40 @@ public partial class MainViewModel
                     targetTasks: new[] { target }).ConfigureAwait(true);
             },
             CanRunCurrentTaskManual);
-        FindVolumeSiblingsCommand = new AsyncRelayCommand(
+        Commands.FindVolumeSiblingsCommand = new AsyncRelayCommand(
             FindVolumeSiblingsAsync,
             () => CanRunCurrentTaskManual());
-        OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
+        Commands.OpenCurrentTaskOutputDirectoryCommand = new RelayCommand(
             () => { if (SelectedTask != null) OpenTaskOutputDirectory(SelectedTask); },
             CanRunCurrentTaskManual);
-        CopyCurrentVolumeGroupPathsCommand = new RelayCommand(
+        Commands.CopyCurrentVolumeGroupPathsCommand = new RelayCommand(
             CopyCurrentVolumeGroupPaths,
             CanRunCurrentTaskManual);
-        AddCurrentOutputFolderToTasksCommand = new AsyncRelayCommand(
+        Commands.AddCurrentOutputFolderToTasksCommand = new AsyncRelayCommand(
             AddCurrentOutputFolderToTasksAsync,
             CanRunCurrentTaskManual);
-        CleanCurrentTaskArtifactsCommand = new AsyncRelayCommand(
+        Commands.CleanCurrentTaskArtifactsCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(
                 CleanupScope.Artifacts,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask }),
             CanRunCurrentTaskManual);
-        RecycleCurrentTaskArtifactsCommand = new AsyncRelayCommand(
+        Commands.RecycleCurrentTaskArtifactsCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(
                 CleanupScope.Artifacts,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask },
                 DeleteMode.RecycleBin),
             CanRunCurrentTaskManual);
-        CleanCurrentTaskEmptyFoldersCommand = new AsyncRelayCommand(
+        Commands.CleanCurrentTaskEmptyFoldersCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(
                 CleanupScope.EmptyFolders,
                 ArtifactDeleteScope.SelectedTask,
                 SelectedTask == null ? null : new[] { SelectedTask }),
             CanRunCurrentTaskManual);
-        OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
-        SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
-        CopyOutputLocationCommand = new RelayCommand(CopyOutputLocation, CanRunNormalCommand);
+        Commands.OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
+        Commands.SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
+        Commands.CopyOutputLocationCommand = new RelayCommand(CopyOutputLocation, CanRunNormalCommand);
 
         /*
          * ②③④⑥四页共用的设置编辑器改了落点之后，把①页「输出位置」那一行拉回同一个真值。
@@ -417,26 +417,26 @@ public partial class MainViewModel
          * 只在这些属性上搬运，别的属性一律不碰（避免 SaveSettings 之后的整片刷新）。
          */
         _settingsEditor.PropertyChanged += OnSettingsEditorPropertyChanged;
-        OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
-        OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
+        Commands.OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
+        Commands.OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
         /*
          * 工作区清理：只在"确实有残留"且当前没有跑批时可点。
          * 跑批中清理会在 UI 线程同步递归删目录，既卡界面又可能删到正在用的工作区。
          */
-        ClearWorkspaceLeftoversCommand = new RelayCommand(Workspace.Clear, () => HasWorkspaceLeftovers && !IsBusy);
+        Commands.ClearWorkspaceLeftoversCommand = new RelayCommand(Workspace.Clear, () => HasWorkspaceLeftovers && !IsBusy);
 
         // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
         // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
-        CleanProcessArtifactsCommand = new AsyncRelayCommand(
+        Commands.CleanProcessArtifactsCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(CleanupScope.Artifacts, ArtifactDeleteScope.SelectedTask),
             CanRunNormalCommand);
 
-        CleanAllProcessArtifactsCommand = new AsyncRelayCommand(
+        Commands.CleanAllProcessArtifactsCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(CleanupScope.Artifacts, ArtifactDeleteScope.EverythingInDirectory),
             CanRunNormalCommand);
 
-        CleanEmptyFoldersCommand = new AsyncRelayCommand(
+        Commands.CleanEmptyFoldersCommand = new AsyncRelayCommand(
             () => Cleanup.RunAsync(CleanupScope.EmptyFolders, ArtifactDeleteScope.SelectedTask),
             CanRunNormalCommand);
 
@@ -449,7 +449,7 @@ public partial class MainViewModel
          * 「移除勾选的按钮一直亮着没用啊」同一个病）。判据 = 参数必须是**列表里真的存在的那一行**
          * （`IsRowInList`）⇒ 该灰就灰；实现里那一支也补一句说明（⛔ 不许静默）。
          */
-        RemoveTaskCommand = new RelayCommand(RemoveTask, IsRowInList);
+        Commands.RemoveTaskCommand = new RelayCommand(RemoveTask, IsRowInList);
 
         /*
          * 「移除勾选的」—— 可用性判据与右键菜单那条 `RemoveSelectedCommand` **共用同一个**
@@ -472,29 +472,29 @@ public partial class MainViewModel
          * 于是勾选变化 / 任务增删都会立刻反映到按钮上（忙闲切换也照发一遍，只是这颗按钮的判据不看它）
          * （§9.5「值 + 通知」两条都要钉住）。
          */
-        RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks, CanRemoveSelectedTasks);
+        Commands.RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks, CanRemoveSelectedTasks);
 
-        RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
+        Commands.RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
             () => RenameBySuggestionAndRetryAsync(),
             CanRenameBySuggestionAndRetry);
-        RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync, IsRowInList);
-        CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo, IsRowInList);
-        CopyTaskPathCommand = new RelayCommand(CopyTaskPath, IsRowInList);
-        CopyTaskErrorCommand = new RelayCommand(CopyTaskError, IsRowInList);
+        Commands.RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync, IsRowInList);
+        Commands.CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo, IsRowInList);
+        Commands.CopyTaskPathCommand = new RelayCommand(CopyTaskPath, IsRowInList);
+        Commands.CopyTaskErrorCommand = new RelayCommand(CopyTaskError, IsRowInList);
         /*
          * ⚠ 这两条命令的实体返回 bool（"到底打开了没有"）—— 命令层要的是 Action ⇒ 这里用 lambda 转一手。
          * ⛔ 别改回方法组：那会让"打不开时静默"重新变成可能（用户 2026-10-10 实测的死点）。
          */
-        OpenTaskDirectoryCommand = new RelayCommand(parameter => OpenTaskDirectory(parameter));
-        OpenTaskOutputDirectoryCommand = new RelayCommand(parameter => OpenTaskOutputDirectory(parameter));
-        OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory, IsRowInList);
-        ToggleShowPasswordCommand = new RelayCommand(() =>
+        Commands.OpenTaskDirectoryCommand = new RelayCommand(parameter => OpenTaskDirectory(parameter));
+        Commands.OpenTaskOutputDirectoryCommand = new RelayCommand(parameter => OpenTaskOutputDirectory(parameter));
+        Commands.OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory, IsRowInList);
+        Commands.ToggleShowPasswordCommand = new RelayCommand(() =>
         {
             ShowPassword = !ShowPassword;
             OnPropertyChanged(nameof(GlobalPassword));
         });
 
-        ResetSettingsCommand = new RelayCommand(ResetSettings, CanRunNormalCommand);
+        Commands.ResetSettingsCommand = new RelayCommand(ResetSettings, CanRunNormalCommand);
 
         /*
          * ===== 空间规划（用户 2026-09-22 需求）=====
@@ -504,12 +504,12 @@ public partial class MainViewModel
          * ⛔ 原来这里还有一个红色按钮命令（危险模式 + 自测 + 凭证）：那整套已按
          * 用户 2026-09-25 第 32 条整块退役 —— 那条需求现在是③页「2 删除操作」的第三档。
          */
-        RefreshParallelAdviceCommand = new AsyncRelayCommand(RefreshParallelAdviceAsync, CanRunNormalCommand);
+        Commands.RefreshParallelAdviceCommand = new AsyncRelayCommand(RefreshParallelAdviceAsync, CanRunNormalCommand);
 
-        SelectAllTasksCommand = new RelayCommand(SelectAllTasks, CanChangeTaskSelection);
-        SelectNoneTasksCommand = new RelayCommand(SelectNoneTasks, CanChangeTaskSelection);
-        InvertTaskSelectionCommand = new RelayCommand(InvertTaskSelection, CanChangeTaskSelection);
-        SelectSoleTaskCommand = new RelayCommand(SelectSoleTask, IsRowInList);
+        Commands.SelectAllTasksCommand = new RelayCommand(SelectAllTasks, CanChangeTaskSelection);
+        Commands.SelectNoneTasksCommand = new RelayCommand(SelectNoneTasks, CanChangeTaskSelection);
+        Commands.InvertTaskSelectionCommand = new RelayCommand(InvertTaskSelection, CanChangeTaskSelection);
+        Commands.SelectSoleTaskCommand = new RelayCommand(SelectSoleTask, IsRowInList);
 
         HookTaskSelectionTracking();
 
@@ -616,6 +616,7 @@ public partial class MainViewModel
         MarkSettingsBaseline();
     }
 }
+
 
 
 

@@ -161,6 +161,8 @@ public partial class MainViewModel
 
     internal Func<Task>? SmartRenameRunnerOverride { get; set; }
 
+    private MainCommandSet? _commands;
+    private MainCommandSet Commands => _commands ??= new MainCommandSet();
     private ManualOperationCoordinator? _manualOperation;
     private ManualOperationCoordinator ManualOperation => _manualOperation ??= new ManualOperationCoordinator(this);
     private SpaceAdviceCoordinator? _spaceAdvice;
@@ -716,6 +718,7 @@ public partial class MainViewModel
 
     private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
 }
+
 
 
 

@@ -643,16 +643,16 @@ public partial class MainViewModel : ViewModelBase
      */
 
     /// <summary>勾选整个列表（Ctrl+A）。</summary>
-    public ICommand SelectAllTasksCommand { get; }
+    public ICommand SelectAllTasksCommand => Commands.SelectAllTasksCommand;
 
     /// <summary>取消全部勾选（Ctrl+D）。</summary>
-    public ICommand SelectNoneTasksCommand { get; }
+    public ICommand SelectNoneTasksCommand => Commands.SelectNoneTasksCommand;
 
     /// <summary>反选（Ctrl+I）。</summary>
-    public ICommand InvertTaskSelectionCommand { get; }
+    public ICommand InvertTaskSelectionCommand => Commands.InvertTaskSelectionCommand;
 
     /// <summary>只勾选指定的那一个（右键菜单「只勾选这一个」），其余全部取消勾选。</summary>
-    public ICommand SelectSoleTaskCommand { get; }
+    public ICommand SelectSoleTaskCommand => Commands.SelectSoleTaskCommand;
 
 
     /// <summary>
@@ -1402,92 +1402,8 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private void RaiseAllCommandCanExecuteChanged()
-    {
-        foreach (ICommand command in new[]
-                 {
-             AddFilesCommand,
-             AddFolderCommand,
-             AppendFilesCommand,
-             AppendFolderCommand,
-             ScanCommand,
-             ClearCommand,
-             RemoveSelectedCommand,
+    private void RaiseAllCommandCanExecuteChanged() => Commands.RaiseAll();
 
-             SmartRenameCommand,
-            OneClickProcessCommand,
-             ChangeNameCommand,
-
-             StartExtractCommand,
-             ExtractIntoSourceFolderCommand,
-             StopCommand,
-             CancelCurrentCommand,
-             PauseAllOperationsCommand,
-
-             SelectAllTasksCommand,
-             SelectNoneTasksCommand,
-             InvertTaskSelectionCommand,
-             SelectSoleTaskCommand,
-
-             /*
-              * 「移除勾选的」（用户 2026-09-29 第二次反馈：判据对了界面也不动）。
-              * 它以前**不在**这份名单里，而 RelayCommand 自己不发 CanExecuteChanged ——
-              * WPF 只在 CommandManager.RequerySuggested（焦点 / 输入变化）时才重问，
-              * 于是"勾上一个任务"之后按钮要等下一次焦点变化才亮，用户看到的就是"先亮着不动"。
-              * 这份名单由 UpdateSummary 统一发一遍（勾选变化 / 任务增删 / 忙闲切换都会走到它），
-              * ⛔ 不许在别处再写一套通知。
-              */
-             RemoveCheckedTasksCommand,
-
-             OpenSettingsCommand,
-             OpenPasswordListCommand,
-             OpenPackingCommand,
-             ExportLogCommand,
-             ExportAllLogsCommand,
-             CopyFailedListCommand,
-             OpenOutputDirectoryCommand,
-             SelectOutputDirectoryCommand,
-             CopyOutputLocationCommand,
-             OpenLogDirectoryCommand,
-             ResetSettingsCommand,
-             CleanProcessArtifactsCommand,
-             CleanAllProcessArtifactsCommand,
-             CleanEmptyFoldersCommand,
-
-             RemoveTaskCommand,
-             RescanTaskCommand,
-             RenameBySuggestionAndRetryCommand,
-             InspectCurrentTaskCommand,
-             TryPasswordsForCurrentTaskCommand,
-             OpenCurrentSourceDirectoryCommand,
-             SmartRenameCurrentTaskCommand,
-             ChangeNameCurrentTaskCommand,
-             RepairVolumeNameCurrentTaskCommand,
-             StartExtractCurrentTaskCommand,
-             ExtractIntoSourceFolderCurrentTaskCommand,
-             OpenCurrentTaskOutputDirectoryCommand,
-             CopyCurrentVolumeGroupPathsCommand,
-             AddCurrentOutputFolderToTasksCommand,
-             CleanCurrentTaskArtifactsCommand,
-             RecycleCurrentTaskArtifactsCommand,
-             CleanCurrentTaskEmptyFoldersCommand,
-             CopyTaskInfoCommand,
-             CopyTaskPathCommand,
-             CopyTaskErrorCommand,
-             OpenTaskDirectoryCommand,
-             OpenTaskOutputDirectoryCommand,
-             ToggleShowPasswordCommand
-         })
-        {
-            if (command is RelayCommand relay)
-            {
-                relay.RaiseCanExecuteChanged();
-            }
-            else if (command is AsyncRelayCommand asyncRelay)
-            {
-                asyncRelay.RaiseCanExecuteChanged();
-            }
-        }
-    }
 
 }
+
