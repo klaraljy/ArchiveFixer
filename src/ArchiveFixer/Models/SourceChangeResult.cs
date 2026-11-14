@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Storage
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 一次比对的结论。**Changed = false 时其余字段一律为空**（调用方只需要看这一个布尔）。

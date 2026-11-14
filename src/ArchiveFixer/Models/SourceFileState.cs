@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 
-namespace ArchiveFixer.Storage
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 一条"源文件当时长什么样"的记录：路径 + 大小 + 修改时间 + <b>记的时候还在不在</b>。

@@ -1,7 +1,7 @@
 using System;
 using ArchiveFixer.Models;
 
-namespace ArchiveFixer.Storage
+namespace ArchiveFixer.Models
 {
     /// <summary>一个文件上比对出来的差异（一项差异 = 一个文件上的一类变化，不叠加）。</summary>
     public sealed class SourceFileChange
