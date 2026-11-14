@@ -16,6 +16,15 @@ namespace ArchiveFixer.Models;
 /// 2. CurrentPath 保存当前真实路径，改名后需要更新。
 /// 3. Password 允许保存在内存中，但不能写入日志。
 /// 4. UI 绑定此类，所以实现 INotifyPropertyChanged。
+///
+/// <para><b>本类只保留绑定表面与任务自己的状态机</b>（公开属性、构造、Mark* / Refresh* 生命周期、
+/// 兼容 API 的转发）；有独立输入输出的各块职责在协作类里：身份显示 = <see cref="UserFileIdentity"/> /
+/// <see cref="TaskDisplayFacts"/>；进度文字 = <see cref="TaskProgressText"/>；变换链 =
+/// <see cref="TransformationChain"/>；状态/密码/格式/错误那几列的显示投影 = <see cref="TaskStatusPresenter"/>；
+/// 内容组结果 = <see cref="ContentGroupFacts"/>；卷组事实 = <see cref="VolumeGroupFacts"/>；
+/// 源文件快照 = <see cref="TaskSourceSnapshot"/>；留着的内层包账本 = <see cref="LeftBehindPackageLedger"/>；
+/// 识别结果落地 = <see cref="DetectResultApplier"/>。
+/// ⛔ 这些协作类都只读写本类公开的绑定属性 / 只读事实，不替换 <c>INotifyPropertyChanged</c>（M6 再收口）。</para>
 /// </summary>
 public class ArchiveTask : INotifyPropertyChanged
 {
@@ -48,6 +57,17 @@ public class ArchiveTask : INotifyPropertyChanged
     private string _responsivenessHint = string.Empty;
     private DateTime? _progressEtaStartUtc;
     private string _estimatedRemainingText = string.Empty;
+
+    /*
+     * 协作类（见类注释）：各自只拿本类的绑定属性 / 只读事实当输入，
+     * ⛔ 一个都不许反过来当解压、删除、统计的判据。
+     */
+    private readonly UserFileIdentity _identity = new();
+    private readonly TransformationChain _transformationChain = new();
+    private readonly ContentGroupFacts _contentGroup = new();
+    private readonly VolumeGroupFacts _volumeGroup = new();
+    private readonly TaskSourceSnapshot _sourceSnapshot = new();
+    private readonly LeftBehindPackageLedger _leftBehindPackages = new();
 
     /// <summary>"还没有进度"的哨兵值。<b>不要</b>用 0 —— 0% 是"确实刚开始解"。</summary>
     public const int NoProgress = -1;
@@ -90,7 +110,7 @@ public class ArchiveTask : INotifyPropertyChanged
         {
             if (SetProperty(ref _originalPath, value ?? string.Empty))
             {
-                RememberOwnFile(_originalPath, allowReplace: _ownFilePath.Length == 0);
+                RememberOwnFile(_originalPath, allowReplace: _identity.OwnFilePath.Length == 0);
             }
         }
     }
@@ -119,8 +139,8 @@ public class ArchiveTask : INotifyPropertyChanged
                  * 跨目录改写（批末补判把起点指到入口包 `…\111\111\111.zip`）⛔ 一律不采纳 ——
                  * 那一份是过程物，采纳了列表那一行就变成"48MB 的入口包"（用户 2026-10-07 当场报的）。
                  */
-                if (_ownFilePath.Length == 0
-                    || IsSameDirectory(_ownFilePath, _currentPath))
+                if (_identity.OwnFilePath.Length == 0
+                    || TaskDisplayFacts.IsSameDirectory(_identity.OwnFilePath, _currentPath))
                 {
                     RememberOwnFile(_currentPath, allowReplace: true);
                 }
@@ -185,265 +205,54 @@ public class ArchiveTask : INotifyPropertyChanged
     /// 列表里那一列「大小」显示的文字（用户 2026-09-27 要求排在**文件名**后面）。
     /// 采不到时显示一个短横，⛔ 不显示"0 字节"（那会让人以为文件是空的）。
     /// </summary>
-    public string SourceSizeText => _sourceSizeBytes > 0 ? FormatSizeText(_sourceSizeBytes) : "-";
-
-    /// <summary>
-    /// 这一行**在列表里显示谁**（见 <see cref="ShowUserFileIdentity"/>）；空 = 与
-    /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 逐字相同（绝大多数任务都是这一档）。
-    /// </summary>
-    private string _userFacingFilePath = string.Empty;
+    public string SourceSizeText => _sourceSizeBytes > 0 ? TaskDisplayFacts.FormatSize(_sourceSizeBytes) : "-";
 
     /// <summary>「缺卷待批末判」这个**显示/统计事实位**的存储（见 <see cref="IsVolumeDeficitDeferred"/>）。</summary>
     private bool _isVolumeDeficitDeferred;
 
     /// <summary>
-    /// **用户那个文件的最新已知位置**（改名跟着走、被搬进其余物跟着走、被删也照旧记着）——
-    /// 只给显示用，⛔ 不参与任何判据。
+    /// 记住"用户那个文件"的最新位置与体积（幂等：位置真的变了才发通知）。
     ///
-    /// <para>为什么需要它（用户 2026-10-07：「文件名、大小、后缀、检测格式、状态，每个都有问题，
-    /// 现在居然还是 <c>111.rar</c>，你是不是一直锁定到原包，根本就没有看最新的东西」）：
-    /// 批末补判会把这一单的**起点**改写到入口包上（真机那一行就成了 48.35 MiB 的
-    /// <c>111\111\111.zip</c>）；那一份**不是用户的文件**，可它一改写就把
-    /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 整行刷新成过程物。
-    /// 老写法在"记着的那条已经不在了"时正是回落到这些被改写的值 ⇒ 列表里那一行变成 48MB 的入口包。</para>
-    ///
-    /// <para>维护点只有三处（⛔ 不新增第四个写入点）：构造时 = 最初导入路径；<see cref="CurrentPath"/>
-    /// **同目录**改写时跟着走（改名 / 组内换卷）；<see cref="ShowUserFileIdentity"/> 采纳提示时。
-    /// 跨目录改写（补判指向入口包）**一律不采纳** —— 那已经不是用户那个文件了。</para>
-    /// </summary>
-    private string _ownFilePath = string.Empty;
-
-    /// <summary>上一条那个文件最后一次被看到时的字节数（0 = 从来没看到过）。</summary>
-    private long _ownFileSizeBytes;
-    /// <summary>
-    /// 这一刻**真正拿来显示**的那份文件：按"最新的盘上事实"逐条问，问不到才算空。
-    ///
-    /// <para>⛔ 为什么要核盘（用户 2026-10-06：「列表里面显示的没有一个是对的」「后缀也不同步」）：
-    /// 记下来的路径会**过期**（改名 / 被搬走 / 被删）—— 拿一个已经不存在的名字去显示，
-    /// 那一行就成了"名字是旧的、别的列是新的"的自相矛盾。</para>
-    ///
-    /// <para>⛔ 为什么要**跟着文件走**（用户 2026-10-07：「你是不是一直锁定到原包，根本就没有看最新的
-    /// 东西」）：这一行属于**用户导入的那个文件**，而它在程序手里会改名（改回标准卷名）、
-    /// 会按设置搬进它自己的「其余物」—— 只认"最初导入那一刻的那条路径"就会一直显示旧名字、旧位置。
-    /// 判定顺序（先用先赢，⛔ 只读、一个字节都不改盘上任何东西）：① 记着的那条（还在 ⇒ 就是它）→
-    /// ② 最初导入那条 → ③ 当前处理路径（**只在同一目录里**才认：批末补判会把起点改写到别的目录的
-    /// 过程物上，那已经不是用户那个文件了）→ ④ 它自己的「其余物」目录里同名的那一份。</para>
-    /// </summary>
-    private string DisplaySourcePath
-    {
-        get
-        {
-            if (_userFacingFilePath.Length > 0 && ExistsOnDisk(_userFacingFilePath))
-            {
-                return _userFacingFilePath;
-            }
-
-            if (ExistsOnDisk(OriginalPath))
-            {
-                return OriginalPath;
-            }
-
-            string originalDirectory = GetDirectorySafe(OriginalPath);
-
-            if (originalDirectory.Length > 0
-                && ExistsOnDisk(CurrentPath)
-                && string.Equals(GetDirectorySafe(CurrentPath), originalDirectory, StringComparison.OrdinalIgnoreCase))
-            {
-                return CurrentPath;
-            }
-
-            return FindOwnFileInRestDirectory();
-        }
-    }
-
-    /// <summary>④ 源包按设置搬进**它自己的**「其余物」之后，用户那一份就在那儿（搬运不改名）。</summary>
-    private string FindOwnFileInRestDirectory()
-    {
-        if (string.IsNullOrWhiteSpace(RestDirectoryPath))
-        {
-            return string.Empty;
-        }
-
-        /*
-         * ⛔ 名字要试**两个**：最初导入那个名字（`OriginalPath`）与**最新已知的那个名字**
-         * （`_ownFilePath` —— 改名之后就是它）。只试前者会漏掉"先改名、后被搬进其余物"那一档，
-         * 于是那一行还停在旧位置（真机 2026-10-07：`111.z03` 已经在 `…\其余物\111.z03`，
-         * 那一行却还写着 `111(4)\111.z03` ⇒ 用户说"显示没同步"）。
-         */
-        foreach (string name in new[]
-                 {
-                     Path.GetFileName(_ownFilePath),
-                     Path.GetFileName(OriginalPath)
-                 })
-        {
-            if (name.Length == 0)
-            {
-                continue;
-            }
-
-            try
-            {
-                string candidate = Path.Combine(RestDirectoryPath, name);
-
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-            catch
-            {
-                // 路径形状不合法 ⇒ 试下一个名字。
-            }
-        }
-
-        return string.Empty;
-    }
-
-    private static bool ExistsOnDisk(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-
-        try
-        {
-            return File.Exists(path);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string GetDirectorySafe(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            return Path.GetDirectoryName(path) ?? string.Empty;
-        }
-        catch
-        {
-            return string.Empty;
-        }
-    }
-
-    private static bool IsSameDirectory(string? left, string? right)
-    {
-        string leftDirectory = GetDirectorySafe(left);
-
-        return leftDirectory.Length > 0
-            && string.Equals(leftDirectory, GetDirectorySafe(right), StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// 记住"用户那个文件"的最新位置与体积（<see cref="_ownFilePath"/> 的**唯一**写入实现）。
-    ///
-    /// <para>体积只在文件真的在时更新（被搬走 / 被删之后保留最后一次看到的那个数 ——
-    /// 那一格要写的是"你那个文件多大"，⛔ 不是"现在盘上还剩什么"）。任何 IO 意外都吞掉：
+    /// <para>实现与失败模型在 <see cref="UserFileIdentity.Remember"/> 里 —— 任何 IO 意外都吞掉：
     /// 这是显示，⛔ 绝不允许因为读不到就影响解压。</para>
     /// </summary>
     private void RememberOwnFile(string? path, bool allowReplace)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        if (_identity.Remember(path, allowReplace))
         {
-            return;
-        }
-
-        if (!allowReplace && _ownFilePath.Length > 0)
-        {
-            return;
-        }
-
-        bool changed = !string.Equals(_ownFilePath, path, StringComparison.OrdinalIgnoreCase);
-
-        _ownFilePath = path!;
-
-        try
-        {
-            if (File.Exists(path))
-            {
-                _ownFileSizeBytes = new FileInfo(path!).Length;
-            }
-        }
-        catch
-        {
-            // 读不到就保留上一次记下的体积。
-        }
-
-        if (changed)
-        {
-            // 显示那几列是计算属性（读 _ownFilePath）⇒ 必须显式发通知，否则行停在旧名字上。
+            // 显示那几列是计算属性（读 identity）⇒ 必须显式发通知，否则行停在旧名字上。
             NotifyDisplayIdentityChanged();
         }
     }
 
-    /// <summary>列表「文件名」那一格显示什么（默认 = <see cref="FileName"/>）。</summary>
+    /// <summary>列表「文件名」那一格显示什么（见 <see cref="UserFileIdentity.DisplayFileName"/>）。</summary>
     public string DisplayFileName =>
-        DisplaySourcePath is { Length: > 0 } path
-            ? Path.GetFileName(path)
-            : (_ownFilePath.Length > 0 ? Path.GetFileName(_ownFilePath) : FileName);
+        _identity.DisplayFileName(OriginalPath, CurrentPath, RestDirectoryPath, FileName);
 
-    /// <summary>列表「大小」那一格显示什么（默认 = <see cref="SourceSizeText"/>）。</summary>
+    /// <summary>列表「大小」那一格显示什么（见 <see cref="UserFileIdentity.DisplaySizeText"/>）。</summary>
     public string DisplaySizeText =>
-        DisplaySourcePath is { Length: > 0 } path
-            ? DescribeSize(path)
-            : (_ownFileSizeBytes > 0 ? FormatSizeText(_ownFileSizeBytes) : SourceSizeText);
+        _identity.DisplaySizeText(OriginalPath, CurrentPath, RestDirectoryPath, SourceSizeText);
 
-    /// <summary>「文件名」那一格悬停提示 / 「完整路径」那一列（默认 = <see cref="CurrentPath"/>）。</summary>
+    /// <summary>「文件名」那一格悬停提示 / 「完整路径」那一列（见 <see cref="UserFileIdentity.DisplayPathToolTip"/>）。</summary>
     public string DisplayPathToolTip =>
-        DisplaySourcePath is { Length: > 0 } path
-            ? path
-            : (_ownFilePath.Length > 0 ? _ownFilePath : CurrentPath);
+        _identity.DisplayPathToolTip(OriginalPath, CurrentPath, RestDirectoryPath);
 
     /// <summary>「完整路径」那一列显示什么（同上：这一行属于**用户自己那个文件**）。</summary>
     public string DisplayPath => DisplayPathToolTip;
 
-    /// <summary>「当前后缀」那一列显示什么（⛔ 必须与 <see cref="DisplayFileName"/> 同步：
-    /// 显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾 —— 用户 2026-10-06 当场报的"后缀也不同步"）。</summary>
-    public string DisplayExtension
-    {
-        get
-        {
-            string name = DisplayFileName;
-
-            if (name.Length == 0)
-            {
-                return CurrentExtension;
-            }
-
-            return Path.GetExtension(name) is { Length: > 0 } extension ? extension : "无";
-        }
-    }
+    /// <summary>「当前后缀」那一列显示什么（与 <see cref="DisplayFileName"/> 同一份名字，⛔ 不许自相矛盾）。</summary>
+    public string DisplayExtension =>
+        _identity.DisplayExtension(OriginalPath, CurrentPath, RestDirectoryPath, FileName, CurrentExtension);
 
     /// <summary>
     /// **显示那几列一起发变更通知**（⛔ 一处改动、五列同步）。
     ///
-    /// <para>为什么必须显式发：这几列是**计算属性**（依赖 <see cref="_userFacingFilePath"/> 与当前路径），
+    /// <para>为什么必须显式发：这几列是**计算属性**（依赖身份记录与当前路径），
     /// 而改名 / 重扫走的是 <see cref="RefreshPathRelatedProperties"/> —— 它只会为
     /// `FileName` / `DirectoryPath` / `CurrentExtension` 发通知，计算属性收不到
     /// ⇒ **那一行就停在旧名字上**（用户 2026-10-06 截图里第 2、3 行正是如此：
     /// 盘上已改成 `111.z02` / `111(2)_.zip`，列表还显示脏名）。</para>
     /// </summary>
-    /// <summary>
-    /// 「错误信息」那一列显示什么：**被借去当单元的那一行不显示单元的内部过程详情**
-    /// （用户 2026-10-07 原话：「列表里面还是显示 111.z03 解压了三次」—— 他看到的正是那一格里的
-    /// 「已完成 3 层递归解压…」）。
-    ///
-    /// <para>口径①：这一行属于**你导入的那个文件**，它的结论就是"这一组解压成功"；
-    /// 递归分几层、产物从哪个工作区搬出来，属于**单元的过程详情**，⛔ 不该占用户这一行
-    /// （要看全过程去①页「详情 / 右键复制任务信息」或日志）。⛔ 只改显示，`ErrorMessage` 一个字不动。</para>
-    /// </summary>
-    public string DisplayErrorMessage =>
-        _userFacingFilePath.Length > 0 && Status == StatusText.ExtractSuccess
-            ? string.Empty
-            : ErrorMessage;
-
     public void NotifyDisplayIdentityChanged()
     {
         OnPropertyChanged(nameof(DisplayFileName));
@@ -456,134 +265,53 @@ public class ArchiveTask : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 「错误信息」那一列显示什么（见 <see cref="TaskStatusPresenter.ComposeErrorMessage"/>）：
+    /// ⛔ 只改显示，<see cref="ErrorMessage"/> 一个字不动。
+    /// </summary>
+    public string DisplayErrorMessage =>
+        TaskStatusPresenter.ComposeErrorMessage(ErrorMessage, _identity.HasUserFacingFile, Status);
+
+    /// <summary>
     /// **这一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06，用户原话：
     /// 「48MB 在列表里面显示到了 111(4)，也就是列表里面第一个……这个你到目前还没改回来」
     /// 「也就是你没有真正的移动只是显示问题的情况，赶紧修」）。
     ///
     /// <para><b>现场</b>：批末补判把这一单的**起点**改写到"别的包解出来的入口包"上
-    /// （`…\111(4)\111.z03` → `…\111\111\111.zip`，48.35 MB）—— `CurrentPath` 的 setter 顺手把
-    /// 名称 / 目录 / 体积整行刷新成那一份过程物 ⇒ 用户导入的那个文件在列表里"变成了 48MB 的东西"。</para>
+    /// （`…\111(4)\111.z03` → `…\111\111\111.zip`，48.35 MB）—— <see cref="CurrentPath"/>
+    /// 的 setter 顺手把名称 / 目录 / 体积整行刷新成那一份过程物 ⇒ 用户导入的那个文件在列表里"变成了 48MB 的东西"。</para>
     ///
-    /// <para>⛔ **只改显示**：<see cref="CurrentPath"/>（真正拿去解压的起点）、`Outcome`、
-    /// 借片账、落点……一个字节都不动；⛔ 起点与用户自己的文件**在同一层**（同一组里自己人的另一卷，
-    /// `set.7z.002` → `set.7z.001`）时显示照旧；⛔ 认不出用户那个文件（哪条路径都不在盘上）⇒
-    /// 什么都不做（显示照旧，⛔ 不猜）。</para>
+    /// <para>⛔ **只改显示**：<see cref="CurrentPath"/>（真正拿去解压的起点）、<see cref="Outcome"/>、
+    /// 借片账、落点……一个字节都不动；判据（同目录 / 同族 / 哪条路径在盘上）在
+    /// <see cref="UserFileIdentity.AdoptUserFacing"/> 里，⛔ 不猜。</para>
     /// </summary>
     /// <param name="startPointPath">改写之后的起点（那一份过程物）；与它同名的那条路径不会被选中。</param>
     /// <param name="hintPath">
-    /// 调用方替我们找到的"用户自己那一份现在在哪"（改名之后 `OriginalPath` 会过期，
+    /// 调用方替我们找到的"用户自己那一份现在在哪"（改名之后 <see cref="OriginalPath"/> 会过期，
     /// 而账上那几卷可能散在别的目录 ⇒ 只有调用方拿得到"同目录 + 同族"那个判据）。
     /// 它会被**优先**采用；⛔ 仍然要求它在最初导入的那个目录里。
     /// </param>
     public void ShowUserFileIdentity(string? startPointPath, string? hintPath = null)
     {
-        if (string.IsNullOrWhiteSpace(OriginalPath))
+        UserFileIdentity.UserFileAdoption adoption = _identity.AdoptUserFacing(
+            OriginalPath,
+            VolumePaths,
+            CurrentPath,
+            startPointPath,
+            hintPath);
+
+        if (adoption.OwnFileChanged)
         {
-            return;
+            NotifyDisplayIdentityChanged();
         }
 
-        string originalDirectory = Path.GetDirectoryName(OriginalPath) ?? string.Empty;
-        string startDirectory = string.IsNullOrWhiteSpace(startPointPath)
-            ? string.Empty
-            : Path.GetDirectoryName(startPointPath) ?? string.Empty;
-
-        if (string.Equals(originalDirectory, startDirectory, StringComparison.OrdinalIgnoreCase))
+        if (adoption.Adopted)
         {
-            // 起点就在自己旁边（自己人另一卷）⇒ 显示照旧（用户要看的是"程序真去解的那一份"）。
-            return;
-        }
-
-        foreach (string path in EnumerateOwnPathsForDisplay().Prepend(hintPath ?? string.Empty))
-        {
-            if (string.IsNullOrWhiteSpace(path)
-                || string.Equals(path, startPointPath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            /*
-             * ⛔ **只认"和最初导入那一份同一个目录"的候选**：用户可以改名
-             * （`111.z0删除2` → `111.z02`），但那一份东西一直在他放的那个目录里；
-             * 账上那几卷可能散在**别的目录**（别的单的片）—— 拿它们顶替就成了"这一行显示别人"。
-             */
-            if (!string.Equals(
-                    Path.GetDirectoryName(path) ?? string.Empty,
-                    originalDirectory,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (!File.Exists(path))
-                {
-                    continue;
-                }
-            }
-            catch
-            {
-                continue;
-            }
-
-            _userFacingFilePath = path;
-            RememberOwnFile(path, allowReplace: true);
             OnPropertyChanged(nameof(DisplayFileName));
             OnPropertyChanged(nameof(DisplaySizeText));
             OnPropertyChanged(nameof(DisplayPathToolTip));
             OnPropertyChanged(nameof(DisplayPath));
             OnPropertyChanged(nameof(DisplayExtension));
-            return;
         }
-    }
-
-    /// <summary>这一单"自己那个文件"可能在哪几条路径上（最初导入的那一份 + 账上那几卷 + 当前路径）。</summary>
-    private IEnumerable<string> EnumerateOwnPathsForDisplay()
-    {
-        yield return OriginalPath;
-
-        foreach (string path in VolumePaths)
-        {
-            yield return path;
-        }
-
-        yield return CurrentPath;
-    }
-
-    /// <summary>读一个文件的体积文字（读不到 ⇒ 短横，⛔ 不显示 0 字节）。</summary>
-    private static string DescribeSize(string path)
-    {
-        try
-        {
-            return File.Exists(path) ? FormatSizeText(new FileInfo(path).Length) : "-";
-        }
-        catch
-        {
-            return "-";
-        }
-    }
-
-    /// <summary>
-    /// 人读的字节数（列表列宽有限，所以最多两位小数、单位取最合适的那一档）。
-    /// 单位与 <c>Storage/TaskSpaceEstimate.FormatSize</c> **完全一致**（KiB / MiB / GiB / 字节）——
-    /// 界面上两处对同一块盘报出两种单位，用户会以为程序在算两个不同的数（历史上被投诉过）。
-    /// 这里自带一份实现是为了**不让 Models 层反向依赖 Storage 层**（分层铁律）。
-    /// </summary>
-    private static string FormatSizeText(long bytes)
-    {
-        string[] units = { "字节", "KiB", "MiB", "GiB", "TiB" };
-        double value = bytes;
-        int unit = 0;
-
-        while (value >= 1024 && unit < units.Length - 1)
-        {
-            value /= 1024;
-            unit++;
-        }
-
-        return unit == 0
-            ? $"{bytes} {units[0]}"
-            : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + " " + units[unit];
     }
 
     /// <summary>
@@ -681,18 +409,11 @@ public class ArchiveTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 「检测格式」那一列**给用户看的**说法（用户 2026-09-28：续卷显示 Unknown 会读成"没认出来"）。
-    ///
-    /// <para>续卷（`x.7z.002`）是裸切块、**没有文件头魔数**，所以内容格式本来就判不了 ——
-    /// 那是"物理上判不了"，不是"我们不认识"。后缀状态那一列才是结论（分卷后缀）。
-    /// 这里只改**显示**：格式 Unknown + 后缀状态是分卷 → 说「分卷续卷（无文件头）」。
-    /// 日志里照旧写 Unknown（机器事实不改），免得排查时对不上。</para>
+    /// 「检测格式」那一列**给用户看的**说法（见 <see cref="TaskStatusPresenter.ComposeDetectedFormat"/>）：
+    /// 只改显示，机器事实 <see cref="_detectedFormat"/> 照旧写 Unknown。
     /// </summary>
     public string DetectedFormatDisplay =>
-        string.Equals(_detectedFormat, "Unknown", StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(ExtensionStatus, StatusText.ExtensionVolume, StringComparison.Ordinal)
-            ? "分卷续卷（无文件头）"
-            : _detectedFormat;
+        TaskStatusPresenter.ComposeDetectedFormat(_detectedFormat, ExtensionStatus);
 
     /// <summary>
     /// 建议后缀。
@@ -758,72 +479,62 @@ public class ArchiveTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 列表“密码状态”列的显示值：在原始密码状态上补“跟班卷 / 缺卷 / 不适用”，
-    /// 避免没有一个任务尝试过密码时整列都停在“未检测”。
+    /// 列表“密码状态”列的显示值（见 <see cref="TaskStatusPresenter.ComposePasswordStatus"/>）：
+    /// 在原始密码状态上补“跟班卷 / 缺卷 / 不适用”，避免整列都停在“未检测”。
     /// </summary>
-    public string PasswordStatusDisplay
-    {
-        get
-        {
-            if (IsVolumeGroupFollower)
-            {
-                return "跟班卷";
-            }
+    public string PasswordStatusDisplay =>
+        TaskStatusPresenter.ComposePasswordStatus(IsVolumeGroupFollower, IsVolumeDeficitDeferred, Status, PasswordStatus);
 
-            if (IsVolumeDeficitDeferred || string.Equals(Status, StatusText.VolumeMissing, StringComparison.Ordinal))
-            {
-                return StatusText.PasswordNotApplicable;
-            }
-
-            if (string.Equals(PasswordStatus, StatusText.NotChecked, StringComparison.Ordinal)
-                && string.Equals(Status, StatusText.Skipped, StringComparison.Ordinal))
-            {
-                return StatusText.PasswordNotApplicable;
-            }
-
-            return PasswordStatus;
-        }
-    }
-
-    /// <summary>
-    /// 输出目录。
-    /// </summary>
     /// <summary>
     /// 这一单属于哪个内容组（空 = 普通单包，不参与组级最终内容口径）。
-    /// 组级字段只由 <c>ExtractionCoordinator.FinalizeContentGroups</c> 写。
+    /// 组级字段只由 <c>ExtractionCoordinator.FinalizeContentGroups</c> 写；事实在 <see cref="ContentGroupFacts"/>。
     /// </summary>
-    public string ContentGroupId { get; set; } = string.Empty;
+    public string ContentGroupId
+    {
+        get => _contentGroup.Id;
+        set => _contentGroup.Id = value;
+    }
 
-    public string ContentGroupBaseName { get; set; } = string.Empty;
+    public string ContentGroupBaseName
+    {
+        get => _contentGroup.BaseName;
+        set => _contentGroup.BaseName = value;
+    }
 
     /// <summary>组最终内容三态；空组/未判决 = Unknown。</summary>
-    public FinalContentState ContentGroupFinalState { get; set; } = FinalContentState.Unknown;
+    public FinalContentState ContentGroupFinalState
+    {
+        get => _contentGroup.FinalState;
+        set => _contentGroup.FinalState = value;
+    }
 
     /// <summary>这一单是组内的过程任务（入口/中间层），不计最终成功。</summary>
-    public bool IsContentGroupProcessTask { get; set; }
+    public bool IsContentGroupProcessTask
+    {
+        get => _contentGroup.IsProcessTask;
+        set => _contentGroup.IsProcessTask = value;
+    }
 
     /// <summary>只有组最终内容任务才有值；过程任务为空。</summary>
-    public string FinalContentPath { get; set; } = string.Empty;
+    public string FinalContentPath
+    {
+        get => _contentGroup.FinalContentPath;
+        set => _contentGroup.FinalContentPath = value;
+    }
 
     /// <summary>组唯一最终输出根；只有最终内容任务才有值。</summary>
-    public string FinalOutputPath { get; set; } = string.Empty;
+    public string FinalOutputPath
+    {
+        get => _contentGroup.FinalOutputPath;
+        set => _contentGroup.FinalOutputPath = value;
+    }
 
-    public bool HasContentGroup => !string.IsNullOrWhiteSpace(ContentGroupId);
+    public bool HasContentGroup => _contentGroup.HasGroup;
 
-    public bool FinalContentVerified =>
-        HasContentGroup
-        && !IsContentGroupProcessTask
-        && ContentGroupFinalState == FinalContentState.Verified;
+    public bool FinalContentVerified => _contentGroup.Verified;
 
     /// <summary>列表「输出目录」列：组内过程任务不再显示自己的中间落点。</summary>
-    public string OutputDisplayPath =>
-        !HasContentGroup
-            ? OutputPath
-            : IsContentGroupProcessTask
-                ? "—（组内过程任务）"
-                : !string.IsNullOrWhiteSpace(FinalOutputPath)
-                    ? FinalOutputPath
-                    : OutputPath;
+    public string OutputDisplayPath => _contentGroup.ResolveOutputDisplayPath(OutputPath);
 
     /// <summary>组判决回写后统一发通知，界面状态格/颜色当场更新。</summary>
     public void ApplyContentGroupFacts(
@@ -834,12 +545,7 @@ public class ArchiveTask : INotifyPropertyChanged
         string? finalContentPath,
         string? finalOutputPath)
     {
-        ContentGroupId = groupId ?? string.Empty;
-        ContentGroupBaseName = baseName ?? string.Empty;
-        ContentGroupFinalState = state;
-        IsContentGroupProcessTask = isProcessTask;
-        FinalContentPath = finalContentPath ?? string.Empty;
-        FinalOutputPath = finalOutputPath ?? string.Empty;
+        _contentGroup.Apply(groupId, baseName, state, isProcessTask, finalContentPath, finalOutputPath);
 
         OnPropertyChanged(nameof(HasContentGroup));
         OnPropertyChanged(nameof(FinalContentVerified));
@@ -1000,231 +706,63 @@ public class ArchiveTask : INotifyPropertyChanged
     public bool HasLiveProgress => _progressPercent >= 0 && _endTime == null;
 
     /// <summary>
-    /// 主界面「状态」列显示的那一格：**不新增列**，把百分比紧凑地并进状态文案。
-    ///
-    /// <para>
-    /// 例：<c>解压中 45%</c>；有长时间无响应提示时是 <c>解压中 45% · 长时间无响应</c>。
-    /// 任务一收尾就退回纯状态文案（见 <see cref="HasLiveProgress"/>）。
-    /// </para>
-    /// <para>
-    /// ⚠ 它**不新造任何状态字符串**：前缀永远是既有的 <see cref="Status"/> 值（来自
-    /// <c>StatusText</c> 常量），这里只做拼接，所以统计与配色（都看 <see cref="Status"/>）完全不受影响。
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// **状态那一格配色读的键**（⛔ 不是新状态常量）：默认就是 <see cref="Status"/>；
-    /// 只有"缺卷待批末判"那一档换成中性档 <see cref="StatusText.Skipped"/>
+    /// 组判决 / "缺卷待批末判"那几档由 <see cref="TaskStatusPresenter.ResolveColorKey"/> 定
     /// —— 用户 2026-10-08 点名的错：「为什么跳过要标红，这是非常错误的行为，这到了最后一步才判断的」。
     ///
     /// <para>为什么要有它：那一格的**文字**读 <see cref="StatusDisplayText"/>（批中间说"跳过"），
     /// 而**颜色**原先绑的是机器状态 ⇒ 待判那一行说着"跳过"却顶着红色。
-    /// 现在两处（`TaskTab.xaml` / `TaskDetailWindow.xaml`）都绑这个键，⛔ 不再各绑各的。</para>
+    /// 现在两处（<c>TaskTab.xaml</c> / <c>TaskDetailWindow.xaml</c>）都绑这个键，⛔ 不再各绑各的。</para>
     /// </summary>
-    public string StatusColorKey
-    {
-        get
-        {
-            if (HasContentGroup)
-            {
-                if (IsContentGroupProcessTask)
-                {
-                    return StatusText.Skipped;
-                }
-
-                if (!FinalContentVerified)
-                {
-                    return ContentGroupFinalState == FinalContentState.Missing
-                        ? StatusText.ExtractFailed
-                        : StatusText.PartiallyCompleted;
-                }
-            }
-
-            return IsVolumeDeficitDeferred ? StatusText.Skipped : Status;
-        }
-    }
-
-    public string StatusDisplayText
-    {
-        get
-        {
-            /*
-             * 组内过程任务不重复显示成最终成功；组最终内容未证也不许显示“解压成功”。
-             * 只改显示，不动 Status/Outcome（删除闸门/统计仍读机器字段）。
-             */
-            if (HasContentGroup)
-            {
-                if (IsContentGroupProcessTask)
-                {
-                    return StatusText.ContentGroupProcessTask;
-                }
-
-                if (!FinalContentVerified)
-                {
-                    return ContentGroupFinalState == FinalContentState.Missing
-                        ? StatusText.ContentGroupMissing
-                        : StatusText.ContentGroupPartial;
-                }
-            }
-
-            /*
-             * ===== 口径①（用户 2026-10-06 拍板）：一行只讲"你导进来的那个文件" =====
-             *
-             * 批末会有一行被"借去"当**解开这一组的那个单元**（起点被改写到入口包上，
-             * 见 <see cref="_userFacingFilePath"/> 的说明）。那一行顶上写的是你的文件，
-             * 状态却写"解压成功" —— 读起来像"你这一片被单独解成功了"。⇒ 这一档改说
-             * **这一组**（显示文案而已，`Status` 一个字不动 ⇒ 判据 / 名单 / 配色全不受影响）。
-             */
-            string text = _userFacingFilePath.Length > 0 && Status == StatusText.ExtractSuccess
-                ? StatusText.ExtractSuccessAsGroup
-                : Status;
-
-            /*
-             * ===== 「这一片已经被整组接手」的行不许永远停在「已跳过」=====
-             *
-             * 用户 2026-10-07 原话：「列表里面最下面的两个，从来没有变化」—— `111.rar` 与
-             * `111(2)_.zip` 两行各自只吐出一片、那片被接进整组解开了，可它们的状态格一直写着
-             * 「已跳过 100%」，读起来像"程序什么都没干"。⇒ 有那条**结构化事实**
-             * （<see cref="SettledWithGroupUnitName"/> 非空 = 收场那一刻记下的"是谁把整组解开的"）
-             * 时，状态格如实说这件事。⛔ `Status` / `Outcome` 一个字不动 ⇒ 统计、名单、配色不受影响。
-             */
-            if (SettledWithGroupUnitName.Length > 0 && Status == StatusText.Skipped)
-            {
-                /*
-                 * ⚠ 2026-10-10（用户拍板「两句都写」）：这一单自己那一趟**也**跑成了的时候
-                 * （<see cref="OwnRunSucceededBeforeGroupSettlement"/>，收场那一刻抄下来的事实），
-                 * 只写后半句就把"你自己那份其实解成了"吃掉了 —— 两个事实都写。
-                 * ⛔ 措辞不另造：前半句复用 `StatusText.ExtractSuccess` 的说法，后半句复用原来那一句。
-                 */
-                text = string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    OwnRunSucceededBeforeGroupSettlement
-                        ? StatusText.ExtractSucceededThenPieceSettledWithGroupFormat
-                        : StatusText.PieceSettledWithGroupFormat,
-                    SettledWithGroupUnitName);
-            }
-
-            /*
-             * ===== 批中间撞上缺卷的那一档：**先跳过，不许把结论摆出来** =====
-             *
-             * 用户 2026-10-08 口径：「没有到最后一步都是先跳过」——缺的那几片完全可能被同一批
-             * 别的包解出来（真机 `111.z01` 就是这样补上的），批末那一站才该下结论。
-             *
-             * ⚠ 这一档**连「部分完成」也要盖掉**（用户 2026-10-08 第二句：「批中间连部分完成也不许显示，
-             * 一律跳过（等最后判）」）：递归停在缺卷、但前面已经解出过东西时，机器状态就是「部分完成」——
-             * 那个结论同样是**下早了**（缺的那几片可能被同批别单补上）。
-             *
-             * ⛔ `Status` / `Outcome` 一个字不动（发布链、其余物、删除闸门读的都是它）——
-             * 这里只把**显示**改说成"跳过（缺卷，等批末再判）"；批末定稿时协调器把事实位清掉，
-             * 那一格随即回到真结论。
-             */
-            if (IsVolumeDeficitDeferred &&
-                (Status == StatusText.VolumeMissing || Status == StatusText.PartiallyCompleted))
-            {
-                text = StatusText.VolumeDeficitPendingText;
-            }
-
-            /*
-             * 百分比什么时候显示（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，
-             * 连一个 100% 的都没有"）：
-             *
-             * · 正在跑（HasLiveProgress）→ 显示实时百分比；
-             * · **已经成功** → 一律显示 100%。
-             *   为什么成功这一档要**写死 100**、而不是读存下来的百分比：
-             *   ① 引擎报的最后一帧常常只到 99（`Everything is Ok` 之前那一次）；
-             *   ② 收尾有好几条路（MarkSuccess / 定稿收尾 / 各分支早退），其中有的会
-             *      `ClearProgress()` 把百分比清成 -1 —— 读字段就会一会儿 99、一会儿没有。
-             *   成功的判据是**机器终态**（Outcome），不是那个瞬时字段，所以这里按终态说话。
-             *
-             * ⛔ 失败 / 部分完成 / 取消**不显示**百分比：配上 100% 会自相矛盾
-             *   （"解压失败 100%"读起来像成功了，正是不变量 6 最忌讳的那种形态）。
-             */
-            int? percent = HasLiveProgress
-                ? _progressPercent
-                : Outcome == TaskOutcome.Succeeded ? 100 : null;
-
-            /*
-             * 续解链的第几层说在括号里（用户 2026-10-07：「111.z03 显示解压了三遍 100%」）：
-             * 递归每开一层都会补一帧 0%（否则进度条会停在上一层的 100%），行里看不出"换层了"
-             * ⇒ 同一行就像被解了三遍。层号是从引擎进度那一帧里**结构化**传上来的
-             * （<see cref="ApplyProgress"/> 的 layer），⛔ 不去解析条目文字。
-             */
-            if (HasLiveProgress && _liveLayer > 0)
-            {
-                text += string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.LiveLayerSuffixFormat,
-                    _liveLayer);
-            }
-
-            if (percent.HasValue)
-            {
-                text += $" {percent.Value}%";
-            }
-
-            if (HasResponsivenessHint)
-            {
-                text += $" · {_responsivenessHint}";
-            }
-
-            /*
-             * "改过名"和"这一单没解成"是两件事（用户 2026-09-28 真机："界面上显示跳过，
-             * 日志上也显示跳过，但是确实是改好了名字了，这是什么情况"）。
-             * 分卷名是**解压前**自动改好的；解压这单照样可能跳过 / 失败 —— 说清楚，别让人以为白改了。
-             */
-            if (VolumeNameAutoRenamed)
-            {
-                text += "（已改回标准名）";
-            }
-
-            /*
-             * 最后把**这一行经历过的变换**接上（用户 2026-10-07：「我们最后想看到 111.rar 通过解压缩
-             * 两层变换到 111.zip，用户如果看到你什么都不动就会以为你什么都没改变」）——
-             * 链本身只由 <see cref="DisplayTransformationText"/> 从程序记录里拼，⛔ 这里不编内容。
-             */
-            if (DisplayTransformationText.Length > 0)
-            {
-                text += StatusText.TransformationChainSeparator + DisplayTransformationText;
-            }
-
-            return text;
-        }
-    }
+    public string StatusColorKey => TaskStatusPresenter.ResolveColorKey(BuildStatusSnapshot());
 
     /// <summary>
-    /// 任务详情窗口「进度」那一行：**百分比 + 当前条目**（没有实时进度时退回既有的进度文案）。
+    /// 主界面「状态」列显示的那一格（口径与拼接见 <see cref="TaskStatusPresenter.ComposeStatusText"/>）：
+    /// **不新增列**，把百分比 / 层号 / 无响应提示 / 改名 / 变换链紧凑地并进状态文案。
+    /// ⚠ 它不新造任何状态字符串，前缀永远是既有的 <see cref="Status"/> 值 ⇒ 统计与配色不受影响。
+    /// </summary>
+    public string StatusDisplayText => TaskStatusPresenter.ComposeStatusText(BuildStatusSnapshot());
+
+    /// <summary>
+    /// 求值那一刻任务上的**只读事实快照**（交给 <see cref="TaskStatusPresenter"/> 拼文字 / 配色键）。
+    /// ⛔ 只读，不许拿它当判据（删除闸门 / 统计读的是 <see cref="Outcome"/> 与机器字段）。
+    /// </summary>
+    private TaskStatusPresenter.TaskStatusSnapshot BuildStatusSnapshot() =>
+        new(
+            Status,
+            _identity.HasUserFacingFile,
+            SettledWithGroupUnitName,
+            OwnRunSucceededBeforeGroupSettlement,
+            VolumeNameAutoRenamed,
+            IsVolumeDeficitDeferred,
+            HasLiveProgress,
+            _progressPercent,
+            _liveLayer,
+            HasResponsivenessHint,
+            _responsivenessHint,
+            Outcome,
+            HasContentGroup,
+            IsContentGroupProcessTask,
+            FinalContentVerified,
+            ContentGroupFinalState,
+            DisplayTransformationText);
+
+    /// <summary>
+    /// 任务详情窗口「进度」那一行（拼接见 <see cref="TaskProgressText.DescribeDetail"/>）：
+    /// **百分比 + 剩余时间 + 当前条目 + 无响应提示**；没有实时进度时退回既有的进度文案。
     ///
     /// 已用时间不在这里拼 —— 详情窗口本来就有「耗时」一行，协调器在每次进度上报时
     /// 顺带刷新 <see cref="ElapsedText"/>，于是它也会跟着实时走。
     /// </summary>
-    public string ProgressDetail
-    {
-        get
-        {
-            if (!HasLiveProgress)
-            {
-                return ProgressText;
-            }
-
-            string percent = $"{_progressPercent}%";
-            string eta = string.IsNullOrWhiteSpace(_estimatedRemainingText)
-                ? string.Empty
-                : string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.ProgressRemainingSuffixFormat,
-                    _estimatedRemainingText);
-
-            if (string.IsNullOrWhiteSpace(_progressEntry))
-            {
-                return HasResponsivenessHint
-                    ? $"{percent}{eta} · {_responsivenessHint}"
-                    : $"{percent}{eta}";
-            }
-
-            return HasResponsivenessHint
-                ? $"{percent}{eta} · {_progressEntry} · {_responsivenessHint}"
-                : $"{percent}{eta} · {_progressEntry}";
-        }
-    }
+    public string ProgressDetail =>
+        TaskProgressText.DescribeDetail(
+            HasLiveProgress,
+            ProgressText,
+            _progressPercent,
+            _estimatedRemainingText,
+            _progressEntry,
+            HasResponsivenessHint,
+            _responsivenessHint);
 
     /// <summary>
     /// 把引擎报上来的进度落到任务上（只允许在 UI 线程调用 —— 协调器负责投递）。
@@ -1264,18 +802,7 @@ public class ArchiveTask : INotifyPropertyChanged
              * ⛔ 不在这里推算、不猜名字（用户 2026-10-07：「谁和你说第一层得到 111.part1.rar，
              * 你不要给我瞎猜，看程序怎么弄」）。
              */
-            string step = string.IsNullOrWhiteSpace(entry)
-                ? string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.LiveLayerSuffixFormat,
-                    layer)
-                : entry.Trim();
-
-            if (_transformationSteps.Count == 0 || !string.Equals(_transformationSteps[^1], step, StringComparison.Ordinal))
-            {
-                _transformationSteps.Add(step);
-            }
-
+            _transformationChain.Append(TaskProgressText.DescribeLayerStep(layer, entry));
             OnPropertyChanged(nameof(StatusDisplayText));
             OnPropertyChanged(nameof(DisplayTransformationText));
         }
@@ -1298,27 +825,11 @@ public class ArchiveTask : INotifyPropertyChanged
     {
         string previous = _estimatedRemainingText;
 
-        if (!HasLiveProgress || _progressPercent <= 0 || _progressPercent >= 100 || _progressEtaStartUtc == null)
-        {
-            _estimatedRemainingText = string.Empty;
-        }
-        else
-        {
-            TimeSpan elapsed = DateTime.UtcNow - _progressEtaStartUtc.Value;
-
-            // 刚开始的一两秒样本太少，估出来只会是 00:00 / 荒唐值；先不显示。
-            if (elapsed < TimeSpan.FromSeconds(2))
-            {
-                _estimatedRemainingText = string.Empty;
-            }
-            else
-            {
-                double remainingSeconds = elapsed.TotalSeconds * (100.0 - _progressPercent) / _progressPercent;
-                _estimatedRemainingText = remainingSeconds is > 0 and < 86400
-                    ? TimeSpan.FromSeconds(remainingSeconds).ToString(remainingSeconds >= 3600 ? @"h\:mm\:ss" : @"mm\:ss")
-                    : string.Empty;
-            }
-        }
+        _estimatedRemainingText = TaskProgressText.EstimateRemaining(
+            HasLiveProgress,
+            _progressPercent,
+            _progressEtaStartUtc,
+            DateTime.UtcNow);
 
         if (!string.Equals(previous, _estimatedRemainingText, StringComparison.Ordinal))
         {
@@ -1355,71 +866,26 @@ public class ArchiveTask : INotifyPropertyChanged
     public string LogName => string.IsNullOrWhiteSpace(DisplayFileName) ? FileName : DisplayFileName;
 
     /// <summary>
-    /// **这一行"你的文件"经历过的变换**（改名 / 续解每一层），一步一步攒起来，**全是程序自己的记录**：
-    /// 改名那一步 = 「最初导入的名字 → 最新已知的名字」（两个名字都是任务账上的事实字段），
-    /// 续解那几步 = 递归每层开头报上来的那一帧原文（`第 N 层：<那一层的包>`）。
-    ///
-    /// <para>来由（用户 2026-10-07）：「我们最后想看到 `111.rar` 通过解压缩两层变换到 `111.zip`，
-    /// 用户如果看到你什么都不动就会以为你什么都没改变」；同一轮他还点名 ⛔ 不许我复述或猜测这条链
-    /// （「谁和你说第一层得到 `111.part1.rar`，你不要给我瞎猜，看程序怎么弄」）。
-    /// ⇒ 只做拼接，⛔ 一个字都不编。</para>
-    /// </summary>
-    private readonly List<string> _transformationSteps = new();
-
-    /// <summary>
     /// **记下一步变换**（唯一写入出口）：调用方必须是"程序自己那条记录"的持有者 ——
     /// 改名 = <c>RenameCoordinator</c> 里那条 <c>OriginalFileName → NewFileName</c> 记录；
     /// 续解 = 递归每层报上来的那一帧（本类内部在 <see cref="ApplyProgress"/> 里记）。
     /// ⛔ 不许拿"账上两个字段比对"推出来当记录（用户 2026-10-07：「你不要给我瞎猜，看程序怎么弄」）。
+    /// 记录与拼接在 <see cref="TransformationChain"/> 里。
     /// </summary>
     public void AppendTransformationStep(string step)
     {
-        if (string.IsNullOrWhiteSpace(step))
+        if (_transformationChain.Append(step))
         {
-            return;
+            OnPropertyChanged(nameof(DisplayTransformationText));
+            OnPropertyChanged(nameof(StatusDisplayText));
         }
-
-        string trimmed = step.Trim();
-
-        if (_transformationSteps.Count > 0
-            && string.Equals(_transformationSteps[^1], trimmed, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _transformationSteps.Add(trimmed);
-        OnPropertyChanged(nameof(DisplayTransformationText));
-        OnPropertyChanged(nameof(StatusDisplayText));
     }
 
     /// <summary>
-    /// 变换链给用户看的那一行（空 = 这一步什么都没发生，不写"无"）。
+    /// 变换链给用户看的那一行（空 = 这一步什么都没发生，不写"无"；拼接见 <see cref="TransformationChain.Describe"/>）。
     /// 例：<c>111.z0删除3 → 111.z03；第 1 层：111.rar → 第 2 层：111.zip；由「111.z03」那一单解开整组</c>。
     /// </summary>
-    public string DisplayTransformationText
-    {
-        get
-        {
-            var parts = new List<string>();
-
-            // ① 改名 / 续解每一步：**程序自己记下来的**（唯一写入出口见 AppendTransformationStep）。
-            if (_transformationSteps.Count > 0)
-            {
-                parts.Add(string.Join(" → ", _transformationSteps));
-            }
-
-            // ② 这一片被整组接手（收场那一刻记下的事实）。
-            if (SettledWithGroupUnitName.Length > 0)
-            {
-                parts.Add(string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.SettledWithGroupChainFormat,
-                    SettledWithGroupUnitName));
-            }
-
-            return parts.Count == 0 ? string.Empty : string.Join("；", parts);
-        }
-    }
+    public string DisplayTransformationText => _transformationChain.Describe(SettledWithGroupUnitName);
 
     /// <summary>
     /// 错误信息。
@@ -1533,46 +999,62 @@ public class ArchiveTask : INotifyPropertyChanged
     /// 是否存在错误信息。
     /// </summary>
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
+
     /// <summary>
-    /// 本任务是否代表"一组分卷"（AGENTS.md §9.3）。
+    /// 本任务是否代表"一组分卷"（AGENTS.md §9.3；事实在 <see cref="VolumeGroupFacts"/>）。
     /// 一组分卷 = 一个任务：只从第一卷启动解压，其余卷不作为独立任务出现。
     /// </summary>
-    public bool IsVolumeGroup { get; set; }
+    public bool IsVolumeGroup
+    {
+        get => _volumeGroup.IsGroup;
+        set => _volumeGroup.IsGroup = value;
+    }
 
     /// <summary>分卷组的归组键（目录 + 基名）。失败重试与清理源包时靠它找回同一组。</summary>
-    public string VolumeGroupKey { get; set; } = string.Empty;
+    public string VolumeGroupKey
+    {
+        get => _volumeGroup.GroupKey;
+        set => _volumeGroup.GroupKey = value;
+    }
 
     /// <summary>这一组已找到的分卷文件（含第一卷），按卷序排列。</summary>
-    public List<string> VolumePaths { get; } = new();
+    public List<string> VolumePaths => _volumeGroup.Paths;
 
     /// <summary>已找到的卷数。</summary>
-    public int VolumeCount => VolumePaths.Count;
+    public int VolumeCount => _volumeGroup.Count;
 
     /// <summary>卷序是否从 1 连续、无缺口（未知/未归组 = false，删除闸门不得 fail-open）。</summary>
-    public bool IsVolumeComplete { get; set; }
+    public bool IsVolumeComplete
+    {
+        get => _volumeGroup.IsComplete;
+        set => _volumeGroup.IsComplete = value;
+    }
 
     /// <summary>缺失的卷文件名（总数无法确定时为空）。</summary>
-    public List<string> MissingVolumeNames { get; } = new();
+    public List<string> MissingVolumeNames => _volumeGroup.MissingNames;
 
     /// <summary>这一单的产物里还有未完成的分卷组，最终成功前不许删源。</summary>
-    public bool HasUnresolvedVolumeGroup { get; set; }
+    public bool HasUnresolvedVolumeGroup
+    {
+        get => _volumeGroup.HasUnresolvedGroup;
+        set => _volumeGroup.HasUnresolvedGroup = value;
+    }
 
     /// <summary>分卷情况的一句话说明，直接显示给用户。</summary>
-    public string VolumeInfoText { get; set; } = string.Empty;
+    public string VolumeInfoText
+    {
+        get => _volumeGroup.InfoText;
+        set => _volumeGroup.InfoText = value;
+    }
 
     /// <summary>
-    /// 「分卷」那一列**显示**什么（用户 2026-10-07：三列过期里点名的「分卷」—— 已经解开整组的行
-    /// 上还留着扫描那一刻的「共 1 卷，缺 111.zip、111.z01…」）。
+    /// 「分卷」那一列**显示**什么（判据与拼接见 <see cref="VolumeGroupFacts.DisplayInfoText"/>）。
     ///
-    /// <para>判据只用**结构化事实**：这一片被整组接手过（<see cref="SettledWithGroupUnitName"/> 非空，
-    /// 收场那一刻记下的）或它本身就是跟班卷、且已按"完成"收场 ⇒ 那一组已经不缺卷了，如实说一声。
-    /// ⛔ 不重跑归组、⛔ 不动 <see cref="VolumePaths"/>（归组结果是收场判据的输入）、⛔ 不比中文文案。</para>
+    /// <para>⛔ 只改显示：不重跑归组、⛔ 不动 <see cref="VolumePaths"/>（归组结果是收场判据的输入）、
+    /// ⛔ 不比中文文案（判据只用"被整组接手过 / 跟班卷且已完成"这两个结构化事实）。</para>
     /// </summary>
     public string DisplayVolumeInfoText =>
-        SettledWithGroupUnitName.Length > 0
-        || (IsVolumeGroupFollower && Outcome == TaskOutcome.Succeeded)
-            ? StatusText.VolumeInfoSettledWithGroupText
-            : VolumeInfoText;
+        _volumeGroup.DisplayInfoText(SettledWithGroupUnitName, IsVolumeGroupFollower, Outcome);
 
     /// <summary>
     /// 被**空间门**拦下时那一刻的三个数（需求 / 可用 / 差多少）；<c>null</c> = 这一单不是被空间门拦下的。
@@ -1705,33 +1187,17 @@ public class ArchiveTask : INotifyPropertyChanged
     public string RestKeptReason { get; set; } = string.Empty;
 
     /// <summary>
-    /// **成品目录里还留着、内容还没解出来的内层包**（只记文件名，隐私红线 §8）。
+    /// **成品目录里还留着、内容还没解出来的内层包**（只记文件名，隐私红线 §8；去重见
+    /// <see cref="LeftBehindPackageLedger.Record"/>）。
     ///
     /// <para>唯一写入点：<c>RestHandlingStep.ReportLeftBehindInnerPackages</c>（链尾那一站**无条件**调）。
     /// 唯一读取点：批末诊断与「一键处理完成」那一行 —— 用户 2026-11-10 真机口径：
     /// 「汇总里没有」是缺口，这种"内容还在里面、一个字节都没解出来"的事实必须被汇总说出来。</para>
     /// </summary>
-    public List<string> LeftBehindInnerPackageNames { get; } = new();
+    public List<string> LeftBehindInnerPackageNames => _leftBehindPackages.Names;
 
-    /// <summary>记下这一轮"成品目录里还留着的内层包"（去重、只记文件名）。</summary>
-    public void RecordLeftBehindInnerPackages(IEnumerable<string>? names)
-    {
-        foreach (string name in names ?? Enumerable.Empty<string>())
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                continue;
-            }
-
-            string fileName = System.IO.Path.GetFileName(name);
-
-            if (!string.IsNullOrWhiteSpace(fileName)
-                && !LeftBehindInnerPackageNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
-            {
-                LeftBehindInnerPackageNames.Add(fileName);
-            }
-        }
-    }
+    /// <summary>记下这一轮"成品目录里还留着的内层包"（去重、只记文件名；实现见 <see cref="LeftBehindPackageLedger.Record"/>）。</summary>
+    public void RecordLeftBehindInnerPackages(IEnumerable<string>? names) => _leftBehindPackages.Record(names);
 
     /// <summary>
     /// 引擎对"这到底是不是能解的容器"下的结论（例如"7-Zip 命令行 26.01 能打开：16 个文件"）。
@@ -1980,72 +1446,43 @@ public class ArchiveTask : INotifyPropertyChanged
     /// 类型在 <c>Storage/</c>：Disk stat 归 Storage 层，Models 只放纯模型（AGENTS.md §4）。
     /// </para>
     /// </summary>
-    public SourceFileSnapshot? SourceSnapshot { get; set; }
+    public SourceFileSnapshot? SourceSnapshot
+    {
+        get => _sourceSnapshot.Snapshot;
+        set => _sourceSnapshot.Snapshot = value;
+    }
 
     /// <summary>
     /// 上面那份快照是什么时候拍的（<b>本地时间</b>，给人看 / 写日志用；快照内部按 UTC 存）。
     /// 为 null 表示从来没拍过。
     /// </summary>
-    public DateTime? SourceSnapshotTime { get; set; }
-
-    /// <summary>有没有可用的基准（没有就该在开工前补拍，而不是判"变了"）。</summary>
-    public bool HasSourceSnapshot => SourceSnapshot != null;
-
-    /// <summary>
-    /// 本任务要记进快照的那一组路径：**主文件在前，分卷整组在后**（顺序即比对顺序）。
-    ///
-    /// 顺序稳定是刚需：比对是**按位**做的，这样"改名了 / 源包被搬进其余物了"
-    /// 这种"路径变了、文件没变"的情形不会被误判成"源文件被换了" ——
-    /// 路径不是不变量 11 要保护的东西，大小与修改时间才是。
-    ///
-    /// <para>⛔ <b>同一份文件只许出现一次</b>（2026-10-10 真机 EEEE）："1 卷组"那一档里
-    /// <see cref="VolumePaths"/> 装的就是这一单自己的文件（归组服务在识别**之后**才写进去），
-    /// 于是"按位比对"会看到**第 2 条是快照里没有的新文件** ⇒ 报「源文件已变化」把这一单拦下、
-    /// 一次引擎都不调。运行期读数（debug-mcp 停在 `ExtractionCoordinator.cs:498`）：
-    /// <c>CurrentPath == VolumePaths[0]</c>、<c>VolumePaths.Count == 1</c>、
-    /// <c>SourceSnapshot.Files.Count == 1</c>、<c>comparison.Changes[0].IsVolume == true</c>、
-    /// <c>PreviousLength == 0</c>、<c>PreviousLastWriteTimeUtc.Ticks == 0</c>（`before == null` 那一支）。
-    /// 守门用例 <c>SourceSnapshotDedupTests</c>（2 条，含"真的多出另一个文件"的哨兵）。</para>
-    /// </summary>
-    public List<string> GetSnapshotPaths()
+    public DateTime? SourceSnapshotTime
     {
-        var paths = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        if (!string.IsNullOrWhiteSpace(CurrentPath) && seen.Add(CurrentPath))
-        {
-            paths.Add(CurrentPath);
-        }
-
-        foreach (string volume in VolumePaths)
-        {
-            if (!string.IsNullOrWhiteSpace(volume) && seen.Add(volume))
-            {
-                paths.Add(volume);
-            }
-        }
-
-        return paths;
+        get => _sourceSnapshot.CapturedAtLocal;
+        set => _sourceSnapshot.CapturedAtLocal = value;
     }
 
+    /// <summary>有没有可用的基准（没有就该在开工前补拍，而不是判"变了"）。</summary>
+    public bool HasSourceSnapshot => _sourceSnapshot.HasSnapshot;
+
     /// <summary>
-    /// 现在就拍一份快照并挂在任务上（<b>只 stat，不读内容</b>）。
+    /// 本任务要记进快照的那一组路径：**主文件在前，分卷整组在后**（顺序即比对顺序，
+    /// 顺序稳定是刚需；去重与顺序的唯一实现在 <see cref="TaskSourceSnapshot.GetPaths"/>）。
+    /// </summary>
+    public List<string> GetSnapshotPaths() => TaskSourceSnapshot.GetPaths(CurrentPath, VolumePaths);
+
+    /// <summary>
+    /// 现在就拍一份快照并挂在任务上（<b>只 stat，不读内容</b>；实现见 <see cref="TaskSourceSnapshot.Capture"/>）。
     ///
     /// 调用时机只有两个：识别完成之后（正常基准），以及开工前发现"没有基准"时补拍。
     /// </summary>
-    public SourceFileSnapshot CaptureSourceSnapshot()
-    {
-        SourceFileSnapshot snapshot = SourceFileSnapshot.Capture(GetSnapshotPaths());
-        SourceSnapshot = snapshot;
-        SourceSnapshotTime = snapshot.CapturedAt.ToLocalTime();
-        return snapshot;
-    }
+    public SourceFileSnapshot CaptureSourceSnapshot() => _sourceSnapshot.Capture(GetSnapshotPaths());
 
     /// <summary>
-    /// 与当前磁盘状况比一遍；<b>没有基准时返回 <c>null</c></b>（调用方补拍，不许当成"变了"）。
+    /// 与当前磁盘状况比一遍（见 <see cref="TaskSourceSnapshot.Compare"/>）；
+    /// <b>没有基准时返回 <c>null</c></b>（调用方补拍，不许当成"变了"）。
     /// </summary>
-    public SourceChangeResult? CompareWithSourceSnapshot() =>
-        SourceSnapshot?.Compare(GetSnapshotPaths());
+    public SourceChangeResult? CompareWithSourceSnapshot() => _sourceSnapshot.Compare(GetSnapshotPaths());
 
     /// <summary>
     /// 是不是"续解出来的内层包"（而不是用户直接给的源包）。
@@ -2291,64 +1728,11 @@ public class ArchiveTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 应用识别结果到任务。
+    /// 应用识别结果到任务（映射策略与"未知格式"那一档见 <see cref="DetectResultApplier.Apply"/>）。
+    /// 它是**覆盖写**：格式 / 后缀建议 / 内嵌偏移 / 改名建议全部按这一轮结果重写，⛔ 不沿用旧结论。
     /// </summary>
-    public void ApplyDetectResult(DetectResult result, string extensionStatus)
-    {
-        if (result == null)
-        {
-            DetectedFormat = "Unknown";
-            SuggestedExtension = string.Empty;
-            IsArchive = false;
-            IsEncrypted = false;
-            EmbeddedArchiveOffset = 0;
-            EmbeddedArchiveEnd = 0;
-            EmbeddedDirectReadSupported = false;
-            EmbeddedDirectReadReason = string.Empty;
-            VolumeRenameSuggestion = string.Empty;
-            SplitVolumeAssemblyNote = string.Empty;
-            ExtensionStatus = StatusText.UnknownFormat;
-            Status = StatusText.UnknownFormat;
-            Operation = StatusText.OpScan;
-            ProgressText = StatusText.ProgressCompleted;
-            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
-            return;
-        }
-
-        DetectedFormat = result.Format;
-        SuggestedExtension = result.SuggestedExtension;
-        IsArchive = result.IsArchive;
-        IsEncrypted = result.IsProbablyEncrypted;
-
-        // 重扫时也要跟着刷新：上一次的偏移对新文件没有意义（识别结果是会被覆盖的）。
-        EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
-        EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
-        EmbeddedDirectReadSupported = result.EmbeddedDirectReadSupported;
-        EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
-
-        // 改名建议同理：它是"上一轮那次解压判决"的产物，识别结果一刷新就必须作废。
-        VolumeRenameSuggestion = string.Empty;
-        SplitVolumeAssemblyNote = string.Empty;
-        ExtensionStatus = extensionStatus;
-
-        if (result.IsArchive)
-        {
-            Status = StatusText.Recognized;
-        }
-        else if (result.IsKnownFormat)
-        {
-            Status = StatusText.Recognized;
-        }
-        else
-        {
-            Status = StatusText.UnknownFormat;
-        }
-
-        Operation = StatusText.OpScan;
-        ProgressText = StatusText.ProgressCompleted;
-        ErrorMessage = result.Message ?? string.Empty;
-        LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
-    }
+    public void ApplyDetectResult(DetectResult result, string extensionStatus) =>
+        DetectResultApplier.Apply(this, result, extensionStatus);
 
     /// <summary>
     /// 更新耗时文本。
@@ -2411,7 +1795,7 @@ public class ArchiveTask : INotifyPropertyChanged
     ///
     /// <para>为什么必须在这一处统一做：`DisplayFileName / DisplaySizeText / DisplayExtension /
     /// DisplayPath / StatusDisplayText / DisplayErrorMessage` 都是**计算属性**
-    /// （读 `_userFacingFilePath` + 当前路径 + 状态 + 错误信息）—— 绑定只认 `PropertyChanged`，
+    /// （读身份记录 + 当前路径 + 状态 + 错误信息）—— 绑定只认 `PropertyChanged`，
     /// 而改动底层字段的地方很多（收场、批末补判、改名、重扫、清校验…）。靠"每个调用点记得叫一声"
     /// 一定会漏（实测就漏了：日志是现算的、永远最新，界面留着旧值）。
     /// ⇒ 判据放在这里：**只要动到这几列的输入，就把这几列一起通知**。

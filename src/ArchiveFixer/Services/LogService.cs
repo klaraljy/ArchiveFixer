@@ -1,27 +1,38 @@
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace ArchiveFixer.Services;
 
 /// <summary>
-/// 日志服务。
-/// 负责屏幕日志、文件日志、密码脱敏、导出日志、打开日志目录。
+/// 日志服务的**门面**：公开 API 一个都没变，调用方（界面、协调器、导出、诊断包）不知道里面分了几层。
+///
+/// <para>职责分工（本类只剩公开 API、两个静态格式常量、以及"谁来装配谁"）：</para>
+/// <list type="bullet">
+/// <item><description><see cref="LogOperationContext"/>：本次运行/本次操作的**可变状态**（运行 ID、
+/// 目录与操作身份、四份文件路径、两个序号、文件日志开关、各行的来源上下文）与**唯一那把锁**；</description></item>
+/// <item><description><see cref="LogFileWriter"/>：**写入核心** —— 四份文件的唯一物理追加口
+/// （人读行与机器读行一比一就靠它同一处写入）；</description></item>
+/// <item><description><see cref="LogScreenBuffer"/>：屏幕日志集合（封顶 3000 行、清空、整段取文本）；</description></item>
+/// <item><description><see cref="LogDiagnosticWriter"/>：**诊断** —— 错误码/组件/判据/结构化事件/异常，
+/// 以及"屏幕 + 人读 + 机器读"的唯一收口；</description></item>
+/// <item><description><see cref="LogJsonRecord"/>：**JSONL** —— 机器读那两份的字段顺序与转义；</description></item>
+/// <item><description><see cref="LogExportWriter"/>：**导出** —— 本次操作/全部/当前这一份，以及操作起点标记；</description></item>
+/// <item><description><see cref="LogLifecycle"/>：**生命周期** —— 运行目录、操作目录、manifest、环境头、保留策略。</description></item>
+/// </list>
+///
+/// <para>⛔ 拆分不改任何**可见行为**：日志格式、文件与目录名、级别、脱敏口径、以及线程安全语义
+/// （四份文件 + 屏幕集合 + 两个序号仍在 <see cref="LogOperationContext.SyncRoot"/> **同一把锁**下串行）
+/// 全部与拆分前一致；守门用例见 <c>LogSchemaTests</c> / <c>LogDetailSplitTests</c> /
+/// <c>LogV3Tests</c> / <c>LogVolumePolicyTests</c> / <c>LogTimestampFormatTests</c>。</para>
 /// </summary>
 public class LogService
 {
-    private static readonly JsonSerializerOptions ManifestJsonOptions = new() { WriteIndented = true };
     /// <summary>
     /// 日志 / 报告里时间戳的**固定格式**（不随系统区域设置、也不随系统日历变）。
     ///
@@ -54,48 +65,149 @@ public class LogService
         return value.ToString(FileNameTimestampFormat, CultureInfo.InvariantCulture);
     }
 
-    private readonly PathService _pathService;
-    private readonly object _lockObj = new();
-
-    /// <summary>当前进程的日志入口；全局未处理异常用它写入当前操作 trace。</summary>
-    public static LogService? Current { get; private set; }
-
-    private string _currentLogFilePath = string.Empty;
-    private string _currentRunDirectory = string.Empty;
-    private string _currentOperationDirectory = string.Empty;
-    private string _currentOperationId = string.Empty;
-    private string _currentOperationName = string.Empty;
-    private int _operationIndex;
+    /// <summary>
+    /// 日志文件里一行的完整文本：<c>[时间] [级别] 消息</c>（唯一的行格式；
+    /// 形态与屏幕日志 <c>OperationLogItem.DisplayText</c> 一致，时间戳固定文化）。
+    /// </summary>
+    public static string FormatLogLine(DateTime time, string? level, string? message)
+    {
+        return LogFileWriter.FormatLogLine(time, level, message);
+    }
 
     /// <summary>
-    /// 普通档（用户看到的/导出的）日志文件：只写普通行，不含详细探针。
-    /// 内部排查用的 `.log` 仍然全量详细；两者用同一个时间戳基名，靠后缀区分。
+    /// 把一行日志拼成**机器读**的 JSON 对象（字段顺序与转义由 <see cref="LogJsonRecord"/> 负责）。
+    /// 保留这个转发只为既有调用方/守门用例的口径不变。
     /// </summary>
-    private string _currentUserLogFilePath = string.Empty;
+    internal static string BuildJsonRecord(
+        OperationLogItem item,
+        LogRunContext context,
+        CriterionFields? criterion,
+        LogEventFields? evidence = null,
+        long sequence = 0,
+        string runId = "",
+        int processId = 0,
+        int threadId = 0,
+        string operationId = "")
+    {
+        return LogJsonRecord.Build(item, context, criterion, evidence, sequence, runId, processId, threadId, operationId);
+    }
 
-    private string _currentJsonlFilePath = string.Empty;
-    private string _currentTraceFilePath = string.Empty;
-    private bool _enableFileLog = true;
+    /// <summary>JSON 字符串转义（零依赖；控制字符走 <c>\uXXXX</c>，⛔ 换行绝不许漏进记录里）。</summary>
+    internal static string EscapeJson(string? value)
+    {
+        return LogJsonRecord.EscapeJson(value);
+    }
 
-    /// <summary>本次进程运行 id（每次启动一个；日志只靠它就能区分“哪一次运行”）。</summary>
-    private readonly string _runId = Guid.NewGuid().ToString("N");
+    /// <summary>日志保留天数（第 44 条追加；固定策略，界面上没有开关 —— 要改告诉我）。</summary>
+    internal const int LogRetentionDays = LogLifecycle.RetentionDays;
 
-    /// <summary>本次运行内的日志序号（从 1 开始；人读/机器读同一条同号）。</summary>
-    private long _sequence;
+    /// <summary>日志目录总量上限（超过就从最旧的开始删）。</summary>
+    internal const long LogRetentionTotalBytes = LogLifecycle.RetentionTotalBytes;
 
-    /// <summary>诊断事件专用序号（不参与人读/JSONL 的一比一）。</summary>
-    private long _traceSequence;
+    /// <summary>无论如何至少留最近这么多份（用户随时可能要看"昨天那一次"）。</summary>
+    internal const int LogRetentionMinFiles = LogLifecycle.RetentionMinFiles;
+
+    private readonly PathService _pathService;
+    private readonly LogOperationContext _context;
+    private readonly LogScreenBuffer _screen;
+    private readonly LogFileWriter _files;
+    private readonly LogDiagnosticWriter _diagnostics;
+    private readonly LogExportWriter _exports;
+    private readonly LogLifecycle _lifecycle;
 
     /// <summary>本进程启动时间（环境头用）。</summary>
     private readonly DateTime _processStarted = Process.GetCurrentProcess().StartTime;
 
+    /// <summary>当前进程的日志入口；全局未处理异常用它写入当前操作 trace。</summary>
+    public static LogService? Current { get; private set; }
+
+    public LogService()
+        : this(new PathService())
+    {
+    }
+
+    public LogService(PathService pathService)
+    {
+        _pathService = pathService;
+        _context = new LogOperationContext();
+        _screen = new LogScreenBuffer();
+        _files = new LogFileWriter(_context);
+        _diagnostics = new LogDiagnosticWriter(_context, _screen, _files);
+        _diagnostics.Published = item => LogAdded?.Invoke(this, item);
+        _exports = new LogExportWriter(pathService, _context, _screen);
+        _lifecycle = new LogLifecycle(pathService, _context, _files, _diagnostics);
+        Current = this;
+    }
+
+    /// <summary>
+    /// 屏幕日志集合。
+    /// MainViewModel 可以直接绑定该集合，或者订阅 LogAdded 事件后自己维护集合。
+    /// </summary>
+    public ObservableCollection<OperationLogItem> Logs => _screen.Items;
+
+    /// <summary>
+    /// 日志新增事件。
+    /// </summary>
+    public event EventHandler<OperationLogItem>? LogAdded;
+
+    /// <summary>
+    /// 当前日志文件路径。
+    /// </summary>
+    public string CurrentLogFilePath => _context.MainLogPath;
+
+    /// <summary>本次运行 ID（整个进程一套）。</summary>
+    public string CurrentRunId => _context.RunId;
+
+    /// <summary>本次运行目录（logs 根下唯一文件夹）。</summary>
+    public string CurrentRunDirectory => _context.RunDirectory;
+
+    /// <summary>当前操作目录（每次操作一个子文件夹）。</summary>
+    public string CurrentOperationDirectory => _context.OperationDirectory;
+
+    public string CurrentOperationId => _context.OperationId;
+
+    public string CurrentOperationName => _context.OperationName;
+
+    /// <summary>
+    /// 当前**机器读**的那一份（`.jsonl`：一行一个 JSON 对象）—— 与人读的 `.log` **一比一**（同一处写入）。
+    ///
+    /// <para>为什么要有它：用户出问题时**只会发日志**，而人读行里的判据输入是中文散文
+    /// ⇒ 逐条筛/汇总/比对都没有稳定形状。JSONL 给人读行配一份**字段固定**的孪生记录
+    /// （时间/级别/批次/轮次/样本/阶段/任务/层/文件/身份/判据名/判据输入/结论/动作/耗时），
+    /// 于是"只看日志"也能把每一处判据的输入与结论摆出来。</para>
+    /// </summary>
+    public string CurrentJsonlFilePath => _context.JsonlPath;
+
+    /// <summary>
+    /// 当前**诊断事件**那一份（`.trace.jsonl`：schema v2，一批一条 JSON，不占人读行）。
+    /// 它与 `.log`/`.jsonl` 分离：成功任务的屏幕日志仍只留少量行，详细的批次/任务/文件/引擎事实全在这里。
+    /// </summary>
+    public string CurrentTraceFilePath => _context.TracePath;
+
+    /// <summary>
+    /// 是否往文件里写日志（对应设置项「启用日志文件」，默认开）。
+    ///
+    /// 关掉只影响**写盘**：屏幕日志照旧（用户还得看见程序在干什么），
+    /// 而且 <see cref="Initialize"/> 仍然把当前日志文件路径算好，重新打开就能接着写同一个文件。
+    /// </summary>
+    public bool EnableFileLog
+    {
+        get => _context.EnableFileLog;
+        set => _context.EnableFileLog = value;
+    }
+
+    /// <summary>
+    /// 日志目录。
+    /// </summary>
+    public string LogDirectory => _pathService.LogsDirectory;
+
     /// <summary>
     /// **这一行的来源上下文**（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）—— 大测试的"只看日志排查"靠它。
     ///
-    /// <para>写点：调用方开工时 <see cref="UpdateRunContext"/>；读点：<see cref="BuildJsonRecord"/> 把它抄进每一行。
+    /// <para>写点：调用方开工时 <see cref="UpdateRunContext"/>；读点：JSONL 拼装把它抄进每一行。
     /// ⛔ 只影响**日志记录**，⛔ 不参与任何判据、⛔ 不改任何行为。</para>
     /// </summary>
-    public LogRunContext RunContext { get; private set; } = new();
+    public LogRunContext RunContext => _context.RunContext;
 
     /// <summary>换一次上下文（只覆盖**显式给了**的那几格；判据一个字都不受影响）。</summary>
     public void UpdateRunContext(
@@ -106,131 +218,23 @@ public class LogService
         string? task = null,
         int? layer = null)
     {
-        RunContext = RunContext with
-        {
-            Batch = batch ?? RunContext.Batch,
-            Round = round ?? RunContext.Round,
-            Sample = sample ?? RunContext.Sample,
-            Stage = stage ?? RunContext.Stage,
-            Task = task ?? RunContext.Task,
-            Layer = layer ?? RunContext.Layer
-        };
+        _context.UpdateRunContext(batch, round, sample, stage, task, layer);
     }
-
-    public LogService()
-        : this(new PathService())
-    {
-    }
-
-    public LogService(PathService pathService)
-    {
-        _pathService = pathService;
-        Current = this;
-    }
-
-    /// <summary>
-    /// 屏幕日志集合。
-    /// MainViewModel 可以直接绑定该集合，或者订阅 LogAdded 事件后自己维护集合。
-    /// </summary>
-    public ObservableCollection<OperationLogItem> Logs { get; } = new();
-
-    /// <summary>
-    /// 日志新增事件。
-    /// </summary>
-    public event EventHandler<OperationLogItem>? LogAdded;
-
-    /// <summary>
-    /// 当前日志文件路径。
-    /// </summary>
-    public string CurrentLogFilePath => _currentLogFilePath;
-
-    /// <summary>本次运行 ID（整个进程一套）。</summary>
-    public string CurrentRunId => _runId;
-
-    /// <summary>本次运行目录（logs 根下唯一文件夹）。</summary>
-    public string CurrentRunDirectory => _currentRunDirectory;
-
-    /// <summary>当前操作目录（每次操作一个子文件夹）。</summary>
-    public string CurrentOperationDirectory => _currentOperationDirectory;
-
-    public string CurrentOperationId => _currentOperationId;
-
-    public string CurrentOperationName => _currentOperationName;
-
-    /// <summary>
-    /// 当前**机器读**的那一份（`.jsonl`：一行一个 JSON 对象）—— 与人读的 `.log` **一比一**（同一处写入）。
-    ///
-    /// <para>为什么要有它：用户出问题时**只会发日志**，而人读行里的判据输入是中文散文
-    /// ⇒ 逐条筛/汇总/比对都没有稳定形状。JSONL 给人读行配一份**字段固定**的孪生记录
-    /// （时间/级别/批次/轮次/样本/阶段/任务/层/文件/身份/判据名/判据输入/结论/动作/耗时），
-    /// 于是"只看日志"也能把每一处判据的输入与结论摆出来。</para>
-    /// </summary>
-    public string CurrentJsonlFilePath => _currentJsonlFilePath;
-
-    /// <summary>
-    /// 当前**诊断事件**那一份（`.trace.jsonl`：schema v2，一批一条 JSON，不占人读行）。
-    /// 它与 `.log`/`.jsonl` 分离：成功任务的屏幕日志仍只留少量行，详细的批次/任务/文件/引擎事实全在这里。
-    /// </summary>
-    public string CurrentTraceFilePath => _currentTraceFilePath;
-
-    /// <summary>
-    /// 是否往文件里写日志（对应设置项「启用日志文件」，默认开）。
-    ///
-    /// 关掉只影响**写盘**：屏幕日志照旧（用户还得看见程序在干什么），
-    /// 而且 <see cref="Initialize"/> 仍然把当前日志文件路径算好，重新打开就能接着写同一个文件。
-    /// </summary>
-    public bool EnableFileLog
-    {
-        get => _enableFileLog;
-        set => _enableFileLog = value;
-    }
-
-    /// <summary>
-    /// 日志目录。
-    /// </summary>
-    public string LogDirectory => _pathService.LogsDirectory;
-
-    /// <summary>
-    /// 本次操作开始处的**屏幕日志下标**（-1 = 还没有标记）。
-    ///
-    /// <para>用户 2026-09-25 第 38 条："我想要的是本次操作的日志，也就是我最近一次点开操作的日志，
-    /// 我看着全部的日志非常的累" —— 所以导出要能只给"最近这一次操作"，
-    /// 而不是把历史日志全拼在一起。</para>
-    /// </summary>
-    private int _operationStartIndex = -1;
-
-    /// <summary>本次操作在日志文件里的起始**行号**（-1 = 没标记 / 不在同一个文件里）。</summary>
-    private int _operationStartFileLine = -1;
-
-    /// <summary>同一次操作在普通档 `.user.log` 里的起始行（详细档与普通档行数不同，不能共用）。</summary>
-    private int _operationStartUserFileLine = -1;
-
-    /// <summary>标记所在的那个日志文件（换文件之后旧行号就不能用了）。</summary>
-    private string _operationStartFile = string.Empty;
-
-    /// <summary>本次操作开始的时间（固定格式字符串；导出时用它过滤 trace 旧事件）。</summary>
-    private string _operationStartTimestamp = string.Empty;
-
-    /// <summary>普通档 `.user.log` 的操作起点（文件换名后旧行号不能复用）。</summary>
-    private string _operationStartUserFile = string.Empty;
 
     /// <summary>
     /// 标记"一次新的操作开始了"（用户点了一次处理 / 一次扫描）。
     ///
-    /// <para>写一行醒目的分隔线进日志，并记下当前位置 —— 这样**导出的日志**与用户自己打开日志文件
-    /// 看到的分界完全一致（"这次操作从哪儿开始"一眼可见）。</para>
+    /// <para>开一个新的操作文件夹、写一行醒目的分隔线进日志，并记下当前位置 —— 这样**导出的日志**与
+    /// 用户自己打开日志文件看到的分界完全一致（"这次操作从哪儿开始"一眼可见）。</para>
+    ///
+    /// <para>⛔ 三步的顺序不能换：先建文件夹（换掉四份文件的路径），再写分隔行（它自己也是这次操作的第一行），
+    /// 最后才取位置 —— 屏幕下标与两份文件的行号取的都是**分隔行**那一处。</para>
     /// </summary>
     public void MarkOperationStart(string operationName)
     {
-        BeginOperationFolder(operationName);
+        _lifecycle.BeginOperationFolder(operationName);
         AppendOperationSeparator(operationName);
-
-        _operationStartIndex = Math.Max(0, Logs.Count - 1);
-        _operationStartFile = _currentLogFilePath;
-        _operationStartFileLine = TryCountLines(_currentLogFilePath) - 1;
-        _operationStartUserFile = _currentUserLogFilePath;
-        _operationStartUserFileLine = TryCountLines(_currentUserLogFilePath) - 1;
-        _operationStartTimestamp = FormatTimestamp(ArchiveFixer.Helpers.Clock.Now);
+        _exports.CaptureOperationStart(_screen.Items.Count);
     }
 
     /// <summary>把"本次操作开始"写进日志（屏幕 + 文件；关掉文件日志时只进屏幕日志）。</summary>
@@ -240,7 +244,7 @@ public class LogService
 
         try
         {
-            Write("INFO", message);
+            _diagnostics.Write("INFO", message);
         }
         catch
         {
@@ -249,10 +253,17 @@ public class LogService
     }
 
     /// <summary>
-    /// **只导出"本次操作"的日志**（最近一次标记之后的部分）。
-    ///
-    /// <para>优先按日志文件导出（与用户手工打开看到的一致）；没有文件（关掉了文件日志）就退回屏幕日志。
-    /// 没有任何标记时导出**当前这一份日志文件**（= 本次运行）—— 那已经是他要的范围，绝不拼历史文件。</para>
+    /// 初始化日志系统（目录、本次运行/操作的六件套、环境头、旧运行目录回收）。
+    /// ⛔ 失败语义不变：初始化失败就关掉文件日志并清空当前路径，绝不让程序起不来。
+    /// </summary>
+    public void Initialize(bool enableFileLog = true)
+    {
+        _lifecycle.Initialize(enableFileLog);
+    }
+
+    /// <summary>
+    /// **只导出"本次操作"的日志**（最近一次标记之后的部分；没有标记就导出当前这一份）。
+    /// 详细档/普通档各按自己那份文件的起点行，`includeDetails=false` 还会剔掉排障专用行。
     /// </summary>
     /// <returns>导出的行数，以及是不是"本次操作"的范围（false = 退回了整份当前日志）。</returns>
     public (int Lines, bool FromOperationMarker) ExportOperationLog(
@@ -261,815 +272,66 @@ public class LogService
         bool includeDetails = true,
         IReadOnlyList<string>? extraSections = null)
     {
-        if (string.IsNullOrWhiteSpace(targetPath))
-        {
-            return (0, false);
-        }
-
-        string? directory = Path.GetDirectoryName(targetPath);
-
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var builder = new StringBuilder();
-        bool fromMarker = false;
-        int lines = 0;
-
-        /*
-         * 导出文件**加个头**（用户 2026-09-25 第 44 条追加拍板）：
-         * 时间范围 / 任务数 / 成功失败 / 引擎版本 / 输出根 + "细节在哪看"。
-         * 为什么要它：这份文件是发给我排查用的 —— 没有头，读的人得先自己找"这是哪一批、跑成什么样"。
-         * ⚠ 头部行**不算进 lineCount**（那是"日志多少行"的数字，别把它算成日志内容）。
-         */
-        if (headerLines != null && headerLines.Count > 0)
-        {
-            foreach (string line in headerLines)
-            {
-                builder.AppendLine(line);
-            }
-
-            builder.AppendLine();
-        }
-
-        /*
-         * 用户 2026-10-26：这份 txt 是唯一可能拿到的文件，所以先放“能直接定位问题”的区块：
-         * 失败/取消/部分完成、分卷组、源包处理。它们由 MainViewModel 从任务事实生成，
-         * 不再靠把整份 trace 倒进来。
-         */
-        if (extraSections != null && extraSections.Count > 0)
-        {
-            foreach (string line in extraSections)
-            {
-                builder.AppendLine(line);
-            }
-
-            builder.AppendLine();
-        }
-
-        var body = new List<string>();
-        string selectedFile = includeDetails
-            ? _currentLogFilePath
-            : _currentUserLogFilePath;
-        int selectedStart = includeDetails
-            ? _operationStartFileLine
-            : _operationStartUserFileLine;
-        string selectedOperationFile = includeDetails
-            ? _operationStartFile
-            : _operationStartUserFile;
-
-        if (!string.IsNullOrWhiteSpace(selectedFile) && File.Exists(selectedFile))
-        {
-            string[] all = File.ReadAllLines(selectedFile);
-            int start = 0;
-
-            if (selectedStart >= 0 &&
-                string.Equals(selectedOperationFile, selectedFile, StringComparison.OrdinalIgnoreCase) &&
-                selectedStart < all.Length)
-            {
-                start = selectedStart;
-                fromMarker = true;
-            }
-
-            for (int i = start; i < all.Length; i++)
-            {
-                body.Add(all[i]);
-            }
-        }
-        else
-        {
-            int start = _operationStartIndex >= 0 ? _operationStartIndex : 0;
-            fromMarker = _operationStartIndex >= 0;
-
-            for (int i = start; i < Logs.Count; i++)
-            {
-                body.Add(Logs[i].DisplayText);
-            }
-        }
-
-        builder.AppendLine("================ 以下是日志正文（已去重；任务行快照已移到上面的任务明细） ================");
-
-        foreach (string line in DeduplicateReportBody(body))
-        {
-            /*
-             * ⛔ 2026-11-01：普通档（includeDetails=false）不把**排障专用**内容给用户：
-             * UI 线程停顿/性能探针/内部排障标记只在完整 `.log` 里。
-             * 详细档（用户主动勾选）原样保留。
-             */
-            if (!includeDetails && IsDiagnosticOnlyLine(line))
-            {
-                continue;
-            }
-
-            builder.AppendLine(line);
-            lines++;
-        }
-
-        /*
-         * 只附**本次操作范围内、精简后的关键事件**：组事实 / 文件操作 / 异常。
-         * ⛔ 不再把 batch.start / batch.end 的整张任务表或 batch 的 JSON 原样塞进来 ——
-         * 那正是旧导出“几十行 JSON 占六成体积、目录重复几十遍”的根因。
-         */
-        AppendCompactDiagnosticEvents(builder);
-
-        File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
-
-        return (lines, fromMarker);
+        return _exports.ExportOperationLog(targetPath, headerLines, includeDetails, extraSections);
     }
 
     /// <summary>
-    /// 普通档导出要排除的**排障专用**行（只该留在完整 `.log` 里给排查用）。
+    /// **导出全部日志**（用户 2026-09-25 第 37 条：不是只导这一次的，是**所有**日志）。
+    /// 读不出来的那一份跳过但记一行，绝不因为一份坏了就什么都不导。
     /// </summary>
-    private static bool IsDiagnosticOnlyLine(string line)
+    /// <returns>导出的日志份数与行数（写成 <c>(0, 0)</c> 表示日志目录里一份都没有）。</returns>
+    public (int FileCount, int LineCount) ExportAllLogs(string targetPath, bool includeDetails = true)
     {
-        return line.Contains("[性能]", StringComparison.Ordinal)
-            || line.Contains("UI 线程停顿", StringComparison.Ordinal)
-            || line.Contains("[排障", StringComparison.Ordinal)
-            || line.Contains("[诊断", StringComparison.Ordinal);
+        return _exports.ExportAllLogs(targetPath, includeDetails);
     }
 
     /// <summary>
-    /// 人读正文去重：去掉任务行快照（上面已有任务明细）与完全相同的重复行。
-    /// 保留时间顺序，不改变任何一行的内容。
+    /// 导出当前日志（有当前文件就整份复制，没有就退回屏幕日志）。
     /// </summary>
-    private static List<string> DeduplicateReportBody(IReadOnlyList<string> body)
+    public bool ExportLog(string targetPath)
     {
-        var result = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (string line in body)
-        {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            if (line.Contains("] [WARN] [行] ", StringComparison.Ordinal)
-                || line.Contains("] [INFO] [行] ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (seen.Add(line))
-            {
-                /*
-                 * 缺卷清单可能有 100+ 个号码；正文里保留前一段即可，完整清单仍在
-                 * data/log 的任务详情与 trace 里。否则单文件报告会被一行几百个数字淹没。
-                 */
-                result.Add(line.Length > 1200 && line.Contains("缺=", StringComparison.Ordinal)
-                    ? line[..1200] + "…（完整缺卷清单见 data\\logs）"
-                    : line);
-            }
-        }
-
-        return result;
+        return _exports.ExportLog(targetPath);
     }
 
     /// <summary>
-    /// 追加本次操作范围内的关键结构化事件（不含批量任务数组）。
-    /// 目的：用户只给一个 txt 时仍能看见组事实与文件操作，又不会被重复路径淹没。
+    /// 打开日志目录。
     /// </summary>
-    private void AppendCompactDiagnosticEvents(StringBuilder builder)
+    public bool OpenLogDirectory()
     {
-        if (string.IsNullOrWhiteSpace(_currentTraceFilePath) ||
-            !File.Exists(_currentTraceFilePath))
-        {
-            return;
-        }
-
-        string[] traceLines;
-
         try
         {
-            traceLines = File.ReadAllLines(_currentTraceFilePath);
+            _pathService.EnsureDirectoryExists(LogDirectory);
+            return _pathService.OpenDirectory(LogDirectory);
         }
         catch
         {
-            return;
-        }
-
-        var emitted = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (string traceLine in traceLines)
-        {
-            if (traceLine.Length == 0)
-            {
-                continue;
-            }
-
-            try
-            {
-                using JsonDocument document = JsonDocument.Parse(traceLine);
-                JsonElement root = document.RootElement;
-
-                string timestamp = root.TryGetProperty("ts", out JsonElement ts) ? ts.GetString() ?? string.Empty : string.Empty;
-
-                if (!string.IsNullOrWhiteSpace(_operationStartTimestamp) &&
-                    !string.IsNullOrWhiteSpace(timestamp) &&
-                    string.CompareOrdinal(timestamp, _operationStartTimestamp) < 0)
-                {
-                    continue;
-                }
-
-                string eventName = root.TryGetProperty("event", out JsonElement eventElement)
-                    ? eventElement.GetString() ?? string.Empty
-                    : string.Empty;
-
-                if (eventName.Length == 0 ||
-                    eventName == "batch.start" ||
-                    eventName == "batch.end" ||
-                    eventName == "task.begin" ||
-                    eventName == "session.settings" ||
-                    eventName == "session.environment")
-                {
-                    continue;
-                }
-
-                string message = root.TryGetProperty("msg", out JsonElement msgElement)
-                    ? msgElement.GetString() ?? string.Empty
-                    : eventName;
-
-                // 组事件展开成一行组事实；其余关键事件只留人话。
-                if (eventName == "group.linked" &&
-                    root.TryGetProperty("detail", out JsonElement detailElement) &&
-                    detailElement.ValueKind == JsonValueKind.String)
-                {
-                    string? detailJson = detailElement.GetString();
-
-                    if (!string.IsNullOrWhiteSpace(detailJson))
-                    {
-                        using JsonDocument detail = JsonDocument.Parse(detailJson);
-                        JsonElement d = detail.RootElement;
-                        string group = GetString(d, "group");
-                        string family = GetString(d, "family");
-                        string state = GetString(d, "state");
-                        string verdict = GetString(d, "verdict");
-                        int pieces = d.TryGetProperty("pieces", out JsonElement piecesElement) &&
-                                     piecesElement.ValueKind == JsonValueKind.Array
-                            ? piecesElement.GetArrayLength()
-                            : 0;
-                        string missing = d.TryGetProperty("missing", out JsonElement missingElement) &&
-                                         missingElement.ValueKind == JsonValueKind.Array
-                            ? string.Join(",", missingElement.EnumerateArray().Select(x => x.ToString()))
-                            : string.Empty;
-
-                        message = $"组「{group}」｜族={family}｜状态={state}｜片={pieces}"
-                            + (missing.Length > 0 ? $"｜缺={missing}" : string.Empty)
-                            + (verdict.Length > 0 ? $"｜{verdict}" : string.Empty);
-                    }
-                }
-
-                string line = $"[{timestamp}] [{eventName}] {message}";
-
-                if (seen.Add(line))
-                {
-                    emitted.Add(line);
-                }
-            }
-            catch
-            {
-                // trace 单行坏了不影响导出；诊断事件只是辅助。
-            }
-        }
-
-        if (emitted.Count == 0)
-        {
-            return;
-        }
-
-        const int maxEvents = 200;
-
-        builder.AppendLine();
-        builder.AppendLine("================ 关键诊断事件（本次操作范围；已去掉整批任务数组） ================");
-
-        foreach (string line in emitted.Take(maxEvents))
-        {
-            builder.AppendLine(line);
-        }
-
-        if (emitted.Count > maxEvents)
-        {
-            builder.AppendLine($"……还有 {emitted.Count - maxEvents} 条关键事件未展开（完整原始事件见 data\\logs 的 .trace.jsonl）");
-        }
-    }
-
-    private static string GetString(JsonElement element, string propertyName)
-    {
-        return element.TryGetProperty(propertyName, out JsonElement value)
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
-    }
-
-    /// <summary>数一个文件有多少行（读不了返回 0）。</summary>
-    private static int TryCountLines(string? path)
-    {
-        try
-        {
-            return string.IsNullOrWhiteSpace(path) || !File.Exists(path)
-                ? 0
-                : File.ReadAllLines(path).Length;
-        }
-        catch
-        {
-            return 0;
+            return false;
         }
     }
 
     /// <summary>
-    /// 初始化日志系统。
+    /// 清空屏幕日志。
+    /// 不删除文件日志。
     /// </summary>
-    public void Initialize(bool enableFileLog = true)
+    public void ClearScreenLogs()
     {
-        _enableFileLog = enableFileLog;
-
-        try
-        {
-            _pathService.EnsureBaseDirectories();
-            MigrateLegacyFlatLogs();
-
-            DateTime started = ArchiveFixer.Helpers.Clock.Now;
-            _currentRunDirectory = Path.Combine(
-                LogDirectory,
-                "run_" + started.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture));
-            Directory.CreateDirectory(_currentRunDirectory);
-
-            BeginOperationFolder("启动");
-
-            if (_enableFileLog)
-            {
-                string header = "日志初始化";
-
-                File.WriteAllText(
-                    _currentLogFilePath,
-                    FormatLogLine(started, "INFO", header) + Environment.NewLine,
-                    Encoding.UTF8);
-
-                File.WriteAllText(
-                    _currentJsonlFilePath,
-                    BuildJsonRecord(new OperationLogItem("INFO", header, string.Empty), RunContext, null, null, 0, _runId, Environment.ProcessId, Environment.CurrentManagedThreadId, _currentOperationId)
-                    + Environment.NewLine,
-                    Encoding.UTF8);
-
-                File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
-
-                WriteEnvironmentHeader();
-                CleanupOldRunDirectories();
-            }
-        }
-        catch
-        {
-            _enableFileLog = false;
-            _currentLogFilePath = string.Empty;
-        }
+        _screen.Clear();
     }
 
     /// <summary>
-    /// 开启一次操作日志：在本次运行目录下新建 operations\NNN-名称-时间，
-    /// 四份日志与 manifest/summary 全部落在同一个操作文件夹里。
+    /// 获取屏幕日志文本。
     /// </summary>
-    private void BeginOperationFolder(string operationName)
+    public string GetScreenLogText()
     {
-        if (string.IsNullOrWhiteSpace(_currentRunDirectory))
-        {
-            return;
-        }
-
-        DateTime started = ArchiveFixer.Helpers.Clock.Now;
-        _operationIndex++;
-        _currentOperationName = string.IsNullOrWhiteSpace(operationName) ? "操作" : operationName.Trim();
-        _currentOperationId = $"{_runId}-{_operationIndex:D3}";
-        string safeName = SanitizeFolderName(_currentOperationName);
-        string operationFolder = Path.Combine(
-            _currentRunDirectory,
-            "operations",
-            $"{_operationIndex:D3}-{safeName}-{started.ToString("HHmmss", CultureInfo.InvariantCulture)}");
-
-        int suffix = 1;
-        string candidate = operationFolder;
-
-        while (Directory.Exists(candidate))
-        {
-            candidate = operationFolder + "-" + suffix.ToString(CultureInfo.InvariantCulture);
-            suffix++;
-        }
-
-        _currentOperationDirectory = candidate;
-        Directory.CreateDirectory(_currentOperationDirectory);
-        DiagnosticSpan.StartOperation(_currentOperationId, _currentOperationName);
-        _sequence = 0;
-        _traceSequence = 0;
-
-        _currentLogFilePath = Path.Combine(_currentOperationDirectory, "operation.log");
-        _currentUserLogFilePath = Path.Combine(_currentOperationDirectory, "operation.user.log");
-        _currentJsonlFilePath = Path.Combine(_currentOperationDirectory, "operation.jsonl");
-        _currentTraceFilePath = Path.Combine(_currentOperationDirectory, "operation.trace.jsonl");
-
-        File.WriteAllText(_currentLogFilePath, string.Empty, Encoding.UTF8);
-        File.WriteAllText(_currentUserLogFilePath, string.Empty, Encoding.UTF8);
-        File.WriteAllText(_currentJsonlFilePath, string.Empty, Encoding.UTF8);
-        File.WriteAllText(_currentTraceFilePath, string.Empty, Encoding.UTF8);
-        WriteOperationManifest(started);
-        File.WriteAllText(
-            Path.Combine(_currentOperationDirectory, "summary.json"),
-            "{\"status\":\"running\",\"note\":\"导出诊断包时更新\"}" + Environment.NewLine,
-            Encoding.UTF8);
+        return _screen.ToText();
     }
-
-    private void WriteOperationManifest(DateTime started)
-    {
-        try
-        {
-            var manifest = new
-            {
-                schema = "archivefixer.operation.v1",
-                run_id = _runId,
-                operation_id = _currentOperationId,
-                operation_name = _currentOperationName,
-                started_at = FormatTimestamp(started),
-                app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
-                file_version = ResolveFileVersion(),
-                build_commit = BuildInfo.Commit,
-                build_configuration = BuildInfo.Configuration,
-                build_time = BuildInfo.BuildTime,
-                os = RuntimeInformation.OSDescription,
-                framework = RuntimeInformation.FrameworkDescription,
-                process_id = Environment.ProcessId,
-                operation_directory = _currentOperationDirectory,
-                log_files = new[]
-                {
-                    "operation.user.log",
-                    "operation.log",
-                    "operation.jsonl",
-                    "operation.trace.jsonl",
-                    "manifest.json",
-                    "summary.json"
-                }
-            };
-
-            File.WriteAllText(
-                Path.Combine(_currentOperationDirectory, "manifest.json"),
-                JsonSerializer.Serialize(manifest, ManifestJsonOptions),
-                Encoding.UTF8);
-        }
-        catch
-        {
-            // 清单写失败不影响日志主流程。
-        }
-    }
-
-    private static string SanitizeFolderName(string name)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var builder = new StringBuilder();
-
-        foreach (char ch in name)
-        {
-            builder.Append(invalid.Contains(ch) || char.IsWhiteSpace(ch) ? '-' : ch);
-        }
-
-        string result = builder.ToString().Trim('-', '.');
-
-        if (result.Length == 0)
-        {
-            result = "操作";
-        }
-
-        return result.Length > 40 ? result[..40] : result;
-    }
-
-    /// <summary>
-    /// 旧版 logs 根下的平铺文件移到 legacy\；只移动，不删除。
-    /// </summary>
-    private void MigrateLegacyFlatLogs()
-    {
-        try
-        {
-            string legacy = Path.Combine(LogDirectory, "legacy");
-            Directory.CreateDirectory(legacy);
-            string[] patterns =
-            {
-                "ArchiveFixer_*.log",
-                "ArchiveFixer_*.user.log",
-                "ArchiveFixer_*.jsonl",
-                "ArchiveFixer_*.trace.jsonl",
-                "fatal_*.log"
-            };
-
-            foreach (string pattern in patterns)
-            {
-                foreach (string source in Directory.GetFiles(LogDirectory, pattern, SearchOption.TopDirectoryOnly))
-                {
-                    try
-                    {
-                        string destination = Path.Combine(legacy, Path.GetFileName(source));
-                        int suffix = 1;
-                        string candidate = destination;
-
-                        while (File.Exists(candidate))
-                        {
-                            candidate = Path.Combine(
-                                legacy,
-                                Path.GetFileNameWithoutExtension(destination)
-                                + "-" + suffix.ToString(CultureInfo.InvariantCulture)
-                                + Path.GetExtension(destination));
-                            suffix++;
-                        }
-
-                        File.Move(source, candidate);
-                    }
-                    catch
-                    {
-                        // 被占用/权限不足：留给下一次启动。
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // 迁移失败不能阻止程序启动。
-        }
-    }
-
-    /// <summary>按运行目录清理，旧目录整体删除；当前运行和 legacy 永不删。</summary>
-    private void CleanupOldRunDirectories()
-    {
-        try
-        {
-            var directories = new DirectoryInfo(LogDirectory)
-                .GetDirectories("run_*", SearchOption.TopDirectoryOnly)
-                .Where(dir => !string.Equals(
-                    dir.FullName,
-                    _currentRunDirectory,
-                    StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(dir => dir.LastWriteTimeUtc)
-                .ToList();
-
-            if (directories.Count <= LogRetentionMinFiles)
-            {
-                return;
-            }
-
-            int deleted = 0;
-            long freedBytes = 0;
-
-            foreach (DirectoryInfo directory in directories.Skip(LogRetentionMinFiles))
-            {
-                try
-                {
-                    long size = directory.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
-                    directory.Delete(recursive: true);
-                    deleted++;
-                    freedBytes += size;
-                }
-                catch
-                {
-                    // 被占用：下次再收。
-                }
-            }
-
-            if (deleted > 0)
-            {
-                Write(
-                    "INFO",
-                    $"已清理 {deleted} 个旧运行日志文件夹（至少保留最近 {LogRetentionMinFiles} 个），释放 {freedBytes / 1024.0 / 1024.0:0.0} MB");
-            }
-        }
-        catch
-        {
-            // 清理失败不影响启动。
-        }
-    }
-
-    /// <summary>
-    /// 日志环境头：OS / .NET / 进程 / 架构 / 启动时间 / 工作目录 / 程序版本。
-    /// 以后用户只发日志时，这一条让读日志的人不必再问“什么系统、什么版本、什么时候跑的”。
-    /// </summary>
-    /// <summary>
-    /// 日志环境头里的「文件版本」：单文件发布只能从**进程路径**读，开发期退回程序目录里的 DLL。
-    /// ⛔ 不用 `Assembly.Location`（单文件里恒为空，且会被 IL3000 判错）。
-    /// </summary>
-    private static string ResolveFileVersion()
-    {
-        foreach (string candidate in new[]
-                 {
-                     Environment.ProcessPath ?? string.Empty,
-                     Path.Combine(AppContext.BaseDirectory, "ArchiveFixer.dll")
-                 })
-        {
-            if (string.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate))
-            {
-                continue;
-            }
-
-            try
-            {
-                string? version = FileVersionInfo.GetVersionInfo(candidate).FileVersion;
-
-                if (!string.IsNullOrWhiteSpace(version))
-                {
-                    return version!;
-                }
-            }
-            catch
-            {
-                // 读不到就试下一个来源。
-            }
-        }
-
-        return string.Empty;
-    }
-    private void WriteEnvironmentHeader()
-    {
-        try
-        {
-            Process process = Process.GetCurrentProcess();
-            string detail = JsonSerializer.Serialize(new
-            {
-                schema = "archivefixer.log.v3",
-                app_version = typeof(LogService).Assembly.GetName().Version?.ToString() ?? string.Empty,
-                /*
-                 * 单文件发布里 `Assembly.Location` 恒为空（IL3000，会被当成错误）⇒ 以**进程路径**为准；
-                 * 开发期 `dotnet run` 时进程是 dotnet.exe，读不到本程序版本，再退回程序目录下的 dll。
-                 */
-                file_version = ResolveFileVersion(),
-                os = RuntimeInformation.OSDescription,
-                os_arch = RuntimeInformation.OSArchitecture.ToString(),
-                process_arch = RuntimeInformation.ProcessArchitecture.ToString(),
-                framework = RuntimeInformation.FrameworkDescription,
-                dotnet = Environment.Version.ToString(),
-                process_id = process.Id,
-                process_name = process.ProcessName,
-                process_started = FormatTimestamp(process.StartTime),
-                machine = Environment.MachineName,
-                user = Environment.UserName,
-                working_directory = Environment.CurrentDirectory,
-                command_line = Environment.CommandLine,
-                processor_count = Environment.ProcessorCount,
-                is_64bit_process = Environment.Is64BitProcess,
-                log_directory = LogDirectory,
-                culture = CultureInfo.CurrentCulture.Name,
-                ui_culture = CultureInfo.CurrentUICulture.Name
-            });
-
-            Event(
-                "session.environment",
-                $"运行环境：{RuntimeInformation.OSDescription}；{RuntimeInformation.FrameworkDescription}；进程 {process.ProcessName}（{process.Id}）",
-                detail: detail);
-        }
-        catch (Exception exception)
-        {
-            Exception("写运行环境头失败", exception);
-        }
-    }
-
-    /// <summary>
-    /// 日志目录的**保留策略**（用户 2026-09-25 第 44 条追加：他导出的那两份日志一份 721 KB、一份 1.4 MB，
-    /// 目录里已经攒了 56 份、3.4 MB —— 而在这之前**没有任何清理**，只增不减）。
-    ///
-    /// <para>规则（按时间从旧到新处理，⛔ 绝不动当前这一份、绝不动不匹配 <c>ArchiveFixer_*.log</c> 的文件）：</para>
-    /// <list type="number">
-    /// <item><description>删掉**超过 <see cref="LogRetentionDays"/> 天**的；</description></item>
-    /// <item><description>剩下的若总量超过 <see cref="LogRetentionTotalBytes"/>，从最旧的开始删到限额以内；</description></item>
-    /// <item><description>**至少留最近 <see cref="LogRetentionMinFiles"/> 份**（用户随时可能要看昨天那一次）。</description></item>
-    /// </list>
-    ///
-    /// <para>删了就在新日志首行之后写一条 INFO 说清删了几份 / 释放多少 —— 静默删文件是这个项目的红线。</para>
-    /// </summary>
-    private void CleanupOldLogs()
-    {
-        try
-        {
-            var files = new DirectoryInfo(LogDirectory)
-                .GetFiles("ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
-                .Where(file => !file.Name.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase))
-                .Where(file => !string.Equals(file.FullName, _currentLogFilePath, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(file => file.LastWriteTimeUtc)
-                .ToList();
-
-            if (files.Count <= LogRetentionMinFiles)
-            {
-                return;
-            }
-
-            DateTime cutoffUtc = DateTime.UtcNow - TimeSpan.FromDays(LogRetentionDays);
-            long totalBytes = files.Sum(file => file.Length
-                + TwinLength(file.FullName, ".user.log")
-                + TwinLength(file.FullName, ".jsonl")
-                + TwinLength(file.FullName, ".trace.jsonl"));
-            int deleted = 0;
-            long freedBytes = 0;
-
-            foreach (FileInfo file in files)
-            {
-                // 最近 N 份永远留着（下面是按时间升序，最后 N 份在队尾）。
-                if (files.Count - files.IndexOf(file) <= LogRetentionMinFiles)
-                {
-                    break;
-                }
-
-                bool tooOld = file.LastWriteTimeUtc < cutoffUtc;
-                bool overQuota = totalBytes > LogRetentionTotalBytes;
-
-                if (!tooOld && !overQuota)
-                {
-                    break;
-                }
-
-                long length = file.Length;
-
-                try
-                {
-                    file.Delete();
-                    deleted++;
-                    freedBytes += length;
-                    totalBytes -= length;
-
-                    /*
-                     * 孪生文件跟着人读日志一起收：否则 `.jsonl` / `.trace.jsonl` 只增不减，
-                     * 而用户看到的是“日志已经清过了”。当前这一份三件套永远不在这里的 files 里。
-                     */
-                    freedBytes += TryDeleteLogTwin(file.FullName, ".user.log");
-                    freedBytes += TryDeleteLogTwin(file.FullName, ".jsonl");
-                    freedBytes += TryDeleteLogTwin(file.FullName, ".trace.jsonl");
-                }
-                catch
-                {
-                    // 正被别的进程占用（例如上一份还开着）：跳过，下次启动再收。
-                }
-            }
-
-            if (deleted > 0)
-            {
-                AppendBothFiles(
-                    ArchiveFixer.Helpers.Clock.Now,
-                    "INFO",
-                    $"已清理 {deleted} 份老日志（保留最近 {LogRetentionDays} 天 / "
-                    + $"上限 {LogRetentionTotalBytes / 1024 / 1024} MB / 至少 {LogRetentionMinFiles} 份），释放 "
-                    + $"{freedBytes / 1024.0 / 1024.0:0.0} MB");
-            }
-        }
-        catch
-        {
-            // 清理失败绝不能让程序起不来：日志只是辅助。
-        }
-    }
-
-    /// <summary>孪生文件的长度（用于 100 MB 总量口径；没有就是 0）。</summary>
-    private static long TwinLength(string logPath, string extension)
-    {
-        try
-        {
-            string twin = Path.ChangeExtension(logPath, extension);
-            return File.Exists(twin) ? new FileInfo(twin).Length : 0;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    /// <summary>
-    /// 删掉人读日志的孪生文件（`.user.log` / `.jsonl` / `.trace.jsonl`），返回释放字节数。
-    /// 只由保留策略调用；当前这一份永远不会走到这里。
-    /// </summary>
-    private static long TryDeleteLogTwin(string logPath, string extension)
-    {
-        try
-        {
-            string twin = Path.ChangeExtension(logPath, extension);
-
-            if (!File.Exists(twin))
-            {
-                return 0;
-            }
-
-            long length = new FileInfo(twin).Length;
-            File.Delete(twin);
-            return length;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    /// <summary>日志保留天数（第 44 条追加；固定策略，界面上没有开关 —— 要改告诉我）。</summary>
-    internal const int LogRetentionDays = 30;
-
-    /// <summary>日志目录总量上限（超过就从最旧的开始删）。</summary>
-    internal const long LogRetentionTotalBytes = 100L * 1024 * 1024;
-
-    /// <summary>无论如何至少留最近这么多份（用户随时可能要看"昨天那一次"）。</summary>
-    internal const int LogRetentionMinFiles = 10;
 
     /// <summary>
     /// 写入 INFO 日志。
     /// </summary>
     public void WriteInfo(string message)
     {
-        Write("INFO", message);
+        _diagnostics.Write("INFO", message);
     }
 
     /// <summary>带稳定错误码/组件的日志行（失败、异常、判据否定必须走这里或 Exception）。</summary>
@@ -1084,27 +346,16 @@ public class LogService
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string caller = "")
     {
-        string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
-            ? DiagnosticCodes.AppUnknown
-            : errorCode.Trim();
-
-        WriteInternal(
+        _diagnostics.WriteWithCode(
             level,
             message,
             taskPath,
-            criterion: null,
-            new LogEventFields(
-                Event: "log.event",
-                EventId: string.IsNullOrWhiteSpace(eventId) ? normalizedCode : eventId,
-                ErrorCode: normalizedCode,
-                Component: string.IsNullOrWhiteSpace(component)
-                    ? DiagnosticCodes.ComponentFor(normalizedCode)
-                    : component,
-                TaskId: DiagnosticSpan.CurrentTaskId,
-                SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
-                SourceLine: sourceLine,
-                Caller: caller,
-                CodeSource: string.IsNullOrWhiteSpace(errorCode) ? "fallback" : "explicit"));
+            errorCode,
+            component,
+            eventId,
+            sourceFile,
+            sourceLine,
+            caller);
     }
 
     /// <summary>
@@ -1125,7 +376,7 @@ public class LogService
             return;
         }
 
-        Write("WARN", message, sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
+        _diagnostics.Write("WARN", message, sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
     }
 
     /// <summary>
@@ -1214,15 +465,7 @@ public class LogService
     /// </summary>
     public void WriteFileOnly(string level, string message)
     {
-        level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
-        message = Sanitize(message);
-
-        var item = new OperationLogItem(level, message);
-
-        lock (_lockObj)
-        {
-            WriteFileLog(item, includeUserLog: false);
-        }
+        _files.WriteFileOnly(level, message);
     }
 
     /// <summary>
@@ -1236,22 +479,7 @@ public class LogService
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string caller = "")
     {
-        LogEventFields? evidence = null;
-
-        if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase))
-        {
-            evidence = new LogEventFields(
-                Event: "log.error",
-                EventId: DiagnosticCodes.AppUnknown,
-                ErrorCode: DiagnosticCodes.AppUnknown,
-                Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown),
-                SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
-                SourceLine: sourceLine,
-                Caller: caller,
-                CodeSource: "fallback");
-        }
-
-        WriteInternal(level, message, taskPath, criterion: null, evidence);
+        _diagnostics.Write(level, message, taskPath, sourceFile, sourceLine, caller);
     }
 
     /// <summary>
@@ -1286,107 +514,32 @@ public class LogService
         int sourceLine = 0,
         string caller = "")
     {
-        string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
-            ? (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase) ? DiagnosticCodes.AppUnknown : string.Empty)
-            : errorCode.Trim();
-        string normalizedComponent = string.IsNullOrWhiteSpace(component)
-            ? DiagnosticCodes.ComponentFor(normalizedCode)
-            : component;
-        string normalizedEventId = string.IsNullOrWhiteSpace(eventId) ? eventName : eventId;
-        string normalizedSourceFile = DiagnosticSource.NormalizeFile(sourceFile);
-        string codeSource = !string.IsNullOrWhiteSpace(errorCode)
-            ? "explicit"
-            : (normalizedCode.Length > 0 ? "fallback" : string.Empty);
-
-        if (normalizedCode.Length > 0)
-        {
-            var diagnosticError = new DiagnosticError(
-                normalizedCode,
-                normalizedComponent,
-                normalizedEventId,
-                normalizedSourceFile,
-                sourceLine,
-                caller,
-                stack,
-                message,
-                engine,
-                exitCode,
-                codeSource);
-
-            DiagnosticSpan.NoteError(diagnosticError);
-
-            if (string.Equals(eventName, "decision.stop", StringComparison.Ordinal))
-            {
-                DiagnosticSpan.NoteDecision(diagnosticError);
-            }
-        }
-
-        string human = $"事件「{eventName}」：{message}"
-            + (source.Length > 0 || target.Length > 0
-                ? $"（{source} → {target}）"
-                : string.Empty)
-            + (result.Length > 0 ? $" ⇒ {result}" : string.Empty)
-            + (normalizedCode.Length > 0 ? $"（错误码 {normalizedCode}）" : string.Empty);
-
-        level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
-        var item = new OperationLogItem(level, Sanitize(human), file);
-
-        /*
-         * 诊断事件只进 `.trace.jsonl`：成功任务的屏幕/人读日志仍保持“一行”纪律，
-         * 而详细事实（批次清单/任务卡/文件操作/引擎原话）在独立文件里，行数与屏幕无关。
-         */
-        lock (_lockObj)
-        {
-            if (!_enableFileLog || string.IsNullOrWhiteSpace(_currentTraceFilePath))
-            {
-                return;
-            }
-
-            try
-            {
-                File.AppendAllText(
-                    _currentTraceFilePath,
-                    BuildJsonRecord(
-                        item,
-                        RunContext,
-                        null,
-                        new LogEventFields(
-                            Event: eventName,
-                            Source: Sanitize(source),
-                            Target: Sanitize(target),
-                            Action: Sanitize(action),
-                            Result: Sanitize(result),
-                            Detail: Sanitize(detail),
-                            Stack: Sanitize(stack),
-                            Engine: Sanitize(engine),
-                            ExitCode: exitCode,
-                            Bytes: bytes,
-                            DurationMs: durationMs,
-                            Group: Sanitize(group),
-                            Identity: Sanitize(identity),
-                            EventId: normalizedEventId,
-                            ErrorCode: normalizedCode,
-                            Component: normalizedComponent,
-                            SpanId: string.IsNullOrWhiteSpace(spanId) ? DiagnosticSpan.CurrentSpanId : spanId,
-                            ParentSpanId: DiagnosticSpan.CurrentParentSpanId,
-                            TaskId: string.IsNullOrWhiteSpace(taskId) ? DiagnosticSpan.CurrentTaskId : taskId,
-                            Stage: stage,
-                            SourceFile: normalizedSourceFile,
-                            SourceLine: sourceLine,
-                            Caller: caller,
-                            CodeSource: codeSource),
-                        ++_traceSequence,
-                        _runId,
-                        Environment.ProcessId,
-                        Environment.CurrentManagedThreadId, _currentOperationId)
-                    + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-            catch
-            {
-                // 诊断日志写失败不影响主日志与业务。
-            }
-        }
+        _diagnostics.Event(
+            eventName: eventName,
+            message: message,
+            detail: detail,
+            level: level,
+            file: file,
+            source: source,
+            target: target,
+            action: action,
+            result: result,
+            stack: stack,
+            engine: engine,
+            exitCode: exitCode,
+            bytes: bytes,
+            durationMs: durationMs,
+            group: group,
+            identity: identity,
+            errorCode: errorCode,
+            component: component,
+            eventId: eventId,
+            spanId: spanId,
+            taskId: taskId,
+            stage: stage,
+            sourceFile: sourceFile,
+            sourceLine: sourceLine,
+            caller: caller);
     }
 
     /// <summary>写一条异常事件（异常类型/消息进人读行，完整 ToString 进机器读的 stack）。</summary>
@@ -1400,39 +553,12 @@ public class LogService
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string caller = "")
     {
-        if (exception == null)
-        {
-            return;
-        }
-
-        string normalizedCode = string.IsNullOrWhiteSpace(errorCode)
-            ? DiagnosticCodes.Unhandled
-            : errorCode;
-        string normalizedComponent = string.IsNullOrWhiteSpace(component)
-            ? DiagnosticCodes.ComponentFor(normalizedCode)
-            : component;
-
-        string detail = JsonSerializer.Serialize(new
-        {
-            type = exception.GetType().FullName,
-            message = exception.Message,
-            inner = exception.InnerException?.GetType().FullName,
-            inner_message = exception.InnerException?.Message,
-            source = exception.Source,
-            hresult = exception.HResult
-        });
-
-        Event(
-            "exception",
-            $"{context}：{exception.GetType().Name}：{exception.Message}",
-            detail: detail,
-            level: "ERROR",
-            file: taskPath,
-            stack: exception.ToString(),
-            errorCode: normalizedCode,
-            component: normalizedComponent,
-            eventId: normalizedCode,
-            taskId: DiagnosticSpan.CurrentTaskId,
+        _diagnostics.Exception(
+            context: context,
+            exception: exception,
+            taskPath: taskPath,
+            errorCode: errorCode,
+            component: component,
             sourceFile: sourceFile,
             sourceLine: sourceLine,
             caller: caller);
@@ -1461,381 +587,19 @@ public class LogService
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string caller = "")
     {
-        string human = $"判据「{criterion}」｜输入：{inputs} ⇒ 结论：{verdict}"
-            + (action.Length > 0 ? $"（动作：{action}）" : string.Empty);
-        bool negative = level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)
-            || level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
-            || verdict.Contains("失败", StringComparison.Ordinal)
-            || verdict.Contains("未通过", StringComparison.Ordinal)
-            || verdict.Contains("不完整", StringComparison.Ordinal)
-            || verdict.Contains('缺')
-            || verdict.Contains("判不出", StringComparison.Ordinal);
-        string code = string.IsNullOrWhiteSpace(errorCode)
-            ? (negative ? DiagnosticCodes.Decision : string.Empty)
-            : errorCode;
-        string normalizedComponent = string.IsNullOrWhiteSpace(component)
-            ? DiagnosticCodes.ComponentFor(code)
-            : component;
-
-        WriteInternal(
-            level,
-            human,
-            file,
-            new CriterionFields(criterion, inputs, verdict, action, file, identity),
-            new LogEventFields(
-                Event: "criterion",
-                EventId: criterion,
-                ErrorCode: code,
-                Component: normalizedComponent,
-                TaskId: DiagnosticSpan.CurrentTaskId,
-                SourceFile: DiagnosticSource.NormalizeFile(sourceFile),
-                SourceLine: sourceLine,
-                Caller: caller,
-                CodeSource: string.IsNullOrWhiteSpace(code)
-                    ? string.Empty
-                    : string.IsNullOrWhiteSpace(errorCode) ? "fallback" : "explicit"));
-    }
-
-    /// <summary><see cref="Write"/> 与 <see cref="Criterion"/> 的**唯一**收口（屏幕 + 人读文件 + 机器读文件）。</summary>
-    private void WriteInternal(
-        string level,
-        string message,
-        string taskPath,
-        CriterionFields? criterion,
-        LogEventFields? evidence = null)
-    {
-        level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
-        message = Sanitize(message);
-
-        if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase)
-            && (evidence == null || string.IsNullOrWhiteSpace(evidence.ErrorCode)))
-        {
-            evidence = new LogEventFields(
-                Event: "log.error",
-                EventId: DiagnosticCodes.AppUnknown,
-                ErrorCode: DiagnosticCodes.AppUnknown,
-                Component: DiagnosticCodes.ComponentFor(DiagnosticCodes.AppUnknown),
-                CodeSource: "fallback");
-        }
-
-        if (evidence != null && !string.IsNullOrWhiteSpace(evidence.ErrorCode))
-        {
-            DiagnosticSpan.NoteError(new DiagnosticError(
-                evidence.ErrorCode,
-                evidence.Component,
-                evidence.EventId,
-                evidence.SourceFile,
-                evidence.SourceLine,
-                evidence.Caller,
-                evidence.Stack,
-                message,
-                CodeSource: evidence.CodeSource));
-
-            message = message + "（错误码 " + evidence.ErrorCode + "）";
-        }
-
-        var item = new OperationLogItem(level, message, taskPath);
-
-        lock (_lockObj)
-        {
-            AddScreenLog(item);
-            WriteFileLog(item, criterion, evidence);
-        }
-
-        LogAdded?.Invoke(this, item);
-    }
-
-    /// <summary>
-    /// 添加屏幕日志。
-    /// </summary>
-    private void AddScreenLog(OperationLogItem item)
-    {
-        try
-        {
-            Logs.Add(item);
-
-            // 防止屏幕日志无限增长。
-            while (Logs.Count > 3000)
-            {
-                Logs.RemoveAt(0);
-            }
-        }
-        catch
-        {
-            // 如果跨线程直接访问 ObservableCollection 出错，
-            // ViewModel 可选择订阅 LogAdded 后在 UI 线程添加。
-        }
-    }
-
-    /// <summary>
-    /// 写入文件日志。
-    /// </summary>
-    /// <summary>
-    /// 日志文件里一行的完整文本：<c>[时间] [级别] 消息</c>。
-    ///
-    /// 形态与屏幕日志（<c>OperationLogItem.DisplayText</c>）**一模一样**，差别只在时间戳走
-    /// <see cref="FormatTimestamp"/>（固定文化）。为什么不直接用 <c>item.DisplayText</c>：
-    /// 它内部是 <c>Time.ToString("yyyy-MM-dd HH:mm:ss")</c>，用的是**当前区域的日历** ——
-    /// 在泰历这类区域里写进文件的就是 2569 年，而日志文件是要被解析、被比对的那一份。
-    /// 屏幕那一行由视图直接绑定，改不到（在 Models 里），所以文件这一份先钉死。
-    /// </summary>
-    public static string FormatLogLine(DateTime time, string? level, string? message)
-    {
-        string normalizedLevel = string.IsNullOrWhiteSpace(level) ? "INFO" : level;
-
-        return $"[{FormatTimestamp(time)}] [{normalizedLevel}] {message}";
-    }
-
-    /// <summary>
-    /// **两份一起追加一行**（人读 + 机器读）—— 只给"不走屏幕日志"的那几处内部写入用
-    /// （日志保留策略那一行）。⛔ 别的地方一律走 <see cref="WriteInternal"/>，那才是唯一收口。
-    /// </summary>
-    private void AppendBothFiles(DateTime time, string level, string message)
-    {
-        if (!_enableFileLog || string.IsNullOrWhiteSpace(_currentLogFilePath))
-        {
-            return;
-        }
-
-        try
-        {
-            string safe = Sanitize(message);
-
-            File.AppendAllText(
-                _currentLogFilePath,
-                FormatLogLine(time, level, safe) + Environment.NewLine,
-                Encoding.UTF8);
-
-            if (_currentJsonlFilePath.Length > 0)
-            {
-                File.AppendAllText(
-                    _currentJsonlFilePath,
-                    BuildJsonRecord(new OperationLogItem(level, safe, string.Empty), RunContext, null)
-                    + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-        }
-        catch
-        {
-            _enableFileLog = false;
-        }
-    }
-
-    private void WriteFileLog(
-        OperationLogItem item,
-        CriterionFields? criterion = null,
-        LogEventFields? evidence = null,
-        bool includeUserLog = true)
-    {
-        if (!_enableFileLog)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(_currentLogFilePath))
-        {
-            return;
-        }
-
-        try
-        {
-            File.AppendAllText(
-                _currentLogFilePath,
-                FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
-                Encoding.UTF8);
-
-            if (includeUserLog && _currentUserLogFilePath.Length > 0)
-            {
-                File.AppendAllText(
-                    _currentUserLogFilePath,
-                    FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-
-            /*
-             * **人读行与机器读行一比一**：同一处写入 ⇒ 行数永远相等（守门用例 `LogSchemaTests` 钉着）。
-             * 机器读那一份是 `.jsonl`（一行一个 JSON 对象），字段固定、⛔ 不可省。
-             */
-            if (_currentJsonlFilePath.Length > 0)
-            {
-                File.AppendAllText(
-                    _currentJsonlFilePath,
-                    BuildJsonRecord(
-                        item,
-                        RunContext,
-                        criterion,
-                        evidence,
-                        ++_sequence,
-                        _runId,
-                        Environment.ProcessId,
-                        Environment.CurrentManagedThreadId, _currentOperationId)
-                    + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-        }
-        catch
-        {
-            _enableFileLog = false;
-        }
-    }
-
-    /// <summary>
-    /// 把一行日志拼成**机器读**的 JSON 对象（⛔ 零依赖：自己转义，不引第三方）。
-    /// 字段固定：<c>ts/level/batch/round/sample/stage/task/layer/file/identity/criterion/inputs/verdict/action/msg</c>。
-    /// </summary>
-    internal static string BuildJsonRecord(
-        OperationLogItem item,
-        LogRunContext context,
-        CriterionFields? criterion,
-        LogEventFields? evidence = null,
-        long sequence = 0,
-        string runId = "",
-        int processId = 0,
-        int threadId = 0,
-        string operationId = "")
-    {
-        var builder = new StringBuilder(256);
-
-        builder.Append('{');
-        AppendJsonField(builder, "schema", "archivefixer.log.v3", first: true);
-        AppendJsonField(builder, "ts", FormatTimestamp(item.Time));
-        AppendJsonField(builder, "level", item.Level);
-        AppendJsonNumber(builder, "seq", sequence);
-        AppendJsonField(builder, "run", runId);
-        AppendJsonField(builder, "operation_id", operationId);
-        AppendJsonField(builder, "operation_name", string.IsNullOrWhiteSpace(evidence?.OperationName) ? DiagnosticSpan.CurrentOperationName : evidence!.OperationName);
-        AppendJsonField(builder, "event_id", evidence?.EventId ?? string.Empty);
-        AppendJsonField(builder, "error_code", evidence?.ErrorCode ?? string.Empty);
-        AppendJsonField(builder, "component", evidence?.Component ?? string.Empty);
-        AppendJsonField(builder, "source_file", evidence?.SourceFile ?? string.Empty);
-        AppendJsonNumber(builder, "source_line", evidence?.SourceLine ?? 0);
-        AppendJsonField(builder, "caller", evidence?.Caller ?? string.Empty);
-        AppendJsonField(builder, "code_source", evidence?.CodeSource ?? string.Empty);
-        string effectiveSpanId = string.IsNullOrWhiteSpace(evidence?.SpanId)
-            ? DiagnosticSpan.CurrentSpanId
-            : evidence!.SpanId;
-
-        if (string.IsNullOrWhiteSpace(effectiveSpanId))
-        {
-            effectiveSpanId = operationId;
-        }
-
-        AppendJsonField(builder, "span_id", effectiveSpanId);
-        AppendJsonField(builder, "parent_span_id", string.IsNullOrWhiteSpace(evidence?.ParentSpanId) ? DiagnosticSpan.CurrentParentSpanId : evidence!.ParentSpanId);
-        AppendJsonField(builder, "task_id", string.IsNullOrWhiteSpace(evidence?.TaskId) ? DiagnosticSpan.CurrentTaskId : evidence!.TaskId);
-        AppendJsonNumber(builder, "pid", processId);
-        AppendJsonNumber(builder, "thread", threadId);
-        AppendJsonField(builder, "batch", context.Batch);
-        AppendJsonNumber(builder, "round", context.Round);
-        AppendJsonField(builder, "sample", context.Sample);
-        AppendJsonField(builder, "stage", string.IsNullOrWhiteSpace(evidence?.Stage) ? context.Stage : evidence!.Stage);
-        AppendJsonField(builder, "task", context.Task);
-        AppendJsonNumber(builder, "layer", context.Layer);
-        AppendJsonField(builder, "file", criterion?.File ?? item.TaskPath);
-        AppendJsonField(builder, "identity", criterion?.Identity ?? string.Empty);
-        AppendJsonField(builder, "criterion", criterion?.Criterion ?? string.Empty);
-        AppendJsonField(builder, "inputs", criterion?.Inputs ?? string.Empty);
-        AppendJsonField(builder, "verdict", criterion?.Verdict ?? string.Empty);
-        AppendJsonField(builder, "action", criterion?.Action ?? string.Empty);
-        AppendJsonField(builder, "msg", item.Message);
-        AppendJsonField(builder, "event", evidence?.Event ?? string.Empty);
-        AppendJsonField(builder, "source", evidence?.Source ?? string.Empty);
-        AppendJsonField(builder, "target", evidence?.Target ?? string.Empty);
-        AppendJsonField(builder, "op_action", evidence?.Action ?? string.Empty);
-        AppendJsonField(builder, "result", evidence?.Result ?? string.Empty);
-        AppendJsonField(builder, "detail", evidence?.Detail ?? string.Empty);
-        AppendJsonField(builder, "stack", evidence?.Stack ?? string.Empty);
-        AppendJsonField(builder, "engine", evidence?.Engine ?? string.Empty);
-        AppendJsonNumber(builder, "exitCode", evidence?.ExitCode);
-        AppendJsonNumber(builder, "bytes", evidence?.Bytes);
-        AppendJsonNumber(builder, "durationMs", evidence?.DurationMs);
-        AppendJsonField(builder, "group", evidence?.Group ?? string.Empty);
-        AppendJsonField(builder, "op_identity", evidence?.Identity ?? string.Empty);
-        builder.Append('}');
-
-        return builder.ToString();
-    }
-
-    private static void AppendJsonField(StringBuilder builder, string name, string? value, bool first = false)
-    {
-        if (!first)
-        {
-            builder.Append(',');
-        }
-
-        builder.Append('"').Append(name).Append("\":\"").Append(EscapeJson(value)).Append('"');
-    }
-
-    private static void AppendJsonNumber(StringBuilder builder, string name, int value)
-    {
-        builder.Append(",\"").Append(name).Append("\":").Append(value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    private static void AppendJsonNumber(StringBuilder builder, string name, long value)
-    {
-        builder.Append(",\"").Append(name).Append("\":").Append(value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    private static void AppendJsonNumber(StringBuilder builder, string name, int? value)
-    {
-        if (value.HasValue)
-        {
-            AppendJsonNumber(builder, name, (long)value.Value);
-        }
-    }
-
-    private static void AppendJsonNumber(StringBuilder builder, string name, long? value)
-    {
-        if (value.HasValue)
-        {
-            AppendJsonNumber(builder, name, value.Value);
-        }
-    }
-
-    /// <summary>JSON 字符串转义（零依赖；控制字符走 <c>\uXXXX</c>，⛔ 换行绝不许漏进记录里）。</summary>
-    internal static string EscapeJson(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return string.Empty;
-        }
-
-        var builder = new StringBuilder(value.Length + 16);
-
-        foreach (char ch in value)
-        {
-            switch (ch)
-            {
-                case '"':
-                    builder.Append("\\\"");
-                    break;
-                case '\\':
-                    builder.Append("\\\\");
-                    break;
-                case '\r':
-                    builder.Append("\\r");
-                    break;
-                case '\n':
-                    builder.Append("\\n");
-                    break;
-                case '\t':
-                    builder.Append("\\t");
-                    break;
-                default:
-                    if (ch < 0x20)
-                    {
-                        builder.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        builder.Append(ch);
-                    }
-
-                    break;
-            }
-        }
-
-        return builder.ToString();
+        _diagnostics.Criterion(
+            criterion: criterion,
+            inputs: inputs,
+            verdict: verdict,
+            action: action,
+            file: file,
+            identity: identity,
+            level: level,
+            errorCode: errorCode,
+            component: component,
+            sourceFile: sourceFile,
+            sourceLine: sourceLine,
+            caller: caller);
     }
 
     /// <summary>
@@ -1843,233 +607,6 @@ public class LogService
     /// 不允许记录明文密码。
     /// </summary>
     public string Sanitize(string message) => LogSanitizer.Sanitize(message);
-
-    /// <summary>
-    /// **导出全部日志**（用户 2026-09-25 第 37 条：不是只导这一次的，是**所有**日志）。
-    ///
-    /// <para>把日志目录里所有 <c>ArchiveFixer_*.log</c> 按文件名排序（= 时间顺序，最旧在前）
-    /// 拼成一个文件，每份前面写一行分隔头（文件名 + 大小 + 行数），末尾写一行合计。
-    /// 内容一律过 <see cref="PasswordMasker"/>（与"导出日志 / 导出失败清单"同一口径）。</para>
-    ///
-    /// <para>读不出来的那一份**跳过但记一行**（被别的程序占用 / 权限）：绝不因为一份坏了就什么都不导。</para>
-    /// </summary>
-    /// <returns>导出的日志份数与行数（写成 <c>(0, 0)</c> 表示日志目录里一份都没有）。</returns>
-    public (int FileCount, int LineCount) ExportAllLogs(string targetPath, bool includeDetails = true)
-    {
-        if (string.IsNullOrWhiteSpace(targetPath))
-        {
-            return (0, 0);
-        }
-
-        string? directory = Path.GetDirectoryName(targetPath);
-
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var builder = new StringBuilder();
-
-        builder.AppendLine("ArchiveFixer 日志 —— 全部日志（本程序写过的每一份都在这里）");
-        builder.AppendLine($"导出时间：{FormatTimestamp(ArchiveFixer.Helpers.Clock.Now)}");
-        builder.AppendLine($"日志目录：{LogDirectory}");
-        builder.AppendLine();
-
-        int fileCount = 0;
-        int lineCount = 0;
-        var skipped = new List<string>();
-
-        foreach (string file in EnumerateLogFilesOldestFirst())
-        {
-            string selectedFile = includeDetails
-                ? file
-                : Path.ChangeExtension(file, ".user.log");
-
-            if (!File.Exists(selectedFile))
-            {
-                selectedFile = file;
-            }
-
-            string fileName = Path.GetFileName(selectedFile);
-
-            string[] lines;
-
-            try
-            {
-                lines = File.ReadAllLines(selectedFile);
-            }
-            catch (Exception ex)
-            {
-                skipped.Add($"{fileName}（{PasswordMasker.Sanitize(ex.Message)}）");
-                continue;
-            }
-
-            builder.AppendLine("================================================================================");
-            builder.AppendLine($"# {fileName}（{lines.Length} 行）");
-            builder.AppendLine("================================================================================");
-
-            foreach (string line in lines)
-            {
-                builder.AppendLine(line);
-            }
-
-            if (includeDetails)
-            {
-                string tracePath = Path.ChangeExtension(file, ".trace.jsonl");
-
-                if (File.Exists(tracePath))
-                {
-                    try
-                    {
-                        string[] traceLines = File.ReadAllLines(tracePath);
-
-                        if (traceLines.Length > 0)
-                        {
-                            builder.AppendLine();
-                            builder.AppendLine($"# {Path.GetFileName(tracePath)}（诊断事件 {traceLines.Length} 行）");
-
-                            foreach (string traceLine in traceLines)
-                            {
-                                builder.AppendLine(traceLine);
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // 诊断事件读不出不影响人读日志的导出。
-                    }
-                }
-            }
-
-            builder.AppendLine();
-
-            fileCount++;
-            lineCount += lines.Length;
-        }
-
-        if (skipped.Count > 0)
-        {
-            builder.AppendLine("--------------------------------------------------------------------------------");
-            builder.AppendLine("以下日志这次没能读出来（被占用或没有权限）：" + string.Join("、", skipped));
-        }
-
-        builder.AppendLine("--------------------------------------------------------------------------------");
-        builder.AppendLine($"合计：{fileCount} 份日志 / {lineCount} 行。");
-
-        File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
-
-        return (fileCount, lineCount);
-    }
-
-    /// <summary>日志目录里的日志文件，按文件名排序（= 时间顺序，最旧在前）。</summary>
-    private IEnumerable<string> EnumerateLogFilesOldestFirst()
-    {
-        try
-        {
-            if (!Directory.Exists(LogDirectory))
-            {
-                return Array.Empty<string>();
-            }
-
-            return Directory.EnumerateFiles(LogDirectory, "operation.log", SearchOption.AllDirectories)
-                .Concat(Directory.EnumerateFiles(LogDirectory, "ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
-                    .Where(file => !file.EndsWith(".user.log", StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(file => File.GetLastWriteTimeUtc(file))
-                .ToList();
-        }
-        catch
-        {
-            return Array.Empty<string>();
-        }
-    }
-
-    /// <summary>
-    /// 导出当前日志。
-    /// </summary>
-    public bool ExportLog(string targetPath)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(targetPath))
-            {
-                return false;
-            }
-
-            string? directory = Path.GetDirectoryName(targetPath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            if (!string.IsNullOrWhiteSpace(_currentLogFilePath) &&
-                File.Exists(_currentLogFilePath))
-            {
-                File.Copy(_currentLogFilePath, targetPath, overwrite: true);
-                return true;
-            }
-
-            var builder = new StringBuilder();
-
-            foreach (OperationLogItem item in Logs)
-            {
-                builder.AppendLine(item.DisplayText);
-            }
-
-            File.WriteAllText(targetPath, builder.ToString(), Encoding.UTF8);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// 打开日志目录。
-    /// </summary>
-    public bool OpenLogDirectory()
-    {
-        try
-        {
-            _pathService.EnsureDirectoryExists(LogDirectory);
-            return _pathService.OpenDirectory(LogDirectory);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// 清空屏幕日志。
-    /// 不删除文件日志。
-    /// </summary>
-    public void ClearScreenLogs()
-    {
-        try
-        {
-            Logs.Clear();
-        }
-        catch
-        {
-            // 忽略 UI 线程问题。
-        }
-    }
-
-    /// <summary>
-    /// 获取屏幕日志文本。
-    /// </summary>
-    public string GetScreenLogText()
-    {
-        var builder = new StringBuilder();
-
-        foreach (OperationLogItem item in Logs)
-        {
-            builder.AppendLine(item.DisplayText);
-        }
-
-        return builder.ToString();
-    }
 
     /// <summary>
     /// 记录软件启动日志。

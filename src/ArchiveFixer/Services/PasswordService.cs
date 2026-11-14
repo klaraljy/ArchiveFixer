@@ -1,162 +1,93 @@
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
+using ArchiveFixer.Services.Password;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.IO;
-using System.Linq;
-using System.Text;
 
 namespace ArchiveFixer.Services;
 
+/// <summary>
+/// 密码列表 / 外部密码本 / 候选 / 记忆的统一门面。
+///
+/// <para><b>公开 API 保持不变</b>，实现按职责拆到 <c>Services/Password/</c> 下的协作类：
+/// 列表内存状态（<see cref="PasswordListState"/>）、试密码账本（<see cref="PasswordAttemptStats"/>）、
+/// 内置文本库（<see cref="PasswordTextLibrary"/>）、外部密码本（<see cref="PasswordBookLibrary"/>）、
+/// 记忆加载/落盘（<see cref="PasswordListMemory"/>）、候选组装（<see cref="PasswordCandidateBuilder"/>）、
+/// 侧车候选（<see cref="PasswordSidecarCandidateSource"/>）、失败模型（<see cref="PasswordListHealth"/>）。</para>
+///
+/// <para>这里只做转发与装配；任何"顺序 / 存储格式 / 隐私边界"的判据都在协作类里，只有一处出处。</para>
+/// </summary>
 public class PasswordService
 {
-    public ObservableCollection<PasswordItem> Passwords { get; } = new();
+    private readonly PasswordListHealth _health;
+    private readonly PasswordListState _listState;
+    private readonly PasswordAttemptStats _attemptStats;
+    private readonly PasswordTextLibrary _textLibrary;
+    private readonly PasswordBookLibrary _bookLibrary;
+    private readonly PasswordListMemory _memory;
+    private readonly PasswordCandidateBuilder _candidateBuilder;
+
+    public PasswordService()
+    {
+        _health = new PasswordListHealth();
+        _listState = new PasswordListState();
+        _attemptStats = new PasswordAttemptStats();
+        _textLibrary = new PasswordTextLibrary(_listState, _health);
+        _bookLibrary = new PasswordBookLibrary(_listState, _textLibrary);
+        _memory = new PasswordListMemory(_listState, _attemptStats, _textLibrary, _health, _bookLibrary);
+        _candidateBuilder = new PasswordCandidateBuilder(
+            _attemptStats,
+            _bookLibrary,
+            new PasswordSidecarCandidateSource());
+
+        // 会被记住的状态一变就落盘（什么时候不该写由 PasswordListMemory 自己判断）。
+        _listState.Changed += _memory.PersistPasswordList;
+        _attemptStats.SuccessRecorded += _memory.PersistPasswordList;
+    }
+
+    /// <summary>密码列表（顺序 = 尝试顺序；界面直接改 IsEnabled/Remark 也会触发落盘）。</summary>
+    public ObservableCollection<PasswordItem> Passwords => _listState.Passwords;
 
     /// <summary>密码本里的全部条目（含映射式的"名称"，用于按归档名匹配）。</summary>
-    private readonly List<PasswordEntry> _bookEntries = new();
-
-    /// <summary>每个归档最近一次成功的密码：同一个包重试时先试它，省掉一轮无谓试错。</summary>
-    private readonly Dictionary<string, string> _recentSuccess = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// 每条密码成功解开过多少次（用户 2026-09-24 第 14 条："密码本里面的优先级差不多就是
-    /// 使用次数的频繁程度"）。**大小写敏感**（与密码本解析 / 去重口径一致：密码就是字节）。
-    ///
-    /// <para>它只有一处用处：随「记住密码列表」一起加密落盘（<see cref="PasswordListSnapshot.SuccessCounts"/>），
-    /// 供重启后统计；⛔ **候选顺序不读它**（跨批次重排已被用户 2026-10-04 否掉）。</para>
-    /// <para>⚠ 并行解压时多个任务会同时调 <see cref="RecordPasswordSuccess"/>，
-    /// 所以对它的读写一律在 <see cref="_passwordStatsLock"/> 里 —— <c>Dictionary</c> 不是线程安全的。</para>
-    /// </summary>
-    private readonly Dictionary<string, int> _successCounts = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// 本次运行里**已经成功试出来过**的密码（顺序 = 首次成功的先后）。
-    ///
-    /// <para>用户原话："如果测密码，只要测到一个成功了就不要去再尝试了，你现在每次都尝试，
-    /// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍"。
-    /// 这些值会被提到每个后续任务的候选**最前面**（空密码之后），于是 N 个同源包从 O(N×5)
-    /// 降到 O(N)。</para>
-    ///
-    /// <para>⛔ 只**提前**、绝不**删减**：不同包的密码可能不同，原来的候选链在后面原样保留
-    /// （用户 2026-09-24 第 14 条的要求）。只记内存、不落盘 —— 它是"本批"的事实，
-    /// 跨重启的优先级由成功次数承担。</para>
-    /// </summary>
-    private readonly List<string> _batchVerifiedPasswords = new();
-
-    /// <summary>
-    /// **本次导入内**每条密码成功过多少次（用户 2026-10-25：按频率排序只限单次导入；
-    /// 不同次导入必须回到④页列表顺序）。它和 <see cref="_successCounts"/> 是两本账：
-    /// 后者跨重启、跨批次保留，只用于展示/落盘；前者在 <see cref="BeginBatch"/> 时清零。
-    /// </summary>
-    private readonly Dictionary<string, int> _batchSuccessCounts = new(StringComparer.Ordinal);
-
-    /// <summary>成功次数与"本批已成功"清单的锁（并行解压会从多个线程记账）。</summary>
-    private readonly object _passwordStatsLock = new();
-
-    /// <summary>记忆文件写入的串行锁（见 <see cref="PersistPasswordList"/> 的说明）。</summary>
-    private readonly object _persistGate = new();
-
-    /// <summary>
-    /// passwords.meta.json 里存在、但当前 passwords.txt 列表里暂时没有的条目。
-    /// 用户删掉/改掉一条密码时不能把它的备注和启用状态一起静默丢掉；
-    /// 值以后重新出现时可以恢复。保存时原样合并回去。
-    /// </summary>
-    private readonly Dictionary<string, PasswordMetadataEntry> _orphanMetadata =
-        new(StringComparer.Ordinal);
-
-    /// <summary>每个条目上一次的值；用于“改值后把旧值的元数据留成孤儿”。</summary>
-    private readonly Dictionary<PasswordItem, string> _lastKnownValues = new();
-
-    /// <summary>
-    /// 记住的密码本路径（**有序**，可多本）—— 用户 2026-09-24 要求多本密码本。
-    ///
-    /// <para>它与 <see cref="AppSettings.PasswordBookPaths"/> 是一份事实的两处落点：
-    /// 设置文件里那份是"用户可以逐项移除"的权威清单，这里的这份负责给出**顺序**、
-    /// 并在启动时被加密记忆一起带回来（设置被清掉时还能自愈）。</para>
-    /// </summary>
-    private readonly List<string> _bookPaths = new();
-
-    /// <summary>
-    /// 墓碑：用户删掉 / 清空过的值。
-    ///
-    /// <para>为什么必须有它：列表在启动时会从密码本 txt 重新合并回来，
-    /// 没有墓碑的话"删掉一条 → 重启又活了"，用户会以为删除根本没生效（2026-09-24 同类现象）。</para>
-    /// <para>导入**不**记墓碑（导入本身就是"再加回来"）；手动重新添加某个值会**撤销**它的墓碑。</para>
-    /// </summary>
-    private readonly List<string> _tombstones = new();
-
-    /// <summary>
-    /// 每本已记住的密码本**解析出来的值集合**（键 = 书路径，Windows 口径大小写不敏感）。
-    ///
-    /// <para><b>它解决哪一个现象</b>（用户 2026-09-24 第 21 条原话："上面显示添加成功了，为什么重启了一下，
-    /// 又显示未添加，你到底是不是保存在本地的"）：以前「未写回」标记只看
-    /// <see cref="PasswordItem.Source"/> 是不是 <c>ManualList</c>，而落盘的只有**来源** ——
-    /// "这条值到底在不在密码本文件里"这个事实既没被记录、也没被重新判定。
-    /// 写回成功只是当场把内存里的账记了一笔，重启后账没了、来源又恢复成 <c>ManualList</c>，
-    /// 标记于是原样长回来。现在判据改成**按值**：值出现在任何一本已记住的书里，才算已写回。</para>
-    ///
-    /// <para><b>为什么不合并成一个全局集合</b>：用户在设置里移除一本书之后，那本书里的值就
-    /// 不再算"已写回"了；按书记账才能把移除的那一本单独丢掉，不必为此重新读所有文件。</para>
-    ///
-    /// <para><b>诚实原则</b>：这里只放"真的从文件里读出来的值"。没有任何已记住的书、
-    /// 书不存在、读不出来 —— 都**不放**任何东西，标记照旧亮着（绝不假装已写回）。</para>
-    /// </summary>
-    private readonly Dictionary<string, HashSet<string>> _bookValuesByPath =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>落盘抑制计数（批量操作期间不为每一条写一次文件）。</summary>
-    private int _persistSuspensions;
-
-    /// <summary>
-    /// 数据根目录。**默认空 = 未装配 = 一律不落盘**（2026-11-01 真机教训）。
-    ///
-    /// <para>以前默认就是用户真实目录 `%LOCALAPPDATA%\ArchiveFixer`：测试/夹具里
-    /// `new PasswordService()` 一加密码就把用户真实的 `password-list.dat` 写坏
-    /// （今天全量单测跑一遍，真实记忆就被写成 1 条测试密码）。现在必须**显式装配**：
-    /// 生产入口在 <c>MainViewModel</c> 构造里用 <c>PathService.DataRootDirectory</c> 注入；
-    /// 测试传临时根；没装配就什么都不写（宁可本次不保存，也不写错用户数据）。</para>
-    /// </summary>
-    private string _dataRootDirectory = string.Empty;
+    public IReadOnlyList<PasswordEntry> BookEntries => _bookLibrary.BookEntries;
 
     /// <summary>最近一次导入密码本时的提醒（编码识别、重复行等），供界面/日志说明情况。</summary>
-    public IReadOnlyList<string> LastImportWarnings { get; private set; } = Array.Empty<string>();
-
-    public IReadOnlyList<PasswordEntry> BookEntries => _bookEntries;
+    public IReadOnlyList<string> LastImportWarnings => _bookLibrary.LastImportWarnings;
 
     /// <summary>最后一次成功导入的密码本文件路径（用于记住它、下次启动自动加载）。</summary>
-    public string LastImportedBookPath { get; private set; } = string.Empty;
+    public string LastImportedBookPath => _bookLibrary.LastImportedBookPath;
 
     /// <summary>
     /// 密码列表记忆的读写体（DPAPI 机器范围，加密落盘）。
-    ///
-    /// <para>它的数据根目录**跟着 <see cref="DataRootDirectory"/> 走**（同一个 setter 一起改）：
-    /// 用户把缓存挪到别的盘之后，记忆文件也必须跟着挪，否则会出现"写在一个盘、读在另一个盘"。</para>
+    /// 它的数据根目录跟着 <see cref="DataRootDirectory"/> 走（同一个 setter 一起改）。
     /// </summary>
-    public PasswordListStore ListStore { get; } = new();
+    public PasswordListStore ListStore => _memory.ListStore;
 
     /// <summary>程序自带的明文密码清单（用户 2026-10-25：不再链接外部密码本）。</summary>
-    public PasswordTextStore TextStore { get; } = new();
+    public PasswordTextStore TextStore => _textLibrary.TextStore;
 
     /// <summary>passwords.txt 的启用 / 备注元数据（密码值仍以 passwords.txt 为准）。</summary>
-    public PasswordMetadataStore MetadataStore { get; } = new();
+    public PasswordMetadataStore MetadataStore => _textLibrary.MetadataStore;
 
     /// <summary>
     /// 是否把内置 <c>passwords.txt</c> 当主存储（生产入口默认 true；单元测试默认 false，保持旧 DPAPI 夹具语义）。
     /// </summary>
-    public bool UseTextStore { get; set; }
+    public bool UseTextStore
+    {
+        get => _textLibrary.UseTextStore;
+        set => _textLibrary.UseTextStore = value;
+    }
 
     /// <summary>
     /// 本次启动**禁止再写 passwords.txt / 元数据 / 加密记忆**。
     ///
     /// <para>只在一种情况下为 true：主清单不见了、同目录的 <c>.bak</c> 也恢复不了，
-    /// 但还有"主清单确实存在过"的证据（元数据/备份）。此时若继续按旧加密记忆落盘，
-    /// 就会用很旧的列表覆盖用户的密码（真机 2026-11-01：13 条 → 只剩 1 条测试密码）。
-    /// 这一档宁可不写，也不能写错；用户把 <c>passwords.txt.bak</c> 改回原名重启即可恢复。</para>
+    /// 但还有"主清单确实存在过"的证据（元数据/备份）。这一档宁可不写，也不能写错；
+    /// 用户把 <c>passwords.txt.bak</c> 改回原名重启即可恢复。</para>
     /// </summary>
-    public bool TextStoreWriteBlocked { get; private set; }
+    public bool TextStoreWriteBlocked => _health.TextStoreWriteBlocked;
 
     /// <summary>
     /// 「记住密码列表」总开关（来自 <see cref="AppSettings.RememberPasswordList"/>，默认开）。
@@ -164,29 +95,36 @@ public class PasswordService
     /// <para>false = **既不写、也不读**记忆文件（一个字节都不动，磁盘上已有的那份不会被删）；
     /// 列表退回"只在本次运行内有效"的老行为。</para>
     /// </summary>
-    public bool RememberPasswordList { get; set; } = true;
+    public bool RememberPasswordList
+    {
+        get => _memory.RememberPasswordList;
+        set => _memory.RememberPasswordList = value;
+    }
 
     /// <summary>启动时由记忆恢复的条数（密码列表窗口上那句"记忆 N 条"用它）。</summary>
-    public int RememberedEntryCount { get; private set; }
+    public int RememberedEntryCount => _memory.RememberedEntryCount;
 
     /// <summary>
     /// 记忆相关的**一句人话**（读不出来 / 写不下去时的原因）。
-    /// 界面在提示条上显示它，**不弹错误框、不阻断**（用户 2026-09-24 要求）。
-    /// 空 = 一切正常。
+    /// 界面在提示条上显示它，**不弹错误框、不阻断**（用户 2026-09-24 要求）。空 = 一切正常。
     /// </summary>
-    public string LastListWarning { get; private set; } = string.Empty;
+    public string LastListWarning => _health.LastListWarning;
 
     /// <summary>
     /// 记忆出问题时通知界面（只给提示条用）。
     /// 订阅者少一处也不影响正确性 —— 事实本身在 <see cref="LastListWarning"/> 里。
     /// </summary>
-    public event Action<string>? RememberedListWarning;
+    public event Action<string>? RememberedListWarning
+    {
+        add => _health.RememberedListWarning += value;
+        remove => _health.RememberedListWarning -= value;
+    }
 
     /// <summary>记住的密码本（有序，副本；改它请走 <see cref="SetRememberedBookPaths"/>）。</summary>
-    public IReadOnlyList<string> RememberedBookPaths => _bookPaths;
+    public IReadOnlyList<string> RememberedBookPaths => _bookLibrary.BookPaths;
 
     /// <summary>墓碑（副本，只读；供测试与排障核对）。</summary>
-    public IReadOnlyList<string> Tombstones => _tombstones;
+    public IReadOnlyList<string> Tombstones => _listState.Tombstones;
 
     /// <summary>
     /// 已记住的密码本里一共读到过多少个不同的值（排障与测试用；读不到的书一个都不算）。
@@ -194,1537 +132,175 @@ public class PasswordService
     /// <para>只数"当前还在记住清单里"的书：用户移除一本书之后，它的值不该再被算进来
     /// （否则那条目会一直显示"已写回"，而实际上它已经不在任何一本被记住的书里了）。</para>
     /// </summary>
-    public int RememberedBookValueCount
-    {
-        get
-        {
-            var values = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (string path in _bookPaths)
-            {
-                if (_bookValuesByPath.TryGetValue(path, out HashSet<string>? known))
-                {
-                    values.UnionWith(known);
-                }
-            }
-
-            return values.Count;
-        }
-    }
-
-    public PasswordService()
-    {
-        ListStore.DataRootDirectory = _dataRootDirectory;
-        MetadataStore.DataRootDirectory = _dataRootDirectory;
-
-        /*
-         * 变更即落盘（用户 2026-09-24 要求：内容 / 顺序 / 启用状态 / 手工条目跨重启保留）。
-         *
-         * 为什么挂在集合的 CollectionChanged 上、而不是逐个改这些方法：
-         * 「启用 / 禁用」那两档是界面直接把 PasswordItem.IsEnabled 改掉的（复选框两向绑定），
-         * 服务这边没有任何方法入口 —— 只改方法的写法会漏掉这一种，用户勾一下重启就白勾。
-         */
-        Passwords.CollectionChanged += Passwords_CollectionChanged;
-    }
+    public int RememberedBookValueCount => _bookLibrary.RememberedBookValueCount;
 
     /// <summary>
-    /// 密码列表记忆文件落在哪个目录（沿用既有数据根目录，**不新造路径来源**）。
+    /// 密码列表记忆落在哪个目录（沿用既有数据根目录，**不新造路径来源**）。
     ///
-    /// 必须与 <see cref="PathService.DataRootDirectory"/> 保持一致：
-    /// 之前在导入那边写死 <c>AppContext.BaseDirectory\data</c>、读取那边却另算一个目录，
-    /// 用户一旦换过位置就会"导入了、下次启动又说没配过"。
-    /// （现在数据根固定 = %LOCALAPPDATA%\ArchiveFixer，两边本来就同一个值；这条口径照旧不许各算一份。）
+    /// 必须与 <see cref="PathService.DataRootDirectory"/> 保持一致：之前在导入那边写死
+    /// <c>AppContext.BaseDirectory\data</c>、读取那边却另算一个目录，用户一旦换过位置就会
+    /// "导入了、下次启动又说没配过"。
     /// </summary>
     public string DataRootDirectory
     {
-        get => _dataRootDirectory;
+        get => _memory.DataRootDirectory;
         set
         {
-            _dataRootDirectory = value ?? string.Empty;
+            _memory.DataRootDirectory = value;
 
-            // 记忆文件与侧车文件共用同一个根：两处分开设过一次就会互相看不见。
-            ListStore.DataRootDirectory = _dataRootDirectory;
-            TextStore.DataRootDirectory = _dataRootDirectory;
-            MetadataStore.DataRootDirectory = _dataRootDirectory;
+            // 导入外部书时那条 sidecar 也落在同一个数据根（内置文本库模式不写它）。
+            _bookLibrary.DataRootDirectory = value ?? string.Empty;
         }
     }
 
     // ================================================================
-    // 记忆：加载 / 保存 / 墓碑 / 多本密码本
+    // 记忆：加载 / 保存
     // ================================================================
 
     /// <summary>
     /// 启动时加载记忆（条目 + 顺序 + 启用状态 + 墓碑 + 记住的密码本）。
     ///
-    /// <para>读失败一律**忽略**：返回原因放进 <see cref="LastListWarning"/>，列表保持空，
+    /// <para>读失败一律**忽略**：返回原因放进 <see cref="LastListWarning"/>，列表保持原样，
     /// 磁盘上那份文件既不被覆盖也不被删（换回原来的机器 / 系统时它还在）。</para>
     /// </summary>
-    public PasswordListLoadStatus LoadRememberedList()
-    {
-        LastListWarning = string.Empty;
-        RememberedEntryCount = 0;
+    public PasswordListLoadStatus LoadRememberedList() => _memory.LoadRememberedList();
 
-        if (!RememberPasswordList)
-        {
-            return PasswordListLoadStatus.Disabled;
-        }
+    /// <summary>
+    /// 把一份快照立刻写进记忆（用户点保存、或测试要一个确定的状态时用）。
+    /// 平时不用手工调它：每次变更都会自动落盘。
+    /// </summary>
+    public PasswordListSaveResult SaveRememberedList() => _memory.SaveRememberedList();
 
-        TextStoreWriteBlocked = false;
-
-        /*
-         * 2026-11-01 真机：passwords.txt 丢失时，旧写法直接回落到 DPAPI 记忆并立即写回，
-         * 等于拿很旧的记忆覆盖用户列表（真机 13 条 → 只剩 1 条测试密码）。先做两件事：
-         * ① 有产品自己的 .bak ⇒ 按 .bak 恢复（那是最后一次保存前的真实内容，不是猜）；
-         * ② 没有 .bak 但仍有"主清单存在过"的证据（元数据）⇒ 本次一个字节都不写，等用户手动恢复。
-         */
-        if (UseTextStore && !TextStore.Exists)
-        {
-            if (TextStore.TryRestoreFromBackup(out _))
-            {
-                LastListWarning = "passwords.txt 不存在，已按同目录的 passwords.txt.bak 自动恢复。";
-                RememberedListWarning?.Invoke(LastListWarning);
-            }
-            else if (File.Exists(TextStore.FilePath + ".bak") || MetadataStore.Exists)
-            {
-                TextStoreWriteBlocked = true;
-                LastListWarning =
-                    "passwords.txt 不存在，且 passwords.txt.bak 恢复失败；为避免用旧的加密记忆覆盖密码列表，"
-                    + "本次不会写回任何密码文件。请把同目录的 passwords.txt.bak 改回 passwords.txt 后重启。";
-                RememberedListWarning?.Invoke(LastListWarning);
-                return PasswordListLoadStatus.NoFile;
-            }
-        }
-
-        bool textStorePresent = UseTextStore && TextStore.Exists;
-
-        /*
-         * 2026-10-25：内置明文清单是主存储。存在就只读它（顺序 = 行顺序），
-         * 不再从外部密码本自动合并；没有它才回落到旧的 DPAPI 记忆做一次性迁移。
-         */
-        if (textStorePresent)
-        {
-            try
-            {
-                if (TextStore.TryLoad(out List<string> textValues, out _))
-                {
-                    // 旧明文密码本读入后立即升级为 DPAPI 密文；写失败也不阻断本次启动，
-                    // 下一次保存或启动会再试。
-                    if (TextStore.EncryptAtRest && !TextStore.LastLoadWasEncrypted)
-                    {
-                        if (!TextStore.TrySave(textValues, out string upgradeError))
-                        {
-                            LastListWarning = "密码本加密升级失败，仍在使用旧明文文件：" + upgradeError;
-                            RememberedListWarning?.Invoke(LastListWarning);
-                        }
-                    }
-
-                    bool hasMetadata = MetadataStore.TryLoad(
-                        out Dictionary<string, PasswordMetadataEntry> metadata,
-                        out string metadataFailure);
-
-                    if (!hasMetadata && metadataFailure.Length > 0)
-                    {
-                        LastListWarning = "密码启用状态 / 备注读取失败，已按启用、无备注恢复：" + metadataFailure;
-                        RememberedListWarning?.Invoke(LastListWarning);
-                    }
-
-                    _orphanMetadata.Clear();
-                    if (hasMetadata)
-                    {
-                        var currentValues = new HashSet<string>(textValues, StringComparer.Ordinal);
-                        foreach (var pair in metadata)
-                        {
-                            if (!currentValues.Contains(pair.Key))
-                            {
-                                _orphanMetadata[pair.Key] = pair.Value;
-                            }
-                        }
-                    }
-
-                    _persistSuspensions++;
-
-                    try
-                    {
-                        Passwords.Clear();
-
-                        foreach (string value in textValues)
-                        {
-                            metadata.TryGetValue(value, out PasswordMetadataEntry? entry);
-
-                            Passwords.Add(new PasswordItem
-                            {
-                                Value = value,
-                                Source = "BuiltInText",
-                                IsEnabled = entry?.IsEnabled ?? true,
-                                Remark = entry?.Remark ?? string.Empty
-                            });
-                        }
-                    }
-                    finally
-                    {
-                        _persistSuspensions--;
-                    }
-
-                    RemoveDuplicatePasswordsKeepOrder();
-                    RememberedEntryCount = Passwords.Count;
-                    return PasswordListLoadStatus.Loaded;
-                }
-            }
-            catch (Exception ex)
-            {
-                if (TextStore.LastLoadWasEncryptedFailure)
-                {
-                    /*
-                     * 加密密码本解不开（换 Windows 用户/机器、文件损坏）时绝不能回落到旧 DPAPI
-                     * 记忆再覆盖它；本次禁止写回，用户可以用备份/导出恢复。
-                     */
-                    TextStoreWriteBlocked = true;
-                    LastListWarning =
-                        "内置密码本无法解密（可能换了 Windows 用户/机器，或文件被改动）；"
-                        + "本次不写回任何密码文件，原文件保留。";
-                    RememberedListWarning?.Invoke(LastListWarning);
-                    return PasswordListLoadStatus.NoFile;
-                }
-
-                LastListWarning = "内置密码清单读取失败，已回落到旧的密码记忆：" + ex.Message;
-                RememberedListWarning?.Invoke(LastListWarning);
-            }
-        }
-
-        // 启动期不在 UI 线程上直接读盘：坏盘上读密码列表会把窗口拖死（2026-11-10 真机）。
-        // 超时或失败一律当"没有记忆"：只管本次运行，不写回、不删原件。
-        PasswordListLoadResult result = ArchiveFixer.Helpers.SafeIo.Run(
-            () => ListStore.Load(),
-            new PasswordListLoadResult(PasswordListLoadStatus.NoFile, null, string.Empty),
-            ArchiveFixer.Helpers.SafeIo.DefaultTimeout);
-
-        if (result.Status == PasswordListLoadStatus.NoFile)
-        {
-            return result.Status;
-        }
-
-        if (!result.HasMemory)
-        {
-            /*
-             * 读不出来（换机器 / 重装系统 / 文件被改坏）：**先把原件另存一份备份，再往下走**。
-             *
-             * ⚠ 老做法只写一句"已忽略、文件没被动"就返回，而下一句"程序没有覆盖、也没有删除那份记忆"
-             * 是**假的**：启动接线随后就会按设置里的密码本清单落盘一次，Save 是替换式的 ——
-             * 那份解不开的记忆当场被覆盖，用户却因为这句话放心了（2026-09-29 复核逮到）。
-             * 现在：原件不动，额外留一份 `<文件名>.unreadable-<时间戳>.bak`，文案如实点名它。
-             */
-            string warning = string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.PasswordListMemoryUnavailableFormat,
-                result.FailureReason);
-
-            if (ListStore.TryBackupUnreadableFile(out string backupFileName, out string backupError))
-            {
-                warning += string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.PasswordListMemoryBackedUpFormat,
-                    backupFileName);
-            }
-            else
-            {
-                warning += string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.PasswordListMemoryBackupFailedFormat,
-                    backupError);
-            }
-
-            LastListWarning = warning;
-
-            RememberedListWarning?.Invoke(LastListWarning);
-            return result.Status;
-        }
-
-        _persistSuspensions++;
-
-        try
-        {
-            Passwords.Clear();
-
-            foreach (PasswordListEntry entry in result.Snapshot.Entries)
-            {
-                Passwords.Add(new PasswordItem
-                {
-                    Value = entry.Value ?? string.Empty,
-                    Source = entry.Source,
-                    IsEnabled = entry.Enabled,
-                    Remark = entry.Remark ?? string.Empty
-                });
-            }
-
-            _bookPaths.Clear();
-
-            foreach (string book in result.Snapshot.BookPaths)
-            {
-                AddBookPathCore(book);
-            }
-
-            _tombstones.Clear();
-            _tombstones.AddRange(result.Snapshot.Tombstones);
-
-            /*
-             * 成功次数（v2 载荷）跟着记忆一起回来 —— 用户"按使用频率排序"的期望跨重启成立。
-             * 旧版本写下的文件（v1）里没有这一项 → 空表，一切按原顺序（不报错、不猜）。
-             */
-            lock (_passwordStatsLock)
-            {
-                _successCounts.Clear();
-
-                foreach (KeyValuePair<string, int> pair in result.Snapshot.SuccessCounts)
-                {
-                    _successCounts[pair.Key] = pair.Value;
-                }
-            }
-        }
-        finally
-        {
-            _persistSuspensions--;
-        }
-
-        RemoveDuplicatePasswordsKeepOrder();
-
-        RememberedEntryCount = Passwords.Count;
-
-        // 旧 DPAPI 记忆读成功后做一次性迁移：立即写内置 txt，之后以 txt 为准。
-        // ⛔ 只在"本来就没有 txt、也没有它存在过的证据"时才写；txt 读过但失败时绝不覆盖。
-        if (UseTextStore && !textStorePresent)
-        {
-            PersistPasswordList();
-        }
-
-        return result.Status;
-    }
+    // ================================================================
+    // 记住的密码本 / 写回判定
+    // ================================================================
 
     /// <summary>
     /// 把"记住的密码本"整份替换掉（④「密码」页里移除一项之后由主界面调它）。
     /// 顺序即合并顺序；重复项按 Windows 路径口径（大小写不敏感）去掉。
     /// </summary>
-    public void SetRememberedBookPaths(IEnumerable<string>? paths)
-    {
-        _bookPaths.Clear();
-
-        if (paths != null)
-        {
-            foreach (string path in paths)
-            {
-                AddBookPathCore(path);
-            }
-        }
-
-        // 被移除的那些书，它的值账要一起丢掉：不然"值在某本书里"会一直算数，
-        // 而用户刚刚在设置里把那本书删掉了 —— 那正是"显示已写回、其实带不走"的假象。
-        PruneBookValues();
-
-        PersistPasswordList();
-    }
+    public void SetRememberedBookPaths(IEnumerable<string>? paths) => _bookLibrary.SetRememberedBookPaths(paths);
 
     /// <summary>记住一本密码本（已经在里面就不重复加，但**顺序不动**）。</summary>
-    public void RememberBookPath(string path)
-    {
-        if (!AddBookPathCore(path))
-        {
-            return;
-        }
-
-        PersistPasswordList();
-    }
+    public void RememberBookPath(string path) => _bookLibrary.RememberBookPath(path);
 
     /// <summary>
     /// 这个值是不是**确实躺在某一本已记住的密码本里**（用户 2026-09-24 第 21 条的判据）。
-    ///
-    /// <para>纯事实查询：只认从文件里解析出来的值。没有任何已记住的书、书不存在、
-    /// 书读不出来、值是空串 —— 一律返回 false（调用方据此保持「未写回」标记，不假装已写回）。</para>
+    /// 纯事实查询：只认从文件里解析出来的值；没有书、书不存在、读不出来、空串 —— 一律 false。
     /// </summary>
-    public bool IsValueInRememberedBooks(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return false;
-        }
-
-        /*
-         * 生产入口把内置 passwords.txt 当主存储；它没有“已记住的外部密码本路径”，
-         * 所以不能只查 _bookValuesByPath，否则手动密码明明已落盘，列表仍永远显示
-         * 「手动添加 · 未写回」。内置文本存储也必须算“已经写回”。
-         */
-        if (UseTextStore
-            && TextStore.Exists
-            && TextStore.TryLoad(out List<string> textValues, out _)
-            && textValues.Contains(value, StringComparer.Ordinal))
-        {
-            return true;
-        }
-
-        foreach (string path in _bookPaths)
-        {
-            if (_bookValuesByPath.TryGetValue(path, out HashSet<string>? known) && known.Contains(value))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    public bool IsValueInRememberedBooks(string? value) => _bookLibrary.IsValueInRememberedBooks(value);
 
     /// <summary>
     /// **重新读一遍**所有已记住的密码本来重建值集合，返回其中真正读到的本书。
-    ///
-    /// <para>什么时候必须调它：「写回密码本」成功之后 —— 值刚刚被追加进文件，只有重新读文件
-    /// 才知道它真的在里面了（⛔ 不许把"我刚写过"当成事实记一笔，那正是重启后标记复活的旧病根）。
-    /// 读不到的书整本丢掉旧账，绝不保留它上一次读到的值。</para>
+    /// 写回密码本成功后必须调它：只有重新读文件才知道值真的在里面了。
     /// </summary>
-    public int RefreshRememberedBookValues()
-    {
-        _bookValuesByPath.Clear();
-
-        int readableBooks = 0;
-
-        foreach (string path in _bookPaths.ToList())
-        {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            {
-                continue;
-            }
-
-            PasswordBookParseResult parsed;
-
-            try
-            {
-                parsed = PasswordBookParser.ParseFile(path);
-            }
-            catch (Exception)
-            {
-                // 读不出来 = 这本书现在提供不了任何事实（权限、被占用、编码彻底认不出…）。
-                // 吞掉异常是刻意的：它只影响一个显示标记，绝不配让"写回"这个动作失败或崩掉。
-                continue;
-            }
-
-            RecordBookValues(path, parsed.Entries);
-            readableBooks++;
-        }
-
-        return readableBooks;
-    }
+    public int RefreshRememberedBookValues() => _bookLibrary.RefreshRememberedBookValues();
 
     /// <summary>
     /// 把一本密码本**合并**进当前列表（启动时逐本调用）。
-    ///
-    /// <para>合并规则（用户 2026-09-24 定的口径）：
-    /// 只补"列表里还没有的值"，**跳过墓碑**（用户删掉过的不许从书里复活），
-    /// 新条目按**书的顺序**追加到末尾 —— 于是记忆里的顺序天然保留在前面。</para>
+    /// 只补"列表里还没有的值"、跳过墓碑，新条目按书的顺序追加到末尾。
     /// </summary>
-    /// <param name="bookPath">密码本 txt 路径。</param>
-    /// <param name="parsedCount">这本书解析出多少条（含被跳过的）。</param>
-    /// <param name="skippedByTombstone">其中多少条因为墓碑被跳过。</param>
-    /// <param name="warnings">解析警告（编码识别、重复行等）。</param>
-    /// <returns>真正补进列表的条数。</returns>
     public int MergePasswordBook(
         string bookPath,
         out int parsedCount,
         out int skippedByTombstone,
-        out IReadOnlyList<string> warnings)
-    {
-        parsedCount = 0;
-        skippedByTombstone = 0;
-        warnings = Array.Empty<string>();
+        out IReadOnlyList<string> warnings) =>
+        _bookLibrary.MergePasswordBook(bookPath, out parsedCount, out skippedByTombstone, out warnings);
 
-        if (string.IsNullOrWhiteSpace(bookPath) || !File.Exists(bookPath))
-        {
-            return 0;
-        }
-
-        PasswordBookParseResult parsed = PasswordBookParser.ParseFile(bookPath);
-
-        warnings = parsed.Warnings;
-        parsedCount = parsed.Entries.Count;
-
-        /*
-         * 合并这一步顺手把"这本书里有哪些值"记下来（用户 2026-09-24 第 21 条）：
-         * 启动时逐本合并正是"加载每本书的值集合"那一刻，而这里的解析结果**现成**，
-         * 不必再读一遍文件。判"未写回"标记时问的就是这份事实。
-         */
-        RecordBookValues(bookPath, parsed.Entries);
-
-        var existing = new HashSet<string>(
-            Passwords.Select(item => item.Value ?? string.Empty),
-            StringComparer.Ordinal);
-
-        var tombstones = new HashSet<string>(_tombstones, StringComparer.Ordinal);
-
-        int added = 0;
-
-        _persistSuspensions++;
-
-        try
-        {
-            foreach (PasswordEntry entry in parsed.Entries)
-            {
-                string value = entry.Password ?? string.Empty;
-
-                if (tombstones.Contains(value))
-                {
-                    // 用户明确删过这个值：书里还留着也不许我给他加回来（否则"删了又活"）。
-                    skippedByTombstone++;
-                    continue;
-                }
-
-                if (!existing.Add(value))
-                {
-                    continue;
-                }
-
-                Passwords.Add(new PasswordItem
-                {
-                    Value = value,
-                    Source = "ImportedList",
-                    IsEnabled = true,
-                    Remark = BuildMergedRemark(entry)
-                });
-
-                added++;
-            }
-
-            // 映射式命中要能按包名匹配到**所有**已加载的书（以前只留最后一本的，多本时等于白读）。
-            // 同一个包被合并两次（主界面多次触发自动加载）时按"名称 + 密码"去重，别让它翻倍。
-            foreach (PasswordEntry entry in parsed.Entries)
-            {
-                bool known = _bookEntries.Any(existing =>
-                    string.Equals(existing.Password, entry.Password, StringComparison.Ordinal) &&
-                    string.Equals(existing.Name, entry.Name, StringComparison.Ordinal));
-
-                if (!known)
-                {
-                    _bookEntries.Add(entry);
-                }
-            }
-        }
-        finally
-        {
-            _persistSuspensions--;
-        }
-
-        if (added > 0)
-        {
-            PersistPasswordList();
-        }
-
-        return added;
-    }
-
-    /// <summary>
-    /// 把一份快照立刻写进记忆（用户点保存、或测试要一个确定的状态时用）。
-    ///
-    /// <para>平时不用手工调它：每次变更都会自动落盘。</para>
-    /// </summary>
-    public PasswordListSaveResult SaveRememberedList()
-    {
-        if (!RememberPasswordList)
-        {
-            return new PasswordListSaveResult(false, "「记住密码列表」已关闭", ListStore.FilePath);
-        }
-
-        return ListStore.Save(BuildSnapshot());
-    }
+    // ================================================================
+    // 密码列表编辑（墓碑随删除/清空记账）
+    // ================================================================
 
     /// <summary>记一条墓碑（值被用户删掉 / 清空）。</summary>
-    public void RecordTombstone(string? value)
-    {
-        value ??= string.Empty;
-
-        if (!_tombstones.Contains(value, StringComparer.Ordinal))
-        {
-            _tombstones.Add(value);
-        }
-    }
+    public void RecordTombstone(string? value) => _listState.RecordTombstone(value);
 
     /// <summary>撤销墓碑（用户又把这个值加回来了：导入与手动添加都算）。</summary>
-    public void ForgetTombstone(string? value)
-    {
-        value ??= string.Empty;
-        _tombstones.RemoveAll(existing => string.Equals(existing, value, StringComparison.Ordinal));
-    }
+    public void ForgetTombstone(string? value) => _listState.ForgetTombstone(value);
 
-    private static string BuildMergedRemark(PasswordEntry entry)
-    {
-        if (entry.Kind == PasswordEntryKind.Mapped && !string.IsNullOrWhiteSpace(entry.Name))
-        {
-            return $"密码本：{entry.Name}";
-        }
+    public bool AddPassword(string password) => _listState.Add(password);
 
-        return $"密码本（第 {entry.LineNumber} 行）";
-    }
+    public bool RemovePassword(PasswordItem item) => _listState.Remove(item);
 
-    private bool AddBookPathCore(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
+    public void ClearPasswords() => _listState.Clear();
 
-        string trimmed = path.Trim();
+    public bool MoveUp(PasswordItem item) => _listState.MoveUp(item);
 
-        foreach (string existing in _bookPaths)
-        {
-            if (string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
+    public bool MoveDown(PasswordItem item) => _listState.MoveDown(item);
 
-        _bookPaths.Add(trimmed);
+    // ================================================================
+    // 本轮试密码的运行期账本
+    // ================================================================
 
-        return true;
-    }
+    /// <summary>记录某个归档刚刚用哪个密码成功过（最近成功只留内存；成功次数跨重启）。</summary>
+    public void RecordPasswordSuccess(string? archivePath, string? password) =>
+        _attemptStats.RecordSuccess(archivePath, password);
 
-    /// <summary>
-    /// 把一本书这次解析出来的值**整份替换**进 <see cref="_bookValuesByPath"/>。
-    ///
-    /// <para>为什么是"整份替换"而不是"逐条追加"：用户手改过密码本（删掉几行）之后，
-    /// 上一次读到的值不能继续算数 —— 否则那条目会一直显示"已写回"，而文件里其实已经没有了。</para>
-    ///
-    /// <para>含被墓碑跳过的值：墓碑管的是"要不要放进尝试列表"，与"文件里有没有这个值"是两件事。</para>
-    /// </summary>
-    private void RecordBookValues(string? bookPath, IEnumerable<PasswordEntry>? entries)
-    {
-        if (string.IsNullOrWhiteSpace(bookPath))
-        {
-            return;
-        }
+    /// <summary>**本批开工**：清空"本批已成功的密码"（只在本批内生效，不影响下一批）。</summary>
+    public void BeginBatch() => _attemptStats.BeginBatch();
 
-        var values = new HashSet<string>(StringComparer.Ordinal);
-
-        if (entries != null)
-        {
-            foreach (PasswordEntry entry in entries)
-            {
-                if (entry != null && !string.IsNullOrEmpty(entry.Password))
-                {
-                    values.Add(entry.Password);
-                }
-            }
-        }
-
-        _bookValuesByPath[bookPath.Trim()] = values;
-    }
-
-    /// <summary>把"已经不在记住清单里"的书的值账丢掉（用户移除一本书之后）。</summary>
-    private void PruneBookValues()
-    {
-        if (_bookValuesByPath.Count == 0)
-        {
-            return;
-        }
-
-        var stale = _bookValuesByPath.Keys
-            .Where(path => !_bookPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-
-        foreach (string path in stale)
-        {
-            _bookValuesByPath.Remove(path);
-        }
-    }
-
-    private PasswordListSnapshot BuildSnapshot()
-    {
-        var snapshot = new PasswordListSnapshot();
-
-        foreach (PasswordItem item in Passwords)
-        {
-            if (item == null)
-            {
-                continue;
-            }
-
-            snapshot.Entries.Add(new PasswordListEntry
-            {
-                Value = item.Value ?? string.Empty,
-                Source = item.Source ?? string.Empty,
-                Enabled = item.IsEnabled,
-                Remark = item.Remark ?? string.Empty
-            });
-        }
-
-        snapshot.BookPaths.AddRange(_bookPaths);
-        snapshot.Tombstones.AddRange(_tombstones);
-
-        // 成功次数（第 14 条的"按使用频率排序"）跟着列表一起落盘；并行解压会在别的线程记账，所以取副本要加锁。
-        lock (_passwordStatsLock)
-        {
-            foreach (KeyValuePair<string, int> pair in _successCounts)
-            {
-                snapshot.SuccessCounts[pair.Key] = pair.Value;
-            }
-        }
-
-        return snapshot;
-    }
-
-    /// <summary>
-    /// 变更之后落盘。关掉开关时**一个字节都不写**；写失败时只留一句人话（界面提示条用），
-    /// 绝不抛异常 —— 记不住密码列表不该让"加一条密码"这个动作失败。
-    ///
-    /// <para>
-    /// ⚠ 整个过程串行化（<see cref="_persistGate"/>）：并行解压时多个任务会同时
-    /// <see cref="RecordPasswordSuccess"/>，而记忆文件是**原子写 + 整体替换**的（同一个 <c>.tmp</c>），
-    /// 两个线程一起写会互相把临时文件搬走，一方报"写失败"（内容不会坏，但会平白多一句失败提示）。
-    /// </para>
-    /// </summary>
-    private void PersistPasswordList()
-    {
-        if (_persistSuspensions > 0 || !RememberPasswordList || TextStoreWriteBlocked)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(ListStore.DataRootDirectory))
-        {
-            return;
-        }
-
-        PasswordListSaveResult result;
-        string textFailure = string.Empty;
-
-        lock (_persistGate)
-        {
-            // 内置 txt 是主存储：顺序 = 当前列表顺序（上下移动后立即写）。
-            if (UseTextStore
-                && !TextStore.TrySave(Passwords.Select(item => item.Value), out textFailure))
-            {
-                textFailure = "内置密码清单写入失败：" + textFailure;
-            }
-
-            if (UseTextStore && textFailure.Length == 0)
-            {
-                var metadataEntries = new List<PasswordMetadataEntry>(
-                    Passwords.Select(item => new PasswordMetadataEntry
-                    {
-                        Value = item.Value ?? string.Empty,
-                        IsEnabled = item.IsEnabled,
-                        Remark = item.Remark ?? string.Empty
-                    }));
-
-                if (_orphanMetadata.Count > 0)
-                {
-                    var currentValues = new HashSet<string>(
-                        metadataEntries.Select(entry => entry.Value),
-                        StringComparer.Ordinal);
-
-                    foreach (var pair in _orphanMetadata)
-                    {
-                        if (!currentValues.Contains(pair.Key))
-                        {
-                            metadataEntries.Add(pair.Value);
-                        }
-                    }
-                }
-
-                if (!MetadataStore.TrySave(metadataEntries, out string metadataFailure))
-                {
-                    textFailure = "密码启用状态 / 备注写入失败：" + metadataFailure;
-                }
-            }
-
-            // DPAPI 记忆继续保留，供迁移 / 统计等旧逻辑使用；它不是用户要写回的那一份。
-            result = ListStore.Save(BuildSnapshot());
-        }
-
-        if (result.Success && textFailure.Length == 0)
-        {
-            return;
-        }
-
-        LastListWarning = textFailure.Length > 0
-            ? textFailure
-            : string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.PasswordListMemorySaveFailedFormat,
-                result.FailureReason);
-
-        RememberedListWarning?.Invoke(LastListWarning);
-    }
-
-    private void Passwords_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-    {
-        if (e.OldItems != null)
-        {
-            foreach (PasswordItem item in e.OldItems)
-            {
-                item.PropertyChanged -= PasswordItem_PropertyChanged;
-
-                // 删除/清空后，原值的启用状态与备注继续留在元数据里，
-                // 以后同一个值再加回来时还能恢复；不在这里静默丢掉。
-                string oldValue = _lastKnownValues.TryGetValue(item, out string? tracked)
-                    ? tracked
-                    : item.Value;
-
-                if (!string.IsNullOrEmpty(oldValue))
-                {
-                    _orphanMetadata[oldValue] = new PasswordMetadataEntry
-                    {
-                        Value = oldValue,
-                        IsEnabled = item.IsEnabled,
-                        Remark = item.Remark ?? string.Empty
-                    };
-                }
-
-                _lastKnownValues.Remove(item);
-            }
-        }
-
-        if (e.NewItems != null)
-        {
-            foreach (PasswordItem item in e.NewItems)
-            {
-                item.PropertyChanged -= PasswordItem_PropertyChanged;
-                item.PropertyChanged += PasswordItem_PropertyChanged;
-                _lastKnownValues[item] = item.Value ?? string.Empty;
-            }
-        }
-
-        // 增 / 删 / 清空 / 上下移（Move 也是集合变更）统统落一次盘：顺序就是尝试顺序，必须留住。
-        PersistPasswordList();
-    }
-
-    private void PasswordItem_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        /*
-         * 启用开关与备注是**界面直接改**的（没有走服务的方法），所以这里必须跟着落盘。
-         * 值（Value）也一起管：用户改了一条密码的值，重启后当然该是改过的那个。
-         */
-        if (e.PropertyName is nameof(PasswordItem.IsEnabled)
-            or nameof(PasswordItem.Value)
-            or nameof(PasswordItem.Remark)
-            or nameof(PasswordItem.Source))
-        {
-            if (e.PropertyName == nameof(PasswordItem.Value) && sender is PasswordItem changed)
-            {
-                string oldValue = _lastKnownValues.TryGetValue(changed, out string? tracked)
-                    ? tracked
-                    : string.Empty;
-
-                string newValue = changed.Value ?? string.Empty;
-
-                if (!string.Equals(oldValue, newValue, StringComparison.Ordinal)
-                    && !string.IsNullOrEmpty(oldValue))
-                {
-                    _orphanMetadata[oldValue] = new PasswordMetadataEntry
-                    {
-                        Value = oldValue,
-                        IsEnabled = changed.IsEnabled,
-                        Remark = changed.Remark ?? string.Empty
-                    };
-                }
-
-                _lastKnownValues[changed] = newValue;
-            }
-
-            PersistPasswordList();
-        }
-    }
-
-    /// <summary>记录某个归档刚刚用哪个密码成功过（只在内存里，不落盘）。</summary>
-    public void RecordPasswordSuccess(string? archivePath, string? password)
-    {
-        if (string.IsNullOrWhiteSpace(archivePath))
-        {
-            return;
-        }
-
-        lock (_passwordStatsLock)
-        {
-            _recentSuccess[archivePath.Trim()] = password ?? string.Empty;
-        }
-
-        RecordVerifiedPassword(password);
-    }
-
-    /// <summary>
-    /// 一条密码刚刚被验证成功：记进"本批已成功"清单（供后续任务复用）并累加成功次数。
-    ///
-    /// <para>
-    /// ⚠ 空密码不算"一条密码"（它是 §9.2 的第一档"不需要密码"，本来就是每个包的第一步），
-    /// 所以不记账、也不进复用清单 —— 否则"复用"这一档会变成一句"再试一次空密码"。
-    /// </para>
-    /// </summary>
-    private void RecordVerifiedPassword(string? password)
-    {
-        if (string.IsNullOrEmpty(password))
-        {
-            return;
-        }
-
-        lock (_passwordStatsLock)
-        {
-            _successCounts[password] = _successCounts.TryGetValue(password, out int count) ? count + 1 : 1;
-            _batchSuccessCounts[password] = _batchSuccessCounts.TryGetValue(password, out int batchCount)
-                ? batchCount + 1
-                : 1;
-
-            if (!_batchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
-            {
-                _batchVerifiedPasswords.Add(password);
-            }
-        }
-
-        // 成功次数要跨重启（用户要的"按使用频率排序"第二次启动仍然成立）。
-        // 关掉「记住密码列表」时这个方法自己会一个字节都不写。
-        PersistPasswordList();
-    }
-
-    /// <summary>
-    /// **本批开工**：把"本批已成功的密码"清空（用户 2026-10-04 的口径）。
-    ///
-    /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
-    /// 不同次文件一律严格按我列表顺序**」⇒ "复用本批已成功的密码"这一档
-    /// **只在本批内生效**：⛔ 不许写回设置、⛔ 不许影响下一批。</para>
-    ///
-    /// <para>唯一调用点 = <c>ExtractionCoordinator.StartExtractAsync</c> 批首那一串清零
-    /// （与"本批的密码失败登记从零开始"同一处）—— 一批只清一次，所以一键处理同一批里
-    /// 后面的包照旧复用前面刚解开的密码。</para>
-    /// </summary>
-    public void BeginBatch()
-    {
-        lock (_passwordStatsLock)
-        {
-            _batchVerifiedPasswords.Clear();
-            _batchSuccessCounts.Clear();
-        }
-    }
-
-    /// <summary>
-    /// 这条密码**本次导入内**成功过多少次（0 = 本批还没成功过）。
-    ///
-    /// <para>候选排序只读它，不读跨批次的 <see cref="GetSuccessCount"/>：
-    /// 用户 2026-10-25 明确「单次的情况」才按频率排，下一次导入必须回到④页列表顺序。</para>
-    /// </summary>
-    public int GetBatchSuccessCount(string? password)
-    {
-        if (string.IsNullOrEmpty(password))
-        {
-            return 0;
-        }
-
-        lock (_passwordStatsLock)
-        {
-            return _batchSuccessCounts.TryGetValue(password, out int count) ? count : 0;
-        }
-    }
+    /// <summary>这条密码**本次导入内**成功过多少次（0 = 本批还没成功过；候选排序只读它）。</summary>
+    public int GetBatchSuccessCount(string? password) => _attemptStats.GetBatchSuccessCount(password);
 
     /// <summary>这条密码成功解开过多少次（0 = 没有记录）。给测试与排障用。</summary>
-    public int GetSuccessCount(string? password)
-    {
-        if (string.IsNullOrEmpty(password))
-        {
-            return 0;
-        }
-
-        lock (_passwordStatsLock)
-        {
-            return _successCounts.TryGetValue(password, out int count) ? count : 0;
-        }
-    }
+    public int GetSuccessCount(string? password) => _attemptStats.GetSuccessCount(password);
 
     /// <summary>
     /// 本次运行里已经成功过的密码（副本，顺序 = 首次成功的先后）。
     ///
-    /// <para>⚠ **2026-09-26 第 45 条改了位置**：它们现在是候选表里的**第一条**（不再是"空密码之后"）——
-    /// 用户原话："我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次已成功的密码，
-    /// 不就是在放屁吗，每次都是重新一轮密码检测"。有已知密码时，空密码**根本不再进候选**
-    /// （加密包的空密码永远不可能对，见第 37 条实测）。</para>
+    /// <para>⚠ 2026-09-26 第 45 条：它们现在是候选表里的**第一条**（不再是"空密码之后"）——
+    /// 有已知密码时，空密码**根本不再进候选**。本档内部按本批成功频率排（稳定排序）。</para>
     /// </summary>
-    /// <summary>
-    /// 「本次导入里已成功的密码」这一档的**唯一出口**（候选顺序读它）——
-    /// 这个属性本身给的是"首次成功的先后"；每**次导入**开工由 <see cref="BeginBatch"/> 清空
-    /// （一键处理的后续轮次**不清**，见 `ExtractionCoordinator.StartExtractCoreAsync` 里那一处）。
-    ///
-    /// <para>⛔ **密码本那些条目**（候选表里这一档之后的部分）不许按**历史成功次数**排序：
-    /// 那是跨批次重排，用户 2026-10-04 明确否掉（"不同次文件一律严格按我列表顺序"）。</para>
-    ///
-    /// <para>✅ 而**这一档内部**按成功频率排序是用户 2026-10-16 当面许可的（"同一次的解压可以按照
-    /// 频率次序来弄……同一次就是指同一次导入的"）⇒ 消费点 <see cref="GetPasswordCandidates"/>
-    /// 在这里按 <see cref="GetBatchSuccessCount"/> 从多到少排（稳定排序，次数相同保持先后）。</para>
-    /// </summary>
-    public IReadOnlyList<string> BatchVerifiedPasswords
-    {
-        get
-        {
-            lock (_passwordStatsLock)
-            {
-                return _batchVerifiedPasswords.ToList();
-            }
-        }
-    }
+    public IReadOnlyList<string> BatchVerifiedPasswords => _attemptStats.BatchVerifiedPasswords;
+
+    // ================================================================
+    // 候选 / 日志文案
+    // ================================================================
 
     /// <summary>按归档文件名匹配密码本里的映射式条目（命中优先于遍历整表）。</summary>
-    public IReadOnlyList<PasswordEntry> MatchMappedEntries(string? archiveFileName)
-    {
-        if (string.IsNullOrWhiteSpace(archiveFileName) || _bookEntries.Count == 0)
-        {
-            return Array.Empty<PasswordEntry>();
-        }
-
-        return PasswordBookParser.MatchByName(_bookEntries, archiveFileName);
-    }
+    public IReadOnlyList<PasswordEntry> MatchMappedEntries(string? archiveFileName) =>
+        _candidateBuilder.MatchMappedEntries(archiveFileName);
 
     /// <summary>
     /// 组装某个任务的密码候选。
     ///
-    /// 顺序按 AGENTS.md §9.2 定死，**只有一处被用户明确要求调整过**（2026-09-24 第 14 条）：
+    /// <para>顺序（AGENTS.md §9.2，2026-09-26 第 45 条唯一调整过的位置）：
     /// 空密码 → **本批已成功的密码（复用）** → 本任务最近成功 → 密码本映射命中 → 单任务密码
-    /// → 统一密码 → 密码列表 → 同目录说明文件。
-    ///
-    /// <para>
-    /// 为什么要这个顺序：越靠前的越可能命中、也越"便宜"（不用用户等）；
-    /// 旁路说明文件是猜的，放最后，避免把说明文件里的一句噪声排到用户明确给的密码前面。
-    /// </para>
-    /// <para>
-    /// <b>「本批已成功的密码」为什么能插到这么前</b>（用户原话："只要测到一个成功了就不要去再尝试了……
-    /// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍"）：
-    /// 同一个批次里的包**大多是同源的**（同一批资源、同一个打包者），第一个包试出来的密码
-    /// 极可能就是后面每个包的密码。把它提到最前，200 个包从 O(N×k) 降到 O(N)。
-    /// ⛔ 但它只是**提前**，不是**替换**：原来的候选链一条都不删（不同包的密码可能确实不同）。
-    /// </para>
-    /// <para>
-    /// 同一次导入内，本批已成功的密码按**本批成功次数从多到少**排（次数相同保持首次成功先后）；
-    /// ⛔ 不读跨批次历史次数，下一次导入回到④页列表顺序。
-    /// </para>
+    /// → 统一密码 → 密码列表 → 密码本整行候选 → 同目录说明文件。复用只是**提前**，不删减原链。</para>
     /// </summary>
     public List<PasswordItem> GetPasswordCandidates(
         ArchiveTask task,
         string globalPassword,
         IEnumerable<PasswordItem> passwordList,
         bool tryEmptyFirst,
-        bool includeSidecarCandidates = false)
-    {
-        var result = new List<PasswordItem>();
-        var used = new HashSet<string>(StringComparer.Ordinal);
+        bool includeSidecarCandidates = false) =>
+        _candidateBuilder.GetPasswordCandidates(
+            task,
+            globalPassword,
+            passwordList,
+            tryEmptyFirst,
+            includeSidecarCandidates);
 
-        void AddCandidate(string value, string source, string remark)
-        {
-            value ??= string.Empty;
+    /// <summary>一次密码尝试的日志文案（来源 + 脱敏占位符，**绝不出现明文**）。</summary>
+    public string BuildTryPasswordLogText(PasswordItem candidate, int index) =>
+        _candidateBuilder.BuildTryPasswordLogText(candidate, index);
 
-            if (!used.Add(value))
-            {
-                return;
-            }
+    /// <summary>脱敏后的密码（日志/界面统一走它）。</summary>
+    public string MaskPassword(string password) => PasswordMasker.Mask(password);
 
-            result.Add(new PasswordItem
-            {
-                Value = value,
-                Source = source,
-                IsEnabled = true,
-                Remark = remark
-            });
-        }
-
-        string archivePath = task?.CurrentPath ?? string.Empty;
-        string archiveFileName = string.IsNullOrWhiteSpace(archivePath)
-            ? string.Empty
-            : Path.GetFileName(archivePath);
-
-        /*
-         * ==================== 顺序：**本批已成功的密码排在最前**（用户 2026-09-26 第 45 条）====================
-         *
-         * 他的原话："我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次已成功的密码，
-         * 不就是在放屁吗，每次都是重新一轮密码检测" —— 真机日志（38 个同源包）逐字对应：
-         * 每个包都是 `候选 1/10，尝试空密码` → `密码错误` → `候选 2/10，复用本批已成功的密码` 才解开。
-         *
-         * 两处都错了：
-         * · 「空密码」对**加密包永远不可能对**（第 37 条实测：7-Zip / WinRAR 都造不出用空密码加密的包），
-         *   一批同源包里有已知密码时还先试它，纯粹是白跑一轮；
-         * · 第 14 条那个位置（"紧跟在空密码之后"）是在**还没有已知密码**的前提下定的 ——
-         *   一旦本批有成功的密码，它就该是**第一个**。
-         *
-         * ⛔ 保留的边界：本批**还没有**成功过密码时，顺序与从前逐字相同（空密码仍在最前，`tryEmptyFirst` 说了算）——
-         * 第一条候选怎么来的这件事不许变，否则"第一条就是密码本第一条"这类现场会再次说不清。
-         *
-         * ⚠ 2026-10-04（用户当天第二次口述，推翻 2026-09-24 第 14 条那一半）：
-         * 「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
-         * 不同次文件一律严格按我列表顺序**」⇒ 这一档只保留**本批内**的复用（`BeginBatch` 每批清一次），
-         * ⛔ 不再按历史成功次数排序（那正是跨任务重排）。
-         */
-        IReadOnlyList<string> verifiedPasswords = BatchVerifiedPasswords
-            .Where(value => !string.IsNullOrEmpty(value))
-            .ToList();
-
-        bool hasVerifiedBatchPassword = verifiedPasswords.Count > 0;
-
-        if (tryEmptyFirst && !hasVerifiedBatchPassword)
-        {
-            AddCandidate(string.Empty, "Empty", "空密码");
-        }
-
-        /*
-         * 顺序 = **同一次导入内按成功频率从多到少**（读本批计数，不读跨批次历史次数）。
-         *
-         * 口径出处（用户 2026-10-16 当面澄清逐字）：「我说过**同一次的解压可以按照频率次序来弄**，
-         * 但是**不同批次的**就是密码本里面的，**同一次就是指同一次导入的**」。
-         *
-         * ⛔ 边界只到这一档为止：这里的成员**全部**是本次导入内已经成功过的密码
-         * （`_batchVerifiedPasswords` 每次导入开工才清一次，后续轮次不清），
-         * 列表里其余那些仍然**严格按密码本顺序** —— 用户 2026-10-04 否掉的是
-         * "拿历史次数去**重排密码本**"（那是跨批次重排），不是这一档。
-         *
-         * `OrderByDescending` 是**稳定**排序 ⇒ 次数相同仍然保持"首次成功的先后"。
-         */
-        foreach (string verified in verifiedPasswords
-                     .OrderByDescending(GetBatchSuccessCount))
-        {
-            AddCandidate(verified, "BatchSuccess", "复用本批已成功的密码");
-        }
-
-        if (!string.IsNullOrWhiteSpace(archivePath) &&
-            _recentSuccess.TryGetValue(archivePath.Trim(), out string? recentPassword))
-        {
-            AddCandidate(recentPassword ?? string.Empty, "RecentSuccess", "本任务最近成功的密码");
-        }
-
-        /*
-         * 密码本里按归档名命中的那几条：**按密码本自己的顺序**（用户 2026-10-04 的口径：
-         * 不同次文件一律严格按列表顺序，⛔ 不许按历史成功次数重排）。
-         */
-        foreach (PasswordEntry entry in MatchMappedEntries(archiveFileName))
-        {
-            string remark = string.IsNullOrWhiteSpace(entry.Name)
-                ? "密码本命中"
-                : $"密码本命中：{entry.Name}";
-
-            AddCandidate(entry.Password, "BookMapped", remark);
-        }
-
-        if (task != null && !string.IsNullOrEmpty(task.Password))
-        {
-            AddCandidate(task.Password, "TaskPassword", "单任务密码");
-        }
-
-        if (!string.IsNullOrEmpty(globalPassword))
-        {
-            AddCandidate(globalPassword, "GlobalPassword", "统一密码");
-        }
-
-        if (passwordList != null)
-        {
-            /*
-             * 密码列表这一层：**严格按用户在④页排的顺序**逐条加进候选。
-             *
-             * ⚠ 2026-10-04（用户当天第二次口述）：这里过去是"先按成功次数从多到少排"，
-             * 用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
-             * 不同次文件一律严格按我列表顺序**」⇒ **不同次任务之间一个字都不许重排**。
-             * （历史成功次数仍然记账、仍然落盘、`GetSuccessCount` 仍然可查 —— 只是不再拿它改顺序。）
-             *
-             * 原始序号（"密码列表第 N 项"）= 它在**用户列表里**的位置，现在也正好就是尝试顺序。
-             */
-            var indexed = new List<(PasswordItem Item, int Index)>();
-
-            int index = 0;
-
-            foreach (PasswordItem item in passwordList)
-            {
-                index++;
-
-                if (item == null || !item.IsEnabled)
-                {
-                    continue;
-                }
-
-                indexed.Add((item, index));
-            }
-
-            foreach ((PasswordItem item, int originalIndex) in indexed)
-            {
-                /*
-                 * 注意：
-                 * 密码允许是空格开头、空格结尾。
-                 * 不要 Trim。
-                 */
-                string value = item.Value ?? string.Empty;
-
-                AddCandidate(value, "ImportedList", $"密码列表第 {originalIndex} 项");
-            }
-        }
-
-        /*
-         * 密码本里那些"按映射式切过"的行：再把**整行**试一遍（2026-09-25 第 30 条）。
-         *
-         * 为什么（真会咬人的形态）：映射式与列表式只能靠"行里有没有冒号"猜，而列表式的密码本身
-         * 完全可能带冒号（`abc:123`、`www.xxx.com:8888`）。那种书里，我们一直在拿冒号**右侧**当密码试，
-         * 正确的整行**从来没有被试过** —— 用户看到的就是"密码本第一条就是这个包的密码，却一直密码错误"。
-         *
-         * 位置：排在显式给的密码（统一密码 / 密码列表）**之后**，所以对正常的映射式密码本
-         * （几百行的"资源名:密码"）只是尾部多了些噪音候选，不会把用户真正要试的那几条挤出尝试上限。
-         */
-        foreach (PasswordEntry entry in _bookEntries)
-        {
-            if (entry == null || entry.Kind != PasswordEntryKind.Mapped || string.IsNullOrEmpty(entry.RawLine))
-            {
-                continue;
-            }
-
-            AddCandidate(
-                entry.RawLine!,
-                "BookRawLine",
-                $"密码本（第 {entry.LineNumber} 行整行）");
-        }
-
-        /*
-         * 同目录说明文件里的密码：**显式开启才用**。
-         * 它是"猜"出来的候选，所以排在用户明确给的密码之后（AGENTS.md §9.4）。
-         */
-        if (includeSidecarCandidates && !string.IsNullOrWhiteSpace(archivePath))
-        {
-            foreach (SidecarCandidate candidate in SidecarPasswordReader.ReadCandidates(archivePath))
-            {
-                string fileName = Path.GetFileName(candidate.SourceFile);
-
-                AddCandidate(
-                    candidate.Password,
-                    "Sidecar",
-                    $"同目录说明文件 {fileName} 第 {candidate.LineNumber} 行");
-            }
-        }
-
-        /*
-         * 如果用户关闭了空密码优先，并且没有任何密码，
-         * 仍然补一个空密码，保证普通无密码压缩包能解压。
-         */
-        if (result.Count == 0)
-        {
-            AddCandidate(string.Empty, "Empty", "空密码");
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// 按**成功次数从多到少**排（次数相同保持原顺序）。用户 2026-09-24 第 14 条：
-    /// "密码本里面的优先级差不多就是使用次数的频繁程度"。
-    ///
-    /// <para>
-    /// 用 <c>OrderByDescending</c>（LINQ 的排序是**稳定**的）：没记录过次数的那些（计 0）
-    /// 仍然保持用户排的顺序，所以"为什么这条在前"永远解释得清。
-    /// </para>
-    /// </summary>
-    private List<T> OrderBySuccessCount<T>(IEnumerable<T> items, Func<T, string?> valueSelector)
-    {
-        if (items == null)
-        {
-            return new List<T>();
-        }
-
-        return items
-            .OrderByDescending(item => GetSuccessCount(valueSelector(item)))
-            .ToList();
-    }
+    // ================================================================
+    // 导入密码本
+    // ================================================================
 
     /// <summary>
     /// 把用户导入的密码本复制一份到**程序安装目录**（与 exe 同级），返回复制后的路径。
-    ///
     /// 用户 2026-10-19 口径：导入的是 .txt，就把它复制到安装位置；⛔ 不是记住/链接用户原文件。
-    /// 这样安装目录里只有一份实际使用的密码本，用户之后移动/删除原文件也不会把程序弄坏。
     /// </summary>
-    public static string CopyImportedBookToInstallDirectory(string sourcePath)
-    {
-        if (string.IsNullOrWhiteSpace(sourcePath))
-        {
-            return sourcePath;
-        }
-
-        string sourceFull = Path.GetFullPath(sourcePath);
-        string installDirectory = AppContext.BaseDirectory;
-        string target = Path.Combine(installDirectory, Path.GetFileName(sourceFull));
-
-        if (string.Equals(sourceFull, target, StringComparison.OrdinalIgnoreCase))
-        {
-            return sourceFull;
-        }
-
-        Directory.CreateDirectory(installDirectory);
-        File.Copy(sourceFull, target, overwrite: true);
-        return target;
-    }
+    public static string CopyImportedBookToInstallDirectory(string sourcePath) =>
+        PasswordBookLibrary.CopyImportedBookToInstallDirectory(sourcePath);
 
     /// <summary>
-    /// 导入密码本文件。
-    ///
-    /// 两种写法都支持（AGENTS.md §9.1）：
-    /// - 列表式：一行一个密码，<c>#</c> 开头是注释
-    /// - 映射式：<c>名称:密码</c> / <c>名称：密码</c>
-    ///
-    /// 映射式的条目**也放进界面列表**（否则用户导入完看到列表是空的会以为失败），
-    /// 但它的"名称"额外留在密码本里，用于按归档名做命中匹配。
-    /// 密码一律不 Trim —— 密码可能真的带首尾空格。
+    /// 导入密码本文件。列表式与映射式都支持；映射式的条目**也放进界面列表**，
+    /// 名称额外留在密码本里用于按归档名匹配。密码一律不 Trim。
     /// </summary>
-    public List<PasswordItem> ImportPasswordList(string txtPath)
-    {
-        var imported = new List<PasswordItem>();
-
-        if (string.IsNullOrWhiteSpace(txtPath) || !File.Exists(txtPath))
-        {
-            LastImportWarnings = new[] { "密码本文件不存在，未导入任何内容。" };
-            return imported;
-        }
-
-        PasswordBookParseResult parsed = PasswordBookParser.ParseFile(txtPath);
-
-        LastImportWarnings = parsed.Warnings;
-
-        LastImportedBookPath = txtPath;
-
-        /*
-         * 导入进来的值**确实在用户那本书里** —— 记下来，"未写回"标记就不会误报
-         * （用户 2026-09-24 第 21 条：判据按值、且以文件为准）。
-         * 放在 AddBookPathCore 之前也没关系：查询时会先看书在不在记住清单里，
-         * 而下面紧接着就会把这本书加进清单。
-         */
-        RecordBookValues(txtPath, parsed.Entries);
-
-        /*
-         * 把路径写盘 —— 挂在"导入"这个动作上，而不是挂在某个窗口上。
-         * 用户从「密码列表」窗口导入、还是从「工具 → 导入密码本…」导入，都要记住；
-         * 之前只在菜单那条路上存了设置，用户走窗口那条路就白导了。
-         *
-         * 2026-10-25：生产入口改用内置 passwords.txt 后，外部路径只作为一次性来源，
-         * 不再写侧车、也不再加入"记住的密码本"清单（否则下次启动又会去链接外部文件）。
-         */
-        if (!UseTextStore && DataRootDirectory.Length > 0)
-        {
-            try
-            {
-                string dataRoot = DataRootDirectory;
-                Directory.CreateDirectory(dataRoot);
-                File.WriteAllText(Path.Combine(dataRoot, "password-book.path"), txtPath, new UTF8Encoding(false));
-            }
-            catch
-            {
-                // 记不住路径不该让导入本身失败。
-            }
-        }
-
-        _bookEntries.Clear();
-        _bookEntries.AddRange(parsed.Entries);
-
-        /*
-         * 导入 = "再加回来"（用户 2026-09-24 的口径）：所以
-         * ① 导入**不记墓碑** —— 用户是主动把这本书读进来的；
-         * ② 书里出现的值**撤销墓碑** —— 他删过、现在又导进来，说明他要留着它。
-         */
-        _persistSuspensions++;
-
-        try
-        {
-            foreach (PasswordEntry entry in parsed.Entries)
-            {
-                string remark = entry.Kind == PasswordEntryKind.Mapped && !string.IsNullOrWhiteSpace(entry.Name)
-                    ? $"导入：{entry.Name}"
-                    : $"导入（第 {entry.LineNumber} 行）";
-
-                ForgetTombstone(entry.Password);
-
-                var item = new PasswordItem
-                {
-                    Value = entry.Password,
-                    Source = "ImportedList",
-                    IsEnabled = true,
-                    Remark = remark
-                };
-
-                Passwords.Add(item);
-                imported.Add(item);
-            }
-
-            RemoveDuplicatePasswordsKeepOrder();
-        }
-        finally
-        {
-            _persistSuspensions--;
-        }
-
-        // 这本书从此"已记住"（不重复加；顺序按第一次导入的先后）。
-        // 内置 txt 模式不再登记外部书：导入只做一次性复制/合并。
-        if (!UseTextStore)
-        {
-            AddBookPathCore(txtPath);
-        }
-
-        PersistPasswordList();
-
-        return imported;
-    }
-
-    public bool AddPassword(string password)
-    {
-        password ??= string.Empty;
-
-        if (Passwords.Any(x =>
-                string.Equals(x.Value, password, StringComparison.Ordinal)))
-        {
-            return false;
-        }
-
-        _persistSuspensions++;
-
-        try
-        {
-            // 用户重新加回一个删过的值 = 他改主意了：墓碑要撤掉，否则下次启动又被书里的旧值吃掉。
-            ForgetTombstone(password);
-
-            Passwords.Add(new PasswordItem
-            {
-                Value = password,
-                Source = "ManualList",
-                IsEnabled = true,
-                Remark = "手动添加"
-            });
-
-            RemoveDuplicatePasswordsKeepOrder();
-        }
-        finally
-        {
-            _persistSuspensions--;
-        }
-
-        PersistPasswordList();
-
-        return true;
-    }
-
-    public bool RemovePassword(PasswordItem item)
-    {
-        if (item == null)
-        {
-            return false;
-        }
-
-        /*
-         * 先记墓碑、再删。
-         *
-         * 顺序不能反：删除会让集合变更处理器立刻落盘，而墓碑必须在那一次落盘里就位 ——
-         * 反过来的话，落盘的是一份"这条没了、墓碑也没有"的记忆，重启时密码本把它原样加回来，
-         * 用户看到的就是"删了又活"。
-         */
-        RecordTombstone(item.Value);
-
-        return Passwords.Remove(item);
-    }
-
-    public void ClearPasswords()
-    {
-        // 清空同理：**所有**被清掉的值都要进墓碑，否则重启整份密码本又回来了。
-        foreach (PasswordItem item in Passwords)
-        {
-            RecordTombstone(item?.Value);
-        }
-
-        Passwords.Clear();
-    }
-
-    public bool MoveUp(PasswordItem item)
-    {
-        if (item == null)
-        {
-            return false;
-        }
-
-        int index = Passwords.IndexOf(item);
-
-        if (index <= 0)
-        {
-            return false;
-        }
-
-        // Move 也是集合变更 → 变更处理器会立刻落盘（顺序就是尝试顺序，必须跨重启保留）。
-        Passwords.Move(index, index - 1);
-
-        return true;
-    }
-
-    public bool MoveDown(PasswordItem item)
-    {
-        if (item == null)
-        {
-            return false;
-        }
-
-        int index = Passwords.IndexOf(item);
-
-        if (index < 0 || index >= Passwords.Count - 1)
-        {
-            return false;
-        }
-
-        Passwords.Move(index, index + 1);
-
-        return true;
-    }
-
-    public string MaskPassword(string password)
-    {
-        return PasswordMasker.Mask(password);
-    }
-
-    public string BuildTryPasswordLogText(PasswordItem candidate, int index)
-    {
-        if (candidate == null)
-        {
-            return $"尝试密码候选第 {index} 项：******";
-        }
-
-        string source = candidate.Source ?? string.Empty;
-
-        return source switch
-        {
-            "Empty" => "尝试空密码",
-
-            // 用户 2026-09-24 第 14 条：本批已经试出来的密码会被提到候选最前面。
-            // 日志必须能看出"这一条是复用来的"（否则排障时看不出顺序为什么变了）。
-            "BatchSuccess" => "复用本批已成功的密码：******",
-            "RecentSuccess" => "尝试本任务最近成功的密码：******",
-            "BookMapped" => "尝试密码本命中项：******",
-            "TaskPassword" => "尝试单任务密码：******",
-            "GlobalPassword" => "尝试统一密码：******",
-            "ImportedList" => $"尝试密码列表第 {index} 项：******",
-            // 密码本里按映射式切过的那一行，按"整行就是密码"再试一次（列表式密码可能自带冒号）。
-            "BookRawLine" => $"尝试密码本整行（第 {index} 项）：******",
-            "ManualList" => $"尝试手动密码第 {index} 项：******",
-            // 一键处理/批量开始前那一次询问得到的密码（ExtractionCoordinator.ManualPasswordSource）：
-            // 以前它走 default 分支，日志里写成"密码候选第 N 项"，看不出这个密码是用户当场给的
-            // （只对本次运行有效、不落盘）。文案里说清来源，排障时才知道该去哪儿改。
-            "ManualBatch" => "尝试本次运行手动输入的密码：******",
-            "Sidecar" => "尝试同目录说明文件里的密码：******",
-            _ => $"尝试密码候选第 {index} 项：******"
-        };
-    }
-
-    private void RemoveDuplicatePasswordsKeepOrder()
-    {
-        var used = new HashSet<string>(StringComparer.Ordinal);
-        var unique = new List<PasswordItem>();
-
-        foreach (PasswordItem item in Passwords)
-        {
-            string value = item.Value ?? string.Empty;
-
-            if (used.Add(value))
-            {
-                unique.Add(item);
-            }
-        }
-
-        if (unique.Count == Passwords.Count)
-        {
-            return;
-        }
-
-        Passwords.Clear();
-
-        foreach (PasswordItem item in unique)
-        {
-            Passwords.Add(item);
-        }
-    }
+    public List<PasswordItem> ImportPasswordList(string txtPath) => _bookLibrary.ImportPasswordList(txtPath);
 }
