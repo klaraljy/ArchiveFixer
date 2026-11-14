@@ -23,11 +23,11 @@ namespace ArchiveFixer.Tests
     /// ① 落点目录里那份 `<包名>.zip` 是谁写的；② 第二次跑时它会不会被重新当成"用户原包"立项。
     /// 用完即删。
     /// </summary>
-    public class ZzzEeeeForensicsTests
+    public class EeeeForensicsTests
     {
         private readonly ITestOutputHelper _output;
 
-        public ZzzEeeeForensicsTests(ITestOutputHelper output) => _output = output;
+        public EeeeForensicsTests(ITestOutputHelper output) => _output = output;
 
         [Fact]
         public async Task 取证_副本跑两遍一键处理_打印真日志()

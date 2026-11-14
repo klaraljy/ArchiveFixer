@@ -83,11 +83,11 @@ namespace ArchiveFixer.Tests
     /// 免得"跑过了"变成一句无法复核的话。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
-    public class AaaReplayPipelineTests : IDisposable
+    public class ReplayPipelineTests : IDisposable
     {
         private readonly string _root;
 
-        public AaaReplayPipelineTests()
+        public ReplayPipelineTests()
         {
             _root = Path.Combine(
                 RealVolumeSampleFactAttribute.TempRoot,
