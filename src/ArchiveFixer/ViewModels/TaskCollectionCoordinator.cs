@@ -439,6 +439,25 @@ internal sealed class TaskCollectionCoordinator
             title,
             _vm.Tasks.Count);
     }
+
+    internal void ReplaceAll(IEnumerable<ArchiveTask>? tasks, bool refreshSummary = true)
+    {
+        _vm.Tasks.ReplaceAll(tasks);
+
+        _vm.RebuildTaskIndex();
+
+        // 清空/替换之后，DataGrid 的当前行可能还指着已经被移除的对象。
+        if (_vm.SelectedTask != null && !_vm.Tasks.Contains(_vm.SelectedTask))
+        {
+            _vm.SelectedTask = null;
+        }
+
+        if (refreshSummary)
+        {
+            _vm.UpdateSummary();
+        }
+    }
 }
+
 
 

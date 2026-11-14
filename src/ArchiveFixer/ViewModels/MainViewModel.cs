@@ -544,134 +544,13 @@ public partial class MainViewModel : ViewModelBase
     // 校验判据搬到 SettingsEditor.DescribeAutoSaveBlock()，保存后的连带动作搬到
     // ApplySettingsSideEffectsAfterSave()。⛔ 不再留一个"要用户点一下"的入口。
 
-    /// <summary>
-    /// 打开密码列表窗口（④密码页的「密码列表管理…」）。
-    /// </summary>
-    internal void OpenPasswordList()
-    {
-        var vm = new PasswordListViewModel(_passwordService, _dialogService);
-
-        /*
-         * 窗口**还开着**的时候，主界面摘要就要跟着变。
-         *
-         * 以前只在 ShowDialog() 返回后刷新一次：用户在密码列表窗口里导入完密码本，
-         * 后面的主界面还是旧条数，必须先关窗才看得见 —— 看起来就像"导入没生效"，
-         * 而这恰恰是用户反复抱怨的那个现象。
-         *
-         * 这里订阅窗口 ViewModel 的密码集合：导入（ReloadFromService）、添加、删除、清空
-         * 都会触发它，口径与关窗后那次刷新完全一致。关窗时退订，别让窗口对象挂住主 ViewModel。
-         */
-        Action unhook = HookPasswordBookSummaryRefresh(vm, RefreshPasswordBookSummary);
-        try
-        {
-            // 窗口创建由宿主（App）注入；ViewModel 不再 new Window / 读 Application.Current。
-            if (DialogWindowFactories.PasswordList is { } showPasswordList)
-            {
-                _ = showPasswordList(vm);
-            }
-            else
-            {
-                AppendLog("INFO", "当前宿主没有 WPF 界面，跳过密码列表窗口。");
-            }
-        }
-        finally
-        {
-            unhook();
-        }
-
-        /*
-         * 关窗口时把结果落到日志和主界面摘要上。
-         * 以前这里只写"窗口已关闭"一句：用户在窗口里导入了密码本、点关闭之后，
-         * 日志和界面都没留下任何痕迹，看起来就像"白导了"。
-         */
-        RefreshPasswordBookSummary();
-
-        /*
-         * 窗口里导入过的书要同步回设置（**两处口径必须一致**）：
-         * 那个窗口自己写的是 appsettings.json，而主 ViewModel 手里这份 Settings 是旧的 ——
-         * 不同步的话，下次保存设置就会用旧清单把新导入的书覆盖掉（用户看到"导入了、重启又没了"）。
-         */
-        SyncRememberedBookPathsToSettings();
-
-        string bookName = _passwordService.LastImportedBookPath.Length == 0
-            ? "无"
-            : System.IO.Path.GetFileName(_passwordService.LastImportedBookPath);
-
-        AppendLog("INFO", $"密码列表管理窗口已关闭（当前 {_passwordService.Passwords.Count} 条密码，密码本：{bookName}）。");
-    }
-
-    /// <summary>
-    /// 把密码服务里那份"记住的密码本"同步回设置并落盘（窗口里导入之后由 <see cref="OpenPasswordList"/> 调它）。
-    ///
-    /// <para>判据是"服务里有多出来的一本"：服务那份是**并集**（导入会追加、设置保存会整份替换），
-    /// 所以只在它确实带了新东西时才写设置 —— 不做无谓的文件写入。</para>
-    /// </summary>
-    private void SyncRememberedBookPathsToSettings()
-    {
-        if (Settings == null)
-        {
-            return;
-        }
-
-        IReadOnlyList<string> fromService = _passwordService.RememberedBookPaths;
-
-        if (fromService.Count == 0)
-        {
-            return;
-        }
-
-        var merged = OrderBookPaths(fromService, Settings.PasswordBookPaths ?? new List<string>());
-
-        if (merged.Count == (Settings.PasswordBookPaths?.Count ?? 0))
-        {
-            bool same = true;
-
-            for (int i = 0; i < merged.Count && same; i++)
-            {
-                same = string.Equals(merged[i], Settings.PasswordBookPaths![i], StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (same)
-            {
-                return;
-            }
-        }
-
-        Settings.PasswordBookPaths = merged;
-        Settings.PasswordBookPath = merged.Count > 0 ? merged[merged.Count - 1] : string.Empty;
-
-        // 记不住路径不该让关窗这个动作失败，但写失败要说清楚（否则用户下次启动发现没自动加载会以为是 bug）。
-        WriteSettingsToDisk("记住的密码本");
-
-        // ④页那份清单跟着重读（同 ImportPasswordBook：它是快照，不刷就与设置里的真值不一样）。
-        SettingsEditor?.NotifyRememberedBooksChanged();
-    }
-
-    /// <summary>
-    /// 把"密码列表窗口的密码集合发生变化"接到主界面摘要刷新上，返回退订用的回调。
-    ///
-    /// 单独一个方法是为了能测：窗口本身要 ShowDialog（测试里没人点），但这条接线完全不需要窗口
-    /// —— 测试可以拿一个 PasswordListViewModel 直接验证"集合一变、摘要就变"。
-    /// </summary>
+    internal void OpenPasswordList() => PasswordBook.OpenPasswordList();
     internal static Action HookPasswordBookSummaryRefresh(PasswordListViewModel listViewModel, Action refresh)
-    {
-        if (listViewModel == null || refresh == null)
-        {
-            return () => { };
-        }
+        => PasswordBookCoordinator.HookPasswordBookSummaryRefresh(listViewModel, refresh);
 
-        void OnPasswordsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        {
-            refresh();
-        }
-
-        listViewModel.Passwords.CollectionChanged += OnPasswordsChanged;
-
-        return () => listViewModel.Passwords.CollectionChanged -= OnPasswordsChanged;
-    }
+    private void SyncRememberedBookPathsToSettings() => PasswordBook.SyncRememberedBookPathsToSettings();
 
     internal void OpenOutputDirectory() => OutputLocation.OpenOutputDirectory();
-
 
     /// <summary>
     /// 「定稿完成后打开输出目录」的落地（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>，**默认关**）。
@@ -913,22 +792,7 @@ public partial class MainViewModel : ViewModelBase
     /// 那一步只是过渡状态，最终那一次才需要算（否则一次导入会算两遍整表）。
     /// </param>
     internal void ReplaceAllTasks(IEnumerable<ArchiveTask>? tasks, bool refreshSummary = true)
-    {
-        Tasks.ReplaceAll(tasks);
-
-        RebuildTaskIndex();
-
-        // 清空/替换之后，DataGrid 的当前行可能还指着已经被移除的对象。
-        if (SelectedTask != null && !Tasks.Contains(SelectedTask))
-        {
-            SelectedTask = null;
-        }
-
-        if (refreshSummary)
-        {
-            UpdateSummary();
-        }
-    }
+        => TaskCollection.ReplaceAll(tasks, refreshSummary);
 
     internal void RaiseAllCommandCanExecuteChanged() => Commands.RaiseAll();
 

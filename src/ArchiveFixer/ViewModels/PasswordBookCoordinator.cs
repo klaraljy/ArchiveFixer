@@ -334,5 +334,120 @@ internal sealed class PasswordBookCoordinator
             _log("WARN", "清理旧密码本路径失败（不影响本次导入）：" + ex.Message);
         }
     }
+
+    internal void OpenPasswordList()
+    {
+        var vm = new PasswordListViewModel(_passwordService, _dialogService);
+
+        /*
+         * 窗口**还开着**的时候，主界面摘要就要跟着变。
+         *
+         * 以前只在 ShowDialog() 返回后刷新一次：用户在密码列表窗口里导入完密码本，
+         * 后面的主界面还是旧条数，必须先关窗才看得见 —— 看起来就像"导入没生效"，
+         * 而这恰恰是用户反复抱怨的那个现象。
+         *
+         * 这里订阅窗口 ViewModel 的密码集合：导入（ReloadFromService）、添加、删除、清空
+         * 都会触发它，口径与关窗后那次刷新完全一致。关窗时退订，别让窗口对象挂住主 ViewModel。
+         */
+        Action unhook = HookPasswordBookSummaryRefresh(vm, _refreshSummary);
+        try
+        {
+            // 窗口创建由宿主（App）注入；ViewModel 不再 new Window / 读 Application.Current。
+            if (DialogWindowFactories.PasswordList is { } showPasswordList)
+            {
+                _ = showPasswordList(vm);
+            }
+            else
+            {
+                _log("INFO", "当前宿主没有 WPF 界面，跳过密码列表窗口。");
+            }
+        }
+        finally
+        {
+            unhook();
+        }
+
+        /*
+         * 关窗口时把结果落到日志和主界面摘要上。
+         * 以前这里只写"窗口已关闭"一句：用户在窗口里导入了密码本、点关闭之后，
+         * 日志和界面都没留下任何痕迹，看起来就像"白导了"。
+         */
+        _refreshSummary();
+
+        /*
+         * 窗口里导入过的书要同步回设置（**两处口径必须一致**）：
+         * 那个窗口自己写的是 appsettings.json，而主 ViewModel 手里这份 _settings() 是旧的 ——
+         * 不同步的话，下次保存设置就会用旧清单把新导入的书覆盖掉（用户看到"导入了、重启又没了"）。
+         */
+        SyncRememberedBookPathsToSettings();
+
+        string bookName = _passwordService.LastImportedBookPath.Length == 0
+            ? "无"
+            : System.IO.Path.GetFileName(_passwordService.LastImportedBookPath);
+
+        _log("INFO", $"密码列表管理窗口已关闭（当前 {_passwordService.Passwords.Count} 条密码，密码本：{bookName}）。");
+    }
+
+    internal void SyncRememberedBookPathsToSettings()
+    {
+        AppSettings? settings = _settings();
+
+        if (settings == null)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> fromService = _passwordService.RememberedBookPaths;
+
+        if (fromService.Count == 0)
+        {
+            return;
+        }
+
+        var merged = MainViewModel.OrderBookPaths(fromService, settings.PasswordBookPaths ?? new List<string>());
+
+        if (merged.Count == (settings.PasswordBookPaths?.Count ?? 0))
+        {
+            bool same = true;
+
+            for (int i = 0; i < merged.Count && same; i++)
+            {
+                same = string.Equals(merged[i], settings.PasswordBookPaths![i], StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (same)
+            {
+                return;
+            }
+        }
+
+        settings.PasswordBookPaths = merged;
+        settings.PasswordBookPath = merged.Count > 0 ? merged[merged.Count - 1] : string.Empty;
+
+        WriteSettings("记住的密码本");
+        _settingsEditor?.NotifyRememberedBooksChanged();
+    }
+
+    private void WriteSettings(string what)
+    {
+        _writeSettings(what);
+    }
+
+    internal static Action HookPasswordBookSummaryRefresh(PasswordListViewModel listViewModel, Action refresh)
+    {
+        if (listViewModel == null || refresh == null)
+        {
+            return () => { };
+        }
+
+        void OnPasswordsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            refresh();
+        }
+
+        listViewModel.Passwords.CollectionChanged += OnPasswordsChanged;
+
+        return () => listViewModel.Passwords.CollectionChanged -= OnPasswordsChanged;
+    }
 }
 
