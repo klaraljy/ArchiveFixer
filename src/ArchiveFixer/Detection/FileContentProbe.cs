@@ -8,39 +8,6 @@ using System.Text;
 namespace ArchiveFixer.Detection
 {
     /// <summary>
-    /// **非压缩文件事实**（用户 2026-11-11：非压缩文件我们不碰；不需要识别所有格式，
-    /// 只要在“准备处理这一份”之前证明它是内容物，判不出就不动）。
-    ///
-    /// <para>与 <see cref="FileContentKind"/> 分开：`FileContentKind` 只描述普通媒体容器；
-    /// 这里回答的是更上层的准入问题 —— `KnownContent`（非压缩文件）/ `Archive`（压缩包）/
-    /// `Unknown`（判不出）。</para>
-    /// </summary>
-    public enum FileContentClass
-    {
-        /// <summary>判不出（⛔ 不猜；没有卷证据时按“不碰”处理）。</summary>
-        Unknown = 0,
-
-        /// <summary>已证明是非压缩文件（图片/视频/音频/文档/文本内容物）。</summary>
-        KnownContent = 1,
-
-        /// <summary>已证明是压缩包/归档容器（含普通 ZIP）。</summary>
-        Archive = 2
-    }
-
-    public sealed record FileContentProbeResult(
-        FileContentClass Class,
-        string Format,
-        string Evidence,
-        bool IsContentContainer = false,
-        long MediaEnd = 0)
-    {
-        public static readonly FileContentProbeResult Unknown = new(
-            FileContentClass.Unknown,
-            string.Empty,
-            string.Empty);
-    }
-
-    /// <summary>
     /// **内容物识别的唯一出口**（只读，不碰盘）：
     /// 魔数优先；ZIP 家族只有深探测才看条目；文本才用 BOM/可打印比例。
     /// ⛔ 后缀只作弱提示，绝不单独决定“这是内容物”。
