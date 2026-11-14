@@ -18,5 +18,11 @@ public static class DialogWindowFactories
 
     /// <summary>创建密码选择窗口。</summary>
     public static Func<string, IReadOnlyList<string>, IPasswordPickerWindow>? PasswordPicker { get; set; }
+
+    /// <summary>
+    /// 创建密码列表窗口；参数是 <c>PasswordListViewModel</c>，Services 不引用 ViewModels，故用 object 承载。
+    /// 未注入时按“无窗口宿主”处理（单测/控制台不弹窗）。
+    /// </summary>
+    public static Func<object, bool?>? PasswordList { get; set; }
 }
 

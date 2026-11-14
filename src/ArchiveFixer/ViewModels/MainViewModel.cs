@@ -7,7 +7,6 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -1019,12 +1018,15 @@ public partial class MainViewModel : ViewModelBase
 
         try
         {
-            var window = new PasswordListWindow(vm)
+            // 窗口创建由宿主（App）注入；ViewModel 不再 new Window / 读 Application.Current。
+            if (DialogWindowFactories.PasswordList is { } showPasswordList)
             {
-                Owner = Application.Current.MainWindow
-            };
-
-            window.ShowDialog();
+                _ = showPasswordList(vm);
+            }
+            else
+            {
+                AppendLog("INFO", "当前宿主没有 WPF 界面，跳过密码列表窗口。");
+            }
         }
         finally
         {
