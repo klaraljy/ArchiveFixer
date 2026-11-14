@@ -108,8 +108,4 @@ namespace ArchiveFixer.Experimental.AutoConcurrency
             public ulong AvailExtendedVirtual;
         }
     }
-
-    public readonly record struct ConcurrencyResourceSnapshot(
-        double CpuBusyPercent,
-        long AvailablePhysicalBytes);
 }

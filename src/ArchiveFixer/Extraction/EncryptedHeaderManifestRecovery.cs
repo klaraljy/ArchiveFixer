@@ -6,10 +6,6 @@ using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
 {
-    public readonly record struct EncryptedHeaderManifestRecoveryResult(
-        LayerManifest Manifest,
-        IReadOnlyList<(string Path, long Size)> Entries);
-
     /// <summary>
     /// 加密头（-mhe）的清单恢复：换引擎兜底成功时主引擎之前列不出目录，
     /// 但命中密码已经知道了，必须拿这个密码再列一次；列出来才允许后续完整性核对。

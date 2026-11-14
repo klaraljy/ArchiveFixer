@@ -6,9 +6,6 @@ using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction
 {
-    /// <summary>并发建议：只描述设备情况，不修改用户选择。</summary>
-    public readonly record struct ConcurrencySuggestion(int Suggested, string Text);
-
     /// <summary>
     /// 按源盘/落点盘的介质类型给出并发建议（1–4 中的保守值）。
     /// 这里不做吞吐实测、不读历史并发数据，避免把“并发争抢导致的慢”误判成设备慢。
