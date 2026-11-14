@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 一次删除的完整计划。手动清理与自动清理都先产出它，再把同一个对象交给执行阶段；

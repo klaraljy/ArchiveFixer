@@ -1,3 +1,5 @@
+using ArchiveFixer.Models;
+
 namespace ArchiveFixer.Extraction
 {
     /// <summary>

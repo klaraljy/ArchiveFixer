@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 空间不足模式的动态并发闸：按队列顺序（已从大到小）算当前还能再启动几个。

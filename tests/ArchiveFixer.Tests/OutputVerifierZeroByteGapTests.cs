@@ -4,6 +4,7 @@ using System.IO;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using Xunit;
+using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Tests
 {

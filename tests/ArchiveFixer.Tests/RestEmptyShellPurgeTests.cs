@@ -226,7 +226,7 @@ namespace ArchiveFixer.Tests
         {
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
 
-            var plan = new ArchiveFixer.Extraction.DeletionPlan
+            var plan = new ArchiveFixer.Models.DeletionPlan
             {
                 Targets = new[] { Path.Combine(_root, "别的任务", "其余物") },
                 AllowedRoot = task.OutputPath!,
