@@ -3,12 +3,6 @@ using System;
 
 namespace ArchiveFixer.Experimental.AutoConcurrency
 {
-    public readonly record struct CapacitySample(
-        double CpuBusyPercent,
-        long AvailablePhysicalBytes,
-        bool UiStalled,
-        bool DiskStalled = false);
-
     /// <summary>
     /// 并发容量策略：压力只降档；加档必须经过一次可比较的探测窗口。
     /// Evaluate 只读压力，不再每次调用就升档；ObserveCompletion 才推进状态机。
