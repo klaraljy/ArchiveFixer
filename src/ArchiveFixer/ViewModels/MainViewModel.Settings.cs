@@ -28,10 +28,24 @@ using System.Windows.Media;
 namespace ArchiveFixer.ViewModels;
 
 public partial class MainViewModel
-{        /// <summary>上一次**真的写进磁盘**的那份设置（自动保存的判据；见 <see cref="AutoSaveSettingsIfChanged"/>）。</summary>
-    private string _lastSavedSettingsJson = string.Empty;
+{
+    private SettingsPersistenceCoordinator? _settingsPersistence;
 
-    private IDisposable? _settingsAutoSaveTimer;
+    private SettingsPersistenceCoordinator SettingsPersistence => _settingsPersistence ??= new SettingsPersistenceCoordinator(
+        _settingsService,
+        () => Settings,
+        () => SettingsEditor,
+        (level, message) => AppendLog(level, message),
+        ApplySettingsSideEffectsAfterSave);
+
+    private void StartSettingsAutoSaveTimer() => SettingsPersistence.StartSettingsAutoSaveTimer();
+
+    internal bool AutoSaveSettingsIfChanged() => SettingsPersistence.AutoSaveSettingsIfChanged();
+
+    private bool WriteSettingsToDisk(string what) => SettingsPersistence.WriteSettingsToDisk(what);
+
+    internal void MarkSettingsBaseline() => SettingsPersistence.MarkCurrentSettingsAsSaved();
+    internal void FlushSettingsAutoSave() => SettingsPersistence.FlushSettingsAutoSave();
 
     /// <summary>UI 响应心跳；只在 WPF 宿主里有 Dispatcher。</summary>
     private IDisposable? _uiResponsivenessMonitor;
@@ -185,12 +199,7 @@ public partial class MainViewModel
     /// <para>没有界面宿主（单元测试）时不起计时器：那时由测试直接调
     /// <see cref="AutoSaveSettingsIfChanged"/>，行为完全一样。</para>
     /// </summary>
-    private void StartSettingsAutoSaveTimer()
-    {
-        _settingsAutoSaveTimer = UiThread.StartTimer?.Invoke(
-            SettingsAutoSaveInterval,
-            () => AutoSaveSettingsIfChanged());
-    }
+
 
     /// <summary>
     /// 「改了就自动存」的本体：设置与上一次落盘那份不同 → 校验 → 写盘 → 记账。
@@ -199,64 +208,7 @@ public partial class MainViewModel
     /// 与设置页「保存」同一套判据），并写一条 WARN 说清"改好就会立刻存"，绝不把不可用的值写进去；
     /// ②写盘失败只写 WARN，绝不弹框、绝不崩（自动保存不该打断用户手上的事）。</para>
     /// </summary>
-    internal bool AutoSaveSettingsIfChanged()
-    {
-        try
-        {
-            /*
-             * ⚠ 快照必须在 Serialize **之前**取：Serialize 会顺手 Normalize（那正是它作为唯一序列化出口
-             * 的职责），而 Normalize 会把超范围的数字**夹回**合法区间 —— 夹过就必须让用户看见
-             * （用户 2026-09-25 第 36 条："不许静默改掉你填的数字"）。
-             * 以前这件事是"点保存"那条路在 `SettingsViewModel.Message` 里说的，而现在保存是自动的、
-             * 那个框也已经删掉 —— 所以改到这里：夹回的结论并进底栏那一行（见 DescribeClampNotice）。
-             */
-            SettingsViewModel.SettingsClampSnapshot requested = SettingsViewModel.SettingsClampSnapshot.Capture(Settings);
 
-            string json = _settingsService.Serialize(Settings);
-
-            if (string.Equals(json, _lastSavedSettingsJson, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            string? blocked = SettingsEditor.DescribeAutoSaveBlock();
-
-            if (!string.IsNullOrWhiteSpace(blocked))
-            {
-                // 只在第一次拦住时写一条（改一次路径、tick 一次，不刷屏）。
-                if (!string.Equals(_lastAutoSaveBlockNote, blocked, StringComparison.Ordinal))
-                {
-                    _lastAutoSaveBlockNote = blocked;
-                    AppendLog("WARN", $"设置暂时没有自动保存：{blocked}（改好之后会自动存，不用点任何按钮）");
-                }
-
-                return false;
-            }
-
-            _lastAutoSaveBlockNote = string.Empty;
-
-            if (!WriteSettingsToDisk("设置"))
-            {
-                return false;
-            }
-
-            AppendLog("INFO", "设置已自动保存（改动即时落盘，重启后仍在）");
-
-            string clampNotice = SettingsViewModel.DescribeClampNotice(requested, Settings);
-
-            if (clampNotice.Length > 0)
-            {
-                AppendLog("WARN", "设置里的数字超出允许范围，已按合法值生效：" + clampNotice);
-            }
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            AppendLog("WARN", "自动保存设置失败：" + ex.Message);
-            return false;
-        }
-    }
 
     /// <summary>
     /// 把设置写进磁盘并更新指纹 —— **写盘的唯一出口**（自动保存与"用户显式选择"几条路都走它）。
@@ -271,26 +223,7 @@ public partial class MainViewModel
     /// 与那一格无关 —— 把它也拦下会让"我明明点了却没记住"重现，那正是用户 2026-09-26
     /// 第 1 条最反感的事。</para>
     /// </summary>
-    private bool WriteSettingsToDisk(string what)
-    {
-        if (_settingsService.Save(Settings))
-        {
-            _lastSavedSettingsJson = _settingsService.Serialize(Settings);
 
-            /*
-             * ⚠ 收尾动作必须在这里做（2026-09-26 补）：指纹基线一更新，自动保存那一跳就"看不出变化"、
-             * 于是**不会再走** ApplySettingsSideEffectsAfterSave() —— 而那几条"自己写盘"的路
-             * （一键处理面板「存为默认」/ 导入密码本 / 记住的密码本 / ①页「选择…」/ 打包那几档）
-             * 恰恰都会改到"包在设置外面"的展示属性（落点那一行、并发那句话、密码本摘要）。
-             * 放在这个唯一出口上，五条路就都跟着刷新了。
-             */
-            ApplySettingsSideEffectsAfterSave();
-            return true;
-        }
-
-        AppendLog("WARN", $"{what}没能写进设置（写盘失败：磁盘只读 / 被占用？）—— 下次打开会回到上一次的值。");
-        return false;
-    }
 
     /*
      * 「底栏那一行设置状态」整块删除（用户 2026-09-26）：
@@ -331,11 +264,7 @@ public partial class MainViewModel
     /// <summary>
     /// 关窗前的最后一次落盘（自动保存是 800 ms 一跳，用户可能改完就关）。
     /// </summary>
-    internal void FlushSettingsAutoSave()
-    {
-        _settingsAutoSaveTimer?.Dispose();
-        AutoSaveSettingsIfChanged();
-    }
+
 
     /// <summary>
     /// ①页「输出位置」那一格显示的那个值（用户 2026-09-25 第 27 条）。
@@ -787,6 +716,8 @@ public partial class MainViewModel
 
     private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
 }
+
+
 
 
 

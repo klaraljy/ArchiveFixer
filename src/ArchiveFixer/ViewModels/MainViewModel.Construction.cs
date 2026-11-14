@@ -613,8 +613,9 @@ public partial class MainViewModel
          * 挂在构造开头取的话，这些"程序自己的初始化"会被当成用户改动 —— 开机 800ms 后
          * 白白写一次盘（真机上表现为"什么都没动，设置文件的时间戳却变了"）。
          */
-        _lastSavedSettingsJson = _settingsService.Serialize(_settings);
+        MarkSettingsBaseline();
     }
 }
+
 
 
