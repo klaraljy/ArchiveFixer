@@ -101,6 +101,7 @@ public partial class App : Application
             return window.ShowDialog();
         };
         DialogWindowFactories.RenameDialog = defaultExtension => RenameWindowFactory.Show(defaultExtension);
+        DialogWindowFactories.PasswordPrompt = message => PasswordPromptWindowFactory.Show(message);
 
         // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
