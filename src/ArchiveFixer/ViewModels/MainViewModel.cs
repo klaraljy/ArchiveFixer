@@ -84,11 +84,10 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>
     /// 这次运行里"启动读记忆"是否已经做过了。
     ///
-    /// <para><see cref="AutoLoadPasswordBook"/> 有五个调用点（启动、清空列表、移除选中、
+    /// <para><see cref="PasswordBookCoordinator.AutoLoad"/> 有五个调用点（启动、清空列表、移除选中、
     /// 移除单个任务、保存设置），其中只有启动那一次该读记忆 —— 读记忆会**重建整个列表**，
     /// 反复读会把用户刚做的改动冲掉。后来的调用只做"合并密码本"这件幂等的事。</para>
     /// </summary>
-    private bool _rememberedListLoaded;
     private bool _showPassword;
     private bool _isBusy;
 

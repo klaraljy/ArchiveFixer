@@ -323,7 +323,7 @@ public partial class MainViewModel
         OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
         OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
 
-        ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
+        ImportPasswordBookCommand = new RelayCommand(PasswordBook.Import, CanRunNormalCommand);
         ExportLogCommand = new RelayCommand(ExportLog);
         ExportDiagnosticBundleCommand = new RelayCommand(ExportDiagnosticBundle);
         ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
@@ -601,7 +601,7 @@ public partial class MainViewModel
         }
 
         LogLeftoverWorkspaces();
-        AutoLoadPasswordBook();
+        PasswordBook.AutoLoad();
 
         UpdateSummary();
 

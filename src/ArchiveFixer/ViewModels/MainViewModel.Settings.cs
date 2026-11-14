@@ -36,6 +36,23 @@ public partial class MainViewModel
     /// <summary>UI 响应心跳；只在 WPF 宿主里有 Dispatcher。</summary>
     private IDisposable? _uiResponsivenessMonitor;
 
+    private PasswordBookCoordinator? _passwordBookCoordinator;
+
+    private PasswordBookCoordinator PasswordBook => _passwordBookCoordinator ??= new PasswordBookCoordinator(
+        _passwordService,
+        _pathService,
+        _dialogService,
+        () => Settings,
+        _settingsEditor,
+        RefreshPasswordBookSummary,
+        WriteSettingsToDisk,
+        (level, message) => AppendLog(level, message));
+
+    internal static List<string> OrderBookPaths(
+        IReadOnlyList<string> remembered,
+        IReadOnlyList<string> fromSettings)
+        => ArchiveFixer.ViewModels.PasswordBook.PasswordBookOrdering.Order(remembered, fromSettings);
+
     /// <summary>自动保存的间隔：够短（改完几乎立刻落盘）又够长（拖滑块/连点勾选框时不会写几十次盘）。</summary>
     internal static readonly TimeSpan SettingsAutoSaveInterval = TimeSpan.FromMilliseconds(800);
 
@@ -186,7 +203,7 @@ public partial class MainViewModel
          */
         SyncOutputLocationFromSettings();
 
-        ApplyRememberedBookPathsFromSettings();
+        PasswordBook.ApplyRememberedBookPathsFromSettings();
 
         RefreshOutputPaths();
         UpdateSummary();

@@ -1,35 +1,52 @@
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
+using ArchiveFixer.ViewModels.PasswordBook;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
+/// <summary>
+/// 密码本记忆/导入/旧路径清理的协作类。
+/// </summary>
+internal sealed class PasswordBookCoordinator
 {
-    internal void AutoLoadPasswordBook()
+    private readonly PasswordService _passwordService;
+    private readonly PathService _pathService;
+    private readonly DialogService _dialogService;
+    private readonly Func<AppSettings?> _settings;
+    private readonly SettingsViewModel _settingsEditor;
+    private readonly Action _refreshSummary;
+    private readonly Func<string, bool> _writeSettings;
+    private readonly Action<string, string> _log;
+    private bool _rememberedListLoaded;
+
+    public PasswordBookCoordinator(
+        PasswordService passwordService,
+        PathService pathService,
+        DialogService dialogService,
+        Func<AppSettings?> settings,
+        SettingsViewModel settingsEditor,
+        Action refreshSummary,
+        Func<string, bool> writeSettings,
+        Action<string, string> log)
+    {
+        _passwordService = passwordService;
+        _pathService = pathService;
+        _dialogService = dialogService;
+        _settings = settings;
+        _settingsEditor = settingsEditor;
+        _refreshSummary = refreshSummary;
+        _writeSettings = writeSettings;
+        _log = log;
+    }
+
+    internal void AutoLoad()
     {
         try
         {
@@ -37,7 +54,7 @@ public partial class MainViewModel
              * 开关随设置走（默认开）。关掉 = 既不写也不读记忆文件 ——
              * 用户明确要求"关掉后重启回到纯内存"，所以这里连读都不读，不能"关了还偷偷读一下"。
              */
-            _passwordService.RememberPasswordList = Settings?.RememberPasswordList ?? true;
+            _passwordService.RememberPasswordList = _settings()?.RememberPasswordList ?? true;
 
             if (!_rememberedListLoaded)
             {
@@ -59,7 +76,7 @@ public partial class MainViewModel
                 if (!File.Exists(book))
                 {
                     // §8 隐私红线：日志只写文件名，个人路径不入日志。
-                    AppendLog(
+                    _log(
                         "WARN",
                         string.Format(
                             System.Globalization.CultureInfo.CurrentCulture,
@@ -81,7 +98,7 @@ public partial class MainViewModel
 
             if (books.Count > 0 || _passwordService.RememberedEntryCount > 0)
             {
-                AppendLog(
+                _log(
                     "INFO",
                     string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
@@ -94,29 +111,21 @@ public partial class MainViewModel
                         addedTotal));
             }
 
-            RefreshPasswordBookSummary();
+            _refreshSummary();
         }
         catch (Exception ex)
         {
-            AppendLog("WARN", "自动加载密码本失败：" + ex.Message);
+            _log("WARN", "自动加载密码本失败：" + ex.Message);
         }
     }
 
-    /// <summary>
-    /// 启动时那一次"读记忆"（**只做一次**）。
-    ///
-    /// <para>为什么只做一次：<see cref="AutoLoadPasswordBook"/> 在清空任务列表、移除任务、
-    /// 保存设置之后都会被调一次，而"读记忆"是会**重建整个列表**的动作 ——
-    /// 每次触发都重来一遍，用户在该窗口里刚做的改动就会被记忆里的旧版本覆盖回去。
-    /// 后面那些调用只需要"把（新记住的）密码本再合并一次"，那是幂等的。</para>
-    /// </summary>
     private void LoadRememberedPasswordListAtStartup()
     {
-        IReadOnlyList<string> settingsBooks = Settings?.PasswordBookPaths ?? new List<string>();
+        IReadOnlyList<string> settingsBooks = _settings()?.PasswordBookPaths ?? new List<string>();
 
         if (!_passwordService.RememberPasswordList)
         {
-            AppendLog("INFO", StatusText.PasswordListMemoryDisabledLog);
+            _log("INFO", StatusText.PasswordListMemoryDisabledLog);
 
             // 关掉记忆只是"不落盘"：设置里记住的密码本照样要自动加载（那是另一件事）。
             _passwordService.SetRememberedBookPaths(settingsBooks);
@@ -135,7 +144,7 @@ public partial class MainViewModel
              * ③ 设置里一本都没有（被清掉 / 换了一份配置）而记忆里有：按记忆恢复，等于自愈一次。
              */
             _passwordService.SetRememberedBookPaths(
-                OrderBookPaths(_passwordService.RememberedBookPaths, settingsBooks));
+                PasswordBookOrdering.Order(_passwordService.RememberedBookPaths, settingsBooks));
 
             return;
         }
@@ -143,7 +152,7 @@ public partial class MainViewModel
         if (status != PasswordListLoadStatus.NoFile)
         {
             // 解不开 / 半截 / 不是我们的格式：**忽略并提示**，不崩、不覆盖、不删（用户 2026-09-24 定的）。
-            AppendLog(
+            _log(
                 "WARN",
                 string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
@@ -171,16 +180,6 @@ public partial class MainViewModel
 
         _passwordService.SetRememberedBookPaths(paths);
     }
-
-    /// <summary>
-    /// 合并两份"记住的密码本"清单：**集合以设置那份为准，顺序尽量沿用记忆那份**。
-    ///
-    /// <para>设置里是空的时候按记忆恢复（appsettings.json 被重置 / 手改坏时的自愈）。</para>
-    /// </summary>
-    internal static List<string> OrderBookPaths(
-        IReadOnlyList<string> remembered,
-        IReadOnlyList<string> fromSettings)
-        => ArchiveFixer.ViewModels.PasswordBook.PasswordBookOrdering.Order(remembered, fromSettings);
 
     private static void AddIfNew(List<string> target, string? path)
     {
@@ -218,10 +217,6 @@ public partial class MainViewModel
         return false;
     }
 
-    /// <summary>
-    /// 读老侧车文件 <c>password-book.path</c>（只读，**不写**）。
-    /// 读不到就当作没有 —— 这个文件是历史遗留，丢了不影响。
-    /// </summary>
     private string ReadPasswordBookSidecar()
     {
         try
@@ -236,11 +231,7 @@ public partial class MainViewModel
         }
     }
 
-    /// <summary>
-    /// 把"记住的密码本"从设置推给密码服务（用户在④「密码」页增删过、设置落盘之后由
-    /// <see cref="SaveSettings"/> 调它）。
-    /// </summary>
-    private void ApplyRememberedBookPathsFromSettings()
+    internal void ApplyRememberedBookPathsFromSettings()
     {
         /*
          * 开关也要跟着设置走，而且**必须在这里先落定**：
@@ -248,15 +239,14 @@ public partial class MainViewModel
          * 开关还是旧值（开）的话，这一下会在他关掉之后**又写一份**记忆。
          * 关掉 = 不写也不读，一次都不该写。
          */
-        _passwordService.RememberPasswordList = Settings?.RememberPasswordList ?? true;
+        _passwordService.RememberPasswordList = _settings()?.RememberPasswordList ?? true;
 
-        IReadOnlyList<string> settingsBooks = Settings?.PasswordBookPaths ?? new List<string>();
+        IReadOnlyList<string> settingsBooks = _settings()?.PasswordBookPaths ?? new List<string>();
 
         _passwordService.SetRememberedBookPaths(settingsBooks);
     }
 
-    /// <summary>导入密码本：合并进内置 passwords.txt，不再复制外部文件、不再记外部路径。</summary>
-    private void ImportPasswordBook()
+    internal void Import()
     {
         try
         {
@@ -268,7 +258,7 @@ public partial class MainViewModel
             {
                 // 取消也要留痕：用户点了导入又取消，日志里什么都不写的话，
                 // 事后完全分不清"没导"和"导了没生效"。
-                AppendLog("INFO", "已取消导入密码本（没有选择文件）。");
+                _log("INFO", "已取消导入密码本（没有选择文件）。");
                 return;
             }
 
@@ -280,15 +270,15 @@ public partial class MainViewModel
              * 里的一份快照，导入这条路以前一次都不刷 —— 摘要行"密码本：xxx — N 条"当场就变了，
              * 下面那份清单还写着「还没有记住任何密码本 —— 启动时不会自动加载任何密码本」（与事实相反）。
              */
-            SettingsEditor?.NotifyRememberedBooksChanged();
+            _settingsEditor.NotifyRememberedBooksChanged();
 
-            RefreshPasswordBookSummary();
+            _refreshSummary();
 
             string warnings = _passwordService.LastImportWarnings.Count > 0
                 ? $"{Environment.NewLine}{Environment.NewLine}提示：{string.Join(Environment.NewLine, _passwordService.LastImportWarnings)}"
                 : string.Empty;
 
-            AppendLog(
+            _log(
                 "INFO",
                 $"已导入密码本：{System.IO.Path.GetFileName(path)}（{count} 条），已合并进内置 passwords.txt；外部文件以后不再链接。");
             _dialogService.ShowInfo(
@@ -296,7 +286,7 @@ public partial class MainViewModel
         }
         catch (Exception ex)
         {
-            AppendLog("ERROR", "导入密码本失败：" + ex.Message);
+            _log("ERROR", "导入密码本失败：" + ex.Message);
 
             /*
              * ⚠ 失败**必须**弹出来：这一条以前只写日志 —— 用户选完文件什么都没发生，
@@ -311,24 +301,21 @@ public partial class MainViewModel
         }
     }
 
-    /// <summary>
-    /// 清掉旧外部密码本路标；⛔ 不删用户文件、也不猜哪个程序目录副本能删。
-    /// </summary>
     private void ClearLegacyPasswordBookPath()
     {
         try
         {
-            if (Settings != null)
+            if (_settings() != null)
             {
-                bool changed = !string.IsNullOrWhiteSpace(Settings.PasswordBookPath)
-                               || (Settings.PasswordBookPaths?.Count ?? 0) > 0;
+                bool changed = !string.IsNullOrWhiteSpace(_settings()!.PasswordBookPath)
+                               || (_settings()!.PasswordBookPaths?.Count ?? 0) > 0;
 
-                Settings.PasswordBookPath = string.Empty;
-                Settings.PasswordBookPaths = new List<string>();
+                _settings()!.PasswordBookPath = string.Empty;
+                _settings()!.PasswordBookPaths = new List<string>();
 
                 if (changed)
                 {
-                    WriteSettingsToDisk("清理旧密码本路径");
+                    _writeSettings("清理旧密码本路径");
                 }
             }
 
@@ -339,12 +326,13 @@ public partial class MainViewModel
             if (sidecar.Length > 0 && File.Exists(sidecar))
             {
                 FileOperations.Delete(sidecar);
-                AppendLog("INFO", "已清掉旧的外部密码本路径（password-book.path）；用户原始文件未动。");
+                _log("INFO", "已清掉旧的外部密码本路径（password-book.path）；用户原始文件未动。");
             }
         }
         catch (Exception ex)
         {
-            AppendLog("WARN", "清理旧密码本路径失败（不影响本次导入）：" + ex.Message);
+            _log("WARN", "清理旧密码本路径失败（不影响本次导入）：" + ex.Message);
         }
     }
 }
+

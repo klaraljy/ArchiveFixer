@@ -386,7 +386,7 @@ public partial class MainViewModel
 
         Tasks.Clear();
         LogLeftoverWorkspaces();
-        AutoLoadPasswordBook();
+        PasswordBook.AutoLoad();
 
         UpdateSummary();
         AppendLog(
@@ -427,7 +427,7 @@ public partial class MainViewModel
 
         RebuildTaskIndex();
         LogLeftoverWorkspaces();
-        AutoLoadPasswordBook();
+        PasswordBook.AutoLoad();
 
         UpdateSummary();
         AppendLog("INFO", $"{title}：以勾选为准，已移除 {targets.Count} 个任务。");
