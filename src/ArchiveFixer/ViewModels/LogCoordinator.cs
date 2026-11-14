@@ -1,15 +1,25 @@
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
-using System.Windows;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
+/// <summary>
+/// 屏幕/文件日志的唯一写入口；MainViewModel 只保留同名薄转发。
+/// </summary>
+internal sealed class LogCoordinator
 {
+    private readonly LogService _logService;
+    private readonly ObservableCollection<OperationLogItem> _logs;
+
+    public LogCoordinator(LogService logService, ObservableCollection<OperationLogItem> logs)
+    {
+        _logService = logService;
+        _logs = logs;
+    }
+
     public void AppendLog(string message)
     {
         AppendLog("INFO", message);
@@ -106,7 +116,7 @@ public partial class MainViewModel
             ? message
             : message + "（错误码 " + errorCode + "）";
 
-        // 屏幕日志与文件日志共用同一个“入队”出口；⛔ 不再从后台线程直接 Logs.Add。
+        // 屏幕日志与文件日志共用同一个“入队”出口；⛔ 不再从后台线程直接 _logs.Add。
         EnqueueScreenLog(level, display);
     }
 
@@ -163,16 +173,16 @@ public partial class MainViewModel
     {
         void Add()
         {
-            Logs.Add(new OperationLogItem
+            _logs.Add(new OperationLogItem
             {
                 Time = ArchiveFixer.Helpers.Clock.Now,
                 Level = level,
                 Message = message
             });
 
-            while (Logs.Count > 1000)
+            while (_logs.Count > 1000)
             {
-                Logs.RemoveAt(0);
+                _logs.RemoveAt(0);
             }
         }
 

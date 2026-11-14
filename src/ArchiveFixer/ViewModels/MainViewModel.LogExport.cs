@@ -28,17 +28,75 @@ using System.Windows.Media;
 namespace ArchiveFixer.ViewModels;
 
 public partial class MainViewModel
-{        /// <summary>
-         /// 导出日志文件的**头部**（用户 2026-09-25 第 44 条追加拍板）：
-         /// 时间范围 / 任务数 / 成功失败 / 引擎版本 / 输出根 + "细节在哪看"。
-         ///
-         /// <para>为什么值得写：这份 txt 的用途就是"发给别人（或未来的自己）排查" ——
-         /// 没有头，读的人得先自己找"这是哪一批、跑到几点、成不成、用的哪个引擎"。
-         /// ⛔ 这里只写**机器事实**（任务表的终态枚举与引擎标识），不写任何密码相关内容。</para>
-         ///
-         /// <para>internal 是为了让测试能直接钉住"头部写了哪几件事、顺序对不对"
-         /// （产品入口只有「导出日志（本次操作）」这一个，见 <see cref="ExportLog"/>）。</para>
-         /// </summary>
+{
+    private LogCoordinator? _logCoordinator;
+
+    private LogCoordinator Log => _logCoordinator ??= new LogCoordinator(_logService, Logs);
+
+    public void AppendLog(string message) => Log.AppendLog(message);
+
+    public void MarkOperationStartForLog(string operationName) => Log.MarkOperationStartForLog(operationName);
+
+    public void UpdateLogRunContext(
+        string? batch = null,
+        int? round = null,
+        string? sample = null,
+        string? stage = null,
+        string? task = null,
+        int? layer = null)
+        => Log.UpdateLogRunContext(batch, round, sample, stage, task, layer);
+
+    public void CriterionLog(
+        string criterion,
+        string inputs,
+        string verdict,
+        string action = "",
+        string file = "",
+        string identity = "",
+        string level = "INFO",
+        string errorCode = "",
+        string component = "",
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string caller = "")
+        => Log.CriterionLog(
+            criterion, inputs, verdict, action, file, identity, level, errorCode, component,
+            sourceFile: sourceFile, sourceLine: sourceLine, caller: caller);
+
+    public void AppendLog(
+        string level,
+        string message,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string caller = "")
+        => Log.AppendLog(level, message, sourceFile, sourceLine, caller);
+
+    public void AppendDiagnosticLog(
+        string level,
+        string message,
+        string errorCode,
+        string component,
+        string taskPath = "",
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string caller = "")
+        => Log.AppendDiagnosticLog(
+            level, message, errorCode, component, taskPath,
+            sourceFile, sourceLine, caller);
+
+    internal void AppendLogFileOnly(string level, string message) => Log.AppendLogFileOnly(level, message);
+
+    /// <summary>
+    /// 导出日志文件的**头部**（用户 2026-09-25 第 44 条追加拍板）：
+    /// 时间范围 / 任务数 / 成功失败 / 引擎版本 / 输出根 + "细节在哪看"。
+    ///
+    /// <para>为什么值得写：这份 txt 的用途就是"发给别人（或未来的自己）排查" ——
+    /// 没有头，读的人得先自己找"这是哪一批、跑到几点、成不成、用的哪个引擎"。
+    /// ⛔ 这里只写**机器事实**（任务表的终态枚举与引擎标识），不写任何密码相关内容。</para>
+    ///
+    /// <para>internal 是为了让测试能直接钉住"头部写了哪几件事、顺序对不对"
+    /// （产品入口只有「导出日志（本次操作）」这一个，见 <see cref="ExportLog"/>）。</para>
+    /// </summary>
     private LogExportBuilder? _logExportBuilder;
 
     private LogExportBuilder LogExport => _logExportBuilder ??= new LogExportBuilder(
