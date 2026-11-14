@@ -1,10 +1,8 @@
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 
 namespace ArchiveFixer.Extraction;
@@ -38,18 +36,18 @@ namespace ArchiveFixer.Extraction;
 /// 所以这里只认定稿那一刻记下来的那一条路径（门槛 4），并用"必须在自己的输出根之内 + 形状必须是其余物"
 /// 两道校验兜住（门槛 5），两条都过了才动手。</para>
 ///
+/// <para><b>三段职责（2026-11-14 拆分，公开 API、门槛顺序与判据一个字没改）</b>：
+/// 扫描/规划 = <see cref="RestPurgeTargetGate"/>（解析目标 + 读取型闸门 + 待删清单）；
+/// 删除执行 = <see cref="RestPurgeDeleter"/>（空壳就地删 / 永久删除）；
+/// 结果汇总/日志 = <see cref="RestPurgeReporter"/>（事实位 + 措辞）。
+/// 本类只留**不可逆判据的公开入口**与两档的编排（调用的先后 = 原先的门槛顺序）。</para>
+///
 /// <para><b>线程</b>：全是磁盘活，调用方必须放后台线程。</para>
 /// </summary>
 public sealed class RestItemPurger
 {
-    /// <summary>
-    /// 点名时最多写几个名字（多出来折成"还有 K 个"）—— 与批末诊断的"每组最多 3 个名字"同一口径。
-    /// </summary>
-    private const int MaxContentKeepNames = 3;
-
-    private readonly IDeleteExecutor _executor;
-    private readonly IDeleteFileSystemProbe _probe;
-    private readonly ContentKeepRules _keepRules;
+    private readonly RestPurgeTargetGate _gate;
+    private readonly RestPurgeDeleter _deleter;
 
     /// <param name="executor">删除执行体（默认真实文件系统 / 回收站）。</param>
     /// <param name="probe">文件系统探测器（默认 Windows 实现）。</param>
@@ -69,9 +67,10 @@ public sealed class RestItemPurger
         IDeleteFileSystemProbe? probe = null,
         ContentKeepRules? keepRules = null)
     {
-        _executor = executor ?? new ShellDeleteExecutor();
-        _probe = probe ?? WindowsDeleteFileSystemProbe.Instance;
-        _keepRules = keepRules ?? ContentKeepRules.Empty;
+        _deleter = new RestPurgeDeleter(
+            executor ?? new ShellDeleteExecutor(),
+            probe ?? WindowsDeleteFileSystemProbe.Instance);
+        _gate = new RestPurgeTargetGate(keepRules ?? ContentKeepRules.Empty);
     }
 
     /// <summary>彻底删除那一档的理由（写进删除日志）。必须写清"为什么可以删"与"进了哪里"。</summary>
@@ -111,12 +110,14 @@ public sealed class RestItemPurger
     /// <para><b>门槛（与 <see cref="Purge"/> 同一套容器内校验，判据另立两条）</b>：</para>
     /// <list type="number">
     /// <item><description>`其余物` 目录**是本次真的记下来的那一个**（<see cref="ArchiveTask.RestDirectoryPath"/>），
-    /// 形状必须是其余物、必须在自己输出根之内 —— 与 <see cref="Purge"/> 逐字相同；</description></item>
-    /// <item><description>第六道门槛（分卷半套，<see cref="Extraction.RestVolumeCompletenessGate"/>）照过；</description></item>
+    /// 形状必须是其余物、必须在自己输出根之内 —— 与 <see cref="Purge"/> 逐字相同
+    /// （判据本体 <see cref="RestPurgeTargetGate.DescribeBlocker"/>）；</description></item>
+    /// <item><description>第六道门槛（分卷半套，<see cref="Extraction.RestVolumeCompletenessGate"/>）照过（同上一处）；</description></item>
     /// <item><description>**要保留的东西里至少有一个此刻真的在盘上** —— 调用方传进来的判据是
     /// "这条链的最外层源包"。它不在 ⇒ 判不出 ⇒ **一个字节都不删**（源包是唯一能重建整条链的东西，
     /// 它都没了还清过程物，等于把最后一份可恢复路径也删掉）；</description></item>
-    /// <item><description>要保留的那一项**在其余物里面**时按项保留（不会被当成"别的项"顺手删掉）。</description></item>
+    /// <item><description>要保留的那一项**在其余物里面**时按项保留（不会被当成"别的项"顺手删掉）
+    /// —— 后两条的判据本体 <see cref="RestPurgeTargetGate.DescribeKeptItemsBlocker"/>。</description></item>
     /// </list>
     /// </summary>
     public RestPurgeOutcome PurgeExcept(
@@ -126,7 +127,7 @@ public sealed class RestItemPurger
     {
         if (task == null)
         {
-            return Skip("没有任务，未删除任何东西");
+            return RestPurgeReporter.Skip("没有任务，未删除任何东西");
         }
 
         string? allowedRootEvidence = null;
@@ -135,115 +136,40 @@ public sealed class RestItemPurger
         {
             if (plan.Cancelled)
             {
-                return Skip("删除计划已取消，其余物一个字节都不删");
+                return RestPurgeReporter.Skip("删除计划已取消，其余物一个字节都不删");
             }
 
-            if (plan.Targets.Count != 1 ||
-                string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
-                !string.Equals(
-                    SafePathHelper.GetFullPathSafe(plan.Targets[0]),
-                    SafePathHelper.GetFullPathSafe(task.RestDirectoryPath),
-                    StringComparison.OrdinalIgnoreCase))
+            if (!RestPurgeTargetGate.PlanTargetsRestDirectory(task, plan))
             {
-                return Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
+                return RestPurgeReporter.Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
             }
 
             allowedRootEvidence = plan.AllowedRoot;
         }
 
-        string name = string.IsNullOrWhiteSpace(task.FileName)
-            ? Path.GetFileName(task.CurrentPath)
-            : task.FileName;
+        string name = RestPurgeTargetGate.ResolveName(task);
 
-        string? targetError = ValidateRestTarget(
+        string? gateBlocker = _gate.DescribeBlocker(
             task,
             allowedRootEvidence,
             out string directory,
             out string allowedRoot);
 
-        if (targetError != null)
+        if (gateBlocker != null)
         {
-            return Skip(targetError);
+            return RestPurgeReporter.Skip(gateBlocker);
         }
 
-        string? splitGroupBlocker = Extraction.RestVolumeCompletenessGate.DescribeBlocker(directory);
-
-        if (splitGroupBlocker != null)
-        {
-            return Skip($"{name}：{splitGroupBlocker}");
-        }
-
-        /*
-         * ===== 「内容物保留关键词」：其余物里有命中项 ⇒ 整份不删（用户 2026-10-04 的新功能）=====
-         *
-         * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
-         * 其余物里躺着的是**过程物 / 内容物**（内层包、抠出来的内嵌归档副本）—— 命中关键词的那些
-         * 一个字节都不许删；而这一档删的是**整个目录**，两件事冲突 ⇒ 兜底落在"什么都不做"：
-         * **整份不删 + 一行点名**。
-         *
-         * ⚠ 唯一豁免：**这一单自己的源包**（<see cref="ArchiveTask.CurrentPath"/> /
-         * <see cref="ArchiveTask.VolumePaths"/>）。用户明确划的界是"只管内容物" ——
-         * 别人给的 `小明.zip` 作为源包被搬进其余物时照常按设置处理。
-         * 判据读的是任务上的**事实路径**（搬完之后管线会把它们改成其余物里的新位置），⛔ 不猜名字。
-         */
-        string? contentKeepBlocker = DescribeContentKeepBlocker(
+        string? itemsBlocker = RestPurgeTargetGate.DescribeKeptItemsBlocker(
+            name,
             directory,
-            EnumerateTaskSourcePaths(task));
+            keepPaths,
+            out List<string> keep,
+            out List<string> targets);
 
-        if (contentKeepBlocker != null)
+        if (itemsBlocker != null)
         {
-            return Skip($"{name}：{contentKeepBlocker}");
-        }
-
-        var keep = new List<string>();
-
-        foreach (string path in keepPaths ?? Array.Empty<string>())
-        {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                continue;
-            }
-
-            string full = SafePathHelper.GetFullPathSafe(path).TrimEnd('\\', '/');
-
-            if (full.Length > 0 && (File.Exists(full) || Directory.Exists(full)))
-            {
-                keep.Add(full);
-            }
-        }
-
-        if (keep.Count == 0)
-        {
-            return Skip(
-                $"{name}：要保留的东西（这条链的最外层源包）一个都不在盘上 —— 判不出 ⇒ 其余物一个字节都不删");
-        }
-
-        var targets = new List<string>();
-
-        try
-        {
-            foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
-            {
-                string full = entry.TrimEnd('\\', '/');
-
-                // 要保留的那一项（或它的祖先 / 后代）跳过 —— 其余的一律是过程物。
-                if (keep.Any(item => IsSameOrUnder(full, item) || IsSameOrUnder(item, full)))
-                {
-                    continue;
-                }
-
-                targets.Add(full);
-            }
-        }
-        catch (Exception ex)
-        {
-            ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-            return Skip($"{name}：读不了其余物目录（{ex.Message}），一个字节都不删");
-        }
-
-        if (targets.Count == 0)
-        {
-            return Skip($"{name}：其余物里除了要保留的以外没有别的项，没有可删除的内容");
+            return RestPurgeReporter.Skip(itemsBlocker);
         }
 
         /*
@@ -254,265 +180,80 @@ public sealed class RestItemPurger
          * —— 那就是回收站里那堆 1 KB 同名「其余物」文件夹的另一半来源。
          *
          * ⛔ keepPaths 的语义一个字不改：要保留的那一份（这条链的最外层源包）怎么算、怎么排除，
-         * 全在上面，这里只决定"剩下这些怎么删"。目标里只要有一个是真文件，
-         * <see cref="IsFileFreeDirectoryTree"/> 就对它返回 false ⇒ 整个 targets 照旧走回收站。
+         * 全在 <see cref="RestPurgeTargetGate.DescribeKeptItemsBlocker"/> 里，这里只决定"剩下这些怎么删"。
+         * 目标里只要有一个是真文件，<see cref="RestPurgeDeleter.IsFileFreeDirectoryTree"/> 就对它返回
+         * false ⇒ 整个 targets 照旧走永久删除。
          */
-        if (targets.All(target => IsFileFreeDirectoryTree(target)))
+        if (targets.All(target => RestPurgeDeleter.IsFileFreeDirectoryTree(target)))
         {
             int removedCount = 0;
 
             foreach (string target in targets)
             {
-                try
+                // 判据已证明这一个递归无文件 ⇒ 只剩空目录结构，就地删掉（不进回收站）。
+                string? shellError = RestPurgeDeleter.TryDeleteEmptyShellDirectory(target);
+
+                if (shellError != null)
                 {
-                    // 判据已证明这一个递归无文件 ⇒ 只剩空目录结构，就地删掉（不进回收站）。
-                    Directory.Delete(target, recursive: true);
-                    removedCount++;
-                }
-                catch (Exception ex)
-                {
-                    ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-                    return Skip(
-                        $"{name}：其余物里剩下的全是空壳，但就地删空目录失败（{target}：{ex.Message}）"
+                    return RestPurgeReporter.Skip(
+                        $"{name}：其余物里剩下的全是空壳，但就地删空目录失败（{target}：{shellError}）"
                         + $" —— 已就地删掉 {removedCount} / {targets.Count} 个空目录，没有送进回收站，"
                         + "没删掉的项仍在原处");
                 }
+
+                removedCount++;
             }
 
-            string shellLine =
-                $"{name}：其余物里除要保留的以外只剩下空壳（0 个文件），已就地删掉 {removedCount} 个空目录，"
-                + "没有送进回收站";
+            string shellLine = RestPurgeReporter.DescribeKeptItemsShellRemoved(name, removedCount);
 
-            return new RestPurgeOutcome
-            {
-                Attempted = true,
-                Succeeded = true,
-                Directory = directory,
-                FreedBytes = 0,
-                EntryCount = 0,
-                RemovedAsEmptyShell = true,
-                Message = shellLine + $"，保留的那一份仍在盘上：{string.Join("、", keep)}",
-                LogLines = new[] { shellLine }
-            };
+            return RestPurgeReporter.RemovedAsEmptyShell(
+                directory,
+                shellLine + RestPurgeReporter.DescribeKeptSuffix(keep),
+                new[] { shellLine });
         }
-
-        var service = new RecycleBinService(_executor, null, _probe);
 
         var requests = targets
             .Select(path => new DeleteRequest(path, PartialPurgeReason))
             .ToList();
 
-        DeleteResult result;
+        DeleteResult? result = _deleter.TryDeletePermanently(
+            requests,
+            allowedRoot,
+            PartialPurgeReason,
+            out string? deleteError);
 
-        try
+        if (result == null)
         {
-            result = service.Delete(
-                requests,
-                new DeleteOptions
-                {
-                    AllowedRoot = allowedRoot,
-                    UserConfirmed = true,
-                    Mode = DeleteMode.Permanent,
-                    Reason = PartialPurgeReason
-                });
-        }
-        catch (Exception ex)
-        {
-            ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-            return Skip($"{name}：清理其余物里的过程物时出现意外错误（{ex.Message}），一个字节都没删");
+            return RestPurgeReporter.Skip(
+                $"{name}：清理其余物里的过程物时出现意外错误（{deleteError}），一个字节都没删");
         }
 
-        var logLines = result.LogEntries.Select(entry => entry.ToDisplayText()).ToList();
+        IReadOnlyList<string> logLines = RestPurgeReporter.ToLogLines(result);
         int entryCount = result.Outcomes.Sum(outcome => outcome.EntryCount);
 
         if (result.SuccessCount <= 0)
         {
-            string failure = result.FailureReasons.Count > 0
-                ? string.Join("；", result.FailureReasons)
-                : result.Message;
-
-            return new RestPurgeOutcome
-            {
-                Attempted = true,
-                Succeeded = false,
-                Directory = directory,
-                Message = $"{name}：其余物里的 {targets.Count} 个过程物没能删掉（{failure}）—— "
-                          + "内容物与源包都不受影响",
-                LogLines = logLines
-            };
+            return RestPurgeReporter.FailedNotRemoved(
+                directory,
+                RestPurgeReporter.DescribeKeptItemsPurgeFailed(
+                    name,
+                    targets.Count,
+                    RestPurgeReporter.DescribeFailureDetail(result)),
+                logLines);
         }
 
-        return new RestPurgeOutcome
-        {
-            Attempted = true,
-            Succeeded = true,
-            Directory = directory,
-            FreedBytes = result.FreedBytes,
-            EntryCount = entryCount,
-            Message = $"{name}：其余物里除要保留的以外已删掉 {result.SuccessCount} / {targets.Count} 个项"
-                      + $"（{entryCount} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）"
-                      + $"，保留的那一份仍在盘上：{string.Join("、", keep)}",
-            LogLines = logLines
-        };
-    }
-
-    /// <summary>
-    /// 「内容物保留关键词」这一档的**唯一判据**（用户 2026-10-04 的新功能，执行体里判）：
-    /// 其余物这棵树里**有没有**名字命中关键词的文件 —— 有 ⇒ 返回一句话（点名哪几个 + 命中哪个词），
-    /// 调用方**整份不删**；没有 ⇒ <c>null</c>（照旧按档删）。
-    ///
-    /// <para><b>三条口径</b>：① 空关键词列表也要扫默认内容容器（`.docx` / `.jar` 等）；
-    /// ② <paramref name="exemptPaths"/> 里的是**这一单自己的源包**（用户划的界：
-    /// 只管内容物，源包照常处理）；③ **扫不动（权限 / 目录读不了）⇒ 当作"有命中项"拦下**
-    /// —— 兜底永远落在"什么都不做"那一档（AGENTS.md §9.5）。</para>
-    /// </summary>
-    private string? DescribeContentKeepBlocker(string directory, IReadOnlyList<string> exemptPaths)
-    {
-        var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (string path in exemptPaths)
-        {
-            string full = SafePathHelper.GetFullPathSafe(path);
-
-            if (full.Length > 0)
-            {
-                exempt.Add(full);
-            }
-        }
-
-        var hits = new List<string>();
-        string? hitKeyword = null;
-        string? hitContainer = null;
-
-        try
-        {
-            foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-            {
-                if (exempt.Contains(SafePathHelper.GetFullPathSafe(file)))
-                {
-                    // 这一单自己的源包：不套用关键词（见方法注释第 ② 条）。
-                    continue;
-                }
-
-                string? keyword = _keepRules.FindMatch(file);
-                bool protectedContainer = ArchiveFixer.Security.ContentContainerProtection.ShouldProtect(file);
-
-                if (keyword == null && !protectedContainer)
-                {
-                    continue;
-                }
-
-                hitKeyword ??= keyword;
-                hitContainer ??= protectedContainer
-                    ? ArchiveFixer.Security.ContentContainerProtection.Describe(file)
-                    : null;
-                hits.Add(file);
-            }
-        }
-        catch (Exception ex)
-        {
-            ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-            return $"其余物里有「内容物保留关键词」这一档，但这棵树扫不动（{ex.Message}）"
-                   + " —— 判不出里面有没有命中项，所以一个字节都不删（宁可不动，也不误删）";
-        }
-
-        if (hits.Count == 0)
-        {
-            return null;
-        }
-
-        string reason = hitKeyword != null
-            ? $"「内容物保留关键词」（{hitKeyword}）"
-            : $"内容容器保护（{hitContainer}）";
-
-        return $"其余物里有 {hits.Count} 个文件命中{reason}："
-               + $"{ContentKeepRules.DescribeHitNames(hits, MaxContentKeepNames)}"
-               + " —— 按设置这些文件碰都不碰，所以这一份其余物整份不删（一个字节都没动）";
-    }
-
-    /// <summary>
-    /// 这一单**自己的源包路径**（搬进其余物之后 <see cref="ArchiveTask.CurrentPath"/> 与
-    /// <see cref="ArchiveTask.VolumePaths"/> 已经是新位置）—— 它们是关键词这一档的**豁免项**：
-    /// 用户划的界是"只管内层包这类内容物"，别人给的 `小明.zip` 当源包时照常按设置处理。
-    /// </summary>
-    private static List<string> EnumerateTaskSourcePaths(ArchiveTask? task)
-    {
-        var paths = new List<string>();
-
-        if (task == null)
-        {
-            return paths;
-        }
-
-        if (!string.IsNullOrWhiteSpace(task.CurrentPath))
-        {
-            paths.Add(task.CurrentPath);
-        }
-
-        foreach (string volumePath in task.VolumePaths)
-        {
-            if (!string.IsNullOrWhiteSpace(volumePath))
-            {
-                paths.Add(volumePath);
-            }
-        }
-
-        return paths;
-    }
-
-    /// <summary><paramref name="candidate"/> 就是 <paramref name="root"/>，或者在它之下。</summary>
-    private static bool IsSameOrUnder(string candidate, string root)
-    {
-        return string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase) ||
-               candidate.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase) ||
-               candidate.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// 两档共用：解析并校验「要删的其余物目录」。只判路径事实，不判断该不该删。
-    /// </summary>
-    private string? ValidateRestTarget(
-        ArchiveTask task,
-        string? allowedRootEvidence,
-        out string directory,
-        out string allowedRoot)
-    {
-        directory = string.Empty;
-        allowedRoot = string.Empty;
-
-        string name = string.IsNullOrWhiteSpace(task.FileName)
-            ? Path.GetFileName(task.CurrentPath)
-            : task.FileName;
-
-        if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
-        {
-            return $"{name}：没记下本次定稿实际用的其余物目录，不敢猜路径，一个字节都不删";
-        }
-
-        directory = SafePathHelper.GetFullPathSafe(task.RestDirectoryPath);
-
-        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-        {
-            return $"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容";
-        }
-
-        if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out allowedRoot, out string why))
-        {
-            return $"{name}：{why}，已拒绝删除";
-        }
-
-        if (!LooksLikeArtifactDirectory(directory))
-        {
-            return $"{name}：{directory} 的形状不像「其余物」目录（既不是 {ProcessArtifactLayout.ArtifactDirectoryName}，"
-                + "上一级也不是），已拒绝删除";
-        }
-
-        if (!ArchivePathGuard.IsInsideRoot(allowedRoot, directory, out string outsideReason))
-        {
-            return $"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}";
-        }
-
-        return null;
+        return RestPurgeReporter.Removed(
+            directory,
+            entryCount,
+            result.FreedBytes,
+            RestPurgeReporter.DescribeKeptItemsPurged(
+                name,
+                result.SuccessCount,
+                targets.Count,
+                entryCount,
+                result.FreedBytes,
+                keep),
+            logLines);
     }
 
     /// <summary>
@@ -548,7 +289,7 @@ public sealed class RestItemPurger
     {
         if (task == null)
         {
-            return Skip("没有任务，未删除任何东西");
+            return RestPurgeReporter.Skip("没有任务，未删除任何东西");
         }
 
         if (completenessEvidenceTask != null
@@ -557,24 +298,22 @@ public sealed class RestItemPurger
                 task.ChainRootIdentity,
                 StringComparison.OrdinalIgnoreCase))
         {
-            return Skip(
+            return RestPurgeReporter.Skip(
                 $"{task.FileName}：完整性证据来自另一条链"
                 + $"（证据链根 {completenessEvidenceTask.ChainRootIdentity}，本任务链根 {task.ChainRootIdentity}）"
                 + "—— 其余物一个字节都不删");
         }
 
-        string name = string.IsNullOrWhiteSpace(task.FileName)
-            ? Path.GetFileName(task.CurrentPath)
-            : task.FileName;
+        string name = RestPurgeTargetGate.ResolveName(task);
 
         if (cancelled)
         {
-            return Skip($"{name}：已取消 —— 其余物一个字节都不删（失败 / 取消 / 校验不通过一律不动）");
+            return RestPurgeReporter.Skip($"{name}：已取消 —— 其余物一个字节都不删（失败 / 取消 / 校验不通过一律不动）");
         }
 
         if (task.Outcome != TaskOutcome.Succeeded)
         {
-            return Skip(
+            return RestPurgeReporter.Skip(
                 $"{name}：任务的机器终态不是「完成」（当前：{task.Outcome}）—— " +
                 $"其余物一个字节都不删（部分完成 / 失败 / 取消 / 跳过一律不动）");
         }
@@ -595,163 +334,75 @@ public sealed class RestItemPurger
 
         if (!completeness.AllowsSourceRemoval)
         {
-            return Skip(
+            return RestPurgeReporter.Skip(
                 $"{name}：{completeness.Message}（机器结论：{completeness.Evidence}），其余物一个字节都不删");
         }
 
-        string? targetError = ValidateRestTarget(
+        // 门槛 4/5 + 第六道门槛（半套分卷）+「内容物保留关键词」：判据全在扫描/规划那一层。
+        string? gateBlocker = _gate.DescribeBlocker(
             task,
             allowedRootEvidence,
             out string directory,
             out string allowedRoot);
 
-        if (targetError != null)
+        if (gateBlocker != null)
         {
-            return Skip(targetError);
-        }
-
-        /*
-         * ===== 第六道门槛：其余物里的分卷**不许是"半套"**（用户 2026-09-30 真机，25 GB 被误删）=====
-         *
-         * 现场：内层包是一组 6 片跨盘 ZIP，末片当时没被认出来（ZIP64 收尾那两条闸门，见
-         * `docs/真机事故复盘.md` §44.2）⇒ 末片被当**内容物**留在成品目录，同组 5 卷被当**过程物**
-         * 收进其余物；上面五道门槛全都过得去，于是其余物被整份彻底删除 ——
-         * 一组包被拆开、末片 1.62 GB 留下、另外 25 GB 永久消失，谁都再也解不开。
-         *
-         * 判据本体是公开纯函数 <see cref="Extraction.RestVolumeCompletenessGate"/>（单独可测）；
-         * ⛔ 放在**这里**而不是各个调用点：其余物的删除只有这一个执行体，
-         * 三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它，放调用点等于漏两处。
-         */
-        string? splitGroupBlocker = Extraction.RestVolumeCompletenessGate.DescribeBlocker(directory);
-
-        if (splitGroupBlocker != null)
-        {
-            return Skip($"{name}：{splitGroupBlocker}");
-        }
-
-        /*
-         * ===== 「内容物保留关键词」：其余物里有命中项 ⇒ 整份不删（用户 2026-10-04 的新功能）=====
-         *
-         * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
-         * 这一档删的是**整个其余物目录**（源包 + 过程物一起），而里面有命中项时两件事冲突
-         * ⇒ 兜底落在"什么都不做"：**整份不删 + 一行点名**（用户要求"碰都不碰"）。
-         *
-         * ⚠ 唯一豁免：**这一单自己的源包**（<see cref="ArchiveTask.CurrentPath"/> /
-         * <see cref="ArchiveTask.VolumePaths"/>）—— 用户划的界是"只管内容物"，
-         * 别人给的 `小明.zip` 作为源包被搬进其余物时照常按设置处理。
-         *
-         * ⛔ 判据放在这里（执行体）而不是调用点：其余物的删除只有这一个类，三处调用都得过它。
-         * ⛔ 空关键词列表 ⇒ 连扫都不扫（行为与加这条功能之前逐字相同）。
-         */
-        string? contentKeepBlocker = DescribeContentKeepBlocker(
-            directory,
-            EnumerateTaskSourcePaths(task));
-
-        if (contentKeepBlocker != null)
-        {
-            return Skip($"{name}：{contentKeepBlocker}");
+            return RestPurgeReporter.Skip(gateBlocker);
         }
 
         /*
          * ===== 空壳就地删掉，不进回收站（用户 2026-10-03 真机）=====
          *
-         * 现场：用户用「删除操作 = 移入回收站」跑完一批之后，回收站里堆了非常多 1 KB 的同名
-         * 「其余物」文件夹 —— 本方法把**整个 `其余物\` 目录当一个条目**送回收站，而每个任务
-         * （递归时每层）各送一次，里面往往只剩空壳 / 极小中间件，**空目录也照送**。
-         * 空目录没有"可还原"的价值，送回收站只是往用户的回收站里塞垃圾。
-         *
-         * 判据唯一出口 <see cref="IsFileFreeDirectoryTree"/>：**递归地一个文件都没有**
-         * （只剩空目录结构，含嵌套空目录）。⛔ 排在上面六道门槛**全部通过之后** ——
+         * 判据唯一出口 <see cref="RestPurgeDeleter.IsFileFreeDirectoryTree"/>：**递归地一个文件都没有**
+         * （只剩空目录结构，含嵌套空目录）。⛔ 排在全部门槛**通过之后** ——
          * 这一条只决定"怎么删"，绝不决定"能不能删"：越界 / 形状不像 / 半套分卷照旧 Skip、什么都不做。
          */
-        if (IsFileFreeDirectoryTree(directory))
+        if (RestPurgeDeleter.IsFileFreeDirectoryTree(directory))
         {
-            try
+            string? shellError = RestPurgeDeleter.TryDeleteEmptyShellDirectory(directory);
+
+            if (shellError != null)
             {
-                // 判据已证明这一棵递归无文件，目录本身又过了六道门槛 ⇒ 这里只可能是空目录结构。
-                Directory.Delete(directory, recursive: true);
-            }
-            catch (Exception ex)
-            {
-                ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-                return Skip(
-                    $"{name}：其余物里只剩下空壳（0 个文件），但就地删空目录失败（{ex.Message}）"
+                return RestPurgeReporter.Skip(
+                    $"{name}：其余物里只剩下空壳（0 个文件），但就地删空目录失败（{shellError}）"
                     + " —— 没有送进回收站，盘上可能还剩一部分空目录");
             }
 
-            string shellLine =
-                $"{name}：其余物目录里只剩下空壳（0 个文件），已就地删掉空目录，没有送进回收站";
+            string shellLine = RestPurgeReporter.DescribeDirectoryShellRemoved(name);
 
-            return new RestPurgeOutcome
-            {
-                Attempted = true,
-                Succeeded = true,
-                Directory = directory,
-                FreedBytes = 0,
-                EntryCount = 0,
-                RemovedAsEmptyShell = true,
-                Message = shellLine,
-                LogLines = new[] { shellLine }
-            };
+            return RestPurgeReporter.RemovedAsEmptyShell(directory, shellLine, new[] { shellLine });
         }
 
-        // logSink 传 null：删除日志由调用方（协调器）原样写进界面与文件日志，
-        // 不在这里另开一个落点（两处各写一份会让日志出现两个时间戳）。
-        string reason = AutoPurgeReason;
+        DeleteResult? result = _deleter.TryDeletePermanently(
+            new[] { new DeleteRequest(directory, AutoPurgeReason) },
+            allowedRoot,
+            AutoPurgeReason,
+            out string? deleteError);
 
-        var service = new RecycleBinService(_executor, null, _probe);
-        DeleteRequest request = new DeleteRequest(directory, reason);
-
-        DeleteResult result;
-
-        try
+        if (result == null)
         {
-            result = service.Delete(
-                new[] { request },
-                new DeleteOptions
-                {
-                    AllowedRoot = allowedRoot,
-                    UserConfirmed = true,
-                    Mode = DeleteMode.Permanent,
-                    Reason = reason
-                });
-        }
-        catch (Exception ex)
-        {
-            ArchiveFixer.Helpers.AppDiagnostics.Problem("其余物", "删除或处理", ex);
-            return Skip($"{name}：删除其余物时出现意外错误（{ex.Message}），源包与过程物都还在");
+            return RestPurgeReporter.Skip($"{name}：删除其余物时出现意外错误（{deleteError}），源包与过程物都还在");
         }
 
-        var logLines = result.LogEntries.Select(entry => entry.ToDisplayText()).ToList();
-        DeleteOutcome? outcome = result.Outcomes.FirstOrDefault();
+        IReadOnlyList<string> logLines = RestPurgeReporter.ToLogLines(result);
+        int entryCount = result.Outcomes.FirstOrDefault()?.EntryCount ?? 0;
 
         if (result.SuccessCount <= 0)
         {
-            string failure = result.FailureReasons.Count > 0
-                ? string.Join("；", result.FailureReasons)
-                : result.Message;
-
-            return new RestPurgeOutcome
-            {
-                Attempted = true,
-                Succeeded = false,
-                Directory = directory,
-                Message = $"{name}：其余物没能删掉（{failure}）—— 内容物不受影响，但空间没有回来",
-                LogLines = logLines
-            };
+            return RestPurgeReporter.FailedNotRemoved(
+                directory,
+                RestPurgeReporter.DescribeDirectoryPurgeFailed(
+                    name,
+                    RestPurgeReporter.DescribeFailureDetail(result)),
+                logLines);
         }
 
-        return new RestPurgeOutcome
-        {
-            Attempted = true,
-            Succeeded = true,
-            Directory = directory,
-            FreedBytes = result.FreedBytes,
-            EntryCount = outcome?.EntryCount ?? 0,
-            Message = $"{name}：其余物已彻底删除 {directory}"
-                + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）",
-            LogLines = logLines
-        };
+        return RestPurgeReporter.Removed(
+            directory,
+            entryCount,
+            result.FreedBytes,
+            RestPurgeReporter.DescribeDirectoryPurged(name, directory, entryCount, result.FreedBytes),
+            logLines);
     }
 
     /// <summary>
@@ -766,21 +417,17 @@ public sealed class RestItemPurger
     {
         if (task == null || plan == null)
         {
-            return Skip("没有任务或删除计划，未删除任何东西");
+            return RestPurgeReporter.Skip("没有任务或删除计划，未删除任何东西");
         }
 
         if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
         {
-            return Skip("任务没有其余物目录，未删除任何东西");
+            return RestPurgeReporter.Skip("任务没有其余物目录，未删除任何东西");
         }
 
-        if (plan.Targets.Count != 1 ||
-            !string.Equals(
-                SafePathHelper.GetFullPathSafe(plan.Targets[0]),
-                SafePathHelper.GetFullPathSafe(task.RestDirectoryPath),
-                StringComparison.OrdinalIgnoreCase))
+        if (!RestPurgeTargetGate.PlanTargetsRestDirectory(task, plan))
         {
-            return Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
+            return RestPurgeReporter.Skip("删除计划的目标不是本任务的其余物，一个字节都不删");
         }
 
         return Purge(
@@ -792,170 +439,12 @@ public sealed class RestItemPurger
     }
 
     /// <summary>
-    /// 允许删除的根：本任务的输出目录，或（开了结果归集时）归集之后的落点。
-    /// **只认这两个**；都不包含目标目录就拒绝 —— 宁可少删，不可错删。
-    /// </summary>
-    private static bool TryResolveAllowedRoot(
-        ArchiveTask task,
-        string directory,
-        string? allowedRootEvidence,
-        out string allowedRoot,
-        out string why)
-    {
-        allowedRoot = string.Empty;
-        why = string.Empty;
-
-        var candidates = new List<string>();
-
-        /*
-         * 调用方给的锚点（见 `Purge` 的 `allowedRootEvidence`）：只在过路层那一格用得上
-         * —— 那一单被收场时 `OutputPath` 已被显式清空，自己的两个候选都是空的。
-         */
-        if (!string.IsNullOrWhiteSpace(allowedRootEvidence))
-        {
-            candidates.Add(SafePathHelper.GetFullPathSafe(allowedRootEvidence));
-        }
-        else
-        {
-            if (!string.IsNullOrWhiteSpace(task.CollectedPath))
-            {
-                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.CollectedPath));
-            }
-
-            if (!string.IsNullOrWhiteSpace(task.OutputPath))
-            {
-                AddAllowedRootCandidate(candidates, SafePathHelper.GetFullPathSafe(task.OutputPath));
-            }
-        }
-
-        foreach (string candidate in candidates)
-        {
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                continue;
-            }
-
-            if (ArchivePathGuard.IsInsideRoot(candidate, directory, out _))
-            {
-                allowedRoot = candidate;
-                return true;
-            }
-        }
-
-        why = $"其余物目录 {directory} 不在本任务的输出目录（{string.Join(" / ", candidates.Where(c => c.Length > 0))}）之内";
-        return false;
-    }
-
-    /// <summary>
-    /// 允许根本身 + 它的**父目录**各算一次：其余物现在和内容物文件夹同级，
-    /// 落在输出目录的父目录下（`out\包名` 的其余物在 `out\其余物`），
-    /// 只拿输出目录自己当允许根会把合法目标判成越界。
-    /// </summary>
-    private static void AddAllowedRootCandidate(List<string> candidates, string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
-        candidates.Add(path);
-
-        string? parent = Path.GetDirectoryName(path);
-
-        if (!string.IsNullOrWhiteSpace(parent))
-        {
-            candidates.Add(parent);
-        }
-    }
-
-    /// <summary>
-    /// 路径形状校验：最后一段是「其余物 / 过程物」，**或者**上一级是
+    /// 路径形状校验（**薄转发**）：最后一段是「其余物 / 过程物」，**或者**上一级是
     /// （共用输出根模式是 <c>&lt;根&gt;\其余物\&lt;包基名&gt;</c>，最后一段是包名）。
+    /// 判据本体只有一处：<see cref="RestPurgeTargetGate.LooksLikeArtifactDirectory"/>。
     /// </summary>
     internal static bool LooksLikeArtifactDirectory(string? directory)
     {
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return false;
-        }
-
-        string trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (ProcessArtifactLayout.IsArtifactDirectoryName(trimmed))
-        {
-            return true;
-        }
-
-        try
-        {
-            string? parent = Path.GetDirectoryName(trimmed);
-
-            return !string.IsNullOrWhiteSpace(parent) &&
-                   ProcessArtifactLayout.IsArtifactDirectoryName(parent);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// **空壳判据（唯一出口）**：这个目录**递归地一个文件都没有**（只剩空目录结构，含嵌套空目录）。
-    ///
-    /// <para><b>为什么要它</b>（用户 2026-10-03 真机）：删除操作 = 移入回收站跑完一批之后，回收站里堆了
-    /// 非常多 1 KB 的同名「其余物」文件夹 —— <see cref="Purge"/> 把整个 `其余物\` 目录当一个条目送回收站、
-    /// 每个任务（递归时每层）各送一次，而里面往往只剩空壳。空目录没有"可还原"的价值
-    /// ⇒ 这一档改为**就地永久删掉、不进回收站**。</para>
-    ///
-    /// <para>两个执行体（<see cref="Purge"/> 与 <see cref="PurgeExcept"/>）都转调这一份，
-    /// ⛔ 不许各写一遍（AGENTS.md §9.5：同一件事的真值只允许有一个出口）。</para>
-    ///
-    /// <para><b>判据只读文件系统事实</b>：数"这一棵下面有没有文件"
-    /// （⛔ 不比中文名、⛔ 不看时间戳、⛔ 不看大小）。见到第一个文件就返回 false，不必数到底。
-    /// 目录不在 / 读不动（枚举中途抛异常）⇒ 一律 false = **判不出就当它不空** ——
-    /// 于是 <c>Directory.Delete(recursive: true)</c> 只可能作用在**已被本判据证明递归无文件**的那个目录上。</para>
-    ///
-    /// <para>⚠ 目录联接点（junction）会被枚举跟着进去（实测 .NET 如此）：所以"链到别处一棵有文件的树"
-    /// 会被正确判成不空；而链到一棵空树时本判据会说"是空壳"，随后的
-    /// <c>Directory.Delete(recursive: true)</c> 会因为重解析点报"拒绝访问"抛出来
-    /// —— 由调用点的 catch 兜住（实测：.NET 的递归删除**不跟着重解析点删**，链接目标不会被删）。</para>
-    /// </summary>
-    private static bool IsFileFreeDirectoryTree(string? directory)
-    {
-        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-        {
-            return false;
-        }
-
-        try
-        {
-            foreach (string entry in Directory.EnumerateFileSystemEntries(
-                         directory,
-                         "*",
-                         SearchOption.AllDirectories))
-            {
-                // 只认文件：`File.Exists` 对目录恒为 false（枚举里的目录一律放过）。
-                if (File.Exists(entry))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static RestPurgeOutcome Skip(string message)
-    {
-        return new RestPurgeOutcome
-        {
-            Attempted = false,
-            Succeeded = false,
-            Message = message
-        };
+        return RestPurgeTargetGate.LooksLikeArtifactDirectory(directory);
     }
 }

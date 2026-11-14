@@ -1,5 +1,3 @@
-using System;
-using System.Buffers.Binary;
 using System.IO;
 
 namespace ArchiveFixer.Detection;
@@ -23,29 +21,22 @@ namespace ArchiveFixer.Detection;
 ///
 /// <para>⚠ RAR5 的加密/分卷头用 vint 编码、解析成本高，这一版**不做**（返回 null = 判不出）——
 /// 宁可判不出，也不拿"差不多"当结论。</para>
+///
+/// <para><b>本类只留策略</b>：先问谁、什么条件下退回盲扫、两个公开入口共用一次扫描。
+/// 四个内聚块在协作类里 —— 搜签名 = <see cref="SignatureWindowScan"/>；
+/// 三种格式的自洽校验 = <see cref="ZipEmbeddedProbe"/> / <see cref="SevenZipEmbeddedProbe"/> /
+/// <see cref="Rar4EmbeddedProbe"/>；媒体段长度（偏移解析）= <see cref="MediaContainerExtent"/>；
+/// 探测结果与记忆化 = <see cref="EmbeddedArchiveProbe"/> / <see cref="EmbeddedArchiveProbeCache"/>。</para>
 /// </summary>
 public static class EmbeddedArchiveLocator
 {
-    /// <summary>7z 签名。<c>37 7A BC AF 27 1C</c>。</summary>
-    private static readonly byte[] SevenZipSignature = { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C };
-
-    /// <summary>RAR 1.5–4.x 签名。<c>52 61 72 21 1A 07 00</c>。</summary>
-    private static readonly byte[] Rar4Signature = { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00 };
-
-    private const int ScanBufferSize = 1 << 20;
-    /// <summary>从文件末尾往前最多扫这么多字节（媒体前缀那一档：归档通常贴着文件尾）。</summary>
-    private const long MaxScanBytes = 4L << 20;
-    /// <summary>深扫窗口：前缀最多 512 MiB（与 ZIP 的顺序扫同一条口径：这是窗口上限，不是文件大小上限）。</summary>
-    private const long DeepScanBytes = 512L << 20;
-    private const int MaxSevenZipNextHeaderBytes = 8 << 20;
-
     /// <summary>
     /// 试着在文件里定位一份**尾部单卷归档**。找到 ⇒ 返回命中（<c>Offset &gt; 0</c>）；
     /// 找不到 / 判不出 / 偏移为 0（那就是普通单卷，由既有那条路回答）⇒ null。
     /// </summary>
     public static EmbeddedArchiveHit? TryLocate(string? path)
     {
-        return TryProbe(path, out ProbeResult probe) ? probe.Hit : null;
+        return TryProbe(path, out EmbeddedArchiveProbe probe) ? probe.Hit : null;
     }
 
     /// <summary>
@@ -58,7 +49,7 @@ public static class EmbeddedArchiveLocator
         mediaEnd = 0;
         fileLength = 0;
 
-        if (!TryProbe(path, out ProbeResult probe))
+        if (!TryProbe(path, out EmbeddedArchiveProbe probe))
         {
             return false;
         }
@@ -69,60 +60,26 @@ public static class EmbeddedArchiveLocator
         return mediaEnd > 0 && fileLength > 0;
     }
 
-    private readonly record struct ProbeResult(
-        EmbeddedArchiveHit? Hit,
-        long MediaEnd,
-        long FileLength);
+    /// <summary>
+    /// 这个名字是不是**媒体容器后缀**（只决定"要不要按媒体结构去量"，⛔ 不是内容结论）。
+    /// </summary>
+    public static bool IsMediaContainerName(string? path)
+        => !string.IsNullOrWhiteSpace(path) && MediaContainerExtent.MatchesFileName(path!);
 
     /// <summary>
-    /// 定位与媒体长度共用**同一次**扫描结果（缓存键 = 路径 + 字节数 + 修改时间）。
-    /// ⛔ 两个公开入口各自再扫一遍会把正常媒体读两次。
+    /// 两个公开入口共用**同一次**扫描结果（键 = 路径 + 字节数 + 修改时间）。
+    /// ⛔ 各自再扫一遍会把正常媒体读两次。
     /// </summary>
-    private static bool TryProbe(string? path, out ProbeResult probe)
+    private static bool TryProbe(string? path, out EmbeddedArchiveProbe probe)
     {
-        probe = default;
-
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return false;
-        }
-
-        string cacheKey;
-
-        try
-        {
-            var info = new FileInfo(path);
-
-            cacheKey = path + "|"
-                + info.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|"
-                + info.LastWriteTimeUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (Cache.TryGetValue(cacheKey, out probe))
-        {
-            return true;
-        }
-
-        probe = TryLocateUncached(path);
-
-        if (Cache.Count > 512)
-        {
-            Cache.Clear();
-        }
-
-        Cache[cacheKey] = probe;
-
-        return true;
+        return EmbeddedArchiveProbeCache.TryGetOrCompute(path, LocateUncached, out probe);
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProbeResult> Cache =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private static ProbeResult TryLocateUncached(string path)
+    /// <summary>
+    /// 探测策略本体：**只决定"先问谁、什么时候退回盲扫、命中哪一档就收工"**，判据都在协作类里。
+    /// 返回的是"这一次探测的全部事实"，而不是单个命中 —— 媒体长度与命中必须来自同一次扫描。
+    /// </summary>
+    private static EmbeddedArchiveProbe LocateUncached(string path)
     {
         long fileLength;
 
@@ -137,13 +94,13 @@ public static class EmbeddedArchiveLocator
 
         if (fileLength <= 0)
         {
-            return new ProbeResult(null, 0, fileLength);
+            return new EmbeddedArchiveProbe(null, 0, fileLength);
         }
 
         // ① ZIP：既有那份唯一实现（EOCD 偏移自洽），⛔ 不重写第二份。
-        if (TryLocateZip(path, out EmbeddedArchiveHit zipHit))
+        if (ZipEmbeddedProbe.TryLocate(path, out EmbeddedArchiveHit zipHit))
         {
-            return new ProbeResult(zipHit, 0, fileLength);
+            return new EmbeddedArchiveProbe(zipHit, 0, fileLength);
         }
 
         /*
@@ -151,14 +108,14 @@ public static class EmbeddedArchiveLocator
          * 先按媒体容器自己的结构把"媒体段"读完，媒体结束处就是归档起点；再在那个偏移上做格式自洽校验。
          * 锚点解析成功且媒体没占满整个文件 ⇒ 归档起点**已知**，⛔ 不再盲扫（省掉对普通大文件的整段扫描）。
          */
-        bool mediaName = IsMediaFileName(path);
+        bool mediaName = MediaContainerExtent.MatchesFileName(path);
         long mediaEnd = 0;
 
         /*
          * 媒体身份**按魔数**，后缀只是兜底：`336.png` 实际是 RIFF/WEBP，
          * 按 `.png` 交给 PNG 解析器会直接失败，整份文件就被当成“认不出”的内容物。
          */
-        bool mediaContainer = TryFindMediaEnd(path, out mediaEnd) && mediaEnd > 0;
+        bool mediaContainer = MediaContainerExtent.TryFindEnd(path, out mediaEnd) && mediaEnd > 0;
 
         if (mediaContainer)
         {
@@ -168,21 +125,23 @@ public static class EmbeddedArchiveLocator
              */
             if (mediaEnd >= fileLength)
             {
-                return new ProbeResult(null, mediaEnd, fileLength);
+                return new EmbeddedArchiveProbe(null, mediaEnd, fileLength);
             }
 
-            if (TryValidateSevenZip(path, mediaEnd, fileLength, out long anchoredLength, out string anchoredEvidence))
+            if (SevenZipEmbeddedProbe.TryValidateAt(
+                path, mediaEnd, fileLength, out long anchoredLength, out string anchoredEvidence))
             {
-                return new ProbeResult(
+                return new EmbeddedArchiveProbe(
                     new EmbeddedArchiveHit(
                         mediaEnd, anchoredLength, VolumeContentFormat.SevenZip, anchoredEvidence),
                     mediaEnd,
                     fileLength);
             }
 
-            if (TryValidateRar4SingleVolume(path, mediaEnd, fileLength, out string rarAnchoredEvidence))
+            if (Rar4EmbeddedProbe.TryValidateSingleVolume(
+                path, mediaEnd, fileLength, out string rarAnchoredEvidence))
             {
-                return new ProbeResult(
+                return new EmbeddedArchiveProbe(
                     new EmbeddedArchiveHit(
                         mediaEnd, 0, VolumeContentFormat.Rar, rarAnchoredEvidence),
                     mediaEnd,
@@ -195,7 +154,7 @@ public static class EmbeddedArchiveLocator
              */
             if (VolumeNumberFromContent.TryValidateRar5At(path, mediaEnd, out _))
             {
-                return new ProbeResult(
+                return new EmbeddedArchiveProbe(
                     new EmbeddedArchiveHit(
                         mediaEnd, 0, VolumeContentFormat.Rar, "RAR5 主头自洽（媒体前缀）"),
                     mediaEnd,
@@ -203,735 +162,38 @@ public static class EmbeddedArchiveLocator
             }
 
             // 前缀确实是媒体，但它后面既不是 7z 单卷也不是 RAR4/RAR5 单卷 ⇒ 判不出（⛔ 不猜、不盲扫）。
-            return new ProbeResult(null, mediaEnd, fileLength);
+            return new EmbeddedArchiveProbe(null, mediaEnd, fileLength);
         }
 
-        // ③ 7z / RAR4：快扫（文件尾 4 MB）。
-        if (TryLocateSevenZip(path, fileLength, deep: false, out EmbeddedArchiveHit sevenZipHit))
+        // ③ 7z / RAR4：快扫（文件尾 4 MiB，见 SignatureWindowScan.TailWindowBytes）。
+        if (SevenZipEmbeddedProbe.TryLocate(path, fileLength, deep: false, out EmbeddedArchiveHit sevenZipHit))
         {
-            return new ProbeResult(sevenZipHit, 0, fileLength);
+            return new EmbeddedArchiveProbe(sevenZipHit, 0, fileLength);
         }
 
-        if (TryLocateRar4(path, fileLength, deep: false, out EmbeddedArchiveHit rarHit))
+        if (Rar4EmbeddedProbe.TryLocate(path, fileLength, deep: false, out EmbeddedArchiveHit rarHit))
         {
-            return new ProbeResult(rarHit, 0, fileLength);
+            return new EmbeddedArchiveProbe(rarHit, 0, fileLength);
         }
 
         /*
-         * ④ 深扫（≤512 MiB）**只对媒体后缀**：媒体锚点解析失败（脏媒体 / 截断）时才退回盲扫；
+         * ④ 深扫（≤512 MiB，见 SignatureWindowScan.DeepWindowBytes）**只对媒体后缀**：
+         * 媒体锚点解析失败（脏媒体 / 截断）时才退回盲扫；
          * 非媒体后缀一律不做深扫 —— 否则内容物里的大文件（60 MB 级）每次识别都要被整段读一遍。
          */
         if (mediaName)
         {
-            if (TryLocateSevenZip(path, fileLength, deep: true, out sevenZipHit))
+            if (SevenZipEmbeddedProbe.TryLocate(path, fileLength, deep: true, out sevenZipHit))
             {
-                return new ProbeResult(sevenZipHit, 0, fileLength);
+                return new EmbeddedArchiveProbe(sevenZipHit, 0, fileLength);
             }
 
-            if (TryLocateRar4(path, fileLength, deep: true, out rarHit))
+            if (Rar4EmbeddedProbe.TryLocate(path, fileLength, deep: true, out rarHit))
             {
-                return new ProbeResult(rarHit, 0, fileLength);
-            }
-        }
-
-        return new ProbeResult(null, 0, fileLength);
-    }
-
-    private static bool TryLocateZip(string path, out EmbeddedArchiveHit hit)
-    {
-        hit = default;
-
-        EmbeddedArchiveInfo info;
-
-        try
-        {
-            info = EmbeddedArchiveDetector.Detect(path);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (!info.Found || info.Offset <= 0 || info.IsVolumePart)
-        {
-            // 偏移 0 = 普通单卷（不归这里管）；跨盘片 = 分卷，交第二大步。
-            return false;
-        }
-
-        hit = new EmbeddedArchiveHit(
-            info.Offset,
-            info.ArchiveLength,
-            VolumeContentFormat.Zip,
-            $"ZIP 尾部自洽：归档起点 {info.Offset}，区间 {info.ArchiveLength} 字节");
-
-        return true;
-    }
-
-    private static bool TryLocateSevenZip(string path, long fileLength, bool deep, out EmbeddedArchiveHit hit)
-    {
-        hit = default;
-
-        foreach (long candidate in EnumerateSignatureOffsets(path, SevenZipSignature, fileLength, deep))
-        {
-            if (candidate <= 0)
-            {
-                continue;
-            }
-
-            if (!TryValidateSevenZip(path, candidate, fileLength, out long archiveLength, out string evidence))
-            {
-                continue;
-            }
-
-            hit = new EmbeddedArchiveHit(candidate, archiveLength, VolumeContentFormat.SevenZip, evidence);
-
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// 7z 起始头的两段 CRC 自洽校验（判据见类注释）。任一层不过 ⇒ false（判不出）。
-    /// </summary>
-    private static bool TryValidateSevenZip(
-        string path,
-        long offset,
-        long fileLength,
-        out long archiveLength,
-        out string evidence)
-    {
-        archiveLength = 0;
-        evidence = string.Empty;
-
-        Span<byte> header = stackalloc byte[32];
-
-        if (!TryReadExactly(path, offset, header))
-        {
-            return false;
-        }
-
-        if (!header[..SevenZipSignature.Length].SequenceEqual(SevenZipSignature))
-        {
-            return false;
-        }
-
-        uint storedStartCrc = BinaryPrimitives.ReadUInt32LittleEndian(header[8..12]);
-
-        if (!VolumeNumberFromContent.CrcMatches(storedStartCrc, header[12..32]))
-        {
-            return false;
-        }
-
-        ulong nextHeaderOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[12..20]);
-        ulong nextHeaderSize = BinaryPrimitives.ReadUInt64LittleEndian(header[20..28]);
-        uint storedNextCrc = BinaryPrimitives.ReadUInt32LittleEndian(header[28..32]);
-
-        if (nextHeaderSize == 0
-            || nextHeaderSize > MaxSevenZipNextHeaderBytes
-            || nextHeaderOffset > long.MaxValue - 32
-            || nextHeaderSize > long.MaxValue)
-        {
-            return false;
-        }
-
-        long total = 32 + (long)nextHeaderOffset + (long)nextHeaderSize;
-
-        if (total <= 0 || offset + total > fileLength)
-        {
-            // 自述字节超出文件剩余长度 ⇒ 它不是一份完整的单卷（可能是分卷首片）。
-            return false;
-        }
-
-        var nextHeader = new byte[(int)nextHeaderSize];
-
-        if (!TryReadExactly(path, offset + 32 + (long)nextHeaderOffset, nextHeader))
-        {
-            return false;
-        }
-
-        if (!VolumeNumberFromContent.CrcMatches(storedNextCrc, nextHeader))
-        {
-            return false;
-        }
-
-        archiveLength = total;
-        evidence = $"7z 起始头自洽：起点 {offset}，NextHeaderCRC 通过，整包 {total} 字节";
-
-        return true;
-    }
-
-    private static bool TryLocateRar4(string path, long fileLength, bool deep, out EmbeddedArchiveHit hit)
-    {
-        hit = default;
-
-        foreach (long candidate in EnumerateSignatureOffsets(path, Rar4Signature, fileLength, deep))
-        {
-            if (candidate <= 0)
-            {
-                continue;
-            }
-
-            if (!TryValidateRar4SingleVolume(path, candidate, fileLength, out string evidence))
-            {
-                continue;
-            }
-
-            hit = new EmbeddedArchiveHit(candidate, 0, VolumeContentFormat.Rar, evidence);
-
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>RAR4 主头 13 字节：CRC16 通过、MHD_VOLUME = 0 ⇒ 完整单卷。</summary>
-    private static bool TryValidateRar4SingleVolume(
-        string path,
-        long offset,
-        long fileLength,
-        out string evidence)
-    {
-        evidence = string.Empty;
-
-        if (offset + 7 + 13 > fileLength)
-        {
-            return false;
-        }
-
-        Span<byte> main = stackalloc byte[13];
-
-        if (!TryReadExactly(path, offset + 7, main))
-        {
-            return false;
-        }
-
-        if (main[2] != 0x73)
-        {
-            return false;
-        }
-
-        ushort storedCrc = BinaryPrimitives.ReadUInt16LittleEndian(main[..2]);
-
-        if (!VolumeNumberFromContent.CrcMatches16(storedCrc, main[2..]))
-        {
-            return false;
-        }
-
-        ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(main[3..5]);
-
-        if ((flags & Rar4VolumeFlag) != 0)
-        {
-            // 分卷成员（含首片）：这里回答的是"最后是不是一份完整单卷"，⛔ 不认。
-            return false;
-        }
-
-        evidence = $"RAR4 主头自洽：起点 {offset}，MHD_VOLUME = 0（完整单卷）";
-
-        return true;
-    }
-
-    /// <summary>RAR 1.5–4.x 主头 flags 里的"这是分卷组的一员"（<c>MHD_VOLUME 0x0001</c>）。</summary>
-    private const ushort Rar4VolumeFlag = 0x0001;
-
-    /// <summary>
-    /// 在文件里顺序扫一个签名，产出**候选起点**（分块读 + 块间重叠，避免跨块漏检）。
-    /// 判不出/读不到 ⇒ 不产出（⛔ 不抛）。
-    /// </summary>
-    /// <summary>
-    /// **从文件末尾往前**扫签名（媒体前缀那一档：归档通常贴着文件尾，前缀在头上）。
-    ///
-    /// <para>⛔ 有上限 <see cref="MaxScanBytes"/>：这类扫描是 O(文件大小) 的，而它会在识别阶段
-    /// 被每个"认不出格式"的文件触发一次（200 MB 的媒体文件扫一遍就白烧 200 MB 读）。
-    /// 超过上限 ⇒ 判不出（保持 Unknown），⛔ 不猜、也不把整块盘读一遍。</para>
-    /// </summary>
-    /// <summary>
-    /// 这个名字是不是**媒体容器后缀**（只决定"要不要按媒体结构去量"，⛔ 不是内容结论）。
-    /// </summary>
-    public static bool IsMediaContainerName(string? path)
-        => !string.IsNullOrWhiteSpace(path) && IsMediaFileName(path!);
-
-    /// <summary>媒体容器的后缀白名单（用户 2026-10-22：「把加媒体前缀的情况就锁定在 MP4 和 png、jpg 等」）。</summary>
-    private static bool IsMediaFileName(string path)
-    {
-        string extension = Path.GetExtension(path);
-
-        return extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".m4v", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".mov", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
-
-    /// <summary>
-    /// 读出"媒体段到哪里结束"（媒体按自己的容器结构遍历，⛔ 不猜）。
-    /// 判不出（脏媒体 / 截断 / 结构不符）⇒ false，调用方退回"媒体后缀 + 深扫"那条兜底。
-    /// </summary>
-    private static bool TryFindMediaEnd(string path, out long end)
-    {
-        end = 0;
-
-        try
-        {
-            using var stream = new FileStream(
-                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-
-            long length = stream.Length;
-            string extension = Path.GetExtension(path);
-
-            /*
-             * 先按文件头认容器，再按后缀兜底。这样 `.png` 实际是 WEBP 也能量出媒体终点；
-             * 反过来，后缀是媒体但文件头已经被截断/伪装时，仍退回原来的后缀解析器。
-             */
-            if (HasPngSignature(stream))
-            {
-                return TryFindPngEnd(stream, length, out end);
-            }
-
-            if (HasWebpSignature(stream))
-            {
-                return TryFindWebpEnd(stream, length, out end);
-            }
-
-            if (HasJpegSignature(stream))
-            {
-                return TryFindJpegEnd(stream, length, out end);
-            }
-
-            if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
-            {
-                return TryFindPngEnd(stream, length, out end);
-            }
-
-            if (extension.Equals(".webp", StringComparison.OrdinalIgnoreCase))
-            {
-                return TryFindWebpEnd(stream, length, out end);
-            }
-
-            if (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
-            {
-                return TryFindJpegEnd(stream, length, out end);
-            }
-
-            if (extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".m4v", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".mov", StringComparison.OrdinalIgnoreCase))
-            {
-                return TryFindMp4End(stream, length, out end);
-            }
-
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool HasPngSignature(FileStream stream)
-    {
-        Span<byte> signature = stackalloc byte[8];
-
-        return TryReadFromStream(stream, 0, signature)
-            && signature.SequenceEqual(PngSignature);
-    }
-
-    private static bool HasJpegSignature(FileStream stream)
-    {
-        Span<byte> soi = stackalloc byte[2];
-
-        return TryReadFromStream(stream, 0, soi)
-            && soi[0] == 0xFF
-            && soi[1] == 0xD8;
-    }
-
-    /// <summary>RIFF 头 + 第 8–11 字节的 `WEBP`（见 RFC 9649：文件大小字段从偏移 8 起算）。</summary>
-    private static bool HasWebpSignature(FileStream stream)
-    {
-        Span<byte> header = stackalloc byte[12];
-
-        return TryReadFromStream(stream, 0, header)
-            && header[0] == (byte)'R'
-            && header[1] == (byte)'I'
-            && header[2] == (byte)'F'
-            && header[3] == (byte)'F'
-            && header[8] == (byte)'W'
-            && header[9] == (byte)'E'
-            && header[10] == (byte)'B'
-            && header[11] == (byte)'P';
-    }
-
-    /// <summary>
-    /// WebP：`RIFF` + 小端 32 位 File Size + `WEBP`；媒体结束 = 8 + File Size。
-    /// 末尾允许有非规范数据（RFC 9649 允许读入方忽略），但这里只报告到 RIFF 声明的终点。
-    /// </summary>
-    private static bool TryFindWebpEnd(FileStream stream, long length, out long end)
-    {
-        end = 0;
-
-        Span<byte> header = stackalloc byte[12];
-
-        if (!TryReadFromStream(stream, 0, header)
-            || header[0] != (byte)'R'
-            || header[1] != (byte)'I'
-            || header[2] != (byte)'F'
-            || header[3] != (byte)'F'
-            || header[8] != (byte)'W'
-            || header[9] != (byte)'E'
-            || header[10] != (byte)'B'
-            || header[11] != (byte)'P')
-        {
-            return false;
-        }
-
-        uint fileSize = BinaryPrimitives.ReadUInt32LittleEndian(header[4..8]);
-
-        if (fileSize < 4)
-        {
-            return false;
-        }
-
-        long total = 8L + fileSize;
-
-        if (total < 12 || total > length)
-        {
-            return false;
-        }
-
-        end = total;
-
-        return true;
-    }
-
-    /// <summary>PNG：8 字节签名 + 块链（长度 4 + 类型 4 + 数据 + CRC 4），走到 IEND 块末尾。</summary>
-    private static bool TryFindPngEnd(FileStream stream, long length, out long end)
-    {
-        end = 0;
-
-        Span<byte> signature = stackalloc byte[8];
-
-        if (!TryReadFromStream(stream, 0, signature)
-            || !signature.SequenceEqual(PngSignature))
-        {
-            return false;
-        }
-
-        long position = 8;
-        Span<byte> head = stackalloc byte[8];
-
-        while (position + 12 <= length)
-        {
-            if (!TryReadFromStream(stream, position, head))
-            {
-                return false;
-            }
-
-            uint chunkLength = BinaryPrimitives.ReadUInt32BigEndian(head[..4]);
-
-            if (chunkLength > int.MaxValue || position + 12 + chunkLength > length)
-            {
-                return false;
-            }
-
-            bool isEnd = head[4] == (byte)'I' && head[5] == (byte)'E'
-                && head[6] == (byte)'N' && head[7] == (byte)'D';
-
-            position += 12 + chunkLength;
-
-            if (isEnd)
-            {
-                end = position;
-                return true;
+                return new EmbeddedArchiveProbe(rarHit, 0, fileLength);
             }
         }
 
-        return false;
-    }
-
-    /// <summary>
-    /// JPEG：字节流里第一个 <c>FF D9</c>（EOI）之后就是媒体结束。
-    /// 熵编码里的 0xFF 一定被转义成 <c>FF 00</c>，所以裸的 <c>FF D9</c> 只会是标记。
-    /// </summary>
-    private static bool TryFindJpegEnd(FileStream stream, long length, out long end)
-    {
-        end = 0;
-
-        Span<byte> soi = stackalloc byte[2];
-
-        if (!TryReadFromStream(stream, 0, soi) || soi[0] != 0xFF || soi[1] != 0xD8)
-        {
-            return false;
-        }
-
-        byte[] buffer = new byte[ScanBufferSize];
-        long position = 2;
-
-        while (position < length)
-        {
-            int want = (int)Math.Min(ScanBufferSize, length - position);
-
-            if (!TryReadFromStream(stream, position, buffer.AsSpan(0, want)))
-            {
-                return false;
-            }
-
-            for (int index = 0; index + 1 < want; index++)
-            {
-                if (buffer[index] == 0xFF && buffer[index + 1] == 0xD9)
-                {
-                    end = position + index + 2;
-
-                    return true;
-                }
-            }
-
-            position += want;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// MP4/MOV：从 0 起按 <c>size(4) + type(4)</c> 走顶层 box。
-    /// 第一个不合法 box（size &lt; 8 或 type 不是可打印 ASCII）的位置 = 媒体结束。
-    /// size = 0 表示"一直到文件尾"，size = 1 表示后面 8 字节是 64 位长度。
-    /// </summary>
-    private static bool TryFindMp4End(FileStream stream, long length, out long end)
-    {
-        end = 0;
-
-        long position = 0;
-        Span<byte> box = stackalloc byte[16];
-
-        while (position + 8 <= length)
-        {
-            if (!TryReadFromStream(stream, position, box[..8]))
-            {
-                return false;
-            }
-
-            uint size = BinaryPrimitives.ReadUInt32BigEndian(box[..4]);
-
-            if (!IsPrintableBoxType(box[4..8]))
-            {
-                end = position;
-
-                return end > 0;
-            }
-
-            long boxEnd;
-
-            if (size == 0)
-            {
-                boxEnd = length;
-            }
-            else if (size == 1)
-            {
-                if (!TryReadFromStream(stream, position + 8, box[8..16]))
-                {
-                    return false;
-                }
-
-                ulong largeSize = BinaryPrimitives.ReadUInt64BigEndian(box[8..16]);
-
-                if (largeSize < 16 || largeSize > long.MaxValue)
-                {
-                    return false;
-                }
-
-                boxEnd = position + (long)largeSize;
-            }
-            else
-            {
-                if (size < 8)
-                {
-                    end = position;
-
-                    return end > 0;
-                }
-
-                boxEnd = position + size;
-            }
-
-            if (boxEnd > length)
-            {
-                return false;
-            }
-
-            position = boxEnd;
-        }
-
-        end = position;
-
-        return end > 0;
-    }
-
-    private static bool IsPrintableBoxType(ReadOnlySpan<byte> type)
-    {
-        for (int index = 0; index < type.Length; index++)
-        {
-            if (type[index] < 0x20 || type[index] > 0x7E)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryReadFromStream(FileStream stream, long offset, Span<byte> destination)
-    {
-        try
-        {
-            stream.Seek(offset, SeekOrigin.Begin);
-
-            int filled = 0;
-
-            while (filled < destination.Length)
-            {
-                int read = stream.Read(destination[filled..]);
-
-                if (read <= 0)
-                {
-                    return false;
-                }
-
-                filled += read;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-    /// <summary>
-    /// 扫签名，两种档位共用这一个入口（⛔ 只留一份扫描实现）：
-    /// <list type="bullet">
-    /// <item><description><b>快扫</b>（<paramref name="deep"/> = false）：只看文件尾 <see cref="MaxScanBytes"/> 字节，从后往前 ——
-    /// 覆盖"归档贴着文件尾"的绝大多数；</description></item>
-    /// <item><description><b>深扫</b>（<paramref name="deep"/> = true）：从文件头顺序扫到 <see cref="DeepScanBytes"/>
-    /// （前缀最多 512 MiB），与 ZIP 那条"顺序扫找 EOCD"同一口径 —— 覆盖大前缀、归档本身很大的情形。</description></item>
-    /// </list>
-    /// </summary>
-    private static System.Collections.Generic.IEnumerable<long> EnumerateSignatureOffsets(
-        string path,
-        byte[] signature,
-        long fileLength,
-        bool deep)
-    {
-        if (signature.Length == 0 || fileLength < signature.Length)
-        {
-            yield break;
-        }
-
-        long scanStart;
-        long scanEnd;
-
-        if (deep)
-        {
-            scanStart = 0;
-            scanEnd = Math.Min(fileLength, DeepScanBytes);
-        }
-        else
-        {
-            scanStart = Math.Max(0, fileLength - MaxScanBytes);
-            scanEnd = fileLength;
-        }
-
-        byte[] buffer = new byte[ScanBufferSize + signature.Length];
-
-        long position = scanStart;
-
-        while (position < scanEnd)
-        {
-            int want = (int)Math.Min(ScanBufferSize, scanEnd - position);
-            int read;
-
-            try
-            {
-                using var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-
-                stream.Seek(position, SeekOrigin.Begin);
-                read = stream.Read(buffer, 0, want);
-            }
-            catch
-            {
-                yield break;
-            }
-
-            if (read <= 0)
-            {
-                yield break;
-            }
-
-            int limit = read - signature.Length;
-
-            // 快扫从后往前（归档贴在尾部时最先命中）；深扫从前往后（前缀在头上，第一个命中就是归档起点）。
-            for (int step = 0; step <= limit; step++)
-            {
-                int index = deep ? step : limit - step;
-                bool matched = true;
-
-                for (int s = 0; s < signature.Length; s++)
-                {
-                    if (buffer[index + s] != signature[s])
-                    {
-                        matched = false;
-                        break;
-                    }
-                }
-
-                if (matched)
-                {
-                    yield return position + index;
-                }
-            }
-
-            position += read;
-        }
-    }
-    private static bool TryReadExactly(string path, long offset, Span<byte> destination)
-    {
-        try
-        {
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-
-            stream.Seek(offset, SeekOrigin.Begin);
-
-            int filled = 0;
-
-            while (filled < destination.Length)
-            {
-                int read = stream.Read(destination[filled..]);
-
-                if (read <= 0)
-                {
-                    return false;
-                }
-
-                filled += read;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        return new EmbeddedArchiveProbe(null, 0, fileLength);
     }
 }
