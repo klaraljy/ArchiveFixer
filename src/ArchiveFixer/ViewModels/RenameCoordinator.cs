@@ -1,6 +1,5 @@
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -264,20 +263,13 @@ internal sealed class RenameCoordinator
             return;
         }
 
-        var window = new RenamePreviewWindow(previewItems)
-        {
-            Owner = Application.Current.MainWindow
-        };
+        RenamePreviewViewModel? vm = RenamePreviewWindowFactory.Show?.Invoke(previewItems);
 
-        bool? dialogResult = window.ShowDialog();
-
-        if (dialogResult != true)
+        if (vm == null)
         {
             AppendLog("INFO", "用户取消改名。");
             return;
         }
-
-        RenamePreviewViewModel vm = window.ViewModel;
 
         /*
          * 「询问」档在改名路径上的落地（真实缺陷修正，2026-09-22）。

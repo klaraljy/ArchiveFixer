@@ -102,6 +102,14 @@ public partial class App : Application
         };
         DialogWindowFactories.RenameDialog = defaultExtension => RenameWindowFactory.Show(defaultExtension);
         DialogWindowFactories.PasswordPromptAsync = message => PasswordPromptWindowFactory.ShowOnUiThreadAsync(message);
+        ArchiveFixer.ViewModels.RenamePreviewWindowFactory.Show = items =>
+        {
+            var window = new RenamePreviewWindow(items)
+            {
+                Owner = Application.Current?.MainWindow
+            };
+            return window.ShowDialog() == true ? window.ViewModel : null;
+        };
 
         // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
