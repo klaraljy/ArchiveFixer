@@ -54,19 +54,11 @@
     "ViewModels/ExtractionCoordinator.VolumeSlotFillStep.cs": 770,
     "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 688,
     "ViewModels/MainViewModel.cs": 1494,
-    "ViewModels/OneClickCoordinator.cs": 1452,
-    "ViewModels/PackingViewModel.cs": 1267,
-    "ViewModels/PasswordListViewModel.cs": 1492,
+    "ViewModels/OneClickCoordinator.cs": 1308,
+    "ViewModels/PackingViewModel.cs": 1250,
+    "ViewModels/PasswordListViewModel.cs": 1469,
     "ViewModels/RenameCoordinator.cs": 829,
-    "ViewModels/SettingsViewModel.cs": 1431
+    "ViewModels/SettingsViewModel.cs": 1361
   },
-  "multi_type_files": {
-    "App.xaml.cs": 2,
-    "ViewModels/OneClickCoordinator.cs": 5,
-    "ViewModels/PackingViewModel.cs": 3,
-    "ViewModels/PasswordListViewModel.cs": 2,
-    "ViewModels/ScanCoordinator.cs": 2,
-    "ViewModels/SettingsViewModel.cs": 3,
-    "Views/AppDialogWindow.xaml.cs": 4
-  }
+  "multi_type_files": {}
 }

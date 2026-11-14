@@ -15,23 +15,6 @@ using System.Windows.Input;
 
 namespace ArchiveFixer.ViewModels
 {
-    /// <summary>窗口内提示条的类别（与密码列表窗口同一套写法，样式在 App.xaml 里）。</summary>
-    public enum PackingNoticeKind
-    {
-        None = 0,
-        Info = 1,
-        Success = 2,
-        Warning = 3,
-        Error = 4
-    }
-
-    /// <summary>结果区分卷表格的一行。</summary>
-    public sealed class PackingVolumeRow
-    {
-        public string FileName { get; init; } = string.Empty;
-
-        public string SizeText { get; init; } = string.Empty;
-    }
 
     /// <summary>
     /// 「打包文件夹为加密分卷」窗口的 ViewModel（用户 2026-09-22 需求第 10 条）。
