@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Views
 {
@@ -12,7 +13,7 @@ namespace ArchiveFixer.Views
     /// 只由 <see cref="ArchiveFixer.Services.DialogService"/> 创建：窗口本身不做线程判断，
     /// marshal 与降级都在 DialogService 里（那里才知道有没有 UI 宿主）。
     /// </summary>
-    public partial class AppDialogWindow : Window
+    public partial class AppDialogWindow : Window, IAppDialogWindow
     {
         private readonly AppDialogRequest _request;
 
@@ -308,6 +309,51 @@ namespace ArchiveFixer.Views
             {
                 Close();
             }
+        }
+        /// <summary>按原逻辑挑宿主窗口并挂 Owner（从 DialogService 搬到窗口实现，行为不变）。</summary>
+        public void AttachOwner()
+        {
+            Window? owner = ResolveOwner();
+
+            if (owner != null && owner.IsVisible)
+            {
+                Owner = owner;
+            }
+            else
+            {
+                WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            }
+        }
+
+        /// <summary>同名冲突询问的默认按钮：主按钮「覆盖」不作默认，避免回车即覆盖。</summary>
+        public void ApplyConflictDefaults()
+        {
+            YesButton.IsDefault = false;
+            NoButton.IsDefault = true;
+        }
+
+        /// <summary>先当前激活窗口、再主窗口；不这样做的话，从模态子窗口弹出的提示会跑到主窗口后面。</summary>
+        private static Window? ResolveOwner()
+        {
+            Application? app = Application.Current;
+
+            if (app == null)
+            {
+                return null;
+            }
+
+            Window? active = app.Windows
+                .OfType<Window>()
+                .FirstOrDefault(window => window.IsActive && window.IsVisible);
+
+            if (active != null)
+            {
+                return active;
+            }
+
+            Window? main = app.MainWindow;
+
+            return main != null && main.IsVisible ? main : null;
         }
     }
 }

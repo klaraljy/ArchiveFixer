@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Windows;
 using Xunit;
+using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Tests
 {

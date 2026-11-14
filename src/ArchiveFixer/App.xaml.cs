@@ -4,6 +4,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using ArchiveFixer.Services;
+using ArchiveFixer.Views;
 
 namespace ArchiveFixer
 {
@@ -81,6 +82,16 @@ namespace ArchiveFixer
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            DialogWindowFactories.AppDialog = request => new AppDialogWindow(request);
+            DialogWindowFactories.PackingConfirm = request => new PackingConfirmWindow(request)
+            {
+                Owner = Application.Current?.MainWindow
+            };
+            DialogWindowFactories.PasswordPicker = (title, passwords) => new PasswordPickerWindow(title, passwords)
+            {
+                Owner = Application.Current?.MainWindow
+            };
 
             // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
             ShutdownMode = ShutdownMode.OnExplicitShutdown;

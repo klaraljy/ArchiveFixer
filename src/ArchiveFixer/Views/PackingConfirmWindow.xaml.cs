@@ -1,5 +1,6 @@
 using System.Windows;
 using ArchiveFixer.Packing;
+using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Views
 {
@@ -14,7 +15,7 @@ namespace ArchiveFixer.Views
     /// <para>它不做任何判断：所有选项与那句红字都来自 <see cref="PackingRunOptions"/> 与
     /// <see cref="PackingConfirmRequest"/>（纯逻辑，可测）。窗口只负责把它们画出来并回传用户的选择。</para>
     /// </summary>
-    public partial class PackingConfirmWindow : Window
+    public partial class PackingConfirmWindow : Window, IPackingConfirmWindow
     {
         private readonly PackingConfirmRequest _request;
         private bool _loading = true;

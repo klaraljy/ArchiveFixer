@@ -1,6 +1,6 @@
 using ArchiveFixer.Packing;
 using ArchiveFixer.Password;
-using ArchiveFixer.Views;
+
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
@@ -20,7 +20,7 @@ namespace ArchiveFixer.Services
     /// 职责：
     /// 1. 封装打开文件 / 文件夹 / 保存文件对话框。
     /// 2. 封装信息、警告、错误、确认提示 —— 一律走自绘的
-    ///    <see cref="AppDialogWindow"/>，不再用系统 MessageBox（灰底、字挤、正文无法复制）。
+    ///    <c>AppDialogWindow</c>，不再用系统 MessageBox（灰底、字挤、正文无法复制）。
     ///
     /// 线程模型（这一条是硬约束，历史上"卡死"就出在这里）：
     /// · **无 UI 宿主**（单元测试、控制台宿主）：一律降级为"写降级日志 + 返回默认值"，
@@ -193,12 +193,9 @@ namespace ArchiveFixer.Services
             return ShowFileDialog<PackingRunOptions?>(
                 () =>
                 {
-                    var window = new Views.PackingConfirmWindow(request)
-                    {
-                        Owner = Application.Current?.MainWindow
-                    };
+                    IPackingConfirmWindow? window = DialogWindowFactories.PackingConfirm?.Invoke(request);
 
-                    return window.ShowDialog() == true ? window.Result : null;
+                    return window != null && window.ShowDialog() == true ? window.Result : null;
                 },
                 "ShowPackingConfirm",
                 null);
@@ -218,12 +215,9 @@ namespace ArchiveFixer.Services
             return ShowFileDialog(
                 () =>
                 {
-                    var window = new Views.PasswordPickerWindow(title, passwords)
-                    {
-                        Owner = Application.Current?.MainWindow
-                    };
+                    IPasswordPickerWindow? window = DialogWindowFactories.PasswordPicker?.Invoke(title, passwords);
 
-                    return window.ShowDialog() == true ? window.Picked ?? string.Empty : string.Empty;
+                    return window != null && window.ShowDialog() == true ? window.Picked ?? string.Empty : string.Empty;
                 },
                 "ShowPasswordPicker",
                 string.Empty);
@@ -607,7 +601,7 @@ namespace ArchiveFixer.Services
         /// <summary>当前正显示着的冲突询问窗口（取消时要能把它关掉，否则用户会对着一个已经作废的框点）。</summary>
         private static readonly object ConflictDialogLock = new();
 
-        private static AppDialogWindow? _activeConflictDialog;
+        private static IAppDialogWindow? _activeConflictDialog;
 
         /// <summary>
         /// 同名冲突询问：**一次问清"这一个 / 整批"怎么处理**（照 WinRAR 六档的精神，按批量场景裁剪）。
@@ -715,7 +709,7 @@ namespace ArchiveFixer.Services
         /// 在 UI 线程上显示冲突询问并读回答案。
         ///
         /// 六个选项的映射：Yes=覆盖、No=跳过、Cancel=自动重命名，勾选框 = 全部；
-        /// ✕ 关窗时 <see cref="AppDialogWindow.Result"/> 停在默认的 Cancel 而
+        /// ✕ 关窗时 <c>Result</c> 停在默认的 Cancel 而
         /// <c>DialogResult</c> **始终是 null**（按钮那条路会显式把它置成 false）——
         /// 这就是"取消本批"与"自动重命名"的区分点。
         /// </summary>
@@ -737,26 +731,22 @@ namespace ArchiveFixer.Services
                 OptionChecked = false
             };
 
-            var window = new AppDialogWindow(request);
+            IAppDialogWindow? window = DialogWindowFactories.AppDialog?.Invoke(request);
 
-            Window? owner = ResolveOwner();
+            if (window == null)
+            {
+                LogFallback("ShowConflictDecision", prompt.Message, "宿主没有注册对话框窗口实现，已按保守档处理（绝不覆盖）");
+                return null;
+            }
 
-            if (owner != null && owner.IsVisible)
-            {
-                window.Owner = owner;
-            }
-            else
-            {
-                window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            }
+            window.AttachOwner();
 
             /*
              * 默认按钮（回车）不能是「覆盖」：AppDialogWindow 对 YesNoCancel 一律把 Yes 设为默认，
              * 而这里的 Yes 正是危险动作「覆盖」。模态框可能在用户打字时弹出来，回车即覆盖
              * 等于把"默认不得覆盖"（不变量 3）做反了。所以显式把默认按钮换成「跳过」。
              */
-            window.YesButton.IsDefault = false;
-            window.NoButton.IsDefault = true;
+            window.ApplyConflictDefaults();
 
             lock (ConflictDialogLock)
             {
@@ -824,7 +814,7 @@ namespace ArchiveFixer.Services
                 dispatcher.BeginInvoke(
                     new Action(() =>
                     {
-                        AppDialogWindow? window;
+                        IAppDialogWindow? window;
 
                         lock (ConflictDialogLock)
                         {
@@ -1029,11 +1019,17 @@ namespace ArchiveFixer.Services
         /// </summary>
         private static T ShowValueDialog<T>(
             AppDialogRequest request,
-            Func<AppDialogWindow, T> read,
+            Func<IAppDialogWindow, T> read,
             string context,
             T fallback)
         {
             Dispatcher? dispatcher = TryGetUiDispatcher();
+
+            if (dispatcher != null && DialogWindowFactories.AppDialog == null)
+            {
+                LogFallback(context, request.Message, "宿主没有注册对话框窗口实现，已按无界面宿主降级");
+                return fallback;
+            }
 
             if (dispatcher == null)
             {
@@ -1175,21 +1171,11 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 在 UI 线程上创建并模态显示统一对话框。
         /// </summary>
-        private static T ShowModal<T>(AppDialogRequest request, Func<AppDialogWindow, T> read)
+        private static T ShowModal<T>(AppDialogRequest request, Func<IAppDialogWindow, T> read)
         {
-            var window = new AppDialogWindow(request);
+            IAppDialogWindow window = DialogWindowFactories.AppDialog!.Invoke(request);
 
-            Window? owner = ResolveOwner();
-
-            if (owner != null && owner.IsVisible)
-            {
-                window.Owner = owner;
-            }
-            else
-            {
-                window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            }
-
+            window.AttachOwner();
             window.ShowDialog();
 
             return read(window);
@@ -1203,53 +1189,23 @@ namespace ArchiveFixer.Services
         /// "批中间不许要用户点一下才能继续"（AGENTS.md §11）。非模态窗口浮在旁边，
         /// 批一秒都不停，用户回来照样看得见。</para>
         ///
-        /// <para>关窗路径不用改：<see cref="AppDialogWindow"/> 在非模态下设置 <c>DialogResult</c>
+        /// <para>关窗路径不用改：<c>AppDialogWindow</c> 在非模态下设置 <c>DialogResult</c>
         /// 会抛 <see cref="InvalidOperationException"/>，它自己已经捕获并回落到 <c>Close()</c>。</para>
         /// </summary>
         private static void ShowModeless(AppDialogRequest request)
         {
-            var window = new AppDialogWindow(request);
-
-            Window? owner = ResolveOwner();
-
-            if (owner != null && owner.IsVisible)
+            if (DialogWindowFactories.AppDialog == null)
             {
-                window.Owner = owner;
-            }
-            else
-            {
-                window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                LogFallback("ShowModeless", request.Message, "宿主没有注册对话框窗口实现，已按无界面宿主降级");
+                return;
             }
 
+            IAppDialogWindow window = DialogWindowFactories.AppDialog.Invoke(request);
+
+            window.AttachOwner();
             window.Show();
         }
 
-        /// <summary>
-        /// 选宿主窗口：先当前激活的那个（可能正是密码列表窗口 / 打包页里的对话框），再退回主窗口。
-        /// 不这样做的话，从模态子窗口里弹出的提示会跑到主窗口后面去。
-        /// </summary>
-        private static Window? ResolveOwner()
-        {
-            Application? app = Application.Current;
-
-            if (app == null)
-            {
-                return null;
-            }
-
-            Window? active = app.Windows
-                .OfType<Window>()
-                .FirstOrDefault(window => window.IsActive && window.IsVisible);
-
-            if (active != null)
-            {
-                return active;
-            }
-
-            Window? main = app.MainWindow;
-
-            return main != null && main.IsVisible ? main : null;
-        }
 
         private static Dispatcher? TryGetUiDispatcher()
         {

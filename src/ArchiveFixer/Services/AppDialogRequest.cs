@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 
 
-namespace ArchiveFixer.Views
+namespace ArchiveFixer.Services
 {
     /// <summary>
     /// 一次对话框请求。给 <see cref="AppDialogWindow"/> 用，同时也是

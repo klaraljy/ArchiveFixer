@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 
 
-namespace ArchiveFixer.Views
+namespace ArchiveFixer.Services
 {
     /// <summary>
     /// 对话框按钮组合。

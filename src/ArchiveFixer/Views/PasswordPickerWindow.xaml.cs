@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Windows;
+using ArchiveFixer.Services;
 
 namespace ArchiveFixer.Views
 {
@@ -10,7 +11,7 @@ namespace ArchiveFixer.Views
     /// <para>它只回传**选中的那一条**给调用方；⛔ 自己不做任何记账、不写日志、不落盘
     /// （不变量 5：密码只存内存）。</para>
     /// </summary>
-    public partial class PasswordPickerWindow : Window
+    public partial class PasswordPickerWindow : Window, IPasswordPickerWindow
     {
         public PasswordPickerWindow(string title, IReadOnlyList<string> passwords)
         {
