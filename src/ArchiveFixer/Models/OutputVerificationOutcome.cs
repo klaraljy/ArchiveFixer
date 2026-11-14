@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 产物校验的**机器可判**结论（AGENTS.md §7：统计与判定不得依赖中文文案比较）。

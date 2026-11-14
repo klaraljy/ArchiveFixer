@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Models
 {
     /// <summary>内容组的最终内容结论；⛔ 任务级“解压成功”不能替代它。</summary>
     public enum FinalContentState
