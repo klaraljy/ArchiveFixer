@@ -1,4 +1,3 @@
-using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Models
 {
@@ -75,7 +74,7 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public bool IsPlacementValid =>
-            !OutputPlacement.UsesCustomRoot(PlacementMode) || !string.IsNullOrWhiteSpace(CustomRoot);
+            !OutputPlacementRules.UsesCustomRoot(PlacementMode) || !string.IsNullOrWhiteSpace(CustomRoot);
 
         /// <summary>
         /// 从设置造一个快照（面板打开时的初值 / 没弹面板时的降级值）。
@@ -102,7 +101,7 @@ namespace ArchiveFixer.Models
             return new OneClickRunOptions
             {
                 // 落点只按用户界面的两个布尔 + 自定义根派生；旧 PlacementMode 不允许再压回来。
-                PlacementMode = OutputPlacement.FromLegacyFlags(
+                PlacementMode = OutputPlacementRules.FromLegacyFlags(
                     settings.ExtractToOriginalDirectory,
                     settings.KeepArchiveNameFolder,
                     customRoot),
@@ -167,7 +166,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static string DescribePlacement(OutputPlacementMode mode, string? customRoot)
         {
-            return OutputPlacement.NormalizeLegacyMode(mode) switch
+            return OutputPlacementRules.NormalizeLegacyMode(mode) switch
             {
                 OutputPlacementMode.CustomRootPerArchive =>
                     $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\包名\\内容物；选中文件夹时用该文件夹的名字）",

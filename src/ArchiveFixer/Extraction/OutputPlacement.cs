@@ -79,7 +79,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static bool UsesCustomRoot(OutputPlacementMode mode)
         {
-            return NormalizeLegacyMode(mode) == OutputPlacementMode.CustomRootPerArchive;
+            return OutputPlacementRules.UsesCustomRoot(mode);
         }
 
         /// <summary>
@@ -100,19 +100,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static OutputPlacementMode NormalizeLegacyMode(OutputPlacementMode mode)
         {
-            return mode switch
-            {
-                OutputPlacementMode.PerArchiveSubfolder => OutputPlacementMode.PerArchiveSubfolder,
-                OutputPlacementMode.CustomRootPerArchive => OutputPlacementMode.CustomRootPerArchive,
-
-                // 旧值 1 = SourceDirectoryFlat（已删除）→ 回到"建同名子文件夹"。
-                (OutputPlacementMode)1 => OutputPlacementMode.PerArchiveSubfolder,
-
-                // 旧值 3 = CustomRootFlat（已删除）→ 保留"指定位置"，但补上同名子文件夹。
-                (OutputPlacementMode)3 => OutputPlacementMode.CustomRootPerArchive,
-
-                _ => OutputPlacementMode.PerArchiveSubfolder
-            };
+            return OutputPlacementRules.NormalizeLegacyMode(mode);
         }
 
         /// <summary>
@@ -120,36 +108,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static OutputPlacementMode ParsePlacementMode(string? value)
         {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return OutputPlacementMode.PerArchiveSubfolder;
-            }
-
-            string trimmed = value.Trim();
-
-            // 认不出名字时**先按旧名字迁移**，再看是不是新名字：旧配置里存的正是那两个名字。
-            if (string.Equals(trimmed, "SourceDirectoryFlat", StringComparison.OrdinalIgnoreCase))
-            {
-                return OutputPlacementMode.PerArchiveSubfolder;
-            }
-
-            if (string.Equals(trimmed, "CustomRootFlat", StringComparison.OrdinalIgnoreCase))
-            {
-                return OutputPlacementMode.CustomRootPerArchive;
-            }
-
-            if (Enum.TryParse(trimmed, ignoreCase: true, out OutputPlacementMode parsed) && Enum.IsDefined(parsed))
-            {
-                return NormalizeLegacyMode(parsed);
-            }
-
-            // 纯数字（旧版本可能把它当整数存过）：按旧编号迁移。
-            if (int.TryParse(trimmed, out int numeric))
-            {
-                return NormalizeLegacyMode((OutputPlacementMode)numeric);
-            }
-
-            return OutputPlacementMode.PerArchiveSubfolder;
+            return OutputPlacementRules.ParsePlacementMode(value);
         }
 
         /// <summary>
@@ -179,13 +138,7 @@ namespace ArchiveFixer.Extraction
             bool keepArchiveNameFolder,
             string? customRoot = null)
         {
-            _ = keepArchiveNameFolder;
-
-            bool hasCustomRoot = !string.IsNullOrWhiteSpace(customRoot);
-
-            return !extractToOriginalDirectory && hasCustomRoot
-                ? OutputPlacementMode.CustomRootPerArchive
-                : OutputPlacementMode.PerArchiveSubfolder;
+            return OutputPlacementRules.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot);
         }
 
         /// <summary>
