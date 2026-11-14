@@ -1,35 +1,30 @@
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
 using ArchiveFixer.Services;
-using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
+/// <summary>
+/// 任务行操作：删除/复制/打开目录/改名/试密码/检查内容；通过 MainViewModel 的公开/内部门面操作列表。
+/// </summary>
+internal sealed class TaskActionCoordinator
 {
-    private void RemoveTask(object? parameter)
+    private readonly MainViewModel _vm;
+
+    public TaskActionCoordinator(MainViewModel vm)
+    {
+        _vm = vm;
+    }
+
+    internal void RemoveTask(object? parameter)
     {
         if (parameter is not ArchiveTask task)
         {
@@ -38,12 +33,12 @@ public partial class MainViewModel
             return;
         }
 
-        Tasks.Remove(task);
+        _vm.Tasks.Remove(task);
         RebuildTaskIndex();
-        Workspace.LogLeftover();
-        PasswordBook.AutoLoad();
+        _vm.Workspace.LogLeftover();
+        _vm.PasswordBook.AutoLoad();
 
-        UpdateSummary();
+        _vm.UpdateSummary();
     }
 
     /// <summary>
@@ -52,9 +47,9 @@ public partial class MainViewModel
     /// <para>只动任务列表：源文件、输出目录、日志一个字节都不碰 —— 移除错了再"添加"一次就回来了，
     /// 所以这里**不做二次确认**（确认框留给真正不可逆的事：删源、清工作区、清其余物）。</para>
     /// </summary>
-    private void RemoveCheckedTasks()
+    internal void RemoveCheckedTasks()
     {
-        List<ArchiveTask> checkedTasks = Tasks.Where(task => task.IsSelected).ToList();
+        List<ArchiveTask> checkedTasks = _vm.Tasks.Where(task => task.IsSelected).ToList();
 
         /*
          * 一个都没勾、但用户**点中了一行**（高亮）→ 就按那一行办。
@@ -63,15 +58,15 @@ public partial class MainViewModel
          * 界面**已经点不到**这种状态了（按钮是灰的 + 不显示 hover），所以这一段降级成"兜底网"：
          * 判据在 WPF 重问与用户实际点下之间可能差一拍（例如刚点完「全不选」），
          * 那一下也**不能**变成"点了没反应"——还是照旧按高亮那一行办，并在日志里写明是按哪一行办的。
-         * ⛔ 绝不会退化成"删掉用户没打算删的那一行"：只有 SelectedTask 确实还在列表里才走这条。
+         * ⛔ 绝不会退化成"删掉用户没打算删的那一行"：只有 _vm.SelectedTask 确实还在列表里才走这条。
          */
         if (checkedTasks.Count == 0)
         {
-            ArchiveTask? highlighted = SelectedTask;
+            ArchiveTask? highlighted = _vm.SelectedTask;
 
-            if (highlighted != null && Tasks.Contains(highlighted))
+            if (highlighted != null && _vm.Tasks.Contains(highlighted))
             {
-                AppendLog(
+                _vm.AppendLog(
                     "INFO",
                     string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
@@ -82,7 +77,7 @@ public partial class MainViewModel
                 return;
             }
 
-            _dialogService.ShowInfo(StatusText.RemoveCheckedTasksNoneText);
+            _vm.DialogService.ShowInfo(StatusText.RemoveCheckedTasksNoneText);
             return;
         }
 
@@ -103,13 +98,13 @@ public partial class MainViewModel
      */
 
     /// <summary>「按建议改名并重试」当前能改的那几个任务（勾选 + 这一档的毛病 + 计划成立）。</summary>
-    private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
+    internal List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
         IReadOnlyList<ArchiveTask>? targets = null)
     {
         var candidates = new List<(ArchiveTask, VolumeNameRepairPlan)>();
         IEnumerable<ArchiveTask> source = targets != null
-            ? targets.Where(Tasks.Contains)
-            : Tasks.Where(item => item != null && item.IsSelected);
+            ? targets.Where(_vm.Tasks.Contains)
+            : _vm.Tasks.Where(item => item != null && item.IsSelected);
 
         foreach (ArchiveTask task in source)
         {
@@ -145,9 +140,9 @@ public partial class MainViewModel
         return VolumeNameRepair.EnumerateFileNamesInDirectory(filePath);
     }
 
-    private bool CanRenameBySuggestionAndRetry()
+    internal bool CanRenameBySuggestionAndRetry()
     {
-        return !IsBusy && BuildVolumeRepairCandidates().Count > 0;
+        return !_vm.IsBusy && BuildVolumeRepairCandidates().Count > 0;
     }
 
     /// <summary>
@@ -159,7 +154,7 @@ public partial class MainViewModel
 
         if (candidates.Count == 0)
         {
-            _dialogService.ShowInfo(StatusText.VolumeRepairNoneText);
+            _vm.DialogService.ShowInfo(StatusText.VolumeRepairNoneText);
             return;
         }
 
@@ -167,18 +162,18 @@ public partial class MainViewModel
             Environment.NewLine,
             candidates.Select(item => "· " + item.Plan.Describe()));
 
-        bool confirmed = _dialogService.ShowConfirm(
+        bool confirmed = _vm.DialogService.ShowConfirm(
             StatusText.VolumeRepairConfirmTitle
             + Environment.NewLine + Environment.NewLine
             + string.Format(StatusText.VolumeRepairConfirmBodyFormat, list));
 
         if (!confirmed)
         {
-            AppendLog("INFO", $"用户取消了「{StatusText.VolumeRepairConfirmTitle}」，磁盘上的文件没有动。");
+            _vm.AppendLog("INFO", $"用户取消了「{StatusText.VolumeRepairConfirmTitle}」，磁盘上的文件没有动。");
             return;
         }
 
-        _logService.MarkOperationStart(StatusText.VolumeRepairConfirmTitle);
+        _vm.LogService.MarkOperationStart(StatusText.VolumeRepairConfirmTitle);
 
         int renamed = 0;
         int failed = 0;
@@ -192,14 +187,14 @@ public partial class MainViewModel
             {
                 failed++;
                 task.ErrorMessage = result.Message;
-                AppendLog("ERROR", $"{plan.CurrentFileName}：{result.Message}");
+                _vm.AppendLog("ERROR", $"{plan.CurrentFileName}：{result.Message}");
                 continue;
             }
 
             renamed++;
             repaired.Add(task);
 
-            AppendLog("INFO", result.Message);
+            _vm.AppendLog("INFO", result.Message);
 
             /*
              * 任务要跟着搬到新路径上：文件在磁盘上已经叫新名字了，任务还指着旧名字的话，
@@ -211,17 +206,17 @@ public partial class MainViewModel
              * （不变量 11 的基准跟着名字走）。以前这里只改自己这一行 → 别的任务被不变量 11
              * 报成"源文件已变化（文件不见了）"。
              */
-            _extractionCoordinator.SyncTasksAfterVolumeRename(plan.Items, task);
+            _vm.ExtractionCoordinator.SyncTasksAfterVolumeRename(plan.Items, task);
 
             /*
              * 重新识别 + **重拍源文件快照**（不变量 11）：路径换了，旧快照对新名字毫无意义，
              * 不重拍的话紧接着的解压会被"源文件已变化"拦下 —— 那条提示是防"文件被改过"的，
              * 不该拿来挡用户主动改的名字。
              */
-            await _scanCoordinator.RescanTaskAsync(task).ConfigureAwait(true);
+            await _vm.ScanCoordinator.RescanTaskAsync(task).ConfigureAwait(true);
         }
 
-        AppendLog(
+        _vm.AppendLog(
             "INFO",
             string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
@@ -231,7 +226,7 @@ public partial class MainViewModel
 
         if (renamed == 0)
         {
-            _dialogService.ShowWarning(StatusText.VolumeRepairNoneText);
+            _vm.DialogService.ShowWarning(StatusText.VolumeRepairNoneText);
             return;
         }
 
@@ -244,7 +239,7 @@ public partial class MainViewModel
          */
         foreach (ArchiveTask sibling in FindSameGroupTasks(repaired))
         {
-            await _scanCoordinator.RescanTaskAsync(sibling).ConfigureAwait(true);
+            await _vm.ScanCoordinator.RescanTaskAsync(sibling).ConfigureAwait(true);
         }
 
         /*
@@ -256,11 +251,11 @@ public partial class MainViewModel
          * 那时整张表都勾着，旧写法会把**所有**勾选任务都解一遍（他只想修这一卷）。
          * 用完把勾选原样还回去：勾选是用户的作用域，不该被这一下改掉。
          */
-        List<ArchiveTask> previousSelection = Tasks.Where(item => item.IsSelected).ToList();
+        List<ArchiveTask> previousSelection = _vm.Tasks.Where(item => item.IsSelected).ToList();
 
-        RunBulkSelectionUpdate(() =>
+        _vm.RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask item in Tasks)
+            foreach (ArchiveTask item in _vm.Tasks)
             {
                 item.IsSelected = repaired.Contains(item);
             }
@@ -268,11 +263,11 @@ public partial class MainViewModel
 
         try
         {
-            await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+            await _vm.ExtractionCoordinator.StartExtractAsync().ConfigureAwait(true);
         }
         finally
         {
-            RunBulkSelectionUpdate(() =>
+            _vm.RunBulkSelectionUpdate(() =>
             {
                 foreach (ArchiveTask item in previousSelection)
                 {
@@ -293,7 +288,7 @@ public partial class MainViewModel
         var repairedSet = new HashSet<ArchiveTask>(repaired);
         var result = new List<ArchiveTask>();
 
-        foreach (ArchiveTask task in Tasks)
+        foreach (ArchiveTask task in _vm.Tasks)
         {
             if (task == null || repairedSet.Contains(task) || string.IsNullOrWhiteSpace(task.CurrentPath))
             {
@@ -338,11 +333,11 @@ public partial class MainViewModel
             return;
         }
 
-        List<ArchiveTask> previouslySelected = Tasks.Where(item => item.IsSelected).ToList();
+        List<ArchiveTask> previouslySelected = _vm.Tasks.Where(item => item.IsSelected).ToList();
 
-        RunBulkSelectionUpdate(() =>
+        _vm.RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask item in Tasks)
+            foreach (ArchiveTask item in _vm.Tasks)
             {
                 item.IsSelected = ReferenceEquals(item, task);
             }
@@ -350,17 +345,17 @@ public partial class MainViewModel
 
         try
         {
-            if (SmartRenameRunnerOverride != null)
+            if (_vm.SmartRenameRunnerOverride != null)
             {
-                await SmartRenameRunnerOverride().ConfigureAwait(true);
+                await _vm.SmartRenameRunnerOverride().ConfigureAwait(true);
                 return;
             }
 
-            await _renameCoordinator.SmartRenameAsync().ConfigureAwait(true);
+            await _vm.RenameCoordinator.SmartRenameAsync().ConfigureAwait(true);
         }
         finally
         {
-            RunBulkSelectionUpdate(() =>
+            _vm.RunBulkSelectionUpdate(() =>
             {
                 foreach (ArchiveTask item in previouslySelected)
                 {
@@ -376,7 +371,6 @@ public partial class MainViewModel
     /// <para>为什么需要它：真窗口在无界面宿主里不会弹，而"勾选会不会被还回来"这件事
     /// 只有把"执行"这一步换掉才测得到（与 <c>ScanCoordinator.JunkReminderOverride</c> 同一套做法）。</para>
     /// </summary>
-    internal Func<Task>? SmartRenameRunnerOverride { get; set; }
 
     /// <summary>
     /// 按源路径移除任务（文件夹导入时自动剔除无用物走这条；⛔ 只动列表，不动磁盘）。
@@ -386,7 +380,7 @@ public partial class MainViewModel
     /// **批末重算"改过名那些行"的检测格式 / 后缀状态**（用户 2026-10-07 点名的三列过期）。
     /// 转调扫描那边唯一的出口，⛔ 这里不另写判据。
     /// </summary>
-    internal Task RefreshRenamedRowFactsAsync() => _scanCoordinator.RefreshRenamedRowFactsAsync();
+    internal Task RefreshRenamedRowFactsAsync() => _vm.ScanCoordinator.RefreshRenamedRowFactsAsync();
     internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
     {
         if (paths == null)
@@ -409,7 +403,7 @@ public partial class MainViewModel
          * 裸 `HashSet<string>` 比 `CurrentPath` 对大小写/分隔符/`..` 一律敏感 ——
          * 用既有出口 `SafePathHelper.PathEquals`（与全项目其它地方同一把尺子）。
          */
-        List<ArchiveTask> matched = Tasks
+        List<ArchiveTask> matched = _vm.Tasks
             .Where(task => wanted.Any(path => SafePathHelper.PathEquals(path, task.CurrentPath)))
             .ToList();
 
@@ -428,13 +422,13 @@ public partial class MainViewModel
     {
         foreach (ArchiveTask task in toRemove)
         {
-            Tasks.Remove(task);
+            _vm.Tasks.Remove(task);
         }
 
         RebuildTaskIndex();
-        UpdateSummary();
+        _vm.UpdateSummary();
 
-        AppendLog(
+        _vm.AppendLog(
             "INFO",
             string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
@@ -449,33 +443,33 @@ public partial class MainViewModel
     /// 命令那一层已有 `IsRowInList` 判据（该灰就灰），这里是第二道 —— 两条腿都要有：
     /// 判据让菜单项变灰，说明让"万一还是点到了"这一档不静默。</para>
     /// </summary>
-    private void CopyTaskInfo(object? parameter)
+    internal void CopyTaskInfo(object? parameter)
     {
         if (parameter is ArchiveTask task)
         {
-            LogExport.CopySanitizedToClipboard(BuildTaskInfoText(task));
+            _vm.LogExport.CopySanitizedToClipboard(BuildTaskInfoText(task));
             return;
         }
 
         ExplainNoRow();
     }
 
-    private void CopyTaskPath(object? parameter)
+    internal void CopyTaskPath(object? parameter)
     {
         if (parameter is ArchiveTask task)
         {
-            LogExport.CopySanitizedToClipboard(task.CurrentPath);
+            _vm.LogExport.CopySanitizedToClipboard(task.CurrentPath);
             return;
         }
 
         ExplainNoRow();
     }
 
-    private void CopyTaskError(object? parameter)
+    internal void CopyTaskError(object? parameter)
     {
         if (parameter is ArchiveTask task)
         {
-            LogExport.CopySanitizedToClipboard(task.ErrorMessage);
+            _vm.LogExport.CopySanitizedToClipboard(task.ErrorMessage);
             return;
         }
 
@@ -483,8 +477,8 @@ public partial class MainViewModel
     }
 
     /// <summary>行级命令"没有可作用的那一行"时的统一说明（唯一措辞，⛔ 别各写一句）。</summary>
-    private void ExplainNoRow()
-        => _dialogService.ShowInfo("请先在任务列表里点中一行，再用这一项。");
+    internal void ExplainNoRow()
+        => _vm.DialogService.ShowInfo("请先在任务列表里点中一行，再用这一项。");
 
     /// <summary>
     /// 任务信息文本。
@@ -505,7 +499,7 @@ public partial class MainViewModel
     ///
     /// <para>⛔ 不写盘、不解压（<see cref="ArchiveInspectService"/> 只调 list）；结论走一个可复制的弹窗 + 日志。</para>
     /// </summary>
-    private async Task InspectCheckedArchivesAsync()
+    internal async Task InspectCheckedArchivesAsync()
     {
         await RunInspectAsync(tryPasswords: false).ConfigureAwait(true);
     }
@@ -513,7 +507,7 @@ public partial class MainViewModel
     /// <summary>
     /// 「试密码」：与「看内容」同一条实现，只是**把候选逐个都问一遍**，报出能开的那个。
     /// </summary>
-    private async Task TryPasswordsForCheckedArchivesAsync()
+    internal async Task TryPasswordsForCheckedArchivesAsync()
     {
         await RunInspectAsync(tryPasswords: true).ConfigureAwait(true);
     }
@@ -521,29 +515,29 @@ public partial class MainViewModel
     /// <summary>
     /// 两个按钮共用的本体（⛔ 一份实现：不然"看内容"说不能开、"试密码"说能开，用户只会更糊涂）。
     /// </summary>
-    private async Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
+    internal async Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
     {
-        List<ArchiveTask> targets = singleTask != null && Tasks.Contains(singleTask)
+        List<ArchiveTask> targets = singleTask != null && _vm.Tasks.Contains(singleTask)
             ? new List<ArchiveTask> { singleTask }
-            : Tasks.Where(item => item.IsSelected).ToList();
+            : _vm.Tasks.Where(item => item.IsSelected).ToList();
 
         if (targets.Count == 0)
         {
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 singleTask != null
                     ? "当前没有选中的任务。"
                     : "请先勾选要看的任务（最左侧一列）。");
             return;
         }
 
-        _logService.MarkOperationStart(tryPasswords ? "试密码" : "看内容");
-        AppendLog("INFO", $"{(tryPasswords ? "试密码" : "看内容")}：{targets.Count} 个任务（只列目录，不解压、不写盘）。");
+        _vm.LogService.MarkOperationStart(tryPasswords ? "试密码" : "看内容");
+        _vm.AppendLog("INFO", $"{(tryPasswords ? "试密码" : "看内容")}：{targets.Count} 个任务（只列目录，不解压、不写盘）。");
 
-        IsBusy = true;
+        _vm.IsBusy = true;
 
         try
         {
-            var inspect = new ArchiveInspectService(_archiveEngine);
+            var inspect = new ArchiveInspectService(_vm.ArchiveEngine);
             var report = new System.Text.StringBuilder();
 
             foreach (ArchiveTask task in targets)
@@ -554,14 +548,14 @@ public partial class MainViewModel
                  * 「看内容」不试密码（只回答"要不要密码"）；「试密码」才把候选交下去。
                  */
                 IReadOnlyList<PasswordItem>? candidates = tryPasswords
-                    ? _passwordService
+                    ? _vm.PasswordService
                         .GetPasswordCandidates(
                             task,
-                            Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                            _passwordService.Passwords,
-                            Settings.TryEmptyPasswordFirst,
-                            Settings.EnableSidecarPassword)
-                        .Take(Math.Clamp(Settings.MaxPasswordAttemptsPerLayer, 1, 1000))
+                            _vm.Settings.UseGlobalPasswordForAllTasks ? _vm.GlobalPassword : string.Empty,
+                            _vm.PasswordService.Passwords,
+                            _vm.Settings.TryEmptyPasswordFirst,
+                            _vm.Settings.EnableSidecarPassword)
+                        .Take(Math.Clamp(_vm.Settings.MaxPasswordAttemptsPerLayer, 1, 1000))
                         .ToList()
                     : null;
 
@@ -570,24 +564,24 @@ public partial class MainViewModel
                 report.AppendLine(DescribeInspectResult(result, tryPasswords));
                 report.AppendLine();
 
-                AppendLog(
+                _vm.AppendLog(
                     result.Success ? "INFO" : "WARN",
                     $"{task.FileName}：{(tryPasswords ? "试密码" : "看内容")} —— {SummarizeInspectResult(result, tryPasswords)}");
             }
 
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 $"{(tryPasswords ? "试密码" : "看内容")}（{targets.Count} 个任务，只列目录、没写盘）："
                 + Environment.NewLine + Environment.NewLine
                 + report.ToString().TrimEnd());
         }
         catch (Exception ex)
         {
-            AppendLog("ERROR", $"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
-            _dialogService.ShowError($"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
+            _vm.AppendLog("ERROR", $"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
+            _vm.DialogService.ShowError($"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
         }
         finally
         {
-            IsBusy = false;
+            _vm.IsBusy = false;
         }
     }
 
@@ -600,51 +594,51 @@ public partial class MainViewModel
     ///
     /// <para>⛔ 它只**打开目录**，不动任何文件（不选中、不改名、不删除）。</para>
     /// </summary>
-    private void CopyCurrentVolumeGroupPaths()
+    internal void CopyCurrentVolumeGroupPaths()
     {
-        if (SelectedTask == null)
+        if (_vm.SelectedTask == null)
         {
             return;
         }
 
-        IEnumerable<string> paths = SelectedTask.VolumePaths.Count > 0
-            ? SelectedTask.VolumePaths
-            : new[] { SelectedTask.CurrentPath };
+        IEnumerable<string> paths = _vm.SelectedTask.VolumePaths.Count > 0
+            ? _vm.SelectedTask.VolumePaths
+            : new[] { _vm.SelectedTask.CurrentPath };
 
         string text = string.Join(Environment.NewLine, paths);
 
-        if (LogExport.CopySanitizedToClipboard(text))
+        if (_vm.LogExport.CopySanitizedToClipboard(text))
         {
-            AppendLog("INFO", $"已复制当前任务同组路径（{paths.Count()} 条）。");
+            _vm.AppendLog("INFO", $"已复制当前任务同组路径（{paths.Count()} 条）。");
         }
     }
 
-    private async Task AddCurrentOutputFolderToTasksAsync()
+    internal async Task AddCurrentOutputFolderToTasksAsync()
     {
-        if (SelectedTask == null)
+        if (_vm.SelectedTask == null)
         {
             return;
         }
 
-        string output = SelectedTask.OutputPath;
+        string output = _vm.SelectedTask.OutputPath;
 
         if (string.IsNullOrWhiteSpace(output) || !Directory.Exists(output))
         {
-            _dialogService.ShowInfo("当前任务还没有可用的输出目录；先解压这一层，再添加下一层。");
+            _vm.DialogService.ShowInfo("当前任务还没有可用的输出目录；先解压这一层，再添加下一层。");
             return;
         }
 
-        await _scanCoordinator.AddPathsAsync(new[] { output }, ImportMode.Append).ConfigureAwait(true);
-        AppendLog("INFO", $"已把当前任务输出目录追加到任务列表，供手动逐层继续：{output}");
+        await _vm.ScanCoordinator.AddPathsAsync(new[] { output }, ImportMode.Append).ConfigureAwait(true);
+        _vm.AppendLog("INFO", $"已把当前任务输出目录追加到任务列表，供手动逐层继续：{output}");
     }
 
-    private void OpenCheckedSourceDirectory()
+    internal void OpenCheckedSourceDirectory()
     {
-        ArchiveTask? task = Tasks.FirstOrDefault(item => item.IsSelected) ?? SelectedTask;
+        ArchiveTask? task = _vm.Tasks.FirstOrDefault(item => item.IsSelected) ?? _vm.SelectedTask;
 
         if (task == null)
         {
-            _dialogService.ShowInfo("列表里还没有任务：先点「添加文件 / 添加文件夹」（也可以直接把文件拖进窗口）。");
+            _vm.DialogService.ShowInfo("列表里还没有任务：先点「添加文件 / 添加文件夹」（也可以直接把文件拖进窗口）。");
             return;
         }
 
@@ -663,12 +657,12 @@ public partial class MainViewModel
     /// 下一步能做什么**。</para>
     /// </summary>
     /// <returns>真的打开了 ⇒ true；否则 false（调用方不必再补一句"已打开"）。</returns>
-    private bool OpenTaskDirectory(object? parameter)
+    internal bool OpenTaskDirectory(object? parameter)
     {
         if (parameter is not ArchiveTask task)
         {
             // 右键落在空白处 / 列头时会是这一档：⛔ 不许静默。
-            _dialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
+            _vm.DialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
             return false;
         }
 
@@ -677,24 +671,24 @@ public partial class MainViewModel
         if (string.IsNullOrWhiteSpace(directory))
         {
             // 点了没反应是最难排查的一类"界面在撒谎"：说清为什么 + 下一步做什么。
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 $"「{task.LogName}」还没有可打开的目录（路径信息不完整）。"
                 + "可以先右键「重新扫描此文件」，或把文件重新添加一次。");
             return false;
         }
 
-        if (!_pathService.OpenDirectory(directory))
+        if (!_vm.PathService.OpenDirectory(directory))
         {
             string message =
                 $"打不开「{directory}」—— 这个目录现在不在了（源包可能被搬进「其余物」、按删除档删掉，或者改过名）。"
                 + $"这一行现在是「{task.LogName}」。";
 
-            _dialogService.ShowInfo(message + "可以先右键「重新扫描此文件」，或在「查看任务详情」里看它当初的完整路径。");
-            AppendLog("WARN", $"{task.LogName}：打开源目录失败 —— {directory} 不存在（可能已被搬走或删除）。");
+            _vm.DialogService.ShowInfo(message + "可以先右键「重新扫描此文件」，或在「查看任务详情」里看它当初的完整路径。");
+            _vm.AppendLog("WARN", $"{task.LogName}：打开源目录失败 —— {directory} 不存在（可能已被搬走或删除）。");
             return false;
         }
 
-        AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它所在的目录：{directory}");
+        _vm.AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它所在的目录：{directory}");
         return true;
     }
 
@@ -705,32 +699,32 @@ public partial class MainViewModel
     /// 输出目录被收掉（定稿后整份删掉 / 归集后搬走）是常态，静默就是死点。</para>
     /// </summary>
     /// <returns>真的打开了 ⇒ true；否则 false。</returns>
-    private bool OpenTaskOutputDirectory(object? parameter)
+    internal bool OpenTaskOutputDirectory(object? parameter)
     {
         if (parameter is not ArchiveTask task)
         {
-            _dialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
+            _vm.DialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
             return false;
         }
 
         if (string.IsNullOrWhiteSpace(task.OutputPath))
         {
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 $"「{task.LogName}」还没有输出目录（先解压一次才会有）。"
                 + "可以先勾选它并点「只解压」或「一键处理」。");
             return false;
         }
 
-        if (!_pathService.OpenDirectory(task.OutputPath))
+        if (!_vm.PathService.OpenDirectory(task.OutputPath))
         {
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 $"打不开「{task.OutputPath}」—— 这个输出目录现在不在了（可能已经按档清理掉，或产物被搬去了别的落点）。"
                 + $"这一行现在是「{task.LogName}」。");
-            AppendLog("WARN", $"{task.LogName}：打开输出目录失败 —— {task.OutputPath} 不存在（可能已被清理或搬走）。");
+            _vm.AppendLog("WARN", $"{task.LogName}：打开输出目录失败 —— {task.OutputPath} 不存在（可能已被清理或搬走）。");
             return false;
         }
 
-        AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它的输出目录：{task.OutputPath}");
+        _vm.AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它的输出目录：{task.OutputPath}");
         return true;
     }
 
@@ -740,7 +734,7 @@ public partial class MainViewModel
     /// 路径用与「删除其余物」**同一份解析**（<see cref="MaintenanceCleanupService.ResolveArtifactScope"/>）：
     /// 用户在这里看到的目录，就是那条删除入口会动的那一个 —— 两个入口给出不同答案是最容易出事的形态。
     /// </summary>
-    private void OpenTaskArtifactDirectory(object? parameter)
+    internal void OpenTaskArtifactDirectory(object? parameter)
     {
         if (parameter is not ArchiveTask task)
         {
@@ -751,25 +745,25 @@ public partial class MainViewModel
 
         if (!scope.IsResolved && string.IsNullOrWhiteSpace(scope.ArtifactDirectory))
         {
-            _dialogService.ShowInfo("这个任务还没有其余物目录（还没解压，或已经被删掉了）。");
+            _vm.DialogService.ShowInfo("这个任务还没有其余物目录（还没解压，或已经被删掉了）。");
             return;
         }
 
         if (SafePathHelper.DirectoryExists(scope.ArtifactDirectory))
         {
             // ⛔ 返回值不许丢（同「打开源/输出目录」那一档）：打不开也要如实说一句，不许静默。
-            if (_pathService.OpenDirectory(scope.ArtifactDirectory))
+            if (_vm.PathService.OpenDirectory(scope.ArtifactDirectory))
             {
-                AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开其余物目录：{scope.ArtifactDirectory}");
+                _vm.AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开其余物目录：{scope.ArtifactDirectory}");
                 return;
             }
 
-            _dialogService.ShowInfo("其余物目录打不开（可能刚被别的程序删掉或权限不够）：" + scope.ArtifactDirectory);
-            AppendLog("WARN", $"{task.LogName}：打开其余物目录失败 —— {scope.ArtifactDirectory}");
+            _vm.DialogService.ShowInfo("其余物目录打不开（可能刚被别的程序删掉或权限不够）：" + scope.ArtifactDirectory);
+            _vm.AppendLog("WARN", $"{task.LogName}：打开其余物目录失败 —— {scope.ArtifactDirectory}");
             return;
         }
 
-        _dialogService.ShowInfo("其余物目录不存在（可能已经被删掉了）：" + scope.ArtifactDirectory);
+        _vm.DialogService.ShowInfo("其余物目录不存在（可能已经被删掉了）：" + scope.ArtifactDirectory);
     }
 
     /// <summary>
@@ -781,17 +775,18 @@ public partial class MainViewModel
     ///
     /// <para>为什么是"在不在列表里"而不是"选中项非空"：右键菜单给的是
     /// `PlacementTarget.SelectedItem`（那一行的对象），而选中项可能已经过期
-    /// （`ReplaceAll` 之后 `SelectedTask` 被清成 null，见 <c>RebuildTaskIndex</c> 那段说明）——
+    /// （`ReplaceAll` 之后 `_vm.SelectedTask` 被清成 null，见 <c>RebuildTaskIndex</c> 那段说明）——
     /// 按"对象还在表里"判，两个来源就都稳。</para>
     /// </summary>
-    private bool IsRowInList(object? parameter)
-        => parameter is ArchiveTask task && Tasks.Contains(task);
+    internal bool IsRowInList(object? parameter)
+        => parameter is ArchiveTask task && _vm.Tasks.Contains(task);
 
     internal void RebuildTaskIndex()
     {
-        for (int i = 0; i < Tasks.Count; i++)
+        for (int i = 0; i < _vm.Tasks.Count; i++)
         {
-            Tasks[i].Index = i + 1;
+            _vm.Tasks[i].Index = i + 1;
         }
     }
 }
+

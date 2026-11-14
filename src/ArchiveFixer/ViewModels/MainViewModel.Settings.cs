@@ -40,7 +40,7 @@ public partial class MainViewModel
 
     private CleanupCoordinator? _cleanupCoordinator;
 
-    private CleanupCoordinator Cleanup => _cleanupCoordinator ??= new CleanupCoordinator(
+    internal CleanupCoordinator Cleanup => _cleanupCoordinator ??= new CleanupCoordinator(
         () => Tasks,
         PromptNoCheckedTask,
         (level, message) => AppendLog(level, message),
@@ -109,7 +109,7 @@ public partial class MainViewModel
 
     private LogExportCoordinator? _logExportCoordinator;
 
-    private LogExportCoordinator LogExport => _logExportCoordinator ??= new LogExportCoordinator(
+    internal LogExportCoordinator LogExport => _logExportCoordinator ??= new LogExportCoordinator(
         () => Tasks,
         () => Logs,
         () => OutputLocationForLog,
@@ -129,7 +129,29 @@ public partial class MainViewModel
 
     internal virtual bool WriteClipboardText(string sanitizedText) => _clipboardService.CopyText(sanitizedText);
 
-    private PasswordBookCoordinator PasswordBook => _passwordBookCoordinator ??= new PasswordBookCoordinator(
+    internal DialogService DialogService => _dialogService;
+
+    internal LogService LogService => _logService;
+
+    internal ExtractionCoordinator ExtractionCoordinator => _extractionCoordinator;
+
+    internal ScanCoordinator ScanCoordinator => _scanCoordinator;
+
+    internal RenameCoordinator RenameCoordinator => _renameCoordinator;
+
+    internal PathService PathService => _pathService;
+
+    internal PasswordService PasswordService => _passwordService;
+
+    internal IArchiveEngine ArchiveEngine => _archiveEngine;
+
+    internal Func<Task>? SmartRenameRunnerOverride { get; set; }
+
+    private TaskActionCoordinator? _taskActions;
+
+    private TaskActionCoordinator TaskActions => _taskActions ??= new TaskActionCoordinator(this);
+
+    internal PasswordBookCoordinator PasswordBook => _passwordBookCoordinator ??= new PasswordBookCoordinator(
         _passwordService,
         _pathService,
         _dialogService,
@@ -578,7 +600,7 @@ public partial class MainViewModel
 
     private WorkspaceCoordinator? _workspaceCoordinator;
 
-    private WorkspaceCoordinator Workspace => _workspaceCoordinator ??= new WorkspaceCoordinator(
+    internal WorkspaceCoordinator Workspace => _workspaceCoordinator ??= new WorkspaceCoordinator(
         ResolveWorkspaceScanRoots,
         UpdateWorkspaceLeftoverState,
         RaiseAllCommandCanExecuteChanged,
@@ -662,4 +684,104 @@ public partial class MainViewModel
 
     /// <summary>「继续解」能不能点：有剩下的内层包，而且现在不忙。</summary>
     private bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
+
+    private void RemoveTask(object? parameter) => TaskActions.RemoveTask(parameter);
+
+    private void RemoveCheckedTasks() => TaskActions.RemoveCheckedTasks();
+
+    private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates(
+        IReadOnlyList<ArchiveTask>? targets = null)
+        => TaskActions.BuildVolumeRepairCandidates(targets);
+
+    private bool CanRenameBySuggestionAndRetry() => TaskActions.CanRenameBySuggestionAndRetry();
+
+    internal Task RenameBySuggestionAndRetryAsync(IReadOnlyList<ArchiveTask>? targets = null)
+        => TaskActions.RenameBySuggestionAndRetryAsync(targets);
+
+    internal Task RunSmartRenameForSingleTaskAsync(ArchiveTask? task)
+        => TaskActions.RunSmartRenameForSingleTaskAsync(task);
+
+    internal Task RefreshRenamedRowFactsAsync() => TaskActions.RefreshRenamedRowFactsAsync();
+
+    internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
+        => TaskActions.RemoveTasksBySourcePaths(paths);
+
+    private void CopyTaskInfo(object? parameter) => TaskActions.CopyTaskInfo(parameter);
+
+    private void CopyTaskPath(object? parameter) => TaskActions.CopyTaskPath(parameter);
+
+    private void CopyTaskError(object? parameter) => TaskActions.CopyTaskError(parameter);
+
+    internal void ExplainNoRow() => TaskActions.ExplainNoRow();
+
+    internal static string BuildTaskInfoText(ArchiveTask task) => TaskActionCoordinator.BuildTaskInfoText(task);
+
+    private Task InspectCheckedArchivesAsync() => TaskActions.InspectCheckedArchivesAsync();
+
+    private Task TryPasswordsForCheckedArchivesAsync() => TaskActions.TryPasswordsForCheckedArchivesAsync();
+
+    private Task RunInspectAsync(bool tryPasswords, ArchiveTask? singleTask = null)
+        => TaskActions.RunInspectAsync(tryPasswords, singleTask);
+
+    internal static string DescribeInspectResult(ArchiveInspectResult result, bool tryPasswords)
+        => TaskActionCoordinator.DescribeInspectResult(result, tryPasswords);
+
+    internal static string SummarizeInspectResult(ArchiveInspectResult result, bool tryPasswords)
+        => TaskActionCoordinator.SummarizeInspectResult(result, tryPasswords);
+
+    private void CopyCurrentVolumeGroupPaths() => TaskActions.CopyCurrentVolumeGroupPaths();
+
+    private Task AddCurrentOutputFolderToTasksAsync() => TaskActions.AddCurrentOutputFolderToTasksAsync();
+
+    private void OpenCheckedSourceDirectory() => TaskActions.OpenCheckedSourceDirectory();
+
+    private bool OpenTaskDirectory(object? parameter) => TaskActions.OpenTaskDirectory(parameter);
+
+    private bool OpenTaskOutputDirectory(object? parameter) => TaskActions.OpenTaskOutputDirectory(parameter);
+
+    private void OpenTaskArtifactDirectory(object? parameter) => TaskActions.OpenTaskArtifactDirectory(parameter);
+
+    private bool IsRowInList(object? parameter) => TaskActions.IsRowInList(parameter);
+
+    internal void RebuildTaskIndex() => TaskActions.RebuildTaskIndex();
+
+    private TaskCollectionCoordinator? _taskCollection;
+
+    private TaskCollectionCoordinator TaskCollection => _taskCollection ??= new TaskCollectionCoordinator(this);
+
+    private bool CanRunNormalCommand() => TaskCollection.CanRunNormalCommand();
+
+    private bool CanStartExtract() => TaskCollection.CanStartExtract();
+
+    private bool CanRunCurrentTaskManual() => TaskCollection.CanRunCurrentTaskManual();
+
+    private ArchiveTask? ResolveManualExtractionTarget()
+        => TaskCollection.ResolveManualExtractionTarget();
+
+    private bool CanChangeTaskSelection() => TaskCollection.CanChangeTaskSelection();
+
+    private bool CanRemoveSelectedTasks() => TaskCollection.CanRemoveSelectedTasks();
+
+    private void HookTaskSelectionTracking() => TaskCollection.HookTaskSelectionTracking();
+
+    public void RefreshSummaryAfterSelectionChange() => TaskCollection.RefreshSummaryAfterSelectionChange();
+
+    internal void RunBulkSelectionUpdate(Action changeSelection)
+        => TaskCollection.RunBulkSelectionUpdate(changeSelection);
+
+    public void SelectAllTasks() => TaskCollection.SelectAllTasks();
+
+    public void SelectNoneTasks() => TaskCollection.SelectNoneTasks();
+
+    public void InvertTaskSelection() => TaskCollection.InvertTaskSelection();
+
+    private void SelectSoleTask(object? parameter) => TaskCollection.SelectSoleTask(parameter);
+
+    public void ClearTasks() => TaskCollection.ClearTasks();
+
+    public void RemoveSelectedTasks() => TaskCollection.RemoveSelectedTasks();
+
+    private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
 }
+
+

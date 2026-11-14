@@ -1,56 +1,49 @@
-using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
-using ArchiveFixer.Extraction;
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
 using ArchiveFixer.Services;
-using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
 
 namespace ArchiveFixer.ViewModels;
 
-public partial class MainViewModel
+/// <summary>
+/// 任务集合/勾选状态/汇总刷新；MainViewModel 只保留命令转发。
+/// </summary>
+internal sealed class TaskCollectionCoordinator
 {
-    private bool CanRunNormalCommand()
+    private readonly MainViewModel _vm;
+    private bool _bulkSelectionUpdate;
+
+    public TaskCollectionCoordinator(MainViewModel vm)
     {
-        return !IsBusy;
+        _vm = vm;
     }
 
-    private bool CanStartExtract()
+    internal bool CanRunNormalCommand()
     {
-        return !IsBusy && Tasks.Any(x => x.IsSelected);
+        return !_vm.IsBusy;
     }
 
-    private bool CanRunCurrentTaskManual()
+    internal bool CanStartExtract()
     {
-        return !IsBusy && SelectedTask != null && Tasks.Contains(SelectedTask);
+        return !_vm.IsBusy && _vm.Tasks.Any(x => x.IsSelected);
+    }
+
+    internal bool CanRunCurrentTaskManual()
+    {
+        return !_vm.IsBusy && _vm.SelectedTask != null && _vm.Tasks.Contains(_vm.SelectedTask);
     }
 
     /// <summary>
     /// 手动解压永远从入口包启动：选中第 2 卷时，找列表里对应的入口包；
     /// 找不到就停下来提示，不拿后续卷去启动一条注定失败的解压。
     /// </summary>
-    private ArchiveTask? ResolveManualExtractionTarget()
+    internal ArchiveTask? ResolveManualExtractionTarget()
     {
-        ArchiveTask? selected = SelectedTask;
+        ArchiveTask? selected = _vm.SelectedTask;
 
         if (selected == null)
         {
@@ -69,14 +62,14 @@ public partial class MainViewModel
             return selected;
         }
 
-        ArchiveTask? entryTask = Tasks.FirstOrDefault(task =>
+        ArchiveTask? entryTask = _vm.Tasks.FirstOrDefault(task =>
             string.Equals(task.CurrentPath, entryPath, StringComparison.OrdinalIgnoreCase)
             || task.VolumePaths.Any(path =>
                 string.Equals(path, entryPath, StringComparison.OrdinalIgnoreCase)));
 
         if (entryTask == null)
         {
-            _dialogService.ShowInfo(
+            _vm.DialogService.ShowInfo(
                 "当前选中的是分卷组的后续卷，但任务列表里没有入口包。"
                 + Environment.NewLine
                 + "请先把入口包加入列表，再手动解压；程序不会拿后续卷直接启动。");
@@ -86,9 +79,9 @@ public partial class MainViewModel
     }
 
     /// <summary>三个批量勾选命令的可用性：闲着 + 列表里确实有东西可勾。</summary>
-    private bool CanChangeTaskSelection()
+    internal bool CanChangeTaskSelection()
     {
-        return !IsBusy && Tasks.Count > 0;
+        return !_vm.IsBusy && _vm.Tasks.Count > 0;
     }
 
     /// <summary>
@@ -98,25 +91,25 @@ public partial class MainViewModel
     /// <para>这个判据是用户**两轮反馈各管一半**合成的，两半都留在这里，⛔ 只照一半改就是错的：</para>
     ///
     /// <list type="number">
-    /// <item><description><b>2026-09-27 否掉的那一半</b>：这里以前绑着 <c>!IsBusy</c>，跑批中途按钮是灰的。
+    /// <item><description><b>2026-09-27 否掉的那一半</b>：这里以前绑着 <c>!_vm.IsBusy</c>，跑批中途按钮是灰的。
     /// 用户原话：<i>"我就是修改列表删除东西，和正在处理有什么关系"</i>（他当天正是在跑批中间点的它）。
     /// 这话是对的：它是**纯列表操作**（只动内存里那几行，磁盘一个字节都不碰），
     /// **与跑批没有关系** —— 所以跑批中途必须能点。</description></item>
-    /// <item><description><b>2026-09-29 补上的那一半</b>：去掉 <c>!IsBusy</c> 之后它变成"永远可点"，
+    /// <item><description><b>2026-09-29 补上的那一半</b>：去掉 <c>!_vm.IsBusy</c> 之后它变成"永远可点"，
     /// 于是空列表 / 一个都没勾时也亮着、点下去什么都不发生。用户原话：
     /// <i>"这个勾选行里面，移除勾选的按钮一直亮着没用啊，我都没有导入文件你亮着干什么"</i>
     /// —— 可作用的对象就是"勾选"，一个都没有就不该亮（与「只解压」等命令同一条精神）。</description></item>
     /// </list>
     ///
     /// <para>合成口径 = **只问"有没有勾选的"，忙闲根本不进判据**。
-    /// ⛔ **不许再加 <c>!IsBusy</c>**：那会推翻用户 2026-09-27 的明确原话，等于把两轮反馈又砍回一半。</para>
+    /// ⛔ **不许再加 <c>!_vm.IsBusy</c>**：那会推翻用户 2026-09-27 的明确原话，等于把两轮反馈又砍回一半。</para>
     ///
     /// <para>⛔ 两条命令共用这一个判据（2026-09-29）：同一件事只允许有一个出口，
     /// 各写一套必然漂移成"按钮是灰的、右键菜单却能点"。</para>
     /// </summary>
-    private bool CanRemoveSelectedTasks()
+    internal bool CanRemoveSelectedTasks()
     {
-        return Tasks.Any(task => task?.IsSelected == true);
+        return _vm.Tasks.Any(task => task?.IsSelected == true);
     }
 
     /*
@@ -133,13 +126,12 @@ public partial class MainViewModel
      */
 
     /// <summary>批量改勾选时挂起逐条刷新（50–200 个任务的"全选"不该触发 200 次汇总）。</summary>
-    private bool _bulkSelectionUpdate;
 
-    private void HookTaskSelectionTracking()
+    internal void HookTaskSelectionTracking()
     {
-        Tasks.CollectionChanged += Tasks_CollectionChanged;
+        _vm.Tasks.CollectionChanged += Tasks_CollectionChanged;
 
-        foreach (ArchiveTask task in Tasks)
+        foreach (ArchiveTask task in _vm.Tasks)
         {
             task.PropertyChanged -= Task_SelectionPropertyChanged;
             task.PropertyChanged += Task_SelectionPropertyChanged;
@@ -161,7 +153,7 @@ public partial class MainViewModel
          */
         if (e.Action == NotifyCollectionChangedAction.Reset)
         {
-            foreach (ArchiveTask task in Tasks)
+            foreach (ArchiveTask task in _vm.Tasks)
             {
                 task.PropertyChanged -= Task_SelectionPropertyChanged;
                 task.PropertyChanged += Task_SelectionPropertyChanged;
@@ -211,11 +203,11 @@ public partial class MainViewModel
     {
         if (UiThread.IsAvailable?.Invoke() == true && UiThread.CheckAccess?.Invoke() == false)
         {
-            UiThread.BeginInvoke?.Invoke(UpdateSummary);
+            UiThread.BeginInvoke?.Invoke(_vm.UpdateSummary);
             return;
         }
 
-        UpdateSummary();
+        _vm.UpdateSummary();
     }
 
     /// <summary>
@@ -246,37 +238,37 @@ public partial class MainViewModel
     /// <summary>全选：整个列表都参与处理。</summary>
     public void SelectAllTasks()
     {
-        if (Tasks.Count == 0)
+        if (_vm.Tasks.Count == 0)
         {
-            AppendLog("INFO", "「全选」：任务列表是空的，没有可勾选的任务。");
+            _vm.AppendLog("INFO", "「全选」：任务列表是空的，没有可勾选的任务。");
             return;
         }
 
         RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask task in Tasks)
+            foreach (ArchiveTask task in _vm.Tasks)
             {
                 task.IsSelected = true;
             }
         });
 
-        AppendLog("INFO", $"已全选：{Tasks.Count} 个任务都会参与处理（「只解压 / 一键处理」按勾选执行）。");
+        _vm.AppendLog("INFO", $"已全选：{_vm.Tasks.Count} 个任务都会参与处理（「只解压 / 一键处理」按勾选执行）。");
     }
 
     /// <summary>全不选：一个都不勾，方便"只处理其中某一个"。</summary>
     public void SelectNoneTasks()
     {
-        if (Tasks.Count == 0)
+        if (_vm.Tasks.Count == 0)
         {
-            AppendLog("INFO", "「全不选」：任务列表是空的。");
+            _vm.AppendLog("INFO", "「全不选」：任务列表是空的。");
             return;
         }
 
-        int before = Tasks.Count(x => x.IsSelected);
+        int before = _vm.Tasks.Count(x => x.IsSelected);
 
         RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask task in Tasks)
+            foreach (ArchiveTask task in _vm.Tasks)
             {
                 task.IsSelected = false;
             }
@@ -288,7 +280,7 @@ public partial class MainViewModel
          * 一个都没勾时它们只提示、什么都不做（用户 2026-09-24 第 12 条），
          * 所以"清掉行高亮会拆掉兜底"这个老顾虑已经不存在了。
          */
-        AppendLog(
+        _vm.AppendLog(
             "INFO",
             $"已取消全部勾选（原有 {before} 个勾选被清掉）：现在一个都没勾。" +
             "接着点某一行左边的勾选框，或者用右键「只勾选这一个」。");
@@ -297,21 +289,21 @@ public partial class MainViewModel
     /// <summary>反选：勾上的取消、没勾的勾上。</summary>
     public void InvertTaskSelection()
     {
-        if (Tasks.Count == 0)
+        if (_vm.Tasks.Count == 0)
         {
-            AppendLog("INFO", "「反选」：任务列表是空的。");
+            _vm.AppendLog("INFO", "「反选」：任务列表是空的。");
             return;
         }
 
         RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask task in Tasks)
+            foreach (ArchiveTask task in _vm.Tasks)
             {
                 task.IsSelected = !task.IsSelected;
             }
         });
 
-        AppendLog("INFO", $"已反选：现在有 {Tasks.Count(x => x.IsSelected)} 个任务被勾选（共 {Tasks.Count} 个）。");
+        _vm.AppendLog("INFO", $"已反选：现在有 {_vm.Tasks.Count(x => x.IsSelected)} 个任务被勾选（共 {_vm.Tasks.Count} 个）。");
     }
 
     /// <summary>
@@ -320,26 +312,26 @@ public partial class MainViewModel
     /// 这是"识别完一个文件夹、几十上百个包全被勾上，但这次只想解其中一个"最短的一条路：
     /// 右键那一行 → 点一下，不必先"全不选"再去找那一个。
     /// </summary>
-    private void SelectSoleTask(object? parameter)
+    internal void SelectSoleTask(object? parameter)
     {
-        if (parameter is not ArchiveTask target || !Tasks.Contains(target))
+        if (parameter is not ArchiveTask target || !_vm.Tasks.Contains(target))
         {
             // ⛔ 不许静默（用户 2026-10-10：「什么东西都是没有用的」）：命令那层已有 IsRowInList 判据，这里补一句。
-            ExplainNoRow();
+            _vm.ExplainNoRow();
             return;
         }
 
         RunBulkSelectionUpdate(() =>
         {
-            foreach (ArchiveTask task in Tasks)
+            foreach (ArchiveTask task in _vm.Tasks)
             {
                 task.IsSelected = ReferenceEquals(task, target);
             }
         });
 
-        AppendLog(
+        _vm.AppendLog(
             "INFO",
-            $"只勾选了「{target.FileName}」：其余 {Math.Max(0, Tasks.Count - 1)} 个任务的勾选已取消。");
+            $"只勾选了「{target.FileName}」：其余 {Math.Max(0, _vm.Tasks.Count - 1)} 个任务的勾选已取消。");
     }
 
     /// <summary>
@@ -359,13 +351,13 @@ public partial class MainViewModel
     /// </summary>
     public void ClearTasks()
     {
-        if (Tasks.Count == 0)
+        if (_vm.Tasks.Count == 0)
         {
             return;
         }
 
-        int totalCount = Tasks.Count;
-        int checkedCount = Tasks.Count(x => x.IsSelected);
+        int totalCount = _vm.Tasks.Count;
+        int checkedCount = _vm.Tasks.Count(x => x.IsSelected);
 
         string confirmText =
             $"确定要清空整个任务列表吗？{Environment.NewLine}{Environment.NewLine}"
@@ -376,20 +368,20 @@ public partial class MainViewModel
             + $"{Environment.NewLine}{Environment.NewLine}"
             + $"只移除勾选的任务请用「移除选中」；这里只清空列表，磁盘上的文件一个都不会动。";
 
-        bool confirm = _dialogService.ShowConfirm(confirmText);
+        bool confirm = _vm.DialogService.ShowConfirm(confirmText);
 
         if (!confirm)
         {
-            AppendLog("INFO", "用户取消了「清空列表」，任务列表没有变化。");
+            _vm.AppendLog("INFO", "用户取消了「清空列表」，任务列表没有变化。");
             return;
         }
 
-        Tasks.Clear();
-        Workspace.LogLeftover();
-        PasswordBook.AutoLoad();
+        _vm.Tasks.Clear();
+        _vm.Workspace.LogLeftover();
+        _vm.PasswordBook.AutoLoad();
 
-        UpdateSummary();
-        AppendLog(
+        _vm.UpdateSummary();
+        _vm.AppendLog(
             "INFO",
             $"已清空任务列表（整表操作，与勾选无关）：共移除 {totalCount} 个任务（其中勾选 {checkedCount} 个）；磁盘上的文件没有动。");
     }
@@ -407,14 +399,14 @@ public partial class MainViewModel
     {
         const string title = "移除选中";
 
-        CleanupTargetSelection selection = CleanupSelection.Resolve(Tasks);
+        CleanupTargetSelection selection = CleanupSelection.Resolve(_vm.Tasks);
 
-        AppendLog(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
+        _vm.AppendLog(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
 
         if (!selection.HasTarget)
         {
             // 只提示、什么都不做（用户 2026-09-24 第 12 条：一律只认勾选）。
-            _dialogService.ShowWarning(PromptNoCheckedTask(title));
+            _vm.DialogService.ShowWarning(PromptNoCheckedTask(title));
             return;
         }
 
@@ -422,15 +414,15 @@ public partial class MainViewModel
 
         foreach (ArchiveTask task in targets)
         {
-            Tasks.Remove(task);
+            _vm.Tasks.Remove(task);
         }
 
-        RebuildTaskIndex();
-        Workspace.LogLeftover();
-        PasswordBook.AutoLoad();
+        _vm.RebuildTaskIndex();
+        _vm.Workspace.LogLeftover();
+        _vm.PasswordBook.AutoLoad();
 
-        UpdateSummary();
-        AppendLog("INFO", $"{title}：以勾选为准，已移除 {targets.Count} 个任务。");
+        _vm.UpdateSummary();
+        _vm.AppendLog("INFO", $"{title}：以勾选为准，已移除 {targets.Count} 个任务。");
     }
 
     /// <summary>
@@ -439,13 +431,14 @@ public partial class MainViewModel
     /// <para>措辞来自 <see cref="StatusText.NoCheckedTaskPromptFormat"/> —— 界面蓝字、命令提示、
     /// 日志三处共用同一句话，谁也不能再各写一套（§7）。</para>
     /// </summary>
-    private string PromptNoCheckedTask(string title)
+    internal string PromptNoCheckedTask(string title)
     {
         return string.Format(
             System.Globalization.CultureInfo.CurrentCulture,
             StatusText.NoCheckedTaskPromptFormat,
             title,
-            Tasks.Count);
+            _vm.Tasks.Count);
     }
-
 }
+
+
