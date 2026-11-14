@@ -3,27 +3,6 @@ using System;
 namespace ArchiveFixer.Detection
 {
     /// <summary>
-    /// 交接证据强度（用户 2026-10-24 口径）：内容可证 / 名字槽位 / 判不出。
-    /// ⛔ 这只是**登记理由**，不是"它一定是分卷"的结论。
-    /// </summary>
-    public enum VolumeHandoffEvidence
-    {
-        Unknown = 0,
-        ContentProven = 1,
-        NameSlot = 2
-    }
-
-    /// <summary>这一份文件是从哪来的（交接单要用它决定"搬还是只建链接"）。</summary>
-    public enum VolumeHandoffSource
-    {
-        /// <summary>用户导入的原件（源目录只读：只许建零字节硬链接）。</summary>
-        UserImported = 0,
-
-        /// <summary>本链产出的片（同卷搬、跨卷建链接）。</summary>
-        ChainProduced = 1
-    }
-
-    /// <summary>
     /// **第一大步的交接事实**（用户 2026-10-22 口径）：每一份"过了闸门"的文件登记一行，
     /// 交给第二大步当原包。⛔ 这不是"待处理队列"，文件本身必须原地不动。
     ///
