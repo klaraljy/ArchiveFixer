@@ -2,126 +2,125 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// 一次只读遍历得到的产物树快照：相对路径 → 字节数。
+/// 校验、清单核对、额外文件说明共用这一份，不再各自枚举整棵树。
+/// 口径与 OutputVerifier 原实现一致：不跟随符号链接/联接点；读不到大小按 0；
+/// 路径统一为正斜杠、去掉首尾分隔符。
+/// </summary>
+public sealed class OutputTreeSnapshot
 {
-    /// <summary>
-    /// 一次只读遍历得到的产物树快照：相对路径 → 字节数。
-    /// 校验、清单核对、额外文件说明共用这一份，不再各自枚举整棵树。
-    /// 口径与 OutputVerifier 原实现一致：不跟随符号链接/联接点；读不到大小按 0；
-    /// 路径统一为正斜杠、去掉首尾分隔符。
-    /// </summary>
-    public sealed class OutputTreeSnapshot
+    private OutputTreeSnapshot(
+        IReadOnlyDictionary<string, long> filesByRelativePath,
+        int fileCount,
+        long totalSize)
     {
-        private OutputTreeSnapshot(
-            IReadOnlyDictionary<string, long> filesByRelativePath,
-            int fileCount,
-            long totalSize)
+        FilesByRelativePath = filesByRelativePath;
+        FileCount = fileCount;
+        TotalSize = totalSize;
+    }
+
+    public IReadOnlyDictionary<string, long> FilesByRelativePath { get; }
+
+    public int FileCount { get; }
+
+    public long TotalSize { get; }
+
+    public static OutputTreeSnapshot Capture(string? directory)
+    {
+        var files = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(directory) || !SafeDirectoryExists(directory))
         {
-            FilesByRelativePath = filesByRelativePath;
-            FileCount = fileCount;
-            TotalSize = totalSize;
+            return new OutputTreeSnapshot(files, 0, 0);
         }
 
-        public IReadOnlyDictionary<string, long> FilesByRelativePath { get; }
-
-        public int FileCount { get; }
-
-        public long TotalSize { get; }
-
-        public static OutputTreeSnapshot Capture(string? directory)
+        if (!TryGetAttributes(directory, out FileAttributes rootAttributes) ||
+            (rootAttributes & FileAttributes.ReparsePoint) != 0)
         {
-            var files = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            return new OutputTreeSnapshot(files, 0, 0);
+        }
 
-            if (string.IsNullOrWhiteSpace(directory) || !SafeDirectoryExists(directory))
+        int fileCount = 0;
+        long totalSize = 0;
+        var pending = new Stack<string>();
+        pending.Push(directory);
+
+        while (pending.Count > 0)
+        {
+            string currentDirectory = pending.Pop();
+            string[] entries;
+
+            try
             {
-                return new OutputTreeSnapshot(files, 0, 0);
+                entries = Directory.GetFileSystemEntries(currentDirectory);
+            }
+            catch
+            {
+                continue;
             }
 
-            if (!TryGetAttributes(directory, out FileAttributes rootAttributes) ||
-                (rootAttributes & FileAttributes.ReparsePoint) != 0)
+            foreach (string entry in entries)
             {
-                return new OutputTreeSnapshot(files, 0, 0);
-            }
-
-            int fileCount = 0;
-            long totalSize = 0;
-            var pending = new Stack<string>();
-            pending.Push(directory);
-
-            while (pending.Count > 0)
-            {
-                string currentDirectory = pending.Pop();
-                string[] entries;
-
-                try
-                {
-                    entries = Directory.GetFileSystemEntries(currentDirectory);
-                }
-                catch
+                if (!TryGetAttributes(entry, out FileAttributes attributes) ||
+                    (attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     continue;
                 }
 
-                foreach (string entry in entries)
+                if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    if (!TryGetAttributes(entry, out FileAttributes attributes) ||
-                        (attributes & FileAttributes.ReparsePoint) != 0)
-                    {
-                        continue;
-                    }
-
-                    if ((attributes & FileAttributes.Directory) != 0)
-                    {
-                        pending.Push(entry);
-                        continue;
-                    }
-
-                    fileCount++;
-                    long size = 0;
-
-                    try
-                    {
-                        size = new FileInfo(entry).Length;
-                    }
-                    catch
-                    {
-                    }
-
-                    totalSize += size;
-                    files[NormalizeRelativePath(Path.GetRelativePath(directory, entry))] = size;
+                    pending.Push(entry);
+                    continue;
                 }
-            }
 
-            return new OutputTreeSnapshot(files, fileCount, totalSize);
-        }
+                fileCount++;
+                long size = 0;
 
-        public static string NormalizeRelativePath(string path) =>
-            (path ?? string.Empty).Replace('\\', '/').Trim('/');
+                try
+                {
+                    size = new FileInfo(entry).Length;
+                }
+                catch
+                {
+                }
 
-        private static bool SafeDirectoryExists(string directory)
-        {
-            try
-            {
-                return Directory.Exists(directory);
-            }
-            catch
-            {
-                return false;
+                totalSize += size;
+                files[NormalizeRelativePath(Path.GetRelativePath(directory, entry))] = size;
             }
         }
 
-        private static bool TryGetAttributes(string path, out FileAttributes attributes)
+        return new OutputTreeSnapshot(files, fileCount, totalSize);
+    }
+
+    public static string NormalizeRelativePath(string path) =>
+        (path ?? string.Empty).Replace('\\', '/').Trim('/');
+
+    private static bool SafeDirectoryExists(string directory)
+    {
+        try
         {
-            try
-            {
-                attributes = File.GetAttributes(path);
-                return true;
-            }
-            catch
-            {
-                attributes = default;
-                return false;
-            }
+            return Directory.Exists(directory);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetAttributes(string path, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return true;
+        }
+        catch
+        {
+            attributes = default;
+            return false;
         }
     }
 }

@@ -15,183 +15,182 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+[Collection("ArchiveFixerGlobalState")]
+public sealed class SpaceTight915MatrixTests
 {
-    [Collection("ArchiveFixerGlobalState")]
-    public sealed class SpaceTight915MatrixTests
+    private static readonly string Root = Path.Combine(TestPaths.BackupRoot, "915300000-空间不足-矩阵-备份");
+    private static readonly string SpecificRoot = Path.Combine(TestPaths.BackupRoot, "915400000-特定解压-矩阵-备份");
+
+    [Fact]
+    public async Task 二十条空间不足_按recipe注入可用空间并验证结果()
     {
-        private static readonly string Root = Path.Combine(TestPaths.BackupRoot, "915300000-空间不足-矩阵-备份");
-        private static readonly string SpecificRoot = Path.Combine(TestPaths.BackupRoot, "915400000-特定解压-矩阵-备份");
-
-        [Fact]
-        public async Task 二十条空间不足_按recipe注入可用空间并验证结果()
+        if (!Directory.Exists(Root) || !Directory.Exists(SpecificRoot))
         {
-            if (!Directory.Exists(Root) || !Directory.Exists(SpecificRoot))
-            {
-                // 夹具缺失（外接盘已损坏/换机）：跳过本用例，不伪装成通过。
-                return;
-            }
-
-            string[] cases = Directory.GetDirectories(Root)
-                .Concat(Directory.GetDirectories(SpecificRoot))
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            Assert.Equal(20, cases.Length);
-
-            foreach (string sample in cases)
-            {
-                await RunOneAsync(sample);
-            }
+            // 夹具缺失（外接盘已损坏/换机）：跳过本用例，不伪装成通过。
+            return;
         }
 
-        private static async Task RunOneAsync(string sample)
+        string[] cases = Directory.GetDirectories(Root)
+            .Concat(Directory.GetDirectories(SpecificRoot))
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        Assert.Equal(20, cases.Length);
+
+        foreach (string sample in cases)
         {
-            string id = Path.GetFileName(sample);
-            string recipePath = Path.Combine(sample, "recipe.json");
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(recipePath));
-            JsonElement root = document.RootElement;
-            long freeBytes = root.GetProperty("space").GetProperty("freeBytes").GetInt64();
-            long reserveBytes = root.GetProperty("space").GetProperty("reserveBytes").GetInt64();
-            bool useSpecific = root.TryGetProperty("kind", out JsonElement kind)
-                && string.Equals(kind.GetString(), "SpecificBatch", StringComparison.OrdinalIgnoreCase);
-            string[] blocked = ReadNames(root, "blocked");
-            string[] failed = ReadNames(root, "failed");
+            await RunOneAsync(sample);
+        }
+    }
 
-            string work = Path.Combine(@"E:\DeepSeekProjects\_tmp\ArchiveFixer\space915", Guid.NewGuid().ToString("N"));
-            string source = Path.Combine(work, "src");
-            string target = Path.Combine(work, "out");
-            string data = Path.Combine(work, "data");
-            Directory.CreateDirectory(data);
-            Directory.CreateDirectory(target);
-            Copy(Path.Combine(sample, "原包"), source);
+    private static async Task RunOneAsync(string sample)
+    {
+        string id = Path.GetFileName(sample);
+        string recipePath = Path.Combine(sample, "recipe.json");
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(recipePath));
+        JsonElement root = document.RootElement;
+        long freeBytes = root.GetProperty("space").GetProperty("freeBytes").GetInt64();
+        long reserveBytes = root.GetProperty("space").GetProperty("reserveBytes").GetInt64();
+        bool useSpecific = root.TryGetProperty("kind", out JsonElement kind)
+            && string.Equals(kind.GetString(), "SpecificBatch", StringComparison.OrdinalIgnoreCase);
+        string[] blocked = ReadNames(root, "blocked");
+        string[] failed = ReadNames(root, "failed");
 
-            var paths = new PathService { DataRootDirectory = data };
-            var settingsService = new SettingsService(paths);
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.CustomOutputDirectory = target;
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-            settings.UseSpecificExtraction = useSpecific;
-            settings.SkipOneClickConfirm = true;
-            settings.AutoScanAfterDrop = false;
-            settings.ConcurrencyOverride = 2;
-            settingsService.Save(settings);
+        string work = Path.Combine(@"E:\DeepSeekProjects\_tmp\ArchiveFixer\space915", Guid.NewGuid().ToString("N"));
+        string source = Path.Combine(work, "src");
+        string target = Path.Combine(work, "out");
+        string data = Path.Combine(work, "data");
+        Directory.CreateDirectory(data);
+        Directory.CreateDirectory(target);
+        Copy(Path.Combine(sample, "原包"), source);
 
-            ToolLocator.Default.CustomSevenZipExePath = SevenZipFactAttribute.LocateSevenZipPath()
-                ?? throw new InvalidOperationException("no 7z");
-            ToolLocator.Default.Invalidate();
-            var engine = new SevenZipEngine();
-            var password = new PasswordService { DataRootDirectory = data, UseTextStore = true };
-            var vm = new MainViewModel(
-                new FileScanService(),
-                new ArchiveDetectService(),
-                new RenameService(),
-                engine,
-                password,
-                new LogService(paths),
-                settingsService,
-                paths,
-                new TaskSummaryService(),
-                new ClipboardService(),
-                new DialogService(),
-                useTextStore: true,
-                encryptTextStore: false);
-            var extraction = new ExtractionCoordinator(vm, engine, password, paths, new DialogService());
-            var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
-            var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
-            var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
+        var paths = new PathService { DataRootDirectory = data };
+        var settingsService = new SettingsService(paths);
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.CustomOutputDirectory = target;
+        settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+        settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+        settings.UseSpecificExtraction = useSpecific;
+        settings.SkipOneClickConfirm = true;
+        settings.AutoScanAfterDrop = false;
+        settings.ConcurrencyOverride = 2;
+        settingsService.Save(settings);
 
-            extraction.SpaceProbeOverride = _ => freeBytes;
-            extraction.SpaceReserveOverride = reserveBytes;
-            vm.SpaceTightMode = true;
-            vm.SpaceTightKeepSource = false;
+        ToolLocator.Default.CustomSevenZipExePath = SevenZipFactAttribute.LocateSevenZipPath()
+            ?? throw new InvalidOperationException("no 7z");
+        ToolLocator.Default.Invalidate();
+        var engine = new SevenZipEngine();
+        var password = new PasswordService { DataRootDirectory = data, UseTextStore = true };
+        var vm = new MainViewModel(
+            new FileScanService(),
+            new ArchiveDetectService(),
+            new RenameService(),
+            engine,
+            password,
+            new LogService(paths),
+            settingsService,
+            paths,
+            new TaskSummaryService(),
+            new ClipboardService(),
+            new DialogService(),
+            useTextStore: true,
+            encryptTextStore: false);
+        var extraction = new ExtractionCoordinator(vm, engine, password, paths, new DialogService());
+        var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
+        var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
+        var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
-            {
-                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
-                CustomRoot = target,
-                SourceHandling = SourceHandlingMode.KeepInPlace,
-                RestHandling = RestHandlingModes.Keep
-            });
+        extraction.SpaceProbeOverride = _ => freeBytes;
+        extraction.SpaceReserveOverride = reserveBytes;
+        vm.SpaceTightMode = true;
+        vm.SpaceTightKeepSource = false;
 
-            await vm.AddPathsAsync(new[] { source }, ImportMode.Replace);
-            await oneClick.RunAsync().WaitAsync(TimeSpan.FromMinutes(3));
+        oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
+        {
+            PlacementMode = OutputPlacementMode.CustomRootPerArchive,
+            CustomRoot = target,
+            SourceHandling = SourceHandlingMode.KeepInPlace,
+            RestHandling = RestHandlingModes.Keep
+        });
 
-            ArchiveTask[] tasks = vm.Tasks
-                .Where(task => !task.IsContentGroupProcessTask)
-                .ToArray();
+        await vm.AddPathsAsync(new[] { source }, ImportMode.Replace);
+        await oneClick.RunAsync().WaitAsync(TimeSpan.FromMinutes(3));
 
-            if (useSpecific)
-            {
-                Assert.NotEmpty(tasks);
-                return;
-            }
+        ArchiveTask[] tasks = vm.Tasks
+            .Where(task => !task.IsContentGroupProcessTask)
+            .ToArray();
 
-            foreach (string name in blocked)
-            {
-                ArchiveTask task = Find(tasks, name, id);
-                Assert.True(
-                    task.Status == StatusText.DiskSpaceInsufficient,
-                    $"{id}/{name} 应为空间不足，实际 {task.Outcome}/{task.Status}");
-            }
-
-            foreach (string name in failed)
-            {
-                ArchiveTask task = Find(tasks, name, id);
-                Assert.True(
-                    task.Outcome is TaskOutcome.Failed or TaskOutcome.Skipped
-                    || task.Status == StatusText.DiskSpaceInsufficient,
-                    $"{id}/{name} 应失败/跳过，实际 {task.Outcome}/{task.Status}");
-            }
-
-            foreach (string name in blocked.Concat(failed))
-            {
-                Assert.True(
-                    Directory.GetFiles(source, name, SearchOption.AllDirectories).Length > 0,
-                    $"{id}/{name} 失败或空间不足时必须保留源包");
-            }
+        if (useSpecific)
+        {
+            Assert.NotEmpty(tasks);
+            return;
         }
 
-        private static ArchiveTask Find(ArchiveTask[] tasks, string name, string id)
+        foreach (string name in blocked)
         {
-            ArchiveTask? task = tasks.FirstOrDefault(item =>
-                string.Equals(item.FileName, name, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(Path.GetFileName(item.CurrentPath), name, StringComparison.OrdinalIgnoreCase));
-
-            Assert.True(task != null, $"{id} 找不到任务 {name}");
-            return task!;
+            ArchiveTask task = Find(tasks, name, id);
+            Assert.True(
+                task.Status == StatusText.DiskSpaceInsufficient,
+                $"{id}/{name} 应为空间不足，实际 {task.Outcome}/{task.Status}");
         }
 
-        private static string[] ReadNames(JsonElement root, string property)
+        foreach (string name in failed)
         {
-            if (!root.TryGetProperty("expected", out JsonElement expected)
-                || !expected.TryGetProperty(property, out JsonElement value)
-                || value.ValueKind != JsonValueKind.Array)
-            {
-                return Array.Empty<string>();
-            }
-
-            return value.EnumerateArray()
-                .Select(item => item.GetString() ?? string.Empty)
-                .Where(item => item.Length > 0)
-                .ToArray();
+            ArchiveTask task = Find(tasks, name, id);
+            Assert.True(
+                task.Outcome is TaskOutcome.Failed or TaskOutcome.Skipped
+                || task.Status == StatusText.DiskSpaceInsufficient,
+                $"{id}/{name} 应失败/跳过，实际 {task.Outcome}/{task.Status}");
         }
 
-        private static void Copy(string source, string destination)
+        foreach (string name in blocked.Concat(failed))
         {
-            Directory.CreateDirectory(destination);
-            foreach (string directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
-            {
-                Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
-            }
+            Assert.True(
+                Directory.GetFiles(source, name, SearchOption.AllDirectories).Length > 0,
+                $"{id}/{name} 失败或空间不足时必须保留源包");
+        }
+    }
 
-            foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
-            {
-                string path = Path.Combine(destination, Path.GetRelativePath(source, file));
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.Copy(file, path);
-            }
+    private static ArchiveTask Find(ArchiveTask[] tasks, string name, string id)
+    {
+        ArchiveTask? task = tasks.FirstOrDefault(item =>
+            string.Equals(item.FileName, name, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Path.GetFileName(item.CurrentPath), name, StringComparison.OrdinalIgnoreCase));
+
+        Assert.True(task != null, $"{id} 找不到任务 {name}");
+        return task!;
+    }
+
+    private static string[] ReadNames(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty("expected", out JsonElement expected)
+            || !expected.TryGetProperty(property, out JsonElement value)
+            || value.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return value.EnumerateArray()
+            .Select(item => item.GetString() ?? string.Empty)
+            .Where(item => item.Length > 0)
+            .ToArray();
+    }
+
+    private static void Copy(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string path = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Copy(file, path);
         }
     }
 }

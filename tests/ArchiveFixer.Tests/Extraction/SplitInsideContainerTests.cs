@@ -11,545 +11,544 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// **容器里装的是"分卷的第一卷"**（用户 2026-09-25 第 42 条：顺着第 40/41 条往下核出来的形状）。
+///
+/// <para>形状：`封面.jpg`（图片 + 原始字节）里装着的正是 `set.7z.001`，而 `set.7z.002/.003`
+/// 就在同一个目录里。真 7z 实测（探针跑出来的日志）：抠出来交给引擎之后，引擎按**文件名**
+/// 找同组的其他卷 —— 抠出来的那一段没有卷名 —— 于是报"这是分卷压缩包的**后续卷**，缺少首卷"，
+/// 与事实**正好相反**（缺的不是首卷，首卷就在我们手上；缺的是"名字对得上的后续卷"）。</para>
+///
+/// <para>本轮不做"把两边自动凑起来"，只钉两件**必须正确**的事：①抠出来的过程物名字必须跟着真实格式（原来写死 `.zip`，
+/// 一个 7z 被抠成 `封面.zip`，日志与工作区残留都会把人带偏）；
+/// ②失败原因必须说对（补上"容器里是第 1 卷、外面那一组缺首卷"这个事实）。</para>
+///
+/// <para>⚠ **2026-09-26 起**：自动拼装已经做出来了（用户选的方案 A，**默认关**，②页那个开关）——
+/// 那一档的回归在 <c>SplitVolumeAssemblyTests</c>；本类继续钉**默认档**的这两件事（与从前逐字相同）。</para>
+/// </summary>
+[Collection("ArchiveFixerGlobalState")]
+public class SplitInsideContainerTests : IDisposable
 {
-    /// <summary>
-    /// **容器里装的是"分卷的第一卷"**（用户 2026-09-25 第 42 条：顺着第 40/41 条往下核出来的形状）。
-    ///
-    /// <para>形状：`封面.jpg`（图片 + 原始字节）里装着的正是 `set.7z.001`，而 `set.7z.002/.003`
-    /// 就在同一个目录里。真 7z 实测（探针跑出来的日志）：抠出来交给引擎之后，引擎按**文件名**
-    /// 找同组的其他卷 —— 抠出来的那一段没有卷名 —— 于是报"这是分卷压缩包的**后续卷**，缺少首卷"，
-    /// 与事实**正好相反**（缺的不是首卷，首卷就在我们手上；缺的是"名字对得上的后续卷"）。</para>
-    ///
-    /// <para>本轮不做"把两边自动凑起来"，只钉两件**必须正确**的事：①抠出来的过程物名字必须跟着真实格式（原来写死 `.zip`，
-    /// 一个 7z 被抠成 `封面.zip`，日志与工作区残留都会把人带偏）；
-    /// ②失败原因必须说对（补上"容器里是第 1 卷、外面那一组缺首卷"这个事实）。</para>
-    ///
-    /// <para>⚠ **2026-09-26 起**：自动拼装已经做出来了（用户选的方案 A，**默认关**，②页那个开关）——
-    /// 那一档的回归在 <c>SplitVolumeAssemblyTests</c>；本类继续钉**默认档**的这两件事（与从前逐字相同）。</para>
-    /// </summary>
-    [Collection("ArchiveFixerGlobalState")]
-    public class SplitInsideContainerTests : IDisposable
+    private readonly string _root;
+    private readonly string? _sevenZip;
+    private readonly string? _rar;
+
+    public SplitInsideContainerTests()
     {
-        private readonly string _root;
-        private readonly string? _sevenZip;
-        private readonly string? _rar;
+        _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerSplitInside", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+        _sevenZip = LocateSevenZip();
+        _rar = LocateRar();
+    }
 
-        public SplitInsideContainerTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerSplitInside", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
-            _sevenZip = LocateSevenZip();
-            _rar = LocateRar();
-        }
-
-        public void Dispose()
-        {
-            try
+            if (Directory.Exists(_root))
             {
-                if (Directory.Exists(_root))
-                {
-                    Directory.Delete(_root, recursive: true);
-                }
-            }
-            catch
-            {
+                Directory.Delete(_root, recursive: true);
             }
         }
-
-        // ================================================================ 纯逻辑：缺首卷的分卷组
-
-        [Fact]
-        public void 缺首卷的分卷组_找得到并给出标准首卷名()
+        catch
         {
-            IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
-                new[] { "set.7z.002", "set.7z.003", "别的文件.txt", "另一个包.rar" });
-
-            OrphanVolumeSet set = Assert.Single(sets);
-
-            Assert.Equal("set.7z.001", set.FirstVolumeName);
-            Assert.Equal(new[] { "set.7z.002", "set.7z.003" }, set.ContinuationFileNames);
-            Assert.True(set.IsContiguous);
-            Assert.Contains("set.7z.002", set.Describe());
-            Assert.Contains("set.7z.001", set.Describe());
         }
+    }
 
-        [Fact]
-        public void 首卷在目录里时_不是缺首卷的组()
-        {
-            IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
-                new[] { "set.7z.001", "set.7z.002", "set.7z.003" });
+    // ================================================================ 纯逻辑：缺首卷的分卷组
 
-            Assert.Empty(sets);
-        }
+    [Fact]
+    public void 缺首卷的分卷组_找得到并给出标准首卷名()
+    {
+        IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
+            new[] { "set.7z.002", "set.7z.003", "别的文件.txt", "另一个包.rar" });
 
-        [Fact]
-        public void 两组都缺首卷时_两组都报出来()
-        {
-            IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
-                new[] { "a.7z.002", "b.rar.002", "b.rar.003" });
+        OrphanVolumeSet set = Assert.Single(sets);
 
-            Assert.Equal(2, sets.Count);
-            Assert.Contains(sets, set => set.FirstVolumeName == "a.7z.001");
-            Assert.Contains(sets, set => set.FirstVolumeName == "b.rar.001");
-        }
+        Assert.Equal("set.7z.001", set.FirstVolumeName);
+        Assert.Equal(new[] { "set.7z.002", "set.7z.003" }, set.ContinuationFileNames);
+        Assert.True(set.IsContiguous);
+        Assert.Contains("set.7z.002", set.Describe());
+        Assert.Contains("set.7z.001", set.Describe());
+    }
 
-        [Fact]
-        public void 卷号不连续时_如实标注()
-        {
-            IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
-                new[] { "set.7z.002", "set.7z.004" });
+    [Fact]
+    public void 首卷在目录里时_不是缺首卷的组()
+    {
+        IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
+            new[] { "set.7z.001", "set.7z.002", "set.7z.003" });
 
-            OrphanVolumeSet set = Assert.Single(sets);
+        Assert.Empty(sets);
+    }
 
-            Assert.False(set.IsContiguous);
-            Assert.Contains("不连续", set.Describe());
-        }
+    [Fact]
+    public void 两组都缺首卷时_两组都报出来()
+    {
+        IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
+            new[] { "a.7z.002", "b.rar.002", "b.rar.003" });
 
-        [Fact]
-        public void 普通文件名_一个组都不报()
-        {
-            Assert.Empty(OrphanVolumeSetDetector.Find(new[] { "a.bin", "封面.jpg", "说明.txt" }));
-            Assert.Empty(OrphanVolumeSetDetector.Find(null));
-        }
+        Assert.Equal(2, sets.Count);
+        Assert.Contains(sets, set => set.FirstVolumeName == "a.7z.001");
+        Assert.Contains(sets, set => set.FirstVolumeName == "b.rar.001");
+    }
 
-        // ================================================================ 端到端：真 7z + 真管线
+    [Fact]
+    public void 卷号不连续时_如实标注()
+    {
+        IReadOnlyList<OrphanVolumeSet> sets = OrphanVolumeSetDetector.Find(
+            new[] { "set.7z.002", "set.7z.004" });
+
+        OrphanVolumeSet set = Assert.Single(sets);
+
+        Assert.False(set.IsContiguous);
+        Assert.Contains("不连续", set.Describe());
+    }
+
+    [Fact]
+    public void 普通文件名_一个组都不报()
+    {
+        Assert.Empty(OrphanVolumeSetDetector.Find(new[] { "a.bin", "封面.jpg", "说明.txt" }));
+        Assert.Empty(OrphanVolumeSetDetector.Find(null));
+    }
+
+    // ================================================================ 端到端：真 7z + 真管线
 
 
-        /// <summary>
-        /// **抠出来的那一份按内容起名**（用户 2026-10-11 大测试 run-5555 实测出来的缺口）。
-        ///
-        /// <para>现场：`222-L5.png`（8.4 MB 媒体前缀 + **一整个 RAR5 尾巴**）抠出来的那一份叫 `222-L5.zip`
-        /// ⇒ `7z x` 按扩展名挑 zip 处理器、当场拒绝（退出码 2、产物 0 个）⇒ 上层把这次失败归到
-        /// 「分卷缺失」⇒ 整单跳过、内容物一个都没有。同一份字节改成 `.rar` 就能正常解开（本机实测，
-        /// 两个名字只差后缀）。</para>
-        ///
-        /// <para>判据 = 底层那张卡 <see cref="FileNature.Inspect"/>：内容**可证"不是分卷组的一员"**
-        /// ⇒ 按真实格式起名；真分卷成员（上一条用例那个形状）继续叫 `.zip`（用户 2026-09-25 第 42 条）。</para>
-        ///
-        /// <para>⚠ 本机没装 WinRAR 时这条跳过：这一档要造"完整的 RAR 尾巴"，7z 写不出 RAR。</para>
-        /// </summary>
-        [Fact]
-        public async Task 完整RAR尾巴_抠出来那一份必须按内容起名不许写死zip()
-        {
-            RequireRar();
+    /// <summary>
+    /// **抠出来的那一份按内容起名**（用户 2026-10-11 大测试 run-5555 实测出来的缺口）。
+    ///
+    /// <para>现场：`222-L5.png`（8.4 MB 媒体前缀 + **一整个 RAR5 尾巴**）抠出来的那一份叫 `222-L5.zip`
+    /// ⇒ `7z x` 按扩展名挑 zip 处理器、当场拒绝（退出码 2、产物 0 个）⇒ 上层把这次失败归到
+    /// 「分卷缺失」⇒ 整单跳过、内容物一个都没有。同一份字节改成 `.rar` 就能正常解开（本机实测，
+    /// 两个名字只差后缀）。</para>
+    ///
+    /// <para>判据 = 底层那张卡 <see cref="FileNature.Inspect"/>：内容**可证"不是分卷组的一员"**
+    /// ⇒ 按真实格式起名；真分卷成员（上一条用例那个形状）继续叫 `.zip`（用户 2026-09-25 第 42 条）。</para>
+    ///
+    /// <para>⚠ 本机没装 WinRAR 时这条跳过：这一档要造"完整的 RAR 尾巴"，7z 写不出 RAR。</para>
+    /// </summary>
+    [Fact]
+    public async Task 完整RAR尾巴_抠出来那一份必须按内容起名不许写死zip()
+    {
+        RequireRar();
 
-            string work = Path.Combine(_root, "rar-work-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(work);
+        string work = Path.Combine(_root, "rar-work-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
 
-            string container = BuildContainerWithCompleteRar(work, "封面.png");
+        string container = BuildContainerWithCompleteRar(work, "封面.png");
 
-            Harness harness = CreateHarness();
-            var task = await AddTaskAsync(harness, container);
+        Harness harness = CreateHarness();
+        var task = await AddTaskAsync(harness, container);
 
-            await harness.Coordinator.StartExtractAsync();
+        await harness.Coordinator.StartExtractAsync();
 
-            string log = string.Join("\n", harness.LogTexts);
+        string log = string.Join("\n", harness.LogTexts);
 
-            /*
-             * 断言只能落在**判据行**上：任务**成功**时任务级 INFO 会被"攒着、成功就丢"那条规矩丢掉
-             * （"实际使用 …" 那类明细行成功时看不见 —— 实测本用例的日志里就没有它）。
-             * 判据行走的是 _vm.CriterionLog，不进任务缓冲，成功也一定落盘。
-             */
-            Assert.True(
-                harness.LogTexts.Any(line =>
-                    line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
-                    && line.Contains("格式=Rar", StringComparison.Ordinal)
-                    && line.Contains("改名 封面.rar", StringComparison.Ordinal)),
-                "抠出来的那一份没按内容起名成 .rar：\n" + log);
+        /*
+         * 断言只能落在**判据行**上：任务**成功**时任务级 INFO 会被"攒着、成功就丢"那条规矩丢掉
+         * （"实际使用 …" 那类明细行成功时看不见 —— 实测本用例的日志里就没有它）。
+         * 判据行走的是 _vm.CriterionLog，不进任务缓冲，成功也一定落盘。
+         */
+        Assert.True(
+            harness.LogTexts.Any(line =>
+                line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
+                && line.Contains("格式=Rar", StringComparison.Ordinal)
+                && line.Contains("改名 封面.rar", StringComparison.Ordinal)),
+            "抠出来的那一份没按内容起名成 .rar：\n" + log);
 
-            Assert.False(
-                harness.LogTexts.Any(line =>
-                    line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
-                    && line.Contains("保持现有名字", StringComparison.Ordinal)),
-                "内容可证不是分卷成员，却仍然保持 .zip 没改名：\n" + log);
+        Assert.False(
+            harness.LogTexts.Any(line =>
+                line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
+                && line.Contains("保持现有名字", StringComparison.Ordinal)),
+            "内容可证不是分卷成员，却仍然保持 .zip 没改名：\n" + log);
 
-            // ②这一单真解出来了（内容物落在输出根下），且机器终态是成功。
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.True(
-                Directory.EnumerateFiles(harness.OutputRoot, "a.bin", SearchOption.AllDirectories).Any(),
-                "内容物没解出来：\n" + log);
+        // ②这一单真解出来了（内容物落在输出根下），且机器终态是成功。
+        Assert.Equal(StatusText.ExtractSuccess, task.Status);
+        Assert.True(
+            Directory.EnumerateFiles(harness.OutputRoot, "a.bin", SearchOption.AllDirectories).Any(),
+            "内容物没解出来：\n" + log);
 
-            // ③源文件一个字节都没动（不变量 1）。
-            Assert.True(File.Exists(container));
-        }
+        // ③源文件一个字节都没动（不变量 1）。
+        Assert.True(File.Exists(container));
+    }
 
-        /// <summary>
-        /// **引擎行为证据**（这几条不是测我们的代码，而是钉住那段注释里的实测结论）：
-        ///
-        /// <para>①完整的归档**不看后缀**：容器里就是一整个 7z（或 RAR）时，被抠成 `封面.zip` 也照样打得开 ——
-        /// 所以第 38/39 条那条"尾部挂 RAR/7z"的路不会被这个名字拖累；</para>
-        ///
-        /// <para>②而"容器里装的是分卷第一卷"时后缀**会改变判决**：叫 `.zip` 时引擎报的是「分卷缺失」
-        /// 这一类（成因说得对），叫 `.7z` 就改口说"文件损坏"。所以
-        /// <c>BuildEmbeddedArchivePath</c> 里那个写死的 `.zip` 是**刻意**留的，
-        /// ⛔ 谁"顺手改成真实格式的后缀"都会把最需要说清的那一档说歪。</para>
-        /// </summary>
-        [Fact]
-        public async Task 引擎行为证据_完整归档不看后缀_而分卷第一卷看后缀()
-        {
-            RequireSevenZip();
+    /// <summary>
+    /// **引擎行为证据**（这几条不是测我们的代码，而是钉住那段注释里的实测结论）：
+    ///
+    /// <para>①完整的归档**不看后缀**：容器里就是一整个 7z（或 RAR）时，被抠成 `封面.zip` 也照样打得开 ——
+    /// 所以第 38/39 条那条"尾部挂 RAR/7z"的路不会被这个名字拖累；</para>
+    ///
+    /// <para>②而"容器里装的是分卷第一卷"时后缀**会改变判决**：叫 `.zip` 时引擎报的是「分卷缺失」
+    /// 这一类（成因说得对），叫 `.7z` 就改口说"文件损坏"。所以
+    /// <c>BuildEmbeddedArchivePath</c> 里那个写死的 `.zip` 是**刻意**留的，
+    /// ⛔ 谁"顺手改成真实格式的后缀"都会把最需要说清的那一档说歪。</para>
+    /// </summary>
+    [Fact]
+    public async Task 引擎行为证据_完整归档不看后缀_而分卷第一卷看后缀()
+    {
+        RequireSevenZip();
 
-            string directory = Path.Combine(_root, "naming-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
+        string directory = Path.Combine(_root, "naming-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
 
-            var payload = new byte[2 * 1024 * 1024];
-            new Random(11).NextBytes(payload);
-            File.WriteAllBytes(Path.Combine(directory, "a.bin"), payload);
+        var payload = new byte[2 * 1024 * 1024];
+        new Random(11).NextBytes(payload);
+        File.WriteAllBytes(Path.Combine(directory, "a.bin"), payload);
 
-            var engine = new Engines.SevenZip.SevenZipEngine();
+        var engine = new Engines.SevenZip.SevenZipEngine();
 
-            // ① 完整单卷 7z → 改名成 .zip 也能列出来
-            Run7z(directory, "a", "-t7z", "-mx0", "single.7z", "a.bin");
+        // ① 完整单卷 7z → 改名成 .zip 也能列出来
+        Run7z(directory, "a", "-t7z", "-mx0", "single.7z", "a.bin");
 
-            string asZip = Path.Combine(directory, "完整包.zip");
-            File.Copy(Path.Combine(directory, "single.7z"), asZip);
+        string asZip = Path.Combine(directory, "完整包.zip");
+        File.Copy(Path.Combine(directory, "single.7z"), asZip);
 
-            ArchiveListResult complete = await engine.ListAsync(ArchiveRequest.For(asZip), CancellationToken.None);
+        ArchiveListResult complete = await engine.ListAsync(ArchiveRequest.For(asZip), CancellationToken.None);
 
-            Assert.True(complete.Success, $"完整的 7z 不该被名字影响：{complete.Message}");
-            Assert.Contains(complete.Entries, entry => entry.Path!.EndsWith("a.bin", StringComparison.OrdinalIgnoreCase));
+        Assert.True(complete.Success, $"完整的 7z 不该被名字影响：{complete.Message}");
+        Assert.Contains(complete.Entries, entry => entry.Path!.EndsWith("a.bin", StringComparison.OrdinalIgnoreCase));
 
-            // ② 分卷的第一卷：叫 .zip 与叫 .7z 的判决**不一样**（后者落到"文件损坏"那一类）
-            Run7z(directory, "a", "-t7z", "-mx0", "-v1m", "set.7z", "a.bin");
+        // ② 分卷的第一卷：叫 .zip 与叫 .7z 的判决**不一样**（后者落到"文件损坏"那一类）
+        Run7z(directory, "a", "-t7z", "-mx0", "-v1m", "set.7z", "a.bin");
 
-            string firstZip = Path.Combine(directory, "第一卷.zip");
-            string firstSevenZip = Path.Combine(directory, "第一卷.7z");
-            File.Copy(Path.Combine(directory, "set.7z.001"), firstZip);
-            File.Copy(Path.Combine(directory, "set.7z.001"), firstSevenZip);
+        string firstZip = Path.Combine(directory, "第一卷.zip");
+        string firstSevenZip = Path.Combine(directory, "第一卷.7z");
+        File.Copy(Path.Combine(directory, "set.7z.001"), firstZip);
+        File.Copy(Path.Combine(directory, "set.7z.001"), firstSevenZip);
 
-            ArchiveListResult zipNamed = await engine.ListAsync(ArchiveRequest.For(firstZip), CancellationToken.None);
-            ArchiveListResult sevenZipNamed = await engine.ListAsync(ArchiveRequest.For(firstSevenZip), CancellationToken.None);
+        ArchiveListResult zipNamed = await engine.ListAsync(ArchiveRequest.For(firstZip), CancellationToken.None);
+        ArchiveListResult sevenZipNamed = await engine.ListAsync(ArchiveRequest.For(firstSevenZip), CancellationToken.None);
 
-            Assert.False(zipNamed.Success, "只有第一卷时当然列不出来（这条只证明'结论拿得到'）");
-            Assert.False(sevenZipNamed.Success);
+        Assert.False(zipNamed.Success, "只有第一卷时当然列不出来（这条只证明'结论拿得到'）");
+        Assert.False(sevenZipNamed.Success);
 
-            /*
-             * 机器可比的那两位（实测）：叫 `.zip` → 落进**「分卷缺失」这一族**（管线据此报「分卷缺失」，
-             * 成因说得对）；叫 `.7z` → 引擎改口说"损坏"（管线上就是「文件损坏」，会让人去怀疑文件）。
-             *
-             * ⚠ 2026-10-05（真机 `HK.7z.001`）：这一份**自己就是第 1 卷**（`第一卷.zip` 的卷号也是 1），
-             * 所以那一族里现在落的是 `VolumeMissing`（「分卷压缩包缺少必要分卷」）而不是
-             * `MissingFirstVolume`（「这是**后续卷**，缺少首卷」—— 对第 1 卷本身是**说反了**）。
-             * 两个码对上层是同一档（`ExtractionCoordinator.IsVolumeMissingErrorType` 都收），
-             * 本条只钉"落进这一族、且与'损坏'那一档分得开"。
-             */
-            Assert.Contains(
-                zipNamed.ErrorType,
-                new[]
-                {
-                    Engines.SevenZip.SevenZipOutputParser.SevenZipVolumeMissingErrorType,
-                    Engines.SevenZip.SevenZipOutputParser.MissingFirstVolumeErrorType
-                });
-            Assert.Equal(
-                StatusText.VolumeMissing,
-                Engines.SevenZip.SevenZipOutputParser.ErrorTypeToTaskStatus(zipNamed.ErrorType!));
-            Assert.Equal(EngineErrorTypes.CorruptedArchive, sevenZipNamed.ErrorType);
-        }
-
-        /// <summary>
-        /// **反向断言**：外面没有那一组"缺首卷的分卷"时，不许硬套那句补充说明
-        /// （判据必须来自文件系统，⛔ 不许见到内嵌归档就猜）。
-        /// </summary>
-        [Fact]
-        public async Task 外面没有缺首卷的那一组时_不许硬套补充说明()
-        {
-            RequireSevenZip();
-
-            string work = Path.Combine(_root, "work-alone");
-            Directory.CreateDirectory(work);
-
-            string container = BuildContainerWithFirstVolume(work, "只有一卷.jpg", withSiblings: false, siblingBaseName: "set.7z");
-
-            Harness harness = CreateHarness();
-            var task = await AddTaskAsync(harness, container);
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.DoesNotContain("同目录里缺首卷的那一组", task.ErrorMessage);
-        }
-
-        // ================================================================ 造样本与工具
-
-        /// <summary>
-        /// 造一个"图片 + 一组真 7z 的第一卷"的容器；<paramref name="withSiblings"/> 为真时
-        /// 把 `.002/.003` 放在容器同目录里（就是这一档的现场）。
-        /// </summary>
-        private string BuildContainerWithFirstVolume(string directory, string containerName, bool withSiblings, string siblingBaseName)
-        {
-            string source = Path.Combine(_root, "src-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(source);
-
-            var payload = new byte[3 * 1024 * 1024];
-            new Random(20260925).NextBytes(payload);
-            File.WriteAllBytes(Path.Combine(source, "a.bin"), payload);
-
-            Run7z(source, "a", "-t7z", "-mx0", "-v1m", "set.7z", "a.bin");
-
-            string first = Path.Combine(source, "set.7z.001");
-            Assert.True(File.Exists(first), "第一卷没造出来");
-
-            byte[] firstBytes = File.ReadAllBytes(first);
-            var junk = new byte[2 * 1024 * 1024];
-            new Random(7).NextBytes(junk);
-
-            string container = Path.Combine(directory, containerName);
-
-            using (var stream = File.Create(container))
+        /*
+         * 机器可比的那两位（实测）：叫 `.zip` → 落进**「分卷缺失」这一族**（管线据此报「分卷缺失」，
+         * 成因说得对）；叫 `.7z` → 引擎改口说"损坏"（管线上就是「文件损坏」，会让人去怀疑文件）。
+         *
+         * ⚠ 2026-10-05（真机 `HK.7z.001`）：这一份**自己就是第 1 卷**（`第一卷.zip` 的卷号也是 1），
+         * 所以那一族里现在落的是 `VolumeMissing`（「分卷压缩包缺少必要分卷」）而不是
+         * `MissingFirstVolume`（「这是**后续卷**，缺少首卷」—— 对第 1 卷本身是**说反了**）。
+         * 两个码对上层是同一档（`ExtractionCoordinator.IsVolumeMissingErrorType` 都收），
+         * 本条只钉"落进这一族、且与'损坏'那一档分得开"。
+         */
+        Assert.Contains(
+            zipNamed.ErrorType,
+            new[]
             {
-                stream.Write(junk);
-                stream.Write(firstBytes);
+                Engines.SevenZip.SevenZipOutputParser.SevenZipVolumeMissingErrorType,
+                Engines.SevenZip.SevenZipOutputParser.MissingFirstVolumeErrorType
+            });
+        Assert.Equal(
+            StatusText.VolumeMissing,
+            Engines.SevenZip.SevenZipOutputParser.ErrorTypeToTaskStatus(zipNamed.ErrorType!));
+        Assert.Equal(EngineErrorTypes.CorruptedArchive, sevenZipNamed.ErrorType);
+    }
+
+    /// <summary>
+    /// **反向断言**：外面没有那一组"缺首卷的分卷"时，不许硬套那句补充说明
+    /// （判据必须来自文件系统，⛔ 不许见到内嵌归档就猜）。
+    /// </summary>
+    [Fact]
+    public async Task 外面没有缺首卷的那一组时_不许硬套补充说明()
+    {
+        RequireSevenZip();
+
+        string work = Path.Combine(_root, "work-alone");
+        Directory.CreateDirectory(work);
+
+        string container = BuildContainerWithFirstVolume(work, "只有一卷.jpg", withSiblings: false, siblingBaseName: "set.7z");
+
+        Harness harness = CreateHarness();
+        var task = await AddTaskAsync(harness, container);
+
+        await harness.Coordinator.StartExtractAsync();
+
+        Assert.Equal(StatusText.VolumeMissing, task.Status);
+        Assert.DoesNotContain("同目录里缺首卷的那一组", task.ErrorMessage);
+    }
+
+    // ================================================================ 造样本与工具
+
+    /// <summary>
+    /// 造一个"图片 + 一组真 7z 的第一卷"的容器；<paramref name="withSiblings"/> 为真时
+    /// 把 `.002/.003` 放在容器同目录里（就是这一档的现场）。
+    /// </summary>
+    private string BuildContainerWithFirstVolume(string directory, string containerName, bool withSiblings, string siblingBaseName)
+    {
+        string source = Path.Combine(_root, "src-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(source);
+
+        var payload = new byte[3 * 1024 * 1024];
+        new Random(20260925).NextBytes(payload);
+        File.WriteAllBytes(Path.Combine(source, "a.bin"), payload);
+
+        Run7z(source, "a", "-t7z", "-mx0", "-v1m", "set.7z", "a.bin");
+
+        string first = Path.Combine(source, "set.7z.001");
+        Assert.True(File.Exists(first), "第一卷没造出来");
+
+        byte[] firstBytes = File.ReadAllBytes(first);
+        var junk = new byte[2 * 1024 * 1024];
+        new Random(7).NextBytes(junk);
+
+        string container = Path.Combine(directory, containerName);
+
+        using (var stream = File.Create(container))
+        {
+            stream.Write(junk);
+            stream.Write(firstBytes);
+        }
+
+        if (withSiblings)
+        {
+            File.Copy(Path.Combine(source, "set.7z.002"), Path.Combine(directory, siblingBaseName + ".002"));
+            File.Copy(Path.Combine(source, "set.7z.003"), Path.Combine(directory, siblingBaseName + ".003"));
+        }
+
+        return container;
+    }
+
+    /// <summary>
+    /// 造一个"图片 + **一整个完整 RAR**（不是分卷）"的容器 —— 用户 2026-10-11 大测试 run-5555 的形状
+    /// （`222-L5.png` = 8.4 MB 媒体前缀 + 一整个 RAR5 尾巴）。
+    /// </summary>
+    private string BuildContainerWithCompleteRar(string directory, string containerName)
+    {
+        string source = Path.Combine(_root, "rar-src-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(source);
+
+        var payload = new byte[3 * 1024 * 1024];
+        new Random(20261011).NextBytes(payload);
+        File.WriteAllBytes(Path.Combine(source, "a.bin"), payload);
+
+        RunRar(source, "a", "-ep", "-m0", "-ma5", "pack.rar", "a.bin");
+
+        string packed = Path.Combine(source, "pack.rar");
+        Assert.True(File.Exists(packed), "完整 RAR 没造出来");
+
+        byte[] packedBytes = File.ReadAllBytes(packed);
+        var junk = new byte[2 * 1024 * 1024];
+        new Random(11).NextBytes(junk);
+
+        string container = Path.Combine(directory, containerName);
+
+        using (var stream = File.Create(container))
+        {
+            stream.Write(junk);
+            stream.Write(packedBytes);
+        }
+
+        return container;
+    }
+
+    private static async Task<ArchiveTask> AddTaskAsync(Harness harness, string path)
+    {
+        var task = new ArchiveTask(path, harness.Vm.Tasks.Count + 1) { IsSelected = true };
+
+        await new ArchiveDetectService().ApplyDetectResultAsync(task);
+        task.CaptureSourceSnapshot();
+        harness.Vm.Tasks.Add(task);
+
+        return task;
+    }
+
+    private void Run7z(string workingDirectory, params string[] args)
+    {
+        RequireSevenZip();
+
+        var psi = new ProcessStartInfo(_sevenZip!)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (string arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 7z.exe");
+
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(120_000), "7z 超时");
+        Assert.True(process.ExitCode == 0, $"7z 失败：{stdout}{stderr}");
+    }
+
+    private void RunRar(string workingDirectory, params string[] args)
+    {
+        RequireRar();
+
+        var psi = new ProcessStartInfo(_rar!)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (string arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Rar.exe");
+
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(120_000), "Rar 超时");
+        Assert.True(process.ExitCode == 0, $"Rar 失败：{stdout}{stderr}");
+    }
+
+    private Harness CreateHarness()
+    {
+        string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
+        string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
+
+        Directory.CreateDirectory(dataRoot);
+        Directory.CreateDirectory(outputRoot);
+
+        var pathService = new PathService { DataRootDirectory = dataRoot };
+        var settingsService = new SettingsService(pathService);
+
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.CustomOutputDirectory = outputRoot;
+        settings.ExtractToOriginalDirectory = false;
+        settings.KeepArchiveNameFolder = true;
+        settings.AutoScanAfterDrop = false;
+        settings.ConcurrencyOverride = 1;
+        settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+        settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+
+        settingsService.Save(settings);
+
+        var engine = new Engines.SevenZip.SevenZipEngine();
+        var logService = new LogService(pathService);
+
+        var vm = new MainViewModel(
+            new FileScanService(),
+            new ArchiveDetectService(),
+            new RenameService(),
+            engine,
+            new PasswordService(),
+            logService,
+            settingsService,
+            pathService,
+            new TaskSummaryService(),
+            new ClipboardService(),
+            new ConfirmDialogService());
+
+        var coordinator = new ExtractionCoordinator(
+            vm,
+            engine,
+            new PasswordService(),
+            pathService,
+            new ConfirmDialogService());
+
+        return new Harness(vm, coordinator, logService, outputRoot);
+    }
+
+    private void RequireSevenZip()
+    {
+        if (string.IsNullOrEmpty(_sevenZip))
+        {
+            throw new InvalidOperationException("测试机上没有 7z.exe");
+        }
+    }
+
+    /// <summary>
+    /// 这一档**只有 RAR 造得出来**（要的东西正是"内容可证不是分卷成员"的完整 RAR ——
+    /// ZIP 那一族改完名与原来同名、7z 那一族内容证据判不出），所以本机没装 WinRAR 时**跳过**并写清楚。
+    /// </summary>
+    private void RequireRar()
+    {
+        if (string.IsNullOrEmpty(_rar))
+        {
+            throw new InvalidOperationException(
+                "测试机上没有 Rar.exe（WinRAR）：这一档要造\"完整的 RAR 尾巴\"，造不出来就没得测。");
+        }
+    }
+
+    /// <summary>
+    /// 找 <c>Rar.exe</c>：先认环境变量 <c>ARCHIVEFIXER_RAR</c>，再认 WinRAR 的默认安装位置。
+    /// 找不到 = 跳过（与"本机没 WinRAR"那几条既有跳过一个口径）。
+    /// </summary>
+    private static string? LocateRar()
+    {
+        string? fromEnvironment = Environment.GetEnvironmentVariable("ARCHIVEFIXER_RAR");
+
+        if (!string.IsNullOrWhiteSpace(fromEnvironment) && File.Exists(fromEnvironment))
+        {
+            return fromEnvironment;
+        }
+
+        string? fromProgramFiles = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "WinRAR",
+            "Rar.exe");
+
+        return File.Exists(fromProgramFiles) ? fromProgramFiles : null;
+    }
+
+    private static string? LocateSevenZip()
+    {
+        DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory != null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
+            {
+                string candidate = Path.Combine(directory.FullName, "src", "ArchiveFixer", "tools", "7zip", "7z.exe");
+                return File.Exists(candidate) ? candidate : null;
             }
 
-            if (withSiblings)
-            {
-                File.Copy(Path.Combine(source, "set.7z.002"), Path.Combine(directory, siblingBaseName + ".002"));
-                File.Copy(Path.Combine(source, "set.7z.003"), Path.Combine(directory, siblingBaseName + ".003"));
-            }
-
-            return container;
+            directory = directory.Parent;
         }
 
-        /// <summary>
-        /// 造一个"图片 + **一整个完整 RAR**（不是分卷）"的容器 —— 用户 2026-10-11 大测试 run-5555 的形状
-        /// （`222-L5.png` = 8.4 MB 媒体前缀 + 一整个 RAR5 尾巴）。
-        /// </summary>
-        private string BuildContainerWithCompleteRar(string directory, string containerName)
+        return null;
+    }
+
+    private sealed class ConfirmDialogService : DialogService
+    {
+        public override bool ShowConfirm(
+            string message,
+            string optionText,
+            bool optionCheckedByDefault,
+            string detail,
+            out bool optionChecked)
         {
-            string source = Path.Combine(_root, "rar-src-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(source);
-
-            var payload = new byte[3 * 1024 * 1024];
-            new Random(20261011).NextBytes(payload);
-            File.WriteAllBytes(Path.Combine(source, "a.bin"), payload);
-
-            RunRar(source, "a", "-ep", "-m0", "-ma5", "pack.rar", "a.bin");
-
-            string packed = Path.Combine(source, "pack.rar");
-            Assert.True(File.Exists(packed), "完整 RAR 没造出来");
-
-            byte[] packedBytes = File.ReadAllBytes(packed);
-            var junk = new byte[2 * 1024 * 1024];
-            new Random(11).NextBytes(junk);
-
-            string container = Path.Combine(directory, containerName);
-
-            using (var stream = File.Create(container))
-            {
-                stream.Write(junk);
-                stream.Write(packedBytes);
-            }
-
-            return container;
+            optionChecked = optionCheckedByDefault;
+            return true;
         }
+    }
 
-        private static async Task<ArchiveTask> AddTaskAsync(Harness harness, string path)
+    private sealed class Harness
+    {
+        public Harness(MainViewModel vm, ExtractionCoordinator coordinator, LogService log, string outputRoot)
         {
-            var task = new ArchiveTask(path, harness.Vm.Tasks.Count + 1) { IsSelected = true };
-
-            await new ArchiveDetectService().ApplyDetectResultAsync(task);
-            task.CaptureSourceSnapshot();
-            harness.Vm.Tasks.Add(task);
-
-            return task;
+            Vm = vm;
+            Coordinator = coordinator;
+            Log = log;
+            OutputRoot = outputRoot;
         }
 
-        private void Run7z(string workingDirectory, params string[] args)
-        {
-            RequireSevenZip();
+        public MainViewModel Vm { get; }
 
-            var psi = new ProcessStartInfo(_sevenZip!)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = workingDirectory
-            };
+        public ExtractionCoordinator Coordinator { get; }
 
-            foreach (string arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
+        public LogService Log { get; }
 
-            using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 7z.exe");
+        public string OutputRoot { get; }
 
-            string stdout = process.StandardOutput.ReadToEnd();
-            string stderr = process.StandardError.ReadToEnd();
-
-            Assert.True(process.WaitForExit(120_000), "7z 超时");
-            Assert.True(process.ExitCode == 0, $"7z 失败：{stdout}{stderr}");
-        }
-
-        private void RunRar(string workingDirectory, params string[] args)
-        {
-            RequireRar();
-
-            var psi = new ProcessStartInfo(_rar!)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = workingDirectory
-            };
-
-            foreach (string arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Rar.exe");
-
-            string stdout = process.StandardOutput.ReadToEnd();
-            string stderr = process.StandardError.ReadToEnd();
-
-            Assert.True(process.WaitForExit(120_000), "Rar 超时");
-            Assert.True(process.ExitCode == 0, $"Rar 失败：{stdout}{stderr}");
-        }
-
-        private Harness CreateHarness()
-        {
-            string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
-            string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
-
-            Directory.CreateDirectory(dataRoot);
-            Directory.CreateDirectory(outputRoot);
-
-            var pathService = new PathService { DataRootDirectory = dataRoot };
-            var settingsService = new SettingsService(pathService);
-
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.CustomOutputDirectory = outputRoot;
-            settings.ExtractToOriginalDirectory = false;
-            settings.KeepArchiveNameFolder = true;
-            settings.AutoScanAfterDrop = false;
-            settings.ConcurrencyOverride = 1;
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
-
-            settingsService.Save(settings);
-
-            var engine = new Engines.SevenZip.SevenZipEngine();
-            var logService = new LogService(pathService);
-
-            var vm = new MainViewModel(
-                new FileScanService(),
-                new ArchiveDetectService(),
-                new RenameService(),
-                engine,
-                new PasswordService(),
-                logService,
-                settingsService,
-                pathService,
-                new TaskSummaryService(),
-                new ClipboardService(),
-                new ConfirmDialogService());
-
-            var coordinator = new ExtractionCoordinator(
-                vm,
-                engine,
-                new PasswordService(),
-                pathService,
-                new ConfirmDialogService());
-
-            return new Harness(vm, coordinator, logService, outputRoot);
-        }
-
-        private void RequireSevenZip()
-        {
-            if (string.IsNullOrEmpty(_sevenZip))
-            {
-                throw new InvalidOperationException("测试机上没有 7z.exe");
-            }
-        }
-
-        /// <summary>
-        /// 这一档**只有 RAR 造得出来**（要的东西正是"内容可证不是分卷成员"的完整 RAR ——
-        /// ZIP 那一族改完名与原来同名、7z 那一族内容证据判不出），所以本机没装 WinRAR 时**跳过**并写清楚。
-        /// </summary>
-        private void RequireRar()
-        {
-            if (string.IsNullOrEmpty(_rar))
-            {
-                throw new InvalidOperationException(
-                    "测试机上没有 Rar.exe（WinRAR）：这一档要造\"完整的 RAR 尾巴\"，造不出来就没得测。");
-            }
-        }
-
-        /// <summary>
-        /// 找 <c>Rar.exe</c>：先认环境变量 <c>ARCHIVEFIXER_RAR</c>，再认 WinRAR 的默认安装位置。
-        /// 找不到 = 跳过（与"本机没 WinRAR"那几条既有跳过一个口径）。
-        /// </summary>
-        private static string? LocateRar()
-        {
-            string? fromEnvironment = Environment.GetEnvironmentVariable("ARCHIVEFIXER_RAR");
-
-            if (!string.IsNullOrWhiteSpace(fromEnvironment) && File.Exists(fromEnvironment))
-            {
-                return fromEnvironment;
-            }
-
-            string? fromProgramFiles = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                "WinRAR",
-                "Rar.exe");
-
-            return File.Exists(fromProgramFiles) ? fromProgramFiles : null;
-        }
-
-        private static string? LocateSevenZip()
-        {
-            DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-            while (directory != null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
-                {
-                    string candidate = Path.Combine(directory.FullName, "src", "ArchiveFixer", "tools", "7zip", "7z.exe");
-                    return File.Exists(candidate) ? candidate : null;
-                }
-
-                directory = directory.Parent;
-            }
-
-            return null;
-        }
-
-        private sealed class ConfirmDialogService : DialogService
-        {
-            public override bool ShowConfirm(
-                string message,
-                string optionText,
-                bool optionCheckedByDefault,
-                string detail,
-                out bool optionChecked)
-            {
-                optionChecked = optionCheckedByDefault;
-                return true;
-            }
-        }
-
-        private sealed class Harness
-        {
-            public Harness(MainViewModel vm, ExtractionCoordinator coordinator, LogService log, string outputRoot)
-            {
-                Vm = vm;
-                Coordinator = coordinator;
-                Log = log;
-                OutputRoot = outputRoot;
-            }
-
-            public MainViewModel Vm { get; }
-
-            public ExtractionCoordinator Coordinator { get; }
-
-            public LogService Log { get; }
-
-            public string OutputRoot { get; }
-
-            public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.DisplayText);
-        }
+        public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.DisplayText);
     }
 }

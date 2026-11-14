@@ -3,115 +3,114 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Services;
+
+/// <summary>
+/// 主窗口大小/位置记忆。只保存 WPF 的 DIP 坐标；损坏或屏幕外时回到默认居中/自适应。
+/// </summary>
+internal sealed class WindowPlacementService
 {
-    /// <summary>
-    /// 主窗口大小/位置记忆。只保存 WPF 的 DIP 坐标；损坏或屏幕外时回到默认居中/自适应。
-    /// </summary>
-    internal sealed class WindowPlacementService
+    internal const string FileName = "window-placement.json";
+
+    private readonly string _path;
+
+    internal WindowPlacementService(string dataRootDirectory)
     {
-        internal const string FileName = "window-placement.json";
+        _path = Path.Combine(dataRootDirectory, FileName);
+    }
 
-        private readonly string _path;
-
-        internal WindowPlacementService(string dataRootDirectory)
+    internal Placement? Load()
+    {
+        try
         {
-            _path = Path.Combine(dataRootDirectory, FileName);
-        }
-
-        internal Placement? Load()
-        {
-            try
-            {
-                if (!File.Exists(_path))
-                {
-                    return null;
-                }
-
-                Placement? placement = JsonSerializer.Deserialize<Placement>(File.ReadAllText(_path));
-
-                if (placement == null
-                    || placement.Width < 320
-                    || placement.Height < 240
-                    || double.IsNaN(placement.Left)
-                    || double.IsNaN(placement.Top))
-                {
-                    return null;
-                }
-
-                return placement;
-            }
-            catch
+            if (!File.Exists(_path))
             {
                 return null;
             }
-        }
 
-        internal void Save(Window window)
-        {
-            try
+            Placement? placement = JsonSerializer.Deserialize<Placement>(File.ReadAllText(_path));
+
+            if (placement == null
+                || placement.Width < 320
+                || placement.Height < 240
+                || double.IsNaN(placement.Left)
+                || double.IsNaN(placement.Top))
             {
-                Rect bounds = window.WindowState == WindowState.Maximized
-                    ? window.RestoreBounds
-                    : new Rect(window.Left, window.Top, window.Width, window.Height);
-
-                if (bounds.Width < 320 || bounds.Height < 240)
-                {
-                    return;
-                }
-
-                var placement = new Placement
-                {
-                    Left = bounds.Left,
-                    Top = bounds.Top,
-                    Width = bounds.Width,
-                    Height = bounds.Height,
-                    Maximized = window.WindowState == WindowState.Maximized
-                };
-
-                string? directory = Path.GetDirectoryName(_path);
-
-                if (!string.IsNullOrWhiteSpace(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                string temp = _path + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(placement));
-                File.Move(temp, _path, overwrite: true);
+                return null;
             }
-            catch
+
+            return placement;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal void Save(Window window)
+    {
+        try
+        {
+            Rect bounds = window.WindowState == WindowState.Maximized
+                ? window.RestoreBounds
+                : new Rect(window.Left, window.Top, window.Width, window.Height);
+
+            if (bounds.Width < 320 || bounds.Height < 240)
             {
-                // 窗口位置保存失败不影响退出。
+                return;
             }
-        }
 
-        internal static bool IsVisibleOnScreen(Placement placement)
+            var placement = new Placement
+            {
+                Left = bounds.Left,
+                Top = bounds.Top,
+                Width = bounds.Width,
+                Height = bounds.Height,
+                Maximized = window.WindowState == WindowState.Maximized
+            };
+
+            string? directory = Path.GetDirectoryName(_path);
+
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string temp = _path + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(placement));
+            File.Move(temp, _path, overwrite: true);
+        }
+        catch
         {
-            Rect virtualScreen = new(
-                SystemParameters.VirtualScreenLeft,
-                SystemParameters.VirtualScreenTop,
-                SystemParameters.VirtualScreenWidth,
-                SystemParameters.VirtualScreenHeight);
-
-            Rect bounds = new(placement.Left, placement.Top, placement.Width, placement.Height);
-
-            return virtualScreen.IntersectsWith(bounds)
-                   && bounds.Right > virtualScreen.Left + 80
-                   && bounds.Bottom > virtualScreen.Top + 80;
+            // 窗口位置保存失败不影响退出。
         }
+    }
 
-        internal sealed class Placement
-        {
-            public double Left { get; set; }
+    internal static bool IsVisibleOnScreen(Placement placement)
+    {
+        Rect virtualScreen = new(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
 
-            public double Top { get; set; }
+        Rect bounds = new(placement.Left, placement.Top, placement.Width, placement.Height);
 
-            public double Width { get; set; }
+        return virtualScreen.IntersectsWith(bounds)
+               && bounds.Right > virtualScreen.Left + 80
+               && bounds.Bottom > virtualScreen.Top + 80;
+    }
 
-            public double Height { get; set; }
+    internal sealed class Placement
+    {
+        public double Left { get; set; }
 
-            public bool Maximized { get; set; }
-        }
+        public double Top { get; set; }
+
+        public double Width { get; set; }
+
+        public double Height { get; set; }
+
+        public bool Maximized { get; set; }
     }
 }

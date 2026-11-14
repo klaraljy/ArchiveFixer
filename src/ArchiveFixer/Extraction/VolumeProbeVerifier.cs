@@ -7,541 +7,367 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Extraction
-{
-    /// <summary>
-    /// **试开验证**：把候选按假设名做成硬链接，让既有引擎真的列一次目录 —— 列出来才算数。
-    ///
-    /// <para><b>为什么必须真的试开</b>：7z 的分卷内容里没有卷号（见
-    /// <see cref="VolumeContentInference"/> 的注释），"按尺寸猜顺序"只是**假设**；
-    /// 假设错了去改名，就是把一组本来能解的包改成解不开的（改名不可逆、用户还得自己改回来）。
-    /// 引擎列一次目录的证据强度，比任何名字/尺寸规律都高。</para>
-    ///
-    /// <para><b>⛔ 绝不复制文件</b>：一卷 2 GiB，复制一组要几十 GiB 和几分钟。
-    /// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）。
-    /// 由此推出两条硬规矩（用户 2026-09-30 红线：「工作区就设在解压的地方，这就完全不存在跨盘的操作」）：
-    /// <b>① 没有工作区根（拿不到这一单的目标目录）⇒ 一次都不试</b>；<b>② 跨卷 ⇒ 一次都不试</b>。
-    /// ⛔ 不许退到源卷根 / 程序目录 / 临时目录另开一个工作区 —— 判不出就如实报"无法确认"。</para>
-    ///
-    /// <para><b>本类不引用 WPF</b>，只依赖 <see cref="IArchiveEngine"/> 与文件系统。</para>
-    /// </summary>
-    public sealed class VolumeProbeVerifier
-    {
-        private readonly IArchiveEngine _engine;
+namespace ArchiveFixer.Extraction;
 
-        public VolumeProbeVerifier(IArchiveEngine engine)
+/// <summary>
+/// **试开验证**：把候选按假设名做成硬链接，让既有引擎真的列一次目录 —— 列出来才算数。
+///
+/// <para><b>为什么必须真的试开</b>：7z 的分卷内容里没有卷号（见
+/// <see cref="VolumeContentInference"/> 的注释），"按尺寸猜顺序"只是**假设**；
+/// 假设错了去改名，就是把一组本来能解的包改成解不开的（改名不可逆、用户还得自己改回来）。
+/// 引擎列一次目录的证据强度，比任何名字/尺寸规律都高。</para>
+///
+/// <para><b>⛔ 绝不复制文件</b>：一卷 2 GiB，复制一组要几十 GiB 和几分钟。
+/// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）。
+/// 由此推出两条硬规矩（用户 2026-09-30 红线：「工作区就设在解压的地方，这就完全不存在跨盘的操作」）：
+/// <b>① 没有工作区根（拿不到这一单的目标目录）⇒ 一次都不试</b>；<b>② 跨卷 ⇒ 一次都不试</b>。
+/// ⛔ 不许退到源卷根 / 程序目录 / 临时目录另开一个工作区 —— 判不出就如实报"无法确认"。</para>
+///
+/// <para><b>本类不引用 WPF</b>，只依赖 <see cref="IArchiveEngine"/> 与文件系统。</para>
+/// </summary>
+public sealed class VolumeProbeVerifier
+{
+    private readonly IArchiveEngine _engine;
+
+    public VolumeProbeVerifier(IArchiveEngine engine)
+    {
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+    }
+
+    /// <summary>
+    /// 先确认"第一卷自己打不开"（打得开 = 它本身就是个完整压缩包，不是分卷的第一卷，那就什么都别做），
+    /// 再逐个假设顺序试开。
+    /// </summary>
+    /// <param name="firstVolumePath">第一卷。</param>
+    /// <param name="orderings">后续卷的候选排列（每一组都不含第一卷）。</param>
+    /// <param name="cancellationToken">取消。</param>
+    /// <param name="preferredWorkRoot">
+    /// 试开临时物的落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
+    /// <b>没有它 / 它跨卷 ⇒ 一次都不试</b>：⛔ 不退到"源卷根下的 <c>.ArchiveFixer.work</c>"
+    /// （工作区只准设在解压的地方，在源盘开目录正是不变量 12 禁止的形态；本机 C:\ 与 E:\ 根上
+    /// 那两个空壳就是这条老路留下的），⛔ 也不改用程序目录 / 临时目录。
+    /// 两档都如实报"无法确认"（<see cref="VolumeProbeOutcome.SkipReason"/> =
+    /// <see cref="VolumeTrialSkipReason.NoProbeRoot"/> / <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
+    /// </param>
+    public async Task<VolumeProbeOutcome> VerifyAsync(
+        string? firstVolumePath,
+        IReadOnlyList<IReadOnlyList<VolumeCandidate>>? orderings,
+        CancellationToken cancellationToken = default,
+        string? preferredWorkRoot = null,
+        VolumeContentFormat family = VolumeContentFormat.Unknown,
+        bool testVolumes = false,
+        IReadOnlyList<string>? passwordCandidates = null,
+        IProgress<ArchiveProgress>? progress = null,
+        Action<ArchiveStallNotice>? stalled = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
         {
-            _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+            return Refuse(0, "第一卷不在了", attempted: false, VolumeTrialSkipReason.Other);
         }
 
-        /// <summary>
-        /// 先确认"第一卷自己打不开"（打得开 = 它本身就是个完整压缩包，不是分卷的第一卷，那就什么都别做），
-        /// 再逐个假设顺序试开。
-        /// </summary>
-        /// <param name="firstVolumePath">第一卷。</param>
-        /// <param name="orderings">后续卷的候选排列（每一组都不含第一卷）。</param>
-        /// <param name="cancellationToken">取消。</param>
-        /// <param name="preferredWorkRoot">
-        /// 试开临时物的落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
-        /// <b>没有它 / 它跨卷 ⇒ 一次都不试</b>：⛔ 不退到"源卷根下的 <c>.ArchiveFixer.work</c>"
-        /// （工作区只准设在解压的地方，在源盘开目录正是不变量 12 禁止的形态；本机 C:\ 与 E:\ 根上
-        /// 那两个空壳就是这条老路留下的），⛔ 也不改用程序目录 / 临时目录。
-        /// 两档都如实报"无法确认"（<see cref="VolumeProbeOutcome.SkipReason"/> =
-        /// <see cref="VolumeTrialSkipReason.NoProbeRoot"/> / <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
-        /// </param>
-        public async Task<VolumeProbeOutcome> VerifyAsync(
-            string? firstVolumePath,
-            IReadOnlyList<IReadOnlyList<VolumeCandidate>>? orderings,
-            CancellationToken cancellationToken = default,
-            string? preferredWorkRoot = null,
-            VolumeContentFormat family = VolumeContentFormat.Unknown,
-            bool testVolumes = false,
-            IReadOnlyList<string>? passwordCandidates = null,
-            IProgress<ArchiveProgress>? progress = null,
-            Action<ArchiveStallNotice>? stalled = null)
+        if (orderings == null || orderings.Count == 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            return Refuse(
+                0,
+                "同目录里没有可当后续卷的候选文件",
+                attempted: false,
+                VolumeTrialSkipReason.NoOrderings);
+        }
 
-            if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
-            {
-                return Refuse(0, "第一卷不在了", attempted: false, VolumeTrialSkipReason.Other);
-            }
+        if (_engine == null || !_engine.IsAvailable)
+        {
+            return Refuse(
+                0,
+                "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
+                attempted: false,
+                VolumeTrialSkipReason.NoEngine);
+        }
 
-            if (orderings == null || orderings.Count == 0)
-            {
-                return Refuse(
-                    0,
-                    "同目录里没有可当后续卷的候选文件",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoOrderings);
-            }
+        bool hasPreferredRoot = !string.IsNullOrWhiteSpace(preferredWorkRoot);
 
-            if (_engine == null || !_engine.IsAvailable)
-            {
-                return Refuse(
-                    0,
-                    "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoEngine);
-            }
+        /*
+         * ⛔ 没有工作区根 ⇒ **一次都不试**（用户 2026-09-30 红线：「工作区就设在解压的地方，
+         * 这就完全不存在跨盘的操作」）。
+         *
+         * 以前这一档会退到"第一卷所在卷根下的 .ArchiveFixer.work"—— 那就是"专门在用户盘上开一个
+         * 工作区"，本机实测 C:\ 与 E:\ 根上那两个空壳就是它留下的。整条删掉，⛔ 也不许改退到
+         * 程序目录 / 临时目录：证不出来就如实说"无法确认"，宁可什么都不做。
+         */
+        if (!hasPreferredRoot)
+        {
+            return Refuse(
+                0,
+                "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
+                + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出整组是齐的，只能如实报「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.NoProbeRoot);
+        }
 
-            bool hasPreferredRoot = !string.IsNullOrWhiteSpace(preferredWorkRoot);
+        /*
+         * ⛔ 跨盘 = 一次都不试（用户 2026-09-30 决定，见 <paramref name="preferredWorkRoot"/> 的说明）。
+         * 判据是"两个路径在不在同一个卷"，⛔ 不去比文案、也不试一次看看行不行 ——
+         * 试开的第一步就是在那个目录里建东西，那正是被否决的动作。
+         */
+        if (!VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
+        {
+            return Refuse(
+                0,
+                "跨盘无法试开，整卷是否齐全无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
+                + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.CrossVolume);
+        }
 
-            /*
-             * ⛔ 没有工作区根 ⇒ **一次都不试**（用户 2026-09-30 红线：「工作区就设在解压的地方，
-             * 这就完全不存在跨盘的操作」）。
-             *
-             * 以前这一档会退到"第一卷所在卷根下的 .ArchiveFixer.work"—— 那就是"专门在用户盘上开一个
-             * 工作区"，本机实测 C:\ 与 E:\ 根上那两个空壳就是它留下的。整条删掉，⛔ 也不许改退到
-             * 程序目录 / 临时目录：证不出来就如实说"无法确认"，宁可什么都不做。
-             */
-            if (!hasPreferredRoot)
-            {
-                return Refuse(
-                    0,
-                    "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
-                    + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出整组是齐的，只能如实报「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoProbeRoot);
-            }
+        string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot);
 
-            /*
-             * ⛔ 跨盘 = 一次都不试（用户 2026-09-30 决定，见 <paramref name="preferredWorkRoot"/> 的说明）。
-             * 判据是"两个路径在不在同一个卷"，⛔ 不去比文案、也不试一次看看行不行 ——
-             * 试开的第一步就是在那个目录里建东西，那正是被否决的动作。
-             */
-            if (!VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
-            {
-                return Refuse(
-                    0,
-                    "跨盘无法试开，整卷是否齐全无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
-                    + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.CrossVolume);
-            }
+        if (probeRoot.Length == 0)
+        {
+            return Refuse(
+                0,
+                "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试",
+                attempted: false,
+                VolumeTrialSkipReason.NoProbeRoot);
+        }
 
-            string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot);
+        int attempts = 0;
 
-            if (probeRoot.Length == 0)
-            {
-                return Refuse(
-                    0,
-                    "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoProbeRoot);
-            }
-
-            int attempts = 0;
-
+        try
+        {
             try
             {
-                try
-                {
-                    Directory.CreateDirectory(probeRoot);
-                }
-                catch (Exception ex)
-                {
-                    return Refuse(
-                        0,
-                        $"试开目录建不出来（{ex.Message}）",
-                        attempted: false,
-                        VolumeTrialSkipReason.NoProbeRoot);
-                }
+                Directory.CreateDirectory(probeRoot);
+            }
+            catch (Exception ex)
+            {
+                return Refuse(
+                    0,
+                    $"试开目录建不出来（{ex.Message}）",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoProbeRoot);
+            }
 
-                // ① 单独一卷能不能完整打开。能 → 它本来就是个完整包，改名只会把它弄坏。
-                VolumeProbeOutcome? solo = await TrySoloAsync(firstVolumePath, probeRoot, cancellationToken, family)
+            // ① 单独一卷能不能完整打开。能 → 它本来就是个完整包，改名只会把它弄坏。
+            VolumeProbeOutcome? solo = await TrySoloAsync(firstVolumePath, probeRoot, cancellationToken, family)
+                .ConfigureAwait(false);
+
+            if (solo != null)
+            {
+                return WithAttempted(solo, attempted: true);
+            }
+
+            // ② 逐个假设顺序试开：第一个"列得出来"的顺序就是它。
+            foreach (IReadOnlyList<VolumeCandidate> ordering in orderings)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string trialDirectory = Path.Combine(probeRoot, "try-" + attempts.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                attempts++;
+
+                var volumes = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
+                volumes.AddRange(ordering);
+
+                TrialResult trial = await TryLinkAndListAsync(
+                        volumes,
+                        trialDirectory,
+                        cancellationToken,
+                        family,
+                        testVolumes,
+                        passwordCandidates,
+                        progress,
+                        stalled)
                     .ConfigureAwait(false);
 
-                if (solo != null)
+                if (trial.Failure == null)
                 {
-                    return WithAttempted(solo, attempted: true);
-                }
-
-                // ② 逐个假设顺序试开：第一个"列得出来"的顺序就是它。
-                foreach (IReadOnlyList<VolumeCandidate> ordering in orderings)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    string trialDirectory = Path.Combine(probeRoot, "try-" + attempts.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    attempts++;
-
-                    var volumes = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
-                    volumes.AddRange(ordering);
-
-                    TrialResult trial = await TryLinkAndListAsync(
-                            volumes,
-                            trialDirectory,
-                            cancellationToken,
-                            family,
-                            testVolumes,
-                            passwordCandidates,
-                            progress,
-                            stalled)
-                        .ConfigureAwait(false);
-
-                    if (trial.Failure == null)
+                    return new VolumeProbeOutcome
                     {
-                        return new VolumeProbeOutcome
-                        {
-                            Confirmed = true,
-                            Attempted = true,
-                            NeedsPassword = trial.EncryptedArchive,
-                            OrderedVolumes = volumes,
-                            Attempts = attempts,
-                            Reason = trial.EncryptedArchive
-                                ? $"按试开验证的顺序成立了（试了 {attempts} 种排列；引擎认出了这一组是一份"
-                                  + "「文件名也加密」的归档，给不出密码就读不出清单）"
-                                : $"按试开验证的顺序成立了（试了 {attempts} 种排列）"
-                        };
-                    }
-
-                    LastFailure = trial.Failure;
+                        Confirmed = true,
+                        Attempted = true,
+                        NeedsPassword = trial.EncryptedArchive,
+                        OrderedVolumes = volumes,
+                        Attempts = attempts,
+                        Reason = trial.EncryptedArchive
+                            ? $"按试开验证的顺序成立了（试了 {attempts} 种排列；引擎认出了这一组是一份"
+                              + "「文件名也加密」的归档，给不出密码就读不出清单）"
+                            : $"按试开验证的顺序成立了（试了 {attempts} 种排列）"
+                    };
                 }
 
-                return Refuse(attempts, $"试了 {attempts} 种排列都不成立（最后一次：{LastFailure}）", attempted: true);
+                LastFailure = trial.Failure;
             }
-            catch (OperationCanceledException)
+
+            return Refuse(attempts, $"试了 {attempts} 种排列都不成立（最后一次：{LastFailure}）", attempted: true);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Refuse(attempts, $"试开过程中出错：{ex.Message}", attempted: attempts > 0);
+        }
+        finally
+        {
+            TryDelete(probeRoot);
+        }
+    }
+
+    /// <summary>
+    /// **跨盘 zip 的"试拼定序"**（用户 2026-10-01 的专属算法里，最后一小块拼图）。
+    ///
+    /// <para>什么时候需要它：末片的中央目录把**大部分**片都钉住了（<c>SpannedZipIndex.Pin</c>：
+    /// 每一片都有自己的"身份证"—— 中央目录写着它在哪个偏移上该有一个本地头），
+    /// 但**有几片里一个条目都没开始**（整段落在某个文件的数据中间）⇒ 那几片的先后在字节上完全对称，
+    /// 内容里没有任何信息。剩下的可能性只有几种排列 —— 那就**真的试一遍**。</para>
+    ///
+    /// <para><b>为什么必须"测试"（<c>t</c>）而不是"列目录"</b>：跨盘 zip 的中央目录在**末片**里、
+    /// 而且不加密 —— 列目录**根本不看中间几片的数据**，顺序错了照样列得出来（实测）。
+    /// 只有真的解码一遍才会碰到 CRC：顺序错了必然报数据错 / CRC 错。</para>
+    ///
+    /// <para>⛔ 与 <see cref="VerifyAsync"/> 同一套红线：**没有工作区根 / 跨盘 ⇒ 一次都不试**；
+    /// ⛔ 绝不复制（硬链接零字节、瞬时）；⛔ 密码只作为引擎参数传下去，**绝不进日志 / 绝不进结论**。</para>
+    /// </summary>
+    /// <param name="candidateOrders">
+    /// 待验证的**整组顺序**（每个元素 = 一份完整顺序，第 1 片在最前面、末片在最后）。
+    /// ⛔ 调用方只许把"内容已经钉住的部分 + 剩下那几片的排列"放进来，**不许**拿它当暴力搜索。
+    /// </param>
+    /// <param name="passwordCandidates">密码候选（AES 加密的跨盘 zip：只有对的密码才验得出顺序）。</param>
+    /// <param name="preferredWorkRoot">本单的目标工作区根（同 <see cref="VerifyAsync"/>）。</param>
+    /// <param name="cancellationToken">取消。</param>
+    public async Task<VolumeProbeOutcome> VerifySpannedZipOrderAsync(
+        IReadOnlyList<IReadOnlyList<string>>? candidateOrders,
+        IReadOnlyList<string>? passwordCandidates,
+        string? preferredWorkRoot,
+        CancellationToken cancellationToken = default)
+    {
+        if (candidateOrders == null || candidateOrders.Count == 0)
+        {
+            return Refuse(0, "没有可试的顺序", attempted: false, VolumeTrialSkipReason.NoOrderings);
+        }
+
+        IReadOnlyList<string> firstOrder = candidateOrders[0];
+
+        if (firstOrder.Count < 2)
+        {
+            return Refuse(0, "整组还没凑齐（少于 2 片），没法试拼", attempted: false, VolumeTrialSkipReason.Other);
+        }
+
+        foreach (IReadOnlyList<string> order in candidateOrders)
+        {
+            if (order.Count != firstOrder.Count)
             {
-                throw;
+                return Refuse(0, "候选顺序的片数对不上，没法试拼", attempted: false, VolumeTrialSkipReason.Other);
             }
-            catch (Exception ex)
+
+            foreach (string volume in order)
             {
-                return Refuse(attempts, $"试开过程中出错：{ex.Message}", attempted: attempts > 0);
-            }
-            finally
-            {
-                TryDelete(probeRoot);
+                if (string.IsNullOrWhiteSpace(volume) || !File.Exists(volume))
+                {
+                    return Refuse(0, "有一片不在了，没法试拼", attempted: false, VolumeTrialSkipReason.Other);
+                }
             }
         }
 
-        /// <summary>
-        /// **跨盘 zip 的"试拼定序"**（用户 2026-10-01 的专属算法里，最后一小块拼图）。
-        ///
-        /// <para>什么时候需要它：末片的中央目录把**大部分**片都钉住了（<c>SpannedZipIndex.Pin</c>：
-        /// 每一片都有自己的"身份证"—— 中央目录写着它在哪个偏移上该有一个本地头），
-        /// 但**有几片里一个条目都没开始**（整段落在某个文件的数据中间）⇒ 那几片的先后在字节上完全对称，
-        /// 内容里没有任何信息。剩下的可能性只有几种排列 —— 那就**真的试一遍**。</para>
-        ///
-        /// <para><b>为什么必须"测试"（<c>t</c>）而不是"列目录"</b>：跨盘 zip 的中央目录在**末片**里、
-        /// 而且不加密 —— 列目录**根本不看中间几片的数据**，顺序错了照样列得出来（实测）。
-        /// 只有真的解码一遍才会碰到 CRC：顺序错了必然报数据错 / CRC 错。</para>
-        ///
-        /// <para>⛔ 与 <see cref="VerifyAsync"/> 同一套红线：**没有工作区根 / 跨盘 ⇒ 一次都不试**；
-        /// ⛔ 绝不复制（硬链接零字节、瞬时）；⛔ 密码只作为引擎参数传下去，**绝不进日志 / 绝不进结论**。</para>
-        /// </summary>
-        /// <param name="candidateOrders">
-        /// 待验证的**整组顺序**（每个元素 = 一份完整顺序，第 1 片在最前面、末片在最后）。
-        /// ⛔ 调用方只许把"内容已经钉住的部分 + 剩下那几片的排列"放进来，**不许**拿它当暴力搜索。
-        /// </param>
-        /// <param name="passwordCandidates">密码候选（AES 加密的跨盘 zip：只有对的密码才验得出顺序）。</param>
-        /// <param name="preferredWorkRoot">本单的目标工作区根（同 <see cref="VerifyAsync"/>）。</param>
-        /// <param name="cancellationToken">取消。</param>
-        public async Task<VolumeProbeOutcome> VerifySpannedZipOrderAsync(
-            IReadOnlyList<IReadOnlyList<string>>? candidateOrders,
-            IReadOnlyList<string>? passwordCandidates,
-            string? preferredWorkRoot,
-            CancellationToken cancellationToken = default)
+        if (_engine == null || !_engine.IsAvailable)
         {
-            if (candidateOrders == null || candidateOrders.Count == 0)
-            {
-                return Refuse(0, "没有可试的顺序", attempted: false, VolumeTrialSkipReason.NoOrderings);
-            }
+            return Refuse(
+                0,
+                "当前没有可用的解压引擎，没法试拼验证（宁可不改，也不猜）",
+                attempted: false,
+                VolumeTrialSkipReason.NoEngine);
+        }
 
-            IReadOnlyList<string> firstOrder = candidateOrders[0];
+        if (string.IsNullOrWhiteSpace(preferredWorkRoot))
+        {
+            return Refuse(
+                0,
+                "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试拼：工作区只准设在解压的地方，"
+                + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出顺序，只能如实报「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.NoProbeRoot);
+        }
 
-            if (firstOrder.Count < 2)
-            {
-                return Refuse(0, "整组还没凑齐（少于 2 片），没法试拼", attempted: false, VolumeTrialSkipReason.Other);
-            }
+        if (!VolumeContentInference.IsSameVolumeRoot(firstOrder[0], preferredWorkRoot))
+        {
+            return Refuse(
+                0,
+                "跨盘无法试拼，顺序无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
+                + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.CrossVolume);
+        }
 
-            foreach (IReadOnlyList<string> order in candidateOrders)
-            {
-                if (order.Count != firstOrder.Count)
-                {
-                    return Refuse(0, "候选顺序的片数对不上，没法试拼", attempted: false, VolumeTrialSkipReason.Other);
-                }
+        string probeRoot = VolumeContentInference.BuildProbeRoot(firstOrder[0], preferredWorkRoot);
 
-                foreach (string volume in order)
-                {
-                    if (string.IsNullOrWhiteSpace(volume) || !File.Exists(volume))
-                    {
-                        return Refuse(0, "有一片不在了，没法试拼", attempted: false, VolumeTrialSkipReason.Other);
-                    }
-                }
-            }
+        if (probeRoot.Length == 0)
+        {
+            return Refuse(0, "拿不到可用的试拼目录（工作区根给得不合法）—— 不复制大文件，所以不试", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
+        }
 
-            if (_engine == null || !_engine.IsAvailable)
-            {
-                return Refuse(
-                    0,
-                    "当前没有可用的解压引擎，没法试拼验证（宁可不改，也不猜）",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoEngine);
-            }
+        var candidates = (passwordCandidates ?? Array.Empty<string>())
+            .Where(p => p != null)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
-            if (string.IsNullOrWhiteSpace(preferredWorkRoot))
-            {
-                return Refuse(
-                    0,
-                    "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试拼：工作区只准设在解压的地方，"
-                    + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出顺序，只能如实报「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoProbeRoot);
-            }
+        if (candidates.Count == 0)
+        {
+            // 没给候选就按"空密码"试一次：不加密的包这一档就够（加密包会如实报密码不对）。
+            candidates.Add(string.Empty);
+        }
 
-            if (!VolumeContentInference.IsSameVolumeRoot(firstOrder[0], preferredWorkRoot))
-            {
-                return Refuse(
-                    0,
-                    "跨盘无法试拼，顺序无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
-                    + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.CrossVolume);
-            }
+        int attempts = 0;
 
-            string probeRoot = VolumeContentInference.BuildProbeRoot(firstOrder[0], preferredWorkRoot);
-
-            if (probeRoot.Length == 0)
-            {
-                return Refuse(0, "拿不到可用的试拼目录（工作区根给得不合法）—— 不复制大文件，所以不试", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
-            }
-
-            var candidates = (passwordCandidates ?? Array.Empty<string>())
-                .Where(p => p != null)
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
-
-            if (candidates.Count == 0)
-            {
-                // 没给候选就按"空密码"试一次：不加密的包这一档就够（加密包会如实报密码不对）。
-                candidates.Add(string.Empty);
-            }
-
-            int attempts = 0;
-
+        try
+        {
             try
             {
-                try
-                {
-                    Directory.CreateDirectory(probeRoot);
-                }
-                catch (Exception ex)
-                {
-                    return Refuse(0, $"试拼目录建不出来（{ex.Message}）", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
-                }
-
-                string trialDirectory = Path.Combine(probeRoot, "zip-order");
-                string lastFailure = "没有可用信息";
-                int wrongPasswordOnly = 0;
-
-                /*
-                 * 密码只活在这个局部变量里（⛔ 不进日志、不进结论、不进 Reason）。
-                 *
-                 * 为什么要记它：加密的跨盘 zip 里，"顺序错"与"密码错"在引擎那儿是两句话 ——
-                 * 一旦某次失败**不是**密码错，就说明这个密码已经解开了数据（错的只是顺序），
-                 * 后面那几个顺序只要拿它试一次就够了，不必把密码本重跑一遍
-                 * （一组 675 MB 的包，每多试一个密码就是多解一遍）。
-                 */
-                string? knownPassword = null;
-
-                foreach (IReadOnlyList<string> order in candidateOrders)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    string? tailLink = LinkAsSpannedZip(order, trialDirectory);
-
-                    if (tailLink == null)
-                    {
-                        return Refuse(
-                            attempts,
-                            "做不了硬链接 —— 源目录与试拼目录必须在同一个卷上，且文件系统要支持硬链接",
-                            attempted: true);
-                    }
-
-                    IReadOnlyList<string> toTry = knownPassword != null ? new[] { knownPassword } : candidates;
-
-                    foreach (string password in toTry)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        attempts++;
-
-                        ArchiveOperationResult test = await _engine
-                            .TestAsync(ArchiveRequest.For(tailLink, password), cancellationToken)
-                            .ConfigureAwait(false);
-
-                        if (test.Success)
-                        {
-                            return new VolumeProbeOutcome
-                            {
-                                Confirmed = true,
-                                Attempted = true,
-                                OrderedVolumes = order
-                                    .Select(p => new VolumeCandidate { Path = p, Size = SizeOf(p) })
-                                    .ToList(),
-                                Attempts = attempts,
-                                Reason = $"按这个顺序真的解了一遍（引擎测过每个条目的 CRC，全对；试了 {attempts} 次）"
-                            };
-                        }
-
-                        if (test.IsWrongPassword || test.IsNeedPassword)
-                        {
-                            wrongPasswordOnly++;
-                        }
-                        else
-                        {
-                            knownPassword ??= password;
-                        }
-
-                        lastFailure = string.IsNullOrWhiteSpace(test.Message) ? lastFailure : test.Message;
-                    }
-                }
-
-                return Refuse(
-                    attempts,
-                    wrongPasswordOnly == attempts && knownPassword == null
-                        ? "这一组是加密的，而手上没有能用的密码 ⇒ 顺序没法验证（顺序错了与密码错了在引擎那里是同一句话）"
-                        : $"这些顺序都不成立（引擎原话：{lastFailure}）",
-                    attempted: true,
-                    needsPassword: wrongPasswordOnly == attempts && knownPassword == null);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
+                Directory.CreateDirectory(probeRoot);
             }
             catch (Exception ex)
             {
-                return Refuse(attempts, $"试拼过程中出错：{ex.Message}", attempted: attempts > 0);
-            }
-            finally
-            {
-                TryDelete(probeRoot);
-            }
-        }
-
-        /// <summary>
-        /// **通用分片（<c>X.zip.001..00N</c>）的顺序验证**（用户 2026-10-18 口径）。
-        ///
-        /// <para>为什么必须用 <c>TestAsync</c> 而不是 <c>ListAsync</c>：通用分片的中央目录在**末片**里，
-        /// 列目录根本不读中间片的数据 —— 顺序错了照样列得出来（实测）。只有真的解一遍（引擎逐条目核对 CRC）
-        /// 才能回答"这个顺序对不对"。</para>
-        ///
-        /// <para>⛔ 与 <see cref="VerifySpannedZipOrderAsync"/> 同一套红线：没有工作区根 / 跨盘 ⇒ 一次都不试；
-        /// 只在试开目录里建**硬链接**（零字节），收工把整棵目录删掉；⛔ 绝不复制、⛔ 绝不改源文件。</para>
-        /// </summary>
-        /// <param name="candidateOrders">待验证的整组顺序（每个元素 = 第 1 片 … 末片）。</param>
-        /// <param name="preferredWorkRoot">本单的目标工作区根（同 <see cref="VerifyAsync"/>）。</param>
-        /// <param name="cancellationToken">取消。</param>
-        public async Task<VolumeProbeOutcome> VerifyNumberedZipOrderAsync(
-            IReadOnlyList<IReadOnlyList<string>>? candidateOrders,
-            string? preferredWorkRoot,
-            CancellationToken cancellationToken = default)
-        {
-            if (candidateOrders == null || candidateOrders.Count == 0)
-            {
-                return Refuse(0, "没有可试的顺序", attempted: false, VolumeTrialSkipReason.NoOrderings);
+                return Refuse(0, $"试拼目录建不出来（{ex.Message}）", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
             }
 
-            IReadOnlyList<string> firstOrder = candidateOrders[0];
-
-            if (firstOrder.Count < 2)
-            {
-                return Refuse(0, "整组还没凑齐（少于 2 片），没法按顺序试开", attempted: false, VolumeTrialSkipReason.Other);
-            }
-
-            foreach (IReadOnlyList<string> order in candidateOrders)
-            {
-                if (order.Count != firstOrder.Count)
-                {
-                    return Refuse(0, "候选顺序的片数对不上，没法试开", attempted: false, VolumeTrialSkipReason.Other);
-                }
-
-                foreach (string volume in order)
-                {
-                    if (string.IsNullOrWhiteSpace(volume) || !File.Exists(volume))
-                    {
-                        return Refuse(0, "有一片不在了，没法试开", attempted: false, VolumeTrialSkipReason.Other);
-                    }
-                }
-            }
-
-            if (_engine == null || !_engine.IsAvailable)
-            {
-                return Refuse(
-                    0,
-                    "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoEngine);
-            }
-
-            if (string.IsNullOrWhiteSpace(preferredWorkRoot))
-            {
-                return Refuse(
-                    0,
-                    "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
-                    + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出顺序，只能如实报「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.NoProbeRoot);
-            }
-
-            if (!VolumeContentInference.IsSameVolumeRoot(firstOrder[0], preferredWorkRoot))
-            {
-                return Refuse(
-                    0,
-                    "跨盘无法试开，顺序无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
-                    + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
-                    attempted: false,
-                    VolumeTrialSkipReason.CrossVolume);
-            }
-
-            string probeRoot = VolumeContentInference.BuildProbeRoot(firstOrder[0], preferredWorkRoot);
-
-            if (probeRoot.Length == 0)
-            {
-                return Refuse(0, "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
-            }
-
-            int attempts = 0;
+            string trialDirectory = Path.Combine(probeRoot, "zip-order");
             string lastFailure = "没有可用信息";
-            bool passwordBlocked = false;
+            int wrongPasswordOnly = 0;
 
-            try
+            /*
+             * 密码只活在这个局部变量里（⛔ 不进日志、不进结论、不进 Reason）。
+             *
+             * 为什么要记它：加密的跨盘 zip 里，"顺序错"与"密码错"在引擎那儿是两句话 ——
+             * 一旦某次失败**不是**密码错，就说明这个密码已经解开了数据（错的只是顺序），
+             * 后面那几个顺序只要拿它试一次就够了，不必把密码本重跑一遍
+             * （一组 675 MB 的包，每多试一个密码就是多解一遍）。
+             */
+            string? knownPassword = null;
+
+            foreach (IReadOnlyList<string> order in candidateOrders)
             {
-                try
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string? tailLink = LinkAsSpannedZip(order, trialDirectory);
+
+                if (tailLink == null)
                 {
-                    Directory.CreateDirectory(probeRoot);
-                }
-                catch (Exception ex)
-                {
-                    return Refuse(0, $"试开目录建不出来（{ex.Message}）", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
+                    return Refuse(
+                        attempts,
+                        "做不了硬链接 —— 源目录与试拼目录必须在同一个卷上，且文件系统要支持硬链接",
+                        attempted: true);
                 }
 
-                foreach (IReadOnlyList<string> order in candidateOrders)
+                IReadOnlyList<string> toTry = knownPassword != null ? new[] { knownPassword } : candidates;
+
+                foreach (string password in toTry)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    string trialDirectory = Path.Combine(
-                        probeRoot,
-                        "zip-numbered-" + attempts.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     attempts++;
 
-                    string? entryLink = LinkAsNumberedZip(order, trialDirectory);
-
-                    if (entryLink == null)
-                    {
-                        return Refuse(
-                            attempts,
-                            "做不了硬链接 —— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接",
-                            attempted: true);
-                    }
-
-                    /*
-                     * 通用分片这一组在样本里是**不加密**的（加密的是更里层的包）。空密码这一档就够；
-                     * 真遇到加密的这一层，引擎会明确报密码错 —— 那一档**不拿来当"顺序不对"的证据**
-                     * （顺序错了与密码错了在引擎那里是同一句话），直接如实报"没有可用密码"。
-                     */
                     ArchiveOperationResult test = await _engine
-                        .TestAsync(ArchiveRequest.For(entryLink, string.Empty), cancellationToken)
+                        .TestAsync(ArchiveRequest.For(tailLink, password), cancellationToken)
                         .ConfigureAwait(false);
 
                     if (test.Success)
@@ -551,453 +377,626 @@ namespace ArchiveFixer.Extraction
                             Confirmed = true,
                             Attempted = true,
                             OrderedVolumes = order
-                                .Select(path => new VolumeCandidate { Path = path, Size = SizeOf(path) })
+                                .Select(p => new VolumeCandidate { Path = p, Size = SizeOf(p) })
                                 .ToList(),
                             Attempts = attempts,
                             Reason = $"按这个顺序真的解了一遍（引擎测过每个条目的 CRC，全对；试了 {attempts} 次）"
                         };
                     }
 
-                    lastFailure = string.IsNullOrWhiteSpace(test.Message) ? lastFailure : test.Message;
-
                     if (test.IsWrongPassword || test.IsNeedPassword)
                     {
-                        passwordBlocked = true;
-                        break;
+                        wrongPasswordOnly++;
                     }
+                    else
+                    {
+                        knownPassword ??= password;
+                    }
+
+                    lastFailure = string.IsNullOrWhiteSpace(test.Message) ? lastFailure : test.Message;
                 }
-
-                return Refuse(
-                    attempts,
-                    passwordBlocked
-                        ? "这一组是加密的，而这条试开定序没有可用密码 ⇒ 顺序没法验证（顺序错了与密码错了在引擎那里是同一句话）"
-                        : $"这些顺序都不成立（引擎原话：{lastFailure}）",
-                    attempted: true,
-                    needsPassword: passwordBlocked);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return Refuse(attempts, $"试开定序过程中出错：{ex.Message}", attempted: attempts > 0);
-            }
-            finally
-            {
-                TryDelete(probeRoot);
-            }
-        }
-
-        /// <summary>
-        /// 把整组按"第 1 片 … 末片"硬链接成**通用分片名**（<c>volprobe.zip.001…</c>），
-        /// 返回入口链接（第 1 片）。做不出链接返回 <c>null</c>。
-        ///
-        /// <para>重复调用会先把上一次的链接删掉 —— 试第二个顺序时，同一个名字必须换成另一片。</para>
-        /// </summary>
-        private static string? LinkAsNumberedZip(IReadOnlyList<string> orderedVolumes, string directory)
-        {
-            try
-            {
-                if (Directory.Exists(directory))
-                {
-                    Directory.Delete(directory, recursive: true);
-                }
-
-                Directory.CreateDirectory(directory);
-            }
-            catch
-            {
-                return null;
-            }
-
-            string entry = string.Empty;
-
-            for (int i = 0; i < orderedVolumes.Count; i++)
-            {
-                string linkPath = Path.Combine(
-                    directory,
-                    "volprobe.zip." + (i + 1).ToString("D3", System.Globalization.CultureInfo.InvariantCulture));
-
-                if (!CreateHardLinkW(linkPath, orderedVolumes[i], IntPtr.Zero))
-                {
-                    return null;
-                }
-
-                if (i == 0)
-                {
-                    entry = linkPath;
-                }
-            }
-
-            return entry;
-        }
-
-        /// <summary>
-        /// 把整组按"第 1 片 … 末片"硬链接成**标准跨盘卷名**（<c>volprobe.z01…volprobe.zip</c>），
-        /// 返回末片那个链接（引擎要拿它当入口）。做不出链接返回 <c>null</c>。
-        ///
-        /// <para>重复调用会先把上一次的链接删掉 —— 试第二个顺序时，同一个名字必须换成另一片。</para>
-        /// </summary>
-        private static string? LinkAsSpannedZip(IReadOnlyList<string> orderedVolumes, string directory)
-        {
-            try
-            {
-                if (Directory.Exists(directory))
-                {
-                    Directory.Delete(directory, recursive: true);
-                }
-
-                Directory.CreateDirectory(directory);
-            }
-            catch
-            {
-                return null;
-            }
-
-            string tail = string.Empty;
-
-            for (int i = 0; i < orderedVolumes.Count; i++)
-            {
-                bool isTail = i == orderedVolumes.Count - 1;
-                string linkPath = Path.Combine(
-                    directory,
-                    isTail
-                        ? ProbeZipTailName
-                        : ProbeZipNamePrefix + (i + 1).ToString("D2", System.Globalization.CultureInfo.InvariantCulture));
-
-                if (!CreateHardLinkW(linkPath, orderedVolumes[i], IntPtr.Zero))
-                {
-                    return null;
-                }
-
-                if (isTail)
-                {
-                    tail = linkPath;
-                }
-            }
-
-            return tail;
-        }
-
-        /// <summary>试拼用的跨盘 zip 基名（与 <c>VolumeContentInference.ProbeFileName</c> 同一用意：名字只是给引擎看的）。</summary>
-        private const string ProbeZipNamePrefix = "volprobe.z";
-
-        private const string ProbeZipTailName = "volprobe.zip";
-
-        /// <summary>
-        /// <see cref="VolumeGroupResolver"/> 要的那一个试开出口：把请求翻译成本类的硬链接试开，
-        /// 再把结论折成 <see cref="VolumeTrialOutcome"/>。
-        ///
-        /// <para>⛔ <b>只读</b>：源文件一个字节都不动 —— 只在试开目录里建**硬链接**（零字节、瞬时），
-        /// 收工把整棵试开目录删掉。这是"试开确认"能当最高权重证据的前提。</para>
-        /// </summary>
-        public async Task<VolumeTrialOutcome> TryOpenAsync(
-            VolumeTrialRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            if (request == null)
-            {
-                return new VolumeTrialOutcome { Attempted = false, Reason = "试开请求为空" };
-            }
-
-            VolumeProbeOutcome outcome = await VerifyAsync(
-                    request.FirstVolumePath,
-                    request.Orderings,
-                    cancellationToken,
-                    request.PreferredWorkRootDirectory)
-                .ConfigureAwait(false);
-
-            var ordered = new List<string>();
-
-            foreach (VolumeCandidate volume in outcome.OrderedVolumes)
-            {
-                ordered.Add(volume.Path);
-            }
-
-            return new VolumeTrialOutcome
-            {
-                Confirmed = outcome.Confirmed,
-                Attempted = outcome.Attempted,
-                SkipReason = outcome.SkipReason,
-                NeedsPassword = outcome.NeedsPassword,
-                OrderedVolumePaths = ordered,
-                Attempts = outcome.Attempts,
-                Reason = outcome.Reason
-            };
-        }
-
-        /// <summary>补一个"真的试过"的标记（<see cref="TrySoloAsync"/> 的结论是确定的，但它自己不知道试没试）。</summary>
-        private static VolumeProbeOutcome WithAttempted(VolumeProbeOutcome outcome, bool attempted) => new()
-        {
-            Confirmed = outcome.Confirmed,
-            Attempted = attempted,
-            SkipReason = outcome.SkipReason,
-            NeedsPassword = outcome.NeedsPassword,
-            OrderedVolumes = outcome.OrderedVolumes,
-            Attempts = outcome.Attempts,
-            Reason = outcome.Reason
-        };
-
-        /// <summary>最后一次试开失败的原因（只为把话说清，不参与判定）。</summary>
-        private string LastFailure { get; set; } = "没有可用信息";
-
-        /// <summary>单独一卷试开：返回非 null = **已经可以下结论了**（自己就是完整包 → 不该改名）。</summary>
-        private async Task<VolumeProbeOutcome?> TrySoloAsync(
-            string firstVolumePath,
-            string probeRoot,
-            CancellationToken cancellationToken,
-            VolumeContentFormat family = VolumeContentFormat.Unknown)
-        {
-            string soloDirectory = Path.Combine(probeRoot, "solo");
-            var solo = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
-
-            TrialResult trial = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken, family).ConfigureAwait(false);
-
-            /*
-             * ⛔ 「单卷就报加密归档」必须**拒绝**（用户 2026-09-29 真机副本取证）：
-             * 7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header 给出；
-             * 单卷试开就报"头加密"，说明那一份头**就在这个文件里面** —— 它本身就是个**完整**的加密包，
-             * 不是分卷的第一卷（把它当第一卷改名只会把它弄坏）。
-             * 反过来，"分卷的第一卷独自一人"读不到头（头在后面的卷里），报的是"打不开 / 通用分片"。
-             */
-            if (trial.EncryptedArchive)
-            {
-                return Refuse(
-                    0,
-                    "第一卷自己就能完整打开（文件名也加密，没有密码读不出清单）"
-                    + " —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
-                    attempted: true);
-            }
-
-            if (trial.Failure != null)
-            {
-                // 打不开 → 正是"后面还有卷"的样子，可以接着试排列。
-                return null;
             }
 
             return Refuse(
-                0,
-                "第一卷自己就能完整打开 —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
-                attempted: true);
+                attempts,
+                wrongPasswordOnly == attempts && knownPassword == null
+                    ? "这一组是加密的，而手上没有能用的密码 ⇒ 顺序没法验证（顺序错了与密码错了在引擎那里是同一句话）"
+                    : $"这些顺序都不成立（引擎原话：{lastFailure}）",
+                attempted: true,
+                needsPassword: wrongPasswordOnly == attempts && knownPassword == null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Refuse(attempts, $"试拼过程中出错：{ex.Message}", attempted: attempts > 0);
+        }
+        finally
+        {
+            TryDelete(probeRoot);
+        }
+    }
+
+    /// <summary>
+    /// **通用分片（<c>X.zip.001..00N</c>）的顺序验证**（用户 2026-10-18 口径）。
+    ///
+    /// <para>为什么必须用 <c>TestAsync</c> 而不是 <c>ListAsync</c>：通用分片的中央目录在**末片**里，
+    /// 列目录根本不读中间片的数据 —— 顺序错了照样列得出来（实测）。只有真的解一遍（引擎逐条目核对 CRC）
+    /// 才能回答"这个顺序对不对"。</para>
+    ///
+    /// <para>⛔ 与 <see cref="VerifySpannedZipOrderAsync"/> 同一套红线：没有工作区根 / 跨盘 ⇒ 一次都不试；
+    /// 只在试开目录里建**硬链接**（零字节），收工把整棵目录删掉；⛔ 绝不复制、⛔ 绝不改源文件。</para>
+    /// </summary>
+    /// <param name="candidateOrders">待验证的整组顺序（每个元素 = 第 1 片 … 末片）。</param>
+    /// <param name="preferredWorkRoot">本单的目标工作区根（同 <see cref="VerifyAsync"/>）。</param>
+    /// <param name="cancellationToken">取消。</param>
+    public async Task<VolumeProbeOutcome> VerifyNumberedZipOrderAsync(
+        IReadOnlyList<IReadOnlyList<string>>? candidateOrders,
+        string? preferredWorkRoot,
+        CancellationToken cancellationToken = default)
+    {
+        if (candidateOrders == null || candidateOrders.Count == 0)
+        {
+            return Refuse(0, "没有可试的顺序", attempted: false, VolumeTrialSkipReason.NoOrderings);
         }
 
-        /// <summary>一次试开的结论（<see cref="Failure"/> 为 null = 成立）。</summary>
-        private readonly struct TrialResult
+        IReadOnlyList<string> firstOrder = candidateOrders[0];
+
+        if (firstOrder.Count < 2)
         {
-            public TrialResult(string? failure, bool encryptedArchive)
+            return Refuse(0, "整组还没凑齐（少于 2 片），没法按顺序试开", attempted: false, VolumeTrialSkipReason.Other);
+        }
+
+        foreach (IReadOnlyList<string> order in candidateOrders)
+        {
+            if (order.Count != firstOrder.Count)
             {
-                Failure = failure;
-                EncryptedArchive = encryptedArchive;
+                return Refuse(0, "候选顺序的片数对不上，没法试开", attempted: false, VolumeTrialSkipReason.Other);
             }
 
-            /// <summary>失败原因；null = 这一次成立。</summary>
-            public string? Failure { get; }
-
-            /// <summary>引擎的结论是"这一组是一份**文件名也加密**的归档（7z <c>-mhe</c> / RAR <c>-hp</c>）"。</summary>
-            public bool EncryptedArchive { get; }
-        }
-
-        /// <summary>
-        /// 试开用的硬链接名：**按卡上的族拼**（用户 2026-10-17：「底层识别先，名字配合行动」）。
-        ///
-        /// <para>现场（新样本 `1111`）：RAR 组的试开一律用 `ProbeFileName`（7z 数字族 `.001`）建链接，
-        /// 引擎自然报「分卷压缩包缺少必要分卷」⇒ 整组永远判成"试开没通过"。
-        /// ⇒ RAR 族按 `<probe>.partN.rar` 建链接；7z/认不出照旧用数字族。</para>
-        /// </summary>
-        private static string ProbeLinkName(VolumeContentFormat family, int index, int count)
-        {
-            string number = index.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-            return family switch
+            foreach (string volume in order)
             {
-                // RAR partN 族：WinRAR 的口径 = 补零宽度跟着**总卷数的位数**走（1~9 卷 part1，10~99 卷 part01）。
-                VolumeContentFormat.Rar =>
-                    "volprobe.part" + index.ToString(
-                        new string('0', Math.Max(1, count.ToString(System.Globalization.CultureInfo.InvariantCulture).Length)),
-                        System.Globalization.CultureInfo.InvariantCulture) + ".rar",
-
-                // 通用分片族（对归档再分片）：引擎认 `<基名>.zip.001` 这种形状（设计文档 §6.6 A）。
-                VolumeContentFormat.Zip => "volprobe.zip." + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture),
-
-                // 7z 数字族（`volprobe.7z.001`）与判不出族的兜底：沿用既有出口。
-                _ => VolumeContentInference.ProbeFileName(index)
-            };
+                if (string.IsNullOrWhiteSpace(volume) || !File.Exists(volume))
+                {
+                    return Refuse(0, "有一片不在了，没法试开", attempted: false, VolumeTrialSkipReason.Other);
+                }
+            }
         }
 
-        /// <summary>
-        /// 按假设名把这几卷硬链接进 <paramref name="directory"/> 并让引擎列一次；
-        /// 返回 <c>Failure == null</c> = 成立（顺序成立，或引擎认出了"这一组是加密归档"）。
-        /// </summary>
-        private async Task<TrialResult> TryLinkAndListAsync(
-            IReadOnlyList<VolumeCandidate> volumes,
-            string directory,
-            CancellationToken cancellationToken,
-            VolumeContentFormat family = VolumeContentFormat.Unknown,
-            bool testVolumes = false,
-            IReadOnlyList<string>? passwordCandidates = null,
-            IProgress<ArchiveProgress>? progress = null,
-            Action<ArchiveStallNotice>? stalled = null)
+        if (_engine == null || !_engine.IsAvailable)
+        {
+            return Refuse(
+                0,
+                "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
+                attempted: false,
+                VolumeTrialSkipReason.NoEngine);
+        }
+
+        if (string.IsNullOrWhiteSpace(preferredWorkRoot))
+        {
+            return Refuse(
+                0,
+                "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
+                + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出顺序，只能如实报「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.NoProbeRoot);
+        }
+
+        if (!VolumeContentInference.IsSameVolumeRoot(firstOrder[0], preferredWorkRoot))
+        {
+            return Refuse(
+                0,
+                "跨盘无法试开，顺序无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
+                + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
+                attempted: false,
+                VolumeTrialSkipReason.CrossVolume);
+        }
+
+        string probeRoot = VolumeContentInference.BuildProbeRoot(firstOrder[0], preferredWorkRoot);
+
+        if (probeRoot.Length == 0)
+        {
+            return Refuse(0, "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
+        }
+
+        int attempts = 0;
+        string lastFailure = "没有可用信息";
+        bool passwordBlocked = false;
+
+        try
         {
             try
             {
-                Directory.CreateDirectory(directory);
+                Directory.CreateDirectory(probeRoot);
             }
             catch (Exception ex)
             {
-                return new TrialResult($"试开目录建不出来（{ex.Message}）", false);
+                return Refuse(0, $"试开目录建不出来（{ex.Message}）", attempted: false, VolumeTrialSkipReason.NoProbeRoot);
             }
 
-            string firstLink = string.Empty;
-
-            for (int i = 0; i < volumes.Count; i++)
+            foreach (IReadOnlyList<string> order in candidateOrders)
             {
-                string linkPath = Path.Combine(directory, ProbeLinkName(family, i + 1, volumes.Count));
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (!CreateHardLinkW(linkPath, volumes[i].Path, IntPtr.Zero))
+                string trialDirectory = Path.Combine(
+                    probeRoot,
+                    "zip-numbered-" + attempts.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                attempts++;
+
+                string? entryLink = LinkAsNumberedZip(order, trialDirectory);
+
+                if (entryLink == null)
                 {
-                    int error = Marshal.GetLastWin32Error();
-
-                    return new TrialResult(
-                        $"做不了硬链接（Win32 错误 {error}）—— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接",
-                        false);
+                    return Refuse(
+                        attempts,
+                        "做不了硬链接 —— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接",
+                        attempted: true);
                 }
 
-                if (i == 0)
-                {
-                    firstLink = linkPath;
-                }
-            }
-
-            if (testVolumes)
-            {
-                IReadOnlyList<string> candidates = passwordCandidates is { Count: > 0 }
-                    ? passwordCandidates
-                    : new[] { string.Empty };
-                string lastFailure = "试开不成立";
-
-                foreach (string password in candidates)
-                {
-                    ArchiveRequest testRequest = ArchiveRequest.For(firstLink, password);
-                    testRequest.Progress = progress;
-                    testRequest.Stalled = stalled;
-                    ArchiveOperationResult test = await _engine
-                        .TestAsync(testRequest, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (test.Success)
-                    {
-                        return new TrialResult(null, false);
-                    }
-
-                    lastFailure = string.IsNullOrWhiteSpace(test.Message)
-                        ? lastFailure
-                        : test.Message;
-
-                    if (!test.IsWrongPassword && !test.IsPartiallyCompleted)
-                    {
-                        break;
-                    }
-                }
-
-                return new TrialResult(lastFailure, false);
-            }
-
-            ArchiveRequest listRequest = ArchiveRequest.For(firstLink, null);
-            listRequest.Progress = progress;
-            listRequest.Stalled = stalled;
-            ArchiveListResult list = await _engine
-                .ListAsync(listRequest, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (!list.Success)
-            {
                 /*
-                 * ===== 「引擎认得出这一组，只是头加密读不出清单」= **肯定**回答（用户 2026-09-29 真机副本取证）=====
-                 *
-                 * 现场：`amb909.7.01`（2 GiB，带 7z 魔数）+ `amb909.z.2`（1.89 GB 裸续卷）本来就是一组**完整**的两卷包，
-                 * 只是当年造包时开了 `-mhe`（文件名也加密）。对**卷齐**的这一组，7-Zip 报的是
-                 * `Cannot open encrypted archive. Wrong password?`（引擎的结构化结论 = `EncryptedHeaders`）；
-                 * 而"卷不齐 / 拿别的文件顶替"报的是 `Cannot open the file as [7z] archive` + `Unexpected end of archive`
-                 * （两条都在本地副本上实测过，见 AGENTS.md §11）。
-                 *
-                 * 老写法只认 `list.Success` → 这一组**永远**"试不成立" → 一个字节都不动 →
-                 * 管线随后如实报「分卷缺失」。可真正的原因是「缺密码」：**诊断说错了**，
-                 * 用户被指去满盘找卷，而卷就躺在同一个目录里。
-                 *
-                 * 凭什么敢把它当肯定回答：7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header
-                 * 给出（现场 `NextHeaderOffset = 4038274896`、头长 66 → 头正好落在第二卷的最后一字节上）。
-                 * 引擎能报出"这是加密归档"，就说明它按第一张卷声明的偏移**真读到了那一份头** —— 这一组成立；
-                 * 它给不出的只是条目的名字。⛔ 判据仍然只由**这一次硬链接试开**回答（与"列得出清单"同一类证据），
-                 * 不是新造的第二套"这是不是分卷"判据；试不出（打不开 / 通用分片）照旧一个字节都不动。
+                 * 通用分片这一组在样本里是**不加密**的（加密的是更里层的包）。空密码这一档就够；
+                 * 真遇到加密的这一层，引擎会明确报密码错 —— 那一档**不拿来当"顺序不对"的证据**
+                 * （顺序错了与密码错了在引擎那里是同一句话），直接如实报"没有可用密码"。
                  */
-                if (string.Equals(list.ErrorType, EngineErrorTypes.EncryptedHeaders, StringComparison.OrdinalIgnoreCase))
+                ArchiveOperationResult test = await _engine
+                    .TestAsync(ArchiveRequest.For(entryLink, string.Empty), cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (test.Success)
                 {
-                    return new TrialResult(null, encryptedArchive: true);
+                    return new VolumeProbeOutcome
+                    {
+                        Confirmed = true,
+                        Attempted = true,
+                        OrderedVolumes = order
+                            .Select(path => new VolumeCandidate { Path = path, Size = SizeOf(path) })
+                            .ToList(),
+                        Attempts = attempts,
+                        Reason = $"按这个顺序真的解了一遍（引擎测过每个条目的 CRC，全对；试了 {attempts} 次）"
+                    };
                 }
+
+                lastFailure = string.IsNullOrWhiteSpace(test.Message) ? lastFailure : test.Message;
+
+                if (test.IsWrongPassword || test.IsNeedPassword)
+                {
+                    passwordBlocked = true;
+                    break;
+                }
+            }
+
+            return Refuse(
+                attempts,
+                passwordBlocked
+                    ? "这一组是加密的，而这条试开定序没有可用密码 ⇒ 顺序没法验证（顺序错了与密码错了在引擎那里是同一句话）"
+                    : $"这些顺序都不成立（引擎原话：{lastFailure}）",
+                attempted: true,
+                needsPassword: passwordBlocked);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Refuse(attempts, $"试开定序过程中出错：{ex.Message}", attempted: attempts > 0);
+        }
+        finally
+        {
+            TryDelete(probeRoot);
+        }
+    }
+
+    /// <summary>
+    /// 把整组按"第 1 片 … 末片"硬链接成**通用分片名**（<c>volprobe.zip.001…</c>），
+    /// 返回入口链接（第 1 片）。做不出链接返回 <c>null</c>。
+    ///
+    /// <para>重复调用会先把上一次的链接删掉 —— 试第二个顺序时，同一个名字必须换成另一片。</para>
+    /// </summary>
+    private static string? LinkAsNumberedZip(IReadOnlyList<string> orderedVolumes, string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+
+            Directory.CreateDirectory(directory);
+        }
+        catch
+        {
+            return null;
+        }
+
+        string entry = string.Empty;
+
+        for (int i = 0; i < orderedVolumes.Count; i++)
+        {
+            string linkPath = Path.Combine(
+                directory,
+                "volprobe.zip." + (i + 1).ToString("D3", System.Globalization.CultureInfo.InvariantCulture));
+
+            if (!CreateHardLinkW(linkPath, orderedVolumes[i], IntPtr.Zero))
+            {
+                return null;
+            }
+
+            if (i == 0)
+            {
+                entry = linkPath;
+            }
+        }
+
+        return entry;
+    }
+
+    /// <summary>
+    /// 把整组按"第 1 片 … 末片"硬链接成**标准跨盘卷名**（<c>volprobe.z01…volprobe.zip</c>），
+    /// 返回末片那个链接（引擎要拿它当入口）。做不出链接返回 <c>null</c>。
+    ///
+    /// <para>重复调用会先把上一次的链接删掉 —— 试第二个顺序时，同一个名字必须换成另一片。</para>
+    /// </summary>
+    private static string? LinkAsSpannedZip(IReadOnlyList<string> orderedVolumes, string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+
+            Directory.CreateDirectory(directory);
+        }
+        catch
+        {
+            return null;
+        }
+
+        string tail = string.Empty;
+
+        for (int i = 0; i < orderedVolumes.Count; i++)
+        {
+            bool isTail = i == orderedVolumes.Count - 1;
+            string linkPath = Path.Combine(
+                directory,
+                isTail
+                    ? ProbeZipTailName
+                    : ProbeZipNamePrefix + (i + 1).ToString("D2", System.Globalization.CultureInfo.InvariantCulture));
+
+            if (!CreateHardLinkW(linkPath, orderedVolumes[i], IntPtr.Zero))
+            {
+                return null;
+            }
+
+            if (isTail)
+            {
+                tail = linkPath;
+            }
+        }
+
+        return tail;
+    }
+
+    /// <summary>试拼用的跨盘 zip 基名（与 <c>VolumeContentInference.ProbeFileName</c> 同一用意：名字只是给引擎看的）。</summary>
+    private const string ProbeZipNamePrefix = "volprobe.z";
+
+    private const string ProbeZipTailName = "volprobe.zip";
+
+    /// <summary>
+    /// <see cref="VolumeGroupResolver"/> 要的那一个试开出口：把请求翻译成本类的硬链接试开，
+    /// 再把结论折成 <see cref="VolumeTrialOutcome"/>。
+    ///
+    /// <para>⛔ <b>只读</b>：源文件一个字节都不动 —— 只在试开目录里建**硬链接**（零字节、瞬时），
+    /// 收工把整棵试开目录删掉。这是"试开确认"能当最高权重证据的前提。</para>
+    /// </summary>
+    public async Task<VolumeTrialOutcome> TryOpenAsync(
+        VolumeTrialRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request == null)
+        {
+            return new VolumeTrialOutcome { Attempted = false, Reason = "试开请求为空" };
+        }
+
+        VolumeProbeOutcome outcome = await VerifyAsync(
+                request.FirstVolumePath,
+                request.Orderings,
+                cancellationToken,
+                request.PreferredWorkRootDirectory)
+            .ConfigureAwait(false);
+
+        var ordered = new List<string>();
+
+        foreach (VolumeCandidate volume in outcome.OrderedVolumes)
+        {
+            ordered.Add(volume.Path);
+        }
+
+        return new VolumeTrialOutcome
+        {
+            Confirmed = outcome.Confirmed,
+            Attempted = outcome.Attempted,
+            SkipReason = outcome.SkipReason,
+            NeedsPassword = outcome.NeedsPassword,
+            OrderedVolumePaths = ordered,
+            Attempts = outcome.Attempts,
+            Reason = outcome.Reason
+        };
+    }
+
+    /// <summary>补一个"真的试过"的标记（<see cref="TrySoloAsync"/> 的结论是确定的，但它自己不知道试没试）。</summary>
+    private static VolumeProbeOutcome WithAttempted(VolumeProbeOutcome outcome, bool attempted) => new()
+    {
+        Confirmed = outcome.Confirmed,
+        Attempted = attempted,
+        SkipReason = outcome.SkipReason,
+        NeedsPassword = outcome.NeedsPassword,
+        OrderedVolumes = outcome.OrderedVolumes,
+        Attempts = outcome.Attempts,
+        Reason = outcome.Reason
+    };
+
+    /// <summary>最后一次试开失败的原因（只为把话说清，不参与判定）。</summary>
+    private string LastFailure { get; set; } = "没有可用信息";
+
+    /// <summary>单独一卷试开：返回非 null = **已经可以下结论了**（自己就是完整包 → 不该改名）。</summary>
+    private async Task<VolumeProbeOutcome?> TrySoloAsync(
+        string firstVolumePath,
+        string probeRoot,
+        CancellationToken cancellationToken,
+        VolumeContentFormat family = VolumeContentFormat.Unknown)
+    {
+        string soloDirectory = Path.Combine(probeRoot, "solo");
+        var solo = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
+
+        TrialResult trial = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken, family).ConfigureAwait(false);
+
+        /*
+         * ⛔ 「单卷就报加密归档」必须**拒绝**（用户 2026-09-29 真机副本取证）：
+         * 7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header 给出；
+         * 单卷试开就报"头加密"，说明那一份头**就在这个文件里面** —— 它本身就是个**完整**的加密包，
+         * 不是分卷的第一卷（把它当第一卷改名只会把它弄坏）。
+         * 反过来，"分卷的第一卷独自一人"读不到头（头在后面的卷里），报的是"打不开 / 通用分片"。
+         */
+        if (trial.EncryptedArchive)
+        {
+            return Refuse(
+                0,
+                "第一卷自己就能完整打开（文件名也加密，没有密码读不出清单）"
+                + " —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
+                attempted: true);
+        }
+
+        if (trial.Failure != null)
+        {
+            // 打不开 → 正是"后面还有卷"的样子，可以接着试排列。
+            return null;
+        }
+
+        return Refuse(
+            0,
+            "第一卷自己就能完整打开 —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
+            attempted: true);
+    }
+
+    /// <summary>一次试开的结论（<see cref="Failure"/> 为 null = 成立）。</summary>
+    private readonly struct TrialResult
+    {
+        public TrialResult(string? failure, bool encryptedArchive)
+        {
+            Failure = failure;
+            EncryptedArchive = encryptedArchive;
+        }
+
+        /// <summary>失败原因；null = 这一次成立。</summary>
+        public string? Failure { get; }
+
+        /// <summary>引擎的结论是"这一组是一份**文件名也加密**的归档（7z <c>-mhe</c> / RAR <c>-hp</c>）"。</summary>
+        public bool EncryptedArchive { get; }
+    }
+
+    /// <summary>
+    /// 试开用的硬链接名：**按卡上的族拼**（用户 2026-10-17：「底层识别先，名字配合行动」）。
+    ///
+    /// <para>现场（新样本 `1111`）：RAR 组的试开一律用 `ProbeFileName`（7z 数字族 `.001`）建链接，
+    /// 引擎自然报「分卷压缩包缺少必要分卷」⇒ 整组永远判成"试开没通过"。
+    /// ⇒ RAR 族按 `<probe>.partN.rar` 建链接；7z/认不出照旧用数字族。</para>
+    /// </summary>
+    private static string ProbeLinkName(VolumeContentFormat family, int index, int count)
+    {
+        string number = index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        return family switch
+        {
+            // RAR partN 族：WinRAR 的口径 = 补零宽度跟着**总卷数的位数**走（1~9 卷 part1，10~99 卷 part01）。
+            VolumeContentFormat.Rar =>
+                "volprobe.part" + index.ToString(
+                    new string('0', Math.Max(1, count.ToString(System.Globalization.CultureInfo.InvariantCulture).Length)),
+                    System.Globalization.CultureInfo.InvariantCulture) + ".rar",
+
+            // 通用分片族（对归档再分片）：引擎认 `<基名>.zip.001` 这种形状（设计文档 §6.6 A）。
+            VolumeContentFormat.Zip => "volprobe.zip." + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture),
+
+            // 7z 数字族（`volprobe.7z.001`）与判不出族的兜底：沿用既有出口。
+            _ => VolumeContentInference.ProbeFileName(index)
+        };
+    }
+
+    /// <summary>
+    /// 按假设名把这几卷硬链接进 <paramref name="directory"/> 并让引擎列一次；
+    /// 返回 <c>Failure == null</c> = 成立（顺序成立，或引擎认出了"这一组是加密归档"）。
+    /// </summary>
+    private async Task<TrialResult> TryLinkAndListAsync(
+        IReadOnlyList<VolumeCandidate> volumes,
+        string directory,
+        CancellationToken cancellationToken,
+        VolumeContentFormat family = VolumeContentFormat.Unknown,
+        bool testVolumes = false,
+        IReadOnlyList<string>? passwordCandidates = null,
+        IProgress<ArchiveProgress>? progress = null,
+        Action<ArchiveStallNotice>? stalled = null)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+        }
+        catch (Exception ex)
+        {
+            return new TrialResult($"试开目录建不出来（{ex.Message}）", false);
+        }
+
+        string firstLink = string.Empty;
+
+        for (int i = 0; i < volumes.Count; i++)
+        {
+            string linkPath = Path.Combine(directory, ProbeLinkName(family, i + 1, volumes.Count));
+
+            if (!CreateHardLinkW(linkPath, volumes[i].Path, IntPtr.Zero))
+            {
+                int error = Marshal.GetLastWin32Error();
 
                 return new TrialResult(
-                    string.IsNullOrWhiteSpace(list.Message) ? "引擎列不出来" : list.Message,
+                    $"做不了硬链接（Win32 错误 {error}）—— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接",
                     false);
             }
 
-            /*
-             * ⛔ `IsRawSplitStream` 必须当成**失败**：那是 7-Zip 说"这不是归档，是一段通用分片"
-             * —— 也就是"后续卷没找到、只看到裸字节流"。它退出码是 0，不判这一位就会把
-             * "什么都没读到"当成"顺序成立"（同一个坑在管线上踩过，见 ArchiveListResult 的注释）。
-             */
-            if (list.IsRawSplitStream)
+            if (i == 0)
             {
-                return new TrialResult("引擎只看到一段裸分片流（后续卷没接上）", false);
-            }
-
-            return new TrialResult(null, false);
-        }
-
-        private static VolumeProbeOutcome Refuse(
-            int attempts,
-            string reason,
-            bool attempted,
-            VolumeTrialSkipReason skipReason = VolumeTrialSkipReason.None,
-            bool needsPassword = false) => new()
-            {
-                Confirmed = false,
-                Attempted = attempted,
-                NeedsPassword = needsPassword,
-                SkipReason = skipReason,
-                Attempts = attempts,
-                Reason = reason
-            };
-
-        private static long SizeOf(string? path)
-        {
-            try
-            {
-                return string.IsNullOrWhiteSpace(path) ? 0 : new FileInfo(path).Length;
-            }
-            catch
-            {
-                return 0;
+                firstLink = linkPath;
             }
         }
 
-        /// <summary>删试开目录（含里面所有硬链接）。⛔ 删的是链接，源文件一个字节不动。</summary>
-        private static void TryDelete(string directory)
+        if (testVolumes)
         {
-            try
+            IReadOnlyList<string> candidates = passwordCandidates is { Count: > 0 }
+                ? passwordCandidates
+                : new[] { string.Empty };
+            string lastFailure = "试开不成立";
+
+            foreach (string password in candidates)
             {
-                if (Directory.Exists(directory))
+                ArchiveRequest testRequest = ArchiveRequest.For(firstLink, password);
+                testRequest.Progress = progress;
+                testRequest.Stalled = stalled;
+                ArchiveOperationResult test = await _engine
+                    .TestAsync(testRequest, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (test.Success)
                 {
-                    Directory.Delete(directory, recursive: true);
+                    return new TrialResult(null, false);
+                }
+
+                lastFailure = string.IsNullOrWhiteSpace(test.Message)
+                    ? lastFailure
+                    : test.Message;
+
+                if (!test.IsWrongPassword && !test.IsPartiallyCompleted)
+                {
+                    break;
                 }
             }
-            catch
-            {
-                // 留在盘上只是脏一点，绝不能因为清理失败把结论吞掉。
-            }
+
+            return new TrialResult(lastFailure, false);
         }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+        ArchiveRequest listRequest = ArchiveRequest.For(firstLink, null);
+        listRequest.Progress = progress;
+        listRequest.Stalled = stalled;
+        ArchiveListResult list = await _engine
+            .ListAsync(listRequest, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!list.Success)
+        {
+            /*
+             * ===== 「引擎认得出这一组，只是头加密读不出清单」= **肯定**回答（用户 2026-09-29 真机副本取证）=====
+             *
+             * 现场：`amb909.7.01`（2 GiB，带 7z 魔数）+ `amb909.z.2`（1.89 GB 裸续卷）本来就是一组**完整**的两卷包，
+             * 只是当年造包时开了 `-mhe`（文件名也加密）。对**卷齐**的这一组，7-Zip 报的是
+             * `Cannot open encrypted archive. Wrong password?`（引擎的结构化结论 = `EncryptedHeaders`）；
+             * 而"卷不齐 / 拿别的文件顶替"报的是 `Cannot open the file as [7z] archive` + `Unexpected end of archive`
+             * （两条都在本地副本上实测过，见 AGENTS.md §11）。
+             *
+             * 老写法只认 `list.Success` → 这一组**永远**"试不成立" → 一个字节都不动 →
+             * 管线随后如实报「分卷缺失」。可真正的原因是「缺密码」：**诊断说错了**，
+             * 用户被指去满盘找卷，而卷就躺在同一个目录里。
+             *
+             * 凭什么敢把它当肯定回答：7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header
+             * 给出（现场 `NextHeaderOffset = 4038274896`、头长 66 → 头正好落在第二卷的最后一字节上）。
+             * 引擎能报出"这是加密归档"，就说明它按第一张卷声明的偏移**真读到了那一份头** —— 这一组成立；
+             * 它给不出的只是条目的名字。⛔ 判据仍然只由**这一次硬链接试开**回答（与"列得出清单"同一类证据），
+             * 不是新造的第二套"这是不是分卷"判据；试不出（打不开 / 通用分片）照旧一个字节都不动。
+             */
+            if (string.Equals(list.ErrorType, EngineErrorTypes.EncryptedHeaders, StringComparison.OrdinalIgnoreCase))
+            {
+                return new TrialResult(null, encryptedArchive: true);
+            }
+
+            return new TrialResult(
+                string.IsNullOrWhiteSpace(list.Message) ? "引擎列不出来" : list.Message,
+                false);
+        }
+
+        /*
+         * ⛔ `IsRawSplitStream` 必须当成**失败**：那是 7-Zip 说"这不是归档，是一段通用分片"
+         * —— 也就是"后续卷没找到、只看到裸字节流"。它退出码是 0，不判这一位就会把
+         * "什么都没读到"当成"顺序成立"（同一个坑在管线上踩过，见 ArchiveListResult 的注释）。
+         */
+        if (list.IsRawSplitStream)
+        {
+            return new TrialResult("引擎只看到一段裸分片流（后续卷没接上）", false);
+        }
+
+        return new TrialResult(null, false);
     }
+
+    private static VolumeProbeOutcome Refuse(
+        int attempts,
+        string reason,
+        bool attempted,
+        VolumeTrialSkipReason skipReason = VolumeTrialSkipReason.None,
+        bool needsPassword = false) => new()
+        {
+            Confirmed = false,
+            Attempted = attempted,
+            NeedsPassword = needsPassword,
+            SkipReason = skipReason,
+            Attempts = attempts,
+            Reason = reason
+        };
+
+    private static long SizeOf(string? path)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(path) ? 0 : new FileInfo(path).Length;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>删试开目录（含里面所有硬链接）。⛔ 删的是链接，源文件一个字节不动。</summary>
+    private static void TryDelete(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+        catch
+        {
+            // 留在盘上只是脏一点，绝不能因为清理失败把结论吞掉。
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 }

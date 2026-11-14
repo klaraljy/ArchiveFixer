@@ -2,22 +2,21 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Views;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public sealed class TaskDetailSanitizationTests
 {
-    public sealed class TaskDetailSanitizationTests
+    [Fact]
+    public void 任务详情的复制文本不含明文密码()
     {
-        [Fact]
-        public void 任务详情的复制文本不含明文密码()
+        var task = new ArchiveTask(@"C:\samples\sample.7z")
         {
-            var task = new ArchiveTask(@"C:\samples\sample.7z")
-            {
-                ErrorMessage = "ERROR: -pSuperSecret cannot open archive"
-            };
+            ErrorMessage = "ERROR: -pSuperSecret cannot open archive"
+        };
 
-            string detail = TaskDetailWindow.BuildDetailText(task);
+        string detail = TaskDetailWindow.BuildDetailText(task);
 
-            Assert.DoesNotContain("SuperSecret", detail, System.StringComparison.Ordinal);
-            Assert.Contains("错误信息：", detail, System.StringComparison.Ordinal);
-        }
+        Assert.DoesNotContain("SuperSecret", detail, System.StringComparison.Ordinal);
+        Assert.Contains("错误信息：", detail, System.StringComparison.Ordinal);
     }
 }

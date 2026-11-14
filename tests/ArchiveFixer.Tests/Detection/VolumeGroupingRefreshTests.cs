@@ -9,205 +9,204 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// **"账上的分卷清单过期"这一档的守门用例**（用户 2026-10-01 第三、第四次真机）：
+/// 批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01` 都改对了，
+/// 可任务账上的清单还是**扫描期那一份**（那时 `222.zscip` 还没被识别成归档 ⇒ 只归出 1 卷），
+/// 而源包搬运读的就是那份清单 ⇒ **400 MB 的 `222.z01` 留在源目录里**（用户看到的就是这个）。
+///
+/// <para>两条一起钉：① 按名字能把同目录那一组补出来（唯一出口
+/// <see cref="OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName"/>）；② 补出来之后再问
+/// 源包清单（<see cref="SourcePackageMover.ResolveSourceGroup"/>），**两卷都在**。</para>
+///
+/// <para>⛔ 对照组：没有卷兄弟的普通包不许被误判成分卷组（否则"整组搬"会把无关文件卷进来）。</para>
+/// </summary>
+public sealed class VolumeGroupingRefreshTests : IDisposable
 {
-    /// <summary>
-    /// **"账上的分卷清单过期"这一档的守门用例**（用户 2026-10-01 第三、第四次真机）：
-    /// 批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01` 都改对了，
-    /// 可任务账上的清单还是**扫描期那一份**（那时 `222.zscip` 还没被识别成归档 ⇒ 只归出 1 卷），
-    /// 而源包搬运读的就是那份清单 ⇒ **400 MB 的 `222.z01` 留在源目录里**（用户看到的就是这个）。
-    ///
-    /// <para>两条一起钉：① 按名字能把同目录那一组补出来（唯一出口
-    /// <see cref="OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName"/>）；② 补出来之后再问
-    /// 源包清单（<see cref="SourcePackageMover.ResolveSourceGroup"/>），**两卷都在**。</para>
-    ///
-    /// <para>⛔ 对照组：没有卷兄弟的普通包不许被误判成分卷组（否则"整组搬"会把无关文件卷进来）。</para>
-    /// </summary>
-    public sealed class VolumeGroupingRefreshTests : IDisposable
+    private readonly string _root;
+
+    public VolumeGroupingRefreshTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerGroupRefresh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public VolumeGroupingRefreshTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerGroupRefresh-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
+            Directory.Delete(_root, recursive: true);
         }
-
-        public void Dispose()
+        catch
         {
-            try
-            {
-                Directory.Delete(_root, recursive: true);
-            }
-            catch
-            {
-                // 临时目录清不掉不影响结论。
-            }
+            // 临时目录清不掉不影响结论。
         }
+    }
 
-        /// <summary>
-        /// **真机那个形状**：`222.zip`（真机里是改好名的本体）+ `222.z01`（改好名的续卷），
-        /// 任务账上只有本体一卷 ⇒ 按名字补清单必须补出**两卷**，源包清单也必须跟着变成两卷。
-        /// </summary>
-        [Fact]
-        public void 账上只有一卷_按名字能补出两卷_源包清单跟着变两卷()
+    /// <summary>
+    /// **真机那个形状**：`222.zip`（真机里是改好名的本体）+ `222.z01`（改好名的续卷），
+    /// 任务账上只有本体一卷 ⇒ 按名字补清单必须补出**两卷**，源包清单也必须跟着变成两卷。
+    /// </summary>
+    [Fact]
+    public void 账上只有一卷_按名字能补出两卷_源包清单跟着变两卷()
+    {
+        string directory = NewDirectory("case-222");
+
+        string body = WriteFile(directory, "222.zip", 64);
+        string part = WriteFile(directory, "222.z01", 64);
+
+        var task = new ArchiveTask(body, 1)
         {
-            string directory = NewDirectory("case-222");
+            IsArchive = true,
+            DetectedFormat = "ZIP"
+        };
 
-            string body = WriteFile(directory, "222.zip", 64);
-            string part = WriteFile(directory, "222.z01", 64);
+        // 扫描期那一份：只有本体一卷（正是真机账上的样子）。
+        task.IsVolumeGroup = true;
+        task.VolumePaths.Add(body);
 
-            var task = new ArchiveTask(body, 1)
-            {
-                IsArchive = true,
-                DetectedFormat = "ZIP"
-            };
+        ArchiveFixer.Detection.VolumeGroup? group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
 
-            // 扫描期那一份：只有本体一卷（正是真机账上的样子）。
-            task.IsVolumeGroup = true;
-            task.VolumePaths.Add(body);
+        Assert.NotNull(group);
+        Assert.Equal(2, group!.Volumes.Count);
+        Assert.Contains(group.Volumes, v => string.Equals(v.Path, body, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(group.Volumes, v => string.Equals(v.Path, part, StringComparison.OrdinalIgnoreCase));
 
-            ArchiveFixer.Detection.VolumeGroup? group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
+        // 把它补到账上（与管线里同一条路：只增不减的闸门在调用方）。
+        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
 
-            Assert.NotNull(group);
-            Assert.Equal(2, group!.Volumes.Count);
-            Assert.Contains(group.Volumes, v => string.Equals(v.Path, body, StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(group.Volumes, v => string.Equals(v.Path, part, StringComparison.OrdinalIgnoreCase));
+        IReadOnlyList<string> sources = SourcePackageMover.ResolveSourceGroup(task);
 
-            // 把它补到账上（与管线里同一条路：只增不减的闸门在调用方）。
-            new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+        Assert.Equal(2, sources.Count);
+        Assert.Contains(sources, path => path.EndsWith("222.zip", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(sources, path => path.EndsWith("222.z01", StringComparison.OrdinalIgnoreCase));
+    }
 
-            IReadOnlyList<string> sources = SourcePackageMover.ResolveSourceGroup(task);
+    /// <summary>
+    /// **脏名字那一档**：续卷叫 `222.z0sc1`（网盘把 `0` 塞成了 `0sc`）也要认出来
+    /// —— 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegmentTolerant"/> 这个唯一出口。
+    /// </summary>
+    [Fact]
+    public void 续卷名字被塞了垃圾_也照样补得出来()
+    {
+        string directory = NewDirectory("case-dirty");
 
-            Assert.Equal(2, sources.Count);
-            Assert.Contains(sources, path => path.EndsWith("222.zip", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(sources, path => path.EndsWith("222.z01", StringComparison.OrdinalIgnoreCase));
-        }
+        string body = WriteFile(directory, "222.zip", 64);
+        string dirty = WriteFile(directory, "222.z0sc1", 64);
 
-        /// <summary>
-        /// **脏名字那一档**：续卷叫 `222.z0sc1`（网盘把 `0` 塞成了 `0sc`）也要认出来
-        /// —— 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegmentTolerant"/> 这个唯一出口。
-        /// </summary>
-        [Fact]
-        public void 续卷名字被塞了垃圾_也照样补得出来()
-        {
-            string directory = NewDirectory("case-dirty");
+        var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
 
-            string body = WriteFile(directory, "222.zip", 64);
-            string dirty = WriteFile(directory, "222.z0sc1", 64);
+        ArchiveFixer.Detection.VolumeGroup? group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
 
-            var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
+        Assert.NotNull(group);
+        Assert.Equal(2, group!.Volumes.Count);
+        Assert.Contains(group.Volumes, v => string.Equals(v.Path, dirty, StringComparison.OrdinalIgnoreCase));
+    }
 
-            ArchiveFixer.Detection.VolumeGroup? group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
+    /// <summary>
+    /// **对照组（⛔ 不许误报）**：目录里没有卷兄弟的普通包 ⇒ 补不出组（返回 null），
+    /// 这样"重新归组"那一段就不会为一个普通单卷包白跑一趟，更不会把它跟无关文件凑成一组。
+    /// </summary>
+    [Fact]
+    public void 对照组_没有卷兄弟的普通包_补不出组()
+    {
+        string directory = NewDirectory("case-plain");
 
-            Assert.NotNull(group);
-            Assert.Equal(2, group!.Volumes.Count);
-            Assert.Contains(group.Volumes, v => string.Equals(v.Path, dirty, StringComparison.OrdinalIgnoreCase));
-        }
+        string plain = WriteFile(directory, "movie.7z", 64);
+        WriteFile(directory, "readme.txt", 8);
 
-        /// <summary>
-        /// **对照组（⛔ 不许误报）**：目录里没有卷兄弟的普通包 ⇒ 补不出组（返回 null），
-        /// 这样"重新归组"那一段就不会为一个普通单卷包白跑一趟，更不会把它跟无关文件凑成一组。
-        /// </summary>
-        [Fact]
-        public void 对照组_没有卷兄弟的普通包_补不出组()
-        {
-            string directory = NewDirectory("case-plain");
+        var task = new ArchiveTask(plain, 1) { IsArchive = true, DetectedFormat = "7Z" };
 
-            string plain = WriteFile(directory, "movie.7z", 64);
-            WriteFile(directory, "readme.txt", 8);
+        Assert.Null(OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, plain));
+    }
 
-            var task = new ArchiveTask(plain, 1) { IsArchive = true, DetectedFormat = "7Z" };
+    /// <summary>
+    /// **判据本身**（这一轮真正改对的地方）：`222.zip` + `222.z01` 这一单**必须**被判成"要按名字重算清单"。
+    ///
+    /// <para>第三报那一轮白改的原因就在这里：当时写的条件是"自己的名字里带卷标记"，
+    /// 而 `.zip` 不是卷标记 ⇒ 恒为 false ⇒ 补清单永远跑不到。这条用例钉的就是它。</para>
+    /// </summary>
+    [Fact]
+    public void 本体叫222点zip_也必须判成要重算清单()
+    {
+        string directory = NewDirectory("case-needs-refresh");
 
-            Assert.Null(OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, plain));
-        }
+        string body = WriteFile(directory, "222.zip", 64);
+        WriteFile(directory, "222.z01", 64);
 
-        /// <summary>
-        /// **判据本身**（这一轮真正改对的地方）：`222.zip` + `222.z01` 这一单**必须**被判成"要按名字重算清单"。
-        ///
-        /// <para>第三报那一轮白改的原因就在这里：当时写的条件是"自己的名字里带卷标记"，
-        /// 而 `.zip` 不是卷标记 ⇒ 恒为 false ⇒ 补清单永远跑不到。这条用例钉的就是它。</para>
-        /// </summary>
-        [Fact]
-        public void 本体叫222点zip_也必须判成要重算清单()
-        {
-            string directory = NewDirectory("case-needs-refresh");
+        var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
 
-            string body = WriteFile(directory, "222.zip", 64);
-            WriteFile(directory, "222.z01", 64);
+        // ⛔ 前提：`.zip` 不是卷标记（这正是老判据为什么会失效）。
+        Assert.False(FileNameHelper.IsVolumePartFileName("222.zip"));
 
-            var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
+        Assert.True(OneClickCoordinator.NeedsVolumeGroupRefreshByName(task, body));
 
-            // ⛔ 前提：`.zip` 不是卷标记（这正是老判据为什么会失效）。
-            Assert.False(FileNameHelper.IsVolumePartFileName("222.zip"));
+        // 对照组：没有卷兄弟的普通包**不必**重算（省掉白跑一趟）。
+        string plain = WriteFile(directory, "movie.7z", 64);
 
-            Assert.True(OneClickCoordinator.NeedsVolumeGroupRefreshByName(task, body));
+        Assert.False(OneClickCoordinator.NeedsVolumeGroupRefreshByName(
+            new ArchiveTask(plain, 2) { IsArchive = true, DetectedFormat = "7Z" },
+            plain));
+    }
 
-            // 对照组：没有卷兄弟的普通包**不必**重算（省掉白跑一趟）。
-            string plain = WriteFile(directory, "movie.7z", 64);
+    /// <summary>
+    /// **两个归组来源取更全的那一份**：判据只有一句"谁卷数多就用谁"，
+    /// 这条用例把三种组合都钉住（一边更全 / 一边为空 / 两边一样）。
+    ///
+    /// <para>⚠ 如实记：真机上按目录归组给的**只有 1 卷**（`222.zip` 自己成一组、`222.z01` 只是
+    /// "没卷号的候选"），而合成样本里按目录归组**给了 2 卷** —— 这条用例因此只钉
+    /// `PickFullerGroup` 这个纯函数本身，真机那条路的状态另由 `SkipWhenAnotherTaskOwnsThisVolumeGroup`
+    /// 的现场诊断确认（见 `修改日志.md` 2026-10-01 那两条）。</para>
+    /// </summary>
+    [Fact]
+    public void 两个来源取更全的那一份()
+    {
+        string directory = NewDirectory("case-fuller");
 
-            Assert.False(OneClickCoordinator.NeedsVolumeGroupRefreshByName(
-                new ArchiveTask(plain, 2) { IsArchive = true, DetectedFormat = "7Z" },
-                plain));
-        }
+        string body = WriteFile(directory, "222.zip", 64);
+        WriteFile(directory, "222.z01", 64);
 
-        /// <summary>
-        /// **两个归组来源取更全的那一份**：判据只有一句"谁卷数多就用谁"，
-        /// 这条用例把三种组合都钉住（一边更全 / 一边为空 / 两边一样）。
-        ///
-        /// <para>⚠ 如实记：真机上按目录归组给的**只有 1 卷**（`222.zip` 自己成一组、`222.z01` 只是
-        /// "没卷号的候选"），而合成样本里按目录归组**给了 2 卷** —— 这条用例因此只钉
-        /// `PickFullerGroup` 这个纯函数本身，真机那条路的状态另由 `SkipWhenAnotherTaskOwnsThisVolumeGroup`
-        /// 的现场诊断确认（见 `修改日志.md` 2026-10-01 那两条）。</para>
-        /// </summary>
-        [Fact]
-        public void 两个来源取更全的那一份()
-        {
-            string directory = NewDirectory("case-fuller");
+        var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
 
-            string body = WriteFile(directory, "222.zip", 64);
-            WriteFile(directory, "222.z01", 64);
+        ArchiveFixer.Detection.VolumeGroup? byDirectory =
+            OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
+        ArchiveFixer.Detection.VolumeGroup? byName =
+            OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
 
-            var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
+        Assert.NotNull(byDirectory);
+        Assert.NotNull(byName);
 
-            ArchiveFixer.Detection.VolumeGroup? byDirectory =
-                OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
-            ArchiveFixer.Detection.VolumeGroup? byName =
-                OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
+        // 按名字那份看得出两卷（这一条是稳定的判据）。
+        Assert.Equal(2, byName!.Volumes.Count);
 
-            Assert.NotNull(byDirectory);
-            Assert.NotNull(byName);
+        ArchiveFixer.Detection.VolumeGroup picked =
+            OneClickCoordinator.PickFullerGroup(byDirectory, byName)!;
 
-            // 按名字那份看得出两卷（这一条是稳定的判据）。
-            Assert.Equal(2, byName!.Volumes.Count);
+        Assert.True(picked.Volumes.Count >= byDirectory!.Volumes.Count);
 
-            ArchiveFixer.Detection.VolumeGroup picked =
-                OneClickCoordinator.PickFullerGroup(byDirectory, byName)!;
+        // 一边为空 / 两边一样：取有结果的那边、一样全时保留按目录那份。
+        Assert.Same(byName, OneClickCoordinator.PickFullerGroup(null, byName));
+        Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, null));
+        Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, byDirectory));
+    }
 
-            Assert.True(picked.Volumes.Count >= byDirectory!.Volumes.Count);
+    // ================================================================ 辅助
 
-            // 一边为空 / 两边一样：取有结果的那边、一样全时保留按目录那份。
-            Assert.Same(byName, OneClickCoordinator.PickFullerGroup(null, byName));
-            Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, null));
-            Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, byDirectory));
-        }
+    private string NewDirectory(string name)
+    {
+        string path = Path.Combine(_root, name);
+        Directory.CreateDirectory(path);
 
-        // ================================================================ 辅助
+        return path;
+    }
 
-        private string NewDirectory(string name)
-        {
-            string path = Path.Combine(_root, name);
-            Directory.CreateDirectory(path);
+    private static string WriteFile(string directory, string name, long size)
+    {
+        string path = Path.Combine(directory, name);
+        File.WriteAllBytes(path, new byte[size]);
 
-            return path;
-        }
-
-        private static string WriteFile(string directory, string name, long size)
-        {
-            string path = Path.Combine(directory, name);
-            File.WriteAllBytes(path, new byte[size]);
-
-            return path;
-        }
+        return path;
     }
 }

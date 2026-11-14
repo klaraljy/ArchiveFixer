@@ -9,381 +9,380 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// 特定解压的独立循环（不经过第一/第二大步）：
+/// 每个输入压缩包独立解，最多 3 层；每层只认内容物 / 单一压缩包 / 标准分卷。
+/// </summary>
+public sealed class SpecificExtractionRunner
 {
-    /// <summary>
-    /// 特定解压的独立循环（不经过第一/第二大步）：
-    /// 每个输入压缩包独立解，最多 3 层；每层只认内容物 / 单一压缩包 / 标准分卷。
-    /// </summary>
-    public sealed class SpecificExtractionRunner
+    public const int MaxDepth = 3;
+
+    private readonly IArchiveEngine _engine;
+    private readonly Action<string>? _log;
+
+    public SpecificExtractionRunner(IArchiveEngine engine, Action<string>? log = null)
     {
-        public const int MaxDepth = 3;
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _log = log;
+    }
 
-        private readonly IArchiveEngine _engine;
-        private readonly Action<string>? _log;
-
-        public SpecificExtractionRunner(IArchiveEngine engine, Action<string>? log = null)
+    public async Task<SpecificExtractionRunResult> RunAsync(
+        string sourceArchive,
+        string outputRoot,
+        string workRoot,
+        IReadOnlyList<string?> passwordCandidates,
+        CancellationToken cancellationToken = default,
+        Func<IReadOnlyList<string?>>? passwordProvider = null,
+        Action<string?>? onPasswordSuccess = null,
+        Action<int, string>? onLayerStarted = null,
+        IProgress<ArchiveProgress>? progress = null,
+        Func<string?, int, string>? describePassword = null)
+    {
+        if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
         {
-            _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-            _log = log;
+            return new SpecificExtractionRunResult { Message = "输入压缩包不存在" };
         }
 
-        public async Task<SpecificExtractionRunResult> RunAsync(
-            string sourceArchive,
-            string outputRoot,
-            string workRoot,
-            IReadOnlyList<string?> passwordCandidates,
-            CancellationToken cancellationToken = default,
-            Func<IReadOnlyList<string?>>? passwordProvider = null,
-            Action<string?>? onPasswordSuccess = null,
-            Action<int, string>? onLayerStarted = null,
-            IProgress<ArchiveProgress>? progress = null,
-            Func<string?, int, string>? describePassword = null)
+        string currentArchive = sourceArchive;
+        bool anyPasswordUsed = false;
+        Directory.CreateDirectory(outputRoot);
+        Directory.CreateDirectory(workRoot);
+
+        for (int depth = 0; depth < MaxDepth; depth++)
         {
-            if (string.IsNullOrWhiteSpace(sourceArchive) || !File.Exists(sourceArchive))
+            string layerRoot = Path.Combine(workRoot, "layer-" + depth.ToString("D2"));
+            Directory.CreateDirectory(layerRoot);
+
+            onLayerStarted?.Invoke(depth, Path.GetFileName(currentArchive));
+            _log?.Invoke(
+                $"第 {depth + 1} 层：解压「{Path.GetFileName(currentArchive)}」");
+
+            IProgress<ArchiveProgress>? layerProgress = progress == null
+                ? null
+                : new LayerProgress(progress, depth + 1);
+
+            bool extracted = false;
+            string lastError = string.Empty;
+            string lastErrorType = string.Empty;
+            IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
+            List<string?> normalizedPasswords = NormalizePasswords(candidates).ToList();
+
+            for (int passwordIndex = 0; passwordIndex < normalizedPasswords.Count; passwordIndex++)
             {
-                return new SpecificExtractionRunResult { Message = "输入压缩包不存在" };
+                string? password = normalizedPasswords[passwordIndex];
+                string described = describePassword?.Invoke(password, passwordIndex + 1)
+                                   ?? DescribePasswordCandidate(password);
+                string attempt = normalizedPasswords.Count > 1
+                    ? $"密码候选 {passwordIndex + 1}/{normalizedPasswords.Count}，{described}"
+                    : described;
+                _log?.Invoke($"第 {depth + 1} 层：开始解压，{attempt}");
+                var request = new ArchiveRequest
+                {
+                    ArchivePath = currentArchive,
+                    Password = password,
+                    OutputPath = layerRoot,
+                    Progress = layerProgress
+                };
+
+                var options = new ExtractOptions
+                {
+                    ExtractToOriginalDirectory = false,
+                    CustomOutputDirectory = layerRoot,
+                    KeepArchiveNameFolder = false,
+                    OverwriteMode = "OverwriteAll",
+                    UseGlobalPassword = false,
+                    TryPasswordList = false,
+                    TryEmptyPasswordFirst = false,
+                    CancelOnFirstSuccess = true
+                };
+
+                ArchiveOperationResult result = await _engine
+                    .ExtractAsync(request, options, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (result.Success)
+                {
+                    extracted = true;
+                    anyPasswordUsed |= !string.IsNullOrEmpty(password);
+                    onPasswordSuccess?.Invoke(password);
+                    _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 通过");
+                    break;
+                }
+
+                lastError = result.Message;
+                lastErrorType = result.DetectedErrorType;
+                _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 不对，继续试下一个。");
             }
 
-            string currentArchive = sourceArchive;
-            bool anyPasswordUsed = false;
-            Directory.CreateDirectory(outputRoot);
-            Directory.CreateDirectory(workRoot);
-
-            for (int depth = 0; depth < MaxDepth; depth++)
+            if (!extracted)
             {
-                string layerRoot = Path.Combine(workRoot, "layer-" + depth.ToString("D2"));
-                Directory.CreateDirectory(layerRoot);
-
-                onLayerStarted?.Invoke(depth, Path.GetFileName(currentArchive));
-                _log?.Invoke(
-                    $"第 {depth + 1} 层：解压「{Path.GetFileName(currentArchive)}」");
-
-                IProgress<ArchiveProgress>? layerProgress = progress == null
-                    ? null
-                    : new LayerProgress(progress, depth + 1);
-
-                bool extracted = false;
-                string lastError = string.Empty;
-                string lastErrorType = string.Empty;
-                IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
-                List<string?> normalizedPasswords = NormalizePasswords(candidates).ToList();
-
-                for (int passwordIndex = 0; passwordIndex < normalizedPasswords.Count; passwordIndex++)
-                {
-                    string? password = normalizedPasswords[passwordIndex];
-                    string described = describePassword?.Invoke(password, passwordIndex + 1)
-                                       ?? DescribePasswordCandidate(password);
-                    string attempt = normalizedPasswords.Count > 1
-                        ? $"密码候选 {passwordIndex + 1}/{normalizedPasswords.Count}，{described}"
-                        : described;
-                    _log?.Invoke($"第 {depth + 1} 层：开始解压，{attempt}");
-                    var request = new ArchiveRequest
-                    {
-                        ArchivePath = currentArchive,
-                        Password = password,
-                        OutputPath = layerRoot,
-                        Progress = layerProgress
-                    };
-
-                    var options = new ExtractOptions
-                    {
-                        ExtractToOriginalDirectory = false,
-                        CustomOutputDirectory = layerRoot,
-                        KeepArchiveNameFolder = false,
-                        OverwriteMode = "OverwriteAll",
-                        UseGlobalPassword = false,
-                        TryPasswordList = false,
-                        TryEmptyPasswordFirst = false,
-                        CancelOnFirstSuccess = true
-                    };
-
-                    ArchiveOperationResult result = await _engine
-                        .ExtractAsync(request, options, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (result.Success)
-                    {
-                        extracted = true;
-                        anyPasswordUsed |= !string.IsNullOrEmpty(password);
-                        onPasswordSuccess?.Invoke(password);
-                        _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 通过");
-                        break;
-                    }
-
-                    lastError = result.Message;
-                    lastErrorType = result.DetectedErrorType;
-                    _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 不对，继续试下一个。");
-                }
-
-                if (!extracted)
-                {
-                    _log?.Invoke($"第 {depth + 1} 层解压失败：{lastError}");
-
-                    return new SpecificExtractionRunResult
-                    {
-                        Message = "解压失败：" + lastError,
-                        PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
-                        DiagnosticDetail =
-                            $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
-                        RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
-                        Depth = depth
-                    };
-                }
-
-                SpecificLayerDecision decision = SpecificLayerClassifier.Classify(layerRoot);
-
-                _log?.Invoke($"第 {depth + 1} 层分类：{decision.Kind}");
-
-                if (decision.Kind == SpecificLayerKind.Content)
-                {
-                    string name = SpecificOutputNaming.Resolve(currentArchive, layerRoot);
-                    string finalPath = MoveContent(layerRoot, Path.Combine(outputRoot, name));
-
-                    _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
-
-                    /*
-                     * 成功链上的内层包是过程物，按固定规则随工作区删除；
-                     * ⛔ 不再复制到「其余物」。「最后一层过程物」只在失败 / 部分完成时才保留。
-                     */
-                    return new SpecificExtractionRunResult
-                    {
-                        Success = true,
-                        OutputPath = finalPath,
-                        RestDirectory = string.Empty,
-                        PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
-                        Message = "特定解压成功",
-                        Depth = depth
-                    };
-                }
-
-                if (decision.Kind == SpecificLayerKind.SingleArchive)
-                {
-                    currentArchive = decision.ArchivePath;
-                    continue;
-                }
-
-                if (decision.Kind == SpecificLayerKind.StandardVolumeGroup)
-                {
-                    /*
-                     * 特定解压也要接标准分卷：把这一组的第一卷当作下一层的输入，
-                     * 同目录的其余卷由引擎按标准卷名自己找。⛔ 不再直接报“暂未接入”失败。
-                     */
-                    List<string> ordered = decision.VolumePaths
-                        .OrderBy(path => LegacyVolumeNames.TryGetIndex(
-                            Path.GetFileName(SpecificOutputNaming.RemoveChineseFromExtension(path)))
-                            ?? int.MaxValue)
-                        .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-
-                    string? firstVolume = ordered.FirstOrDefault();
-
-                    if (!string.IsNullOrWhiteSpace(firstVolume))
-                    {
-                        /*
-                         * 分卷片可能只带中文字符伪装（例如 111.7z.001删 / .002删）。
-                         * 引擎按标准卷名找兄弟卷，直接把“删”字入口交给它必然报缺卷。
-                         * 在层工作区里为整组做一套标准名硬链接，再让引擎从标准入口解压；
-                         * 用户原片一个字节都不动。
-                         */
-                        string? standardEntry = MaterializeStandardVolumeEntry(ordered, layerRoot);
-                        currentArchive = standardEntry ?? firstVolume;
-                        _log?.Invoke(
-                            $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(currentArchive)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
-                        continue;
-                    }
-                }
+                _log?.Invoke($"第 {depth + 1} 层解压失败：{lastError}");
 
                 return new SpecificExtractionRunResult
                 {
-                    Message = decision.Kind == SpecificLayerKind.StandardVolumeGroup
-                        ? "标准分卷：这一层没有可用的第一卷"
-                        : "这一层的形状不在特定解压支持范围内",
-                    PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
+                    Message = "解压失败：" + lastError,
+                    PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
                     DiagnosticDetail =
-                        $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
+                        $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
                     RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
                     Depth = depth
                 };
             }
 
+            SpecificLayerDecision decision = SpecificLayerClassifier.Classify(layerRoot);
+
+            _log?.Invoke($"第 {depth + 1} 层分类：{decision.Kind}");
+
+            if (decision.Kind == SpecificLayerKind.Content)
+            {
+                string name = SpecificOutputNaming.Resolve(currentArchive, layerRoot);
+                string finalPath = MoveContent(layerRoot, Path.Combine(outputRoot, name));
+
+                _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
+
+                /*
+                 * 成功链上的内层包是过程物，按固定规则随工作区删除；
+                 * ⛔ 不再复制到「其余物」。「最后一层过程物」只在失败 / 部分完成时才保留。
+                 */
+                return new SpecificExtractionRunResult
+                {
+                    Success = true,
+                    OutputPath = finalPath,
+                    RestDirectory = string.Empty,
+                    PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
+                    Message = "特定解压成功",
+                    Depth = depth
+                };
+            }
+
+            if (decision.Kind == SpecificLayerKind.SingleArchive)
+            {
+                currentArchive = decision.ArchivePath;
+                continue;
+            }
+
+            if (decision.Kind == SpecificLayerKind.StandardVolumeGroup)
+            {
+                /*
+                 * 特定解压也要接标准分卷：把这一组的第一卷当作下一层的输入，
+                 * 同目录的其余卷由引擎按标准卷名自己找。⛔ 不再直接报“暂未接入”失败。
+                 */
+                List<string> ordered = decision.VolumePaths
+                    .OrderBy(path => LegacyVolumeNames.TryGetIndex(
+                        Path.GetFileName(SpecificOutputNaming.RemoveChineseFromExtension(path)))
+                        ?? int.MaxValue)
+                    .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                string? firstVolume = ordered.FirstOrDefault();
+
+                if (!string.IsNullOrWhiteSpace(firstVolume))
+                {
+                    /*
+                     * 分卷片可能只带中文字符伪装（例如 111.7z.001删 / .002删）。
+                     * 引擎按标准卷名找兄弟卷，直接把“删”字入口交给它必然报缺卷。
+                     * 在层工作区里为整组做一套标准名硬链接，再让引擎从标准入口解压；
+                     * 用户原片一个字节都不动。
+                     */
+                    string? standardEntry = MaterializeStandardVolumeEntry(ordered, layerRoot);
+                    currentArchive = standardEntry ?? firstVolume;
+                    _log?.Invoke(
+                        $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(currentArchive)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
+                    continue;
+                }
+            }
+
             return new SpecificExtractionRunResult
             {
-                Message = "超过 3 层仍未得到内容物",
+                Message = decision.Kind == SpecificLayerKind.StandardVolumeGroup
+                    ? "标准分卷：这一层没有可用的第一卷"
+                    : "这一层的形状不在特定解压支持范围内",
                 PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
-                DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
+                DiagnosticDetail =
+                    $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
                 RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
-                Depth = MaxDepth
+                Depth = depth
             };
         }
 
-        /// <summary>
-        /// 把“标准卷名 + 中文字符伪装”的整组片做成一套标准名硬链接。
-        /// 返回标准入口；源片不动。做不出标准名时返回 null，调用方保留原入口并如实失败。
-        /// </summary>
-        private static string? MaterializeStandardVolumeEntry(
-            IReadOnlyList<string> sourcePieces,
-            string layerRoot)
+        return new SpecificExtractionRunResult
         {
-            if (sourcePieces == null || sourcePieces.Count < 2)
+            Message = "超过 3 层仍未得到内容物",
+            PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
+            DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
+            RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
+            Depth = MaxDepth
+        };
+    }
+
+    /// <summary>
+    /// 把“标准卷名 + 中文字符伪装”的整组片做成一套标准名硬链接。
+    /// 返回标准入口；源片不动。做不出标准名时返回 null，调用方保留原入口并如实失败。
+    /// </summary>
+    private static string? MaterializeStandardVolumeEntry(
+        IReadOnlyList<string> sourcePieces,
+        string layerRoot)
+    {
+        if (sourcePieces == null || sourcePieces.Count < 2)
+        {
+            return null;
+        }
+
+        string entryRoot = Path.Combine(layerRoot, "standard-volume-entry");
+        Directory.CreateDirectory(entryRoot);
+        string? first = null;
+
+        foreach (string source in sourcePieces)
+        {
+            string cleanedName = SpecificOutputNaming.RemoveChineseFromExtension(Path.GetFileName(source));
+
+            if (string.IsNullOrWhiteSpace(cleanedName)
+                || string.Equals(cleanedName, Path.GetFileName(source), StringComparison.Ordinal))
+            {
+                // 已经是标准名：仍放进同一入口目录，保证兄弟卷同目录。
+            }
+
+            string target = Path.Combine(entryRoot, cleanedName);
+
+            try
+            {
+                if (File.Exists(target))
+                {
+                    continue;
+                }
+
+                if (!HardLinkHelper.TryCreateHardLink(target, source))
+                {
+                    File.Copy(source, target, overwrite: false);
+                }
+
+                first ??= target;
+            }
+            catch
             {
                 return null;
             }
-
-            string entryRoot = Path.Combine(layerRoot, "standard-volume-entry");
-            Directory.CreateDirectory(entryRoot);
-            string? first = null;
-
-            foreach (string source in sourcePieces)
-            {
-                string cleanedName = SpecificOutputNaming.RemoveChineseFromExtension(Path.GetFileName(source));
-
-                if (string.IsNullOrWhiteSpace(cleanedName)
-                    || string.Equals(cleanedName, Path.GetFileName(source), StringComparison.Ordinal))
-                {
-                    // 已经是标准名：仍放进同一入口目录，保证兄弟卷同目录。
-                }
-
-                string target = Path.Combine(entryRoot, cleanedName);
-
-                try
-                {
-                    if (File.Exists(target))
-                    {
-                        continue;
-                    }
-
-                    if (!HardLinkHelper.TryCreateHardLink(target, source))
-                    {
-                        File.Copy(source, target, overwrite: false);
-                    }
-
-                    first ??= target;
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-
-            return first;
         }
 
-        private static string DescribePasswordCandidate(string? password) =>
-            string.IsNullOrEmpty(password) ? "尝试空密码" : "尝试密码候选：******";
+        return first;
+    }
 
-        private static string DescribePasswordStatus(string errorType, bool usedPassword)
+    private static string DescribePasswordCandidate(string? password) =>
+        string.IsNullOrEmpty(password) ? "尝试空密码" : "尝试密码候选：******";
+
+    private static string DescribePasswordStatus(string errorType, bool usedPassword)
+    {
+        if (usedPassword)
         {
-            if (usedPassword)
-            {
-                return StatusText.PasswordCorrect;
-            }
-
-            return errorType switch
-            {
-                EngineErrorTypes.WrongPassword or EngineErrorTypes.PasswordOrCorrupted => StatusText.WrongPassword,
-                EngineErrorTypes.NeedPassword or EngineErrorTypes.EncryptedHeaders => StatusText.PasswordNeed,
-                _ => string.Empty
-            };
+            return StatusText.PasswordCorrect;
         }
 
-        private static IEnumerable<string?> NormalizePasswords(IReadOnlyList<string?>? candidates)
+        return errorType switch
         {
-            if (candidates == null || candidates.Count == 0)
-            {
-                yield return null;
-                yield break;
-            }
+            EngineErrorTypes.WrongPassword or EngineErrorTypes.PasswordOrCorrupted => StatusText.WrongPassword,
+            EngineErrorTypes.NeedPassword or EngineErrorTypes.EncryptedHeaders => StatusText.PasswordNeed,
+            _ => string.Empty
+        };
+    }
 
-            foreach (string? candidate in candidates)
-            {
-                yield return candidate;
-            }
+    private static IEnumerable<string?> NormalizePasswords(IReadOnlyList<string?>? candidates)
+    {
+        if (candidates == null || candidates.Count == 0)
+        {
+            yield return null;
+            yield break;
         }
 
-        private static string MoveContent(string layerRoot, string finalPath)
+        foreach (string? candidate in candidates)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
+            yield return candidate;
+        }
+    }
 
-            if (Directory.Exists(finalPath))
-            {
-                finalPath = SafePathHelper.AutoRenameDirectoryPath(finalPath);
-            }
+    private static string MoveContent(string layerRoot, string finalPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
 
-            string? singleFolder = Directory
-                .GetFileSystemEntries(layerRoot)
-                .Where(Directory.Exists)
-                .Where(path => !string.Equals(
-                    Path.GetFileName(path),
-                    ".ArchiveFixer.work",
-                    StringComparison.OrdinalIgnoreCase))
-                .ToList() is { Count: 1 } folders
-                && !Directory.EnumerateFiles(layerRoot, "*", SearchOption.TopDirectoryOnly).Any()
-                    ? folders[0]
-                    : null;
-
-            string source = singleFolder ?? layerRoot;
-
-            Directory.Move(source, finalPath);
-
-            return finalPath;
+        if (Directory.Exists(finalPath))
+        {
+            finalPath = SafePathHelper.AutoRenameDirectoryPath(finalPath);
         }
 
-        /// <summary>
-        /// 最后一层的过程压缩包留在 <c>其余物</c>；只看工作区里的那一份，
-        /// 用户最外层源包不在这里重复一份。
-        /// </summary>
-        private static string PreserveLastProcessArtifact(
-            string lastArchivePath,
-            string workRoot,
-            string outputRoot)
+        string? singleFolder = Directory
+            .GetFileSystemEntries(layerRoot)
+            .Where(Directory.Exists)
+            .Where(path => !string.Equals(
+                Path.GetFileName(path),
+                ".ArchiveFixer.work",
+                StringComparison.OrdinalIgnoreCase))
+            .ToList() is { Count: 1 } folders
+            && !Directory.EnumerateFiles(layerRoot, "*", SearchOption.TopDirectoryOnly).Any()
+                ? folders[0]
+                : null;
+
+        string source = singleFolder ?? layerRoot;
+
+        Directory.Move(source, finalPath);
+
+        return finalPath;
+    }
+
+    /// <summary>
+    /// 最后一层的过程压缩包留在 <c>其余物</c>；只看工作区里的那一份，
+    /// 用户最外层源包不在这里重复一份。
+    /// </summary>
+    private static string PreserveLastProcessArtifact(
+        string lastArchivePath,
+        string workRoot,
+        string outputRoot)
+    {
+        if (string.IsNullOrWhiteSpace(lastArchivePath)
+            || !File.Exists(lastArchivePath)
+            || !Path.GetFullPath(lastArchivePath).StartsWith(
+                Path.GetFullPath(workRoot),
+                StringComparison.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrWhiteSpace(lastArchivePath)
-                || !File.Exists(lastArchivePath)
-                || !Path.GetFullPath(lastArchivePath).StartsWith(
-                    Path.GetFullPath(workRoot),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            string rest = Path.Combine(outputRoot, "其余物");
-            Directory.CreateDirectory(rest);
-
-            string target = Path.Combine(rest, Path.GetFileName(lastArchivePath));
-
-            if (!File.Exists(target))
-            {
-                File.Copy(lastArchivePath, target);
-            }
-
-            return rest;
+            return string.Empty;
         }
 
-        /// <summary>把引擎进度补上“这是第几层”，UI 不需要自己猜。</summary>
-        private sealed class LayerProgress : IProgress<ArchiveProgress>
+        string rest = Path.Combine(outputRoot, "其余物");
+        Directory.CreateDirectory(rest);
+
+        string target = Path.Combine(rest, Path.GetFileName(lastArchivePath));
+
+        if (!File.Exists(target))
         {
-            private readonly IProgress<ArchiveProgress> _inner;
-            private readonly int _layer;
+            File.Copy(lastArchivePath, target);
+        }
 
-            public LayerProgress(IProgress<ArchiveProgress> inner, int layer)
-            {
-                _inner = inner;
-                _layer = layer;
-            }
+        return rest;
+    }
 
-            public void Report(ArchiveProgress value)
+    /// <summary>把引擎进度补上“这是第几层”，UI 不需要自己猜。</summary>
+    private sealed class LayerProgress : IProgress<ArchiveProgress>
+    {
+        private readonly IProgress<ArchiveProgress> _inner;
+        private readonly int _layer;
+
+        public LayerProgress(IProgress<ArchiveProgress> inner, int layer)
+        {
+            _inner = inner;
+            _layer = layer;
+        }
+
+        public void Report(ArchiveProgress value)
+        {
+            _inner.Report(new ArchiveProgress
             {
-                _inner.Report(new ArchiveProgress
-                {
-                    Percent = value.Percent,
-                    CurrentEntry = value.CurrentEntry,
-                    Layer = _layer,
-                    ProcessedBytes = value.ProcessedBytes,
-                    TotalBytes = value.TotalBytes,
-                    ProcessedEntries = value.ProcessedEntries
-                });
-            }
+                Percent = value.Percent,
+                CurrentEntry = value.CurrentEntry,
+                Layer = _layer,
+                ProcessedBytes = value.ProcessedBytes,
+                TotalBytes = value.TotalBytes,
+                ProcessedEntries = value.ProcessedEntries
+            });
         }
     }
 }

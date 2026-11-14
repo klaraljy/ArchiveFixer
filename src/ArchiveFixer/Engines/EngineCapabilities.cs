@@ -1,133 +1,132 @@
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ArchiveFixer.Engines
+namespace ArchiveFixer.Engines;
+
+/// <summary>引擎的总体能力位（设计.md §十八 的 9 个字段）。</summary>
+public sealed class EngineCapabilities
 {
-    /// <summary>引擎的总体能力位（设计.md §十八 的 9 个字段）。</summary>
-    public sealed class EngineCapabilities
+    public bool CanProbe { get; init; }
+
+    public bool CanList { get; init; }
+
+    public bool CanTest { get; init; }
+
+    public bool CanExtract { get; init; }
+
+    public bool SupportsPassword { get; init; }
+
+    public bool SupportsMultiVolume { get; init; }
+
+    public bool SupportsStreaming { get; init; }
+
+    public bool SupportsLargeFiles { get; init; }
+
+    public bool PreservesUnicodeNames { get; init; }
+
+    /// <summary>按格式的细粒度能力；没有列出的格式按"不支持"处理，不要猜。</summary>
+    public IReadOnlyList<EngineFormatCapability> Formats { get; init; } = new List<EngineFormatCapability>();
+
+    /// <summary>
+    /// <see cref="Formats"/> 是不是**白名单**（未登记的格式一律"不支持"）。
+    ///
+    /// <para>
+    /// 为什么必须有这个开关（实测踩到的坑，验收第 3 条）：选择器原来的兜底是
+    /// "没登记具体格式时退回总体能力位，宁可让引擎去试一把"。
+    /// 这条对**通用引擎**（7-Zip）是对的 —— 它确实还能处理不少没逐条登记的格式；
+    /// 但对**专用引擎**（RARLAB UnRAR，只认 RAR 系列）就是灾难：
+    /// 实测 zip / 7z / tar **全被路由到了 UnRAR 上**（它没登记这些格式，
+    /// 于是"退回总体 CanExtract = true"），结果是"本来能打开的包反而打不开"。
+    /// </para>
+    ///
+    /// <para>所以：<b>专用引擎必须打开它</b>（<c>UnRarEngine</c> 打开），
+    /// 通用引擎保持 false（<c>SevenZipEngine</c> 不打开，行为与以前完全一致）。</para>
+    /// </summary>
+    public bool FormatsAreWhitelist { get; init; }
+
+    public EngineVersionInfo VersionInfo { get; init; } = new EngineVersionInfo();
+
+    /// <summary>取某个格式的能力；没有登记就返回 null（调用方据此判定"这个引擎干不了"）。</summary>
+    public EngineFormatCapability? ForFormat(string? format)
     {
-        public bool CanProbe { get; init; }
-
-        public bool CanList { get; init; }
-
-        public bool CanTest { get; init; }
-
-        public bool CanExtract { get; init; }
-
-        public bool SupportsPassword { get; init; }
-
-        public bool SupportsMultiVolume { get; init; }
-
-        public bool SupportsStreaming { get; init; }
-
-        public bool SupportsLargeFiles { get; init; }
-
-        public bool PreservesUnicodeNames { get; init; }
-
-        /// <summary>按格式的细粒度能力；没有列出的格式按"不支持"处理，不要猜。</summary>
-        public IReadOnlyList<EngineFormatCapability> Formats { get; init; } = new List<EngineFormatCapability>();
-
-        /// <summary>
-        /// <see cref="Formats"/> 是不是**白名单**（未登记的格式一律"不支持"）。
-        ///
-        /// <para>
-        /// 为什么必须有这个开关（实测踩到的坑，验收第 3 条）：选择器原来的兜底是
-        /// "没登记具体格式时退回总体能力位，宁可让引擎去试一把"。
-        /// 这条对**通用引擎**（7-Zip）是对的 —— 它确实还能处理不少没逐条登记的格式；
-        /// 但对**专用引擎**（RARLAB UnRAR，只认 RAR 系列）就是灾难：
-        /// 实测 zip / 7z / tar **全被路由到了 UnRAR 上**（它没登记这些格式，
-        /// 于是"退回总体 CanExtract = true"），结果是"本来能打开的包反而打不开"。
-        /// </para>
-        ///
-        /// <para>所以：<b>专用引擎必须打开它</b>（<c>UnRarEngine</c> 打开），
-        /// 通用引擎保持 false（<c>SevenZipEngine</c> 不打开，行为与以前完全一致）。</para>
-        /// </summary>
-        public bool FormatsAreWhitelist { get; init; }
-
-        public EngineVersionInfo VersionInfo { get; init; } = new EngineVersionInfo();
-
-        /// <summary>取某个格式的能力；没有登记就返回 null（调用方据此判定"这个引擎干不了"）。</summary>
-        public EngineFormatCapability? ForFormat(string? format)
+        if (string.IsNullOrWhiteSpace(format))
         {
-            if (string.IsNullOrWhiteSpace(format))
-            {
-                return null;
-            }
-
-            return Formats.FirstOrDefault(
-                f => string.Equals(f.Format, format, System.StringComparison.OrdinalIgnoreCase));
+            return null;
         }
 
-        /// <summary>
-        /// 这个引擎干得了"这个格式的这件事"吗 —— 三种问法（list / test / extract）共用这一份实现。
-        ///
-        /// <para><b>规则只有一条，但两个分叉都必须在这里</b>：
-        /// ① 登记过该格式 → 看它自己那几位；
-        /// ② 没登记 → <b>白名单引擎（<see cref="FormatsAreWhitelist"/>）一律"干不了"</b>，
-        ///    只有非白名单的通用引擎才退回总体能力位（"宁可让它去试一把"）。</para>
-        ///
-        /// <para>
-        /// ⚠ 这段规则以前在 <c>EngineSelector.CanHandle</c> 里**又写了一遍**，而带名字的这份反而是死代码
-        /// （体检报告 §2 第 4 条）。现在选择器只调这里 —— 那条"改错就会把 zip / 7z 全路由到 UnRAR"
-        /// 的实测教训（见 <see cref="FormatsAreWhitelist"/>）因此只可能在一处被改错。
-        /// </para>
-        /// </summary>
-        public bool CanFormat(string? format, EngineOperation operation)
+        return Formats.FirstOrDefault(
+            f => string.Equals(f.Format, format, System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 这个引擎干得了"这个格式的这件事"吗 —— 三种问法（list / test / extract）共用这一份实现。
+    ///
+    /// <para><b>规则只有一条，但两个分叉都必须在这里</b>：
+    /// ① 登记过该格式 → 看它自己那几位；
+    /// ② 没登记 → <b>白名单引擎（<see cref="FormatsAreWhitelist"/>）一律"干不了"</b>，
+    ///    只有非白名单的通用引擎才退回总体能力位（"宁可让它去试一把"）。</para>
+    ///
+    /// <para>
+    /// ⚠ 这段规则以前在 <c>EngineSelector.CanHandle</c> 里**又写了一遍**，而带名字的这份反而是死代码
+    /// （体检报告 §2 第 4 条）。现在选择器只调这里 —— 那条"改错就会把 zip / 7z 全路由到 UnRAR"
+    /// 的实测教训（见 <see cref="FormatsAreWhitelist"/>）因此只可能在一处被改错。
+    /// </para>
+    /// </summary>
+    public bool CanFormat(string? format, EngineOperation operation)
+    {
+        EngineFormatCapability? capability = ForFormat(format);
+
+        if (capability != null)
         {
-            EngineFormatCapability? capability = ForFormat(format);
-
-            if (capability != null)
-            {
-                return operation switch
-                {
-                    EngineOperation.List => capability.CanList,
-                    EngineOperation.Test => capability.CanTest,
-                    EngineOperation.Extract => capability.CanExtract,
-                    _ => false
-                };
-            }
-
-            // 白名单引擎：没登记就是"干不了"，不许退回总体能力位。
-            if (FormatsAreWhitelist)
-            {
-                return false;
-            }
-
-            // 没登记具体格式时，退回总体能力位：宁可让引擎去试一把，也不要因为"没登记"就拒绝。
             return operation switch
             {
-                EngineOperation.List => CanList,
-                EngineOperation.Test => CanTest,
-                EngineOperation.Extract => CanExtract,
+                EngineOperation.List => capability.CanList,
+                EngineOperation.Test => capability.CanTest,
+                EngineOperation.Extract => capability.CanExtract,
                 _ => false
             };
         }
 
-        /// <summary>解压这一件事的同名问法（选择器的 <c>EngineOperation.Extract</c> 档走它）。</summary>
-        public bool CanExtractFormat(string? format) => CanFormat(format, EngineOperation.Extract);
-
-        /// <summary>列目录这一件事的同名问法。</summary>
-        public bool CanListFormat(string? format) => CanFormat(format, EngineOperation.List);
-
-        /// <summary>测试这一件事的同名问法。</summary>
-        public bool CanTestFormat(string? format) => CanFormat(format, EngineOperation.Test);
-
-        /// <summary>给人看的一句话（写进日志与任务报告）。</summary>
-        public string Describe()
+        // 白名单引擎：没登记就是"干不了"，不许退回总体能力位。
+        if (FormatsAreWhitelist)
         {
-            var parts = new List<string>();
-
-            if (CanProbe) parts.Add("探测");
-            if (CanList) parts.Add("列目录");
-            if (CanTest) parts.Add("测试");
-            if (CanExtract) parts.Add("解压");
-            if (SupportsPassword) parts.Add("密码");
-            if (SupportsMultiVolume) parts.Add("分卷");
-            if (SupportsStreaming) parts.Add("流式");
-            if (SupportsLargeFiles) parts.Add("大文件");
-            if (PreservesUnicodeNames) parts.Add("Unicode 名称");
-
-            return string.Join(" / ", parts);
+            return false;
         }
+
+        // 没登记具体格式时，退回总体能力位：宁可让引擎去试一把，也不要因为"没登记"就拒绝。
+        return operation switch
+        {
+            EngineOperation.List => CanList,
+            EngineOperation.Test => CanTest,
+            EngineOperation.Extract => CanExtract,
+            _ => false
+        };
+    }
+
+    /// <summary>解压这一件事的同名问法（选择器的 <c>EngineOperation.Extract</c> 档走它）。</summary>
+    public bool CanExtractFormat(string? format) => CanFormat(format, EngineOperation.Extract);
+
+    /// <summary>列目录这一件事的同名问法。</summary>
+    public bool CanListFormat(string? format) => CanFormat(format, EngineOperation.List);
+
+    /// <summary>测试这一件事的同名问法。</summary>
+    public bool CanTestFormat(string? format) => CanFormat(format, EngineOperation.Test);
+
+    /// <summary>给人看的一句话（写进日志与任务报告）。</summary>
+    public string Describe()
+    {
+        var parts = new List<string>();
+
+        if (CanProbe) parts.Add("探测");
+        if (CanList) parts.Add("列目录");
+        if (CanTest) parts.Add("测试");
+        if (CanExtract) parts.Add("解压");
+        if (SupportsPassword) parts.Add("密码");
+        if (SupportsMultiVolume) parts.Add("分卷");
+        if (SupportsStreaming) parts.Add("流式");
+        if (SupportsLargeFiles) parts.Add("大文件");
+        if (PreservesUnicodeNames) parts.Add("Unicode 名称");
+
+        return string.Join(" / ", parts);
     }
 }

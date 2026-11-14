@@ -13,19 +13,18 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Extraction
-{    /// <summary>
-     /// 需要用户拍板的多分支询问。字段是给 GUI 直接用的：<see cref="Prompt"/> 就是弹窗正文。
-     /// </summary>
-    public sealed class RecursionDecisionRequest
-    {
-        public string CurrentArchivePath { get; init; } = string.Empty;
+namespace ArchiveFixer.Extraction;
+/// <summary>
+/// 需要用户拍板的多分支询问。字段是给 GUI 直接用的：<see cref="Prompt"/> 就是弹窗正文。
+/// </summary>
+public sealed class RecursionDecisionRequest
+{
+    public string CurrentArchivePath { get; init; } = string.Empty;
 
-        public int Depth { get; init; }
+    public int Depth { get; init; }
 
-        public IReadOnlyList<string> CandidateArchives { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> CandidateArchives { get; init; } = Array.Empty<string>();
 
-        /// <summary>中文，直接弹给用户。</summary>
-        public string Prompt { get; init; } = string.Empty;
-    }
+    /// <summary>中文，直接弹给用户。</summary>
+    public string Prompt { get; init; } = string.Empty;
 }

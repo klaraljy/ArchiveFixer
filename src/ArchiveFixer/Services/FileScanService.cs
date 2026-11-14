@@ -9,516 +9,515 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Services;
+
+/// <summary>
+/// 文件扫描服务。
+/// 
+/// 职责：
+/// 1. 接收文件路径和文件夹路径。
+/// 2. 判断路径类型。
+/// 3. 扫描文件夹。
+/// 4. 支持递归。
+/// 5. 支持扫描模式。
+/// 6. 去重。
+/// 7. 生成 ArchiveTask。
+/// 
+/// 注意：
+/// 只负责扫描和生成任务，不负责识别真实压缩格式。
+/// 真实格式识别交给 ArchiveDetectService。
+/// </summary>
+public class FileScanService
 {
     /// <summary>
-    /// 文件扫描服务。
-    /// 
-    /// 职责：
-    /// 1. 接收文件路径和文件夹路径。
-    /// 2. 判断路径类型。
-    /// 3. 扫描文件夹。
-    /// 4. 支持递归。
-    /// 5. 支持扫描模式。
-    /// 6. 去重。
-    /// 7. 生成 ArchiveTask。
-    /// 
-    /// 注意：
-    /// 只负责扫描和生成任务，不负责识别真实压缩格式。
-    /// 真实格式识别交给 ArchiveDetectService。
+    /// 扫描路径集合。
+    /// paths 可以同时包含文件和文件夹。
     /// </summary>
-    public class FileScanService
+    public async Task<List<ArchiveTask>> ScanPathsAsync(
+        IEnumerable<string> paths,
+        ScanOptions options,
+        CancellationToken cancellationToken = default)
     {
-        /// <summary>
-        /// 扫描路径集合。
-        /// paths 可以同时包含文件和文件夹。
-        /// </summary>
-        public async Task<List<ArchiveTask>> ScanPathsAsync(
-            IEnumerable<string> paths,
-            ScanOptions options,
-            CancellationToken cancellationToken = default)
+        options ??= new ScanOptions();
+        options.Normalize();
+
+        return await Task.Run(() =>
         {
-            options ??= new ScanOptions();
-            options.Normalize();
+            var result = new List<ArchiveTask>();
+            var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            return await Task.Run(() =>
+            if (paths == null)
             {
-                var result = new List<ArchiveTask>();
-                var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                return result;
+            }
 
-                if (paths == null)
+            foreach (string rawPath in paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrWhiteSpace(rawPath))
                 {
-                    return result;
+                    continue;
                 }
 
-                foreach (string rawPath in paths)
+                string path = SafePathHelper.GetFullPathSafe(rawPath);
+
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    if (string.IsNullOrWhiteSpace(rawPath))
+                    if (File.Exists(path))
                     {
-                        continue;
-                    }
+                        ArchiveTask? task = ScanFile(path, options);
 
-                    string path = SafePathHelper.GetFullPathSafe(rawPath);
-
-                    try
-                    {
-                        if (File.Exists(path))
+                        if (task != null && addedPaths.Add(SafePathHelper.GetFullPathSafe(task.CurrentPath)))
                         {
-                            ArchiveTask? task = ScanFile(path, options);
+                            task.Index = result.Count + 1;
+                            result.Add(task);
+                        }
+                    }
+                    else if (Directory.Exists(path))
+                    {
+                        List<ArchiveTask> folderTasks = ScanFolder(path, options, cancellationToken);
 
-                            if (task != null && addedPaths.Add(SafePathHelper.GetFullPathSafe(task.CurrentPath)))
+                        /*
+                         * 用户选中的是**文件夹**：把这件事记在每一个任务上（用户 2026-09-24 第 13 条）。
+                         *
+                         * 为什么必须在这里记：文件夹里的包各自成任务，之后只看任务路径是推不出
+                         * "用户选的是一个容器"的。落点四条规则里有两条要靠它：
+                         * · 指定位置时落点用**这个文件夹的名字**（BBB\222\）；
+                         * · 未指定位置时产物必须留在这个文件夹里面（不新建同名层、不往外扔）。
+                         */
+                        string folderRoot = SafePathHelper.GetFullPathSafe(path);
+
+                        foreach (ArchiveTask task in folderTasks)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            task.SourceSelectionKind = SourceSelectionKind.Folder;
+                            task.SourceSelectionRoot = folderRoot;
+
+                            string fullPath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
+
+                            if (addedPaths.Add(fullPath))
                             {
                                 task.Index = result.Count + 1;
                                 result.Add(task);
                             }
                         }
-                        else if (Directory.Exists(path))
-                        {
-                            List<ArchiveTask> folderTasks = ScanFolder(path, options, cancellationToken);
-
-                            /*
-                             * 用户选中的是**文件夹**：把这件事记在每一个任务上（用户 2026-09-24 第 13 条）。
-                             *
-                             * 为什么必须在这里记：文件夹里的包各自成任务，之后只看任务路径是推不出
-                             * "用户选的是一个容器"的。落点四条规则里有两条要靠它：
-                             * · 指定位置时落点用**这个文件夹的名字**（BBB\222\）；
-                             * · 未指定位置时产物必须留在这个文件夹里面（不新建同名层、不往外扔）。
-                             */
-                            string folderRoot = SafePathHelper.GetFullPathSafe(path);
-
-                            foreach (ArchiveTask task in folderTasks)
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
-
-                                task.SourceSelectionKind = SourceSelectionKind.Folder;
-                                task.SourceSelectionRoot = folderRoot;
-
-                                string fullPath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
-
-                                if (addedPaths.Add(fullPath))
-                                {
-                                    task.Index = result.Count + 1;
-                                    result.Add(task);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // 单个路径扫描失败不能导致整体扫描崩溃。
                     }
                 }
-
-                /*
-                 * 一组分卷 = 一个任务：已停用（用户 2026-10-24：第一大步不许做分卷操作，扫描期也不行）。
-                 * 原 `new VolumeGroupingService().ApplyVolumeGrouping(result)` 把同组卷并成一个任务，
-                 * 属于第二大步的活；实现已搬到 `SecondStepResidue/VolumeGroupingService.cs`。
-                 * 现在扫描结果是一份文件一个任务，分卷组只在交接事实里登记。
-                 */
-
-                /*
-                 * 同一份物理文件的多个硬链接名只留一个任务。
-                 * 判据是 FileIdentity（卷序列号 + 文件索引），不是路径/名字；
-                 * 两个名字都干净时保留先出现的，一个带中文字符伪装时保留干净名。
-                 * 这发生在**任务生成**阶段，所以后续扫描/解压/日志都看不到第二条。
-                 */
-                DeduplicatePhysicalInputs(result);
-
-                RebuildIndex(result);
-                return result;
-            }, cancellationToken);
-        }
-
-        /// <summary>
-        /// 文件是不是真正的 Android 安装包（按内容判，`.apk` 后缀只是廉价的预筛）。
-        ///
-        /// <para>用户 2026-10-26：APK 不该进入处理列表 —— 它不是压缩包处理对象。
-        /// 判不出 / 读不动 ⇒ false（不拦），与 <see cref="AndroidPackageDetector"/> 同一口径。</para>
-        /// </summary>
-        private static bool IsRealApkFile(string filePath)
-        {
-            if (!string.Equals(Path.GetExtension(filePath), ".apk", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
+                catch
+                {
+                    // 单个路径扫描失败不能导致整体扫描崩溃。
+                }
             }
 
-            return AndroidPackageDetector.IsAndroidPackage(filePath);
+            /*
+             * 一组分卷 = 一个任务：已停用（用户 2026-10-24：第一大步不许做分卷操作，扫描期也不行）。
+             * 原 `new VolumeGroupingService().ApplyVolumeGrouping(result)` 把同组卷并成一个任务，
+             * 属于第二大步的活；实现已搬到 `SecondStepResidue/VolumeGroupingService.cs`。
+             * 现在扫描结果是一份文件一个任务，分卷组只在交接事实里登记。
+             */
+
+            /*
+             * 同一份物理文件的多个硬链接名只留一个任务。
+             * 判据是 FileIdentity（卷序列号 + 文件索引），不是路径/名字；
+             * 两个名字都干净时保留先出现的，一个带中文字符伪装时保留干净名。
+             * 这发生在**任务生成**阶段，所以后续扫描/解压/日志都看不到第二条。
+             */
+            DeduplicatePhysicalInputs(result);
+
+            RebuildIndex(result);
+            return result;
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// 文件是不是真正的 Android 安装包（按内容判，`.apk` 后缀只是廉价的预筛）。
+    ///
+    /// <para>用户 2026-10-26：APK 不该进入处理列表 —— 它不是压缩包处理对象。
+    /// 判不出 / 读不动 ⇒ false（不拦），与 <see cref="AndroidPackageDetector"/> 同一口径。</para>
+    /// </summary>
+    private static bool IsRealApkFile(string filePath)
+    {
+        if (!string.Equals(Path.GetExtension(filePath), ".apk", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
         }
 
-        /// <summary>
-        /// 扫描单个文件。
-        /// 如果符合扫描条件，返回 ArchiveTask。
-        /// 否则返回 null。
-        /// </summary>
-        public ArchiveTask? ScanFile(string filePath, ScanOptions options)
-        {
-            options ??= new ScanOptions();
-            options.Normalize();
+        return AndroidPackageDetector.IsAndroidPackage(filePath);
+    }
 
-            if (string.IsNullOrWhiteSpace(filePath))
+    /// <summary>
+    /// 扫描单个文件。
+    /// 如果符合扫描条件，返回 ArchiveTask。
+    /// 否则返回 null。
+    /// </summary>
+    public ArchiveTask? ScanFile(string filePath, ScanOptions options)
+    {
+        options ??= new ScanOptions();
+        options.Normalize();
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!File.Exists(filePath))
             {
                 return null;
             }
 
-            try
-            {
-                if (!File.Exists(filePath))
-                {
-                    return null;
-                }
-
-                if (!ShouldIncludeFile(filePath, options))
-                {
-                    return null;
-                }
-
-                /*
-                 * 用户 2026-10-26：真正的 APK 直接退出，完全不进任务列表。
-                 * （直接选文件、选文件夹都走这里，所以两条入口都不再生成 APK 任务。）
-                 */
-                if (IsRealApkFile(filePath))
-                {
-                    return null;
-                }
-
-                return CreateArchiveTask(filePath);
-            }
-            catch
+            if (!ShouldIncludeFile(filePath, options))
             {
                 return null;
             }
+
+            /*
+             * 用户 2026-10-26：真正的 APK 直接退出，完全不进任务列表。
+             * （直接选文件、选文件夹都走这里，所以两条入口都不再生成 APK 任务。）
+             */
+            if (IsRealApkFile(filePath))
+            {
+                return null;
+            }
+
+            return CreateArchiveTask(filePath);
         }
-
-        /// <summary>
-        /// 扫描文件夹。
-        /// </summary>
-        public List<ArchiveTask> ScanFolder(
-            string folderPath,
-            ScanOptions options,
-            CancellationToken cancellationToken = default)
+        catch
         {
-            options ??= new ScanOptions();
-            options.Normalize();
+            return null;
+        }
+    }
 
-            var result = new List<ArchiveTask>();
+    /// <summary>
+    /// 扫描文件夹。
+    /// </summary>
+    public List<ArchiveTask> ScanFolder(
+        string folderPath,
+        ScanOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new ScanOptions();
+        options.Normalize();
 
-            if (string.IsNullOrWhiteSpace(folderPath))
-            {
-                return result;
-            }
+        var result = new List<ArchiveTask>();
 
-            if (!Directory.Exists(folderPath))
-            {
-                return result;
-            }
-
-            try
-            {
-                SearchOption searchOption = options.RecursiveScan
-                    ? SearchOption.AllDirectories
-                    : SearchOption.TopDirectoryOnly;
-
-                IEnumerable<string> files = EnumerateFilesSafe(folderPath, searchOption, cancellationToken);
-
-                foreach (string file in files)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    ArchiveTask? task = ScanFile(file, options);
-
-                    if (task != null)
-                    {
-                        task.Index = result.Count + 1;
-                        result.Add(task);
-                    }
-                }
-            }
-            catch
-            {
-                // 文件夹扫描失败时返回已扫描到的结果。
-            }
-
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
             return result;
         }
 
-        /// <summary>
-        /// 判断文件是否应加入扫描结果。
-        /// </summary>
-        public bool ShouldIncludeFile(string filePath, ScanOptions options)
+        if (!Directory.Exists(folderPath))
         {
-            options ??= new ScanOptions();
-            options.Normalize();
-
-            if (string.IsNullOrWhiteSpace(filePath))
-            {
-                return false;
-            }
-
-            try
-            {
-                if (!File.Exists(filePath))
-                {
-                    return false;
-                }
-
-                var fileInfo = new FileInfo(filePath);
-
-                if ((fileInfo.Attributes & FileAttributes.Directory) == FileAttributes.Directory)
-                {
-                    return false;
-                }
-
-                if (!options.IncludeHiddenFiles &&
-                    (fileInfo.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
-                {
-                    return false;
-                }
-
-                if (!options.IncludeSystemFiles &&
-                    (fileInfo.Attributes & FileAttributes.System) == FileAttributes.System)
-                {
-                    return false;
-                }
-
-                if (options.MaxFileSizeLimit > 0)
-                {
-                    long maxBytes = options.MaxFileSizeLimit * 1024L * 1024L;
-
-                    if (fileInfo.Length > maxBytes)
-                    {
-                        return false;
-                    }
-                }
-
-                string extension = ExtensionHelper.GetLastExtension(filePath);
-
-                return options.ScanMode switch
-                {
-                    "ScanAllFiles" => true,
-
-                    "ScanKnownArchiveExtensions" =>
-                        ExtensionHelper.IsKnownArchiveExtension(extension),
-
-                    "ScanSuspiciousFiles" =>
-                        ExtensionHelper.IsSuspiciousFile(filePath),
-
-                    _ => true
-                };
-            }
-            catch
-            {
-                return false;
-            }
+            return result;
         }
 
-        /// <summary>
-        /// 创建 ArchiveTask。
-        /// </summary>
-        public ArchiveTask CreateArchiveTask(string filePath)
+        try
         {
-            string fullPath = SafePathHelper.GetFullPathSafe(filePath);
+            SearchOption searchOption = options.RecursiveScan
+                ? SearchOption.AllDirectories
+                : SearchOption.TopDirectoryOnly;
 
-            var task = new ArchiveTask
-            {
-                IsSelected = true,
-                Index = 0,
+            IEnumerable<string> files = EnumerateFilesSafe(folderPath, searchOption, cancellationToken);
 
-                OriginalPath = fullPath,
-                CurrentPath = fullPath,
-
-                FileName = Path.GetFileName(fullPath),
-                DirectoryPath = Path.GetDirectoryName(fullPath) ?? string.Empty,
-                CurrentExtension = ExtensionHelper.GetLastExtensionDisplay(fullPath),
-
-                DetectedFormat = "Unknown",
-                SuggestedExtension = string.Empty,
-                ExtensionStatus = StatusText.NotChecked,
-                RenamePreviewPath = string.Empty,
-
-                Password = string.Empty,
-                PasswordStatus = StatusText.NotChecked,
-
-                OutputPath = string.Empty,
-                Operation = StatusText.OpWaiting,
-                Status = StatusText.WaitingScan,
-                ProgressText = "-",
-                ErrorMessage = string.Empty,
-
-                IsArchive = false,
-                IsEncrypted = false,
-
-                StartTime = null,
-                EndTime = null,
-                ElapsedText = "-",
-                LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now
-            };
-
-            return task;
-        }
-
-        /// <summary>
-        /// 从文件夹安全枚举文件。
-        /// 递归时避免因为某个子目录权限不足导致整体失败。
-        /// </summary>
-        private static IEnumerable<string> EnumerateFilesSafe(
-            string rootFolder,
-            SearchOption searchOption,
-            CancellationToken cancellationToken)
-        {
-            if (searchOption == SearchOption.TopDirectoryOnly)
-            {
-                IEnumerable<string> files;
-
-                try
-                {
-                    files = Directory.EnumerateFiles(rootFolder);
-                }
-                catch
-                {
-                    yield break;
-                }
-
-                foreach (string file in files)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    yield return file;
-                }
-
-                yield break;
-            }
-
-            var folders = new Stack<string>();
-            folders.Push(rootFolder);
-
-            while (folders.Count > 0)
+            foreach (string file in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                string currentFolder = folders.Pop();
+                ArchiveTask? task = ScanFile(file, options);
 
-                IEnumerable<string> files;
-
-                try
+                if (task != null)
                 {
-                    files = Directory.EnumerateFiles(currentFolder);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                foreach (string file in files)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    yield return file;
-                }
-
-                IEnumerable<string> subFolders;
-
-                try
-                {
-                    subFolders = Directory.EnumerateDirectories(currentFolder);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                foreach (string subFolder in subFolders)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    folders.Push(subFolder);
+                    task.Index = result.Count + 1;
+                    result.Add(task);
                 }
             }
         }
-
-        /// <summary>
-        /// 重建序号。
-        /// </summary>
-        /// <summary>
-        /// 同一份物理文件的多个硬链接名只留一个任务（判据只读 FileIdentity）。
-        /// 不按名字去重：不同文件同名必须保留；按文件索引才能把“硬链接双胞胎”收掉。
-        /// </summary>
-        private static void DeduplicatePhysicalInputs(List<ArchiveTask> tasks)
+        catch
         {
-            if (tasks.Count < 2)
-            {
-                return;
-            }
-
-            var accepted = new List<ArchiveTask>(tasks.Count);
-            var byIdentity = new Dictionary<string, ArchiveTask>(StringComparer.Ordinal);
-
-            foreach (ArchiveTask task in tasks)
-            {
-                string path = SafePathHelper.GetFullPathSafe(task.CurrentPath);
-
-                if (string.IsNullOrWhiteSpace(path)
-                    || !FileIdentity.TryGetIdentity(path, out ulong volume, out ulong index))
-                {
-                    accepted.Add(task);
-                    continue;
-                }
-
-                string key = volume.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    + ":"
-                    + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-                if (!byIdentity.TryGetValue(key, out ArchiveTask? kept))
-                {
-                    byIdentity[key] = task;
-                    accepted.Add(task);
-                    continue;
-                }
-
-                if (IsCleanerPhysicalAlias(task.CurrentPath, kept.CurrentPath))
-                {
-                    int position = accepted.IndexOf(kept);
-
-                    if (position >= 0)
-                    {
-                        accepted[position] = task;
-                    }
-
-                    byIdentity[key] = task;
-                }
-            }
-
-            tasks.Clear();
-            tasks.AddRange(accepted);
+            // 文件夹扫描失败时返回已扫描到的结果。
         }
 
-        /// <summary>带中文字符伪装的名字让位给干净名；两个都干净时保留先出现的。</summary>
-        private static bool IsCleanerPhysicalAlias(string candidate, string kept)
+        return result;
+    }
+
+    /// <summary>
+    /// 判断文件是否应加入扫描结果。
+    /// </summary>
+    public bool ShouldIncludeFile(string filePath, ScanOptions options)
+    {
+        options ??= new ScanOptions();
+        options.Normalize();
+
+        if (string.IsNullOrWhiteSpace(filePath))
         {
-            string candidateName = Path.GetFileName(candidate);
-            string keptName = Path.GetFileName(kept);
-
-            bool candidateClean = string.Equals(
-                candidateName,
-                SpecificOutputNaming.RemoveChineseFromExtension(candidateName),
-                StringComparison.Ordinal);
-            bool keptClean = string.Equals(
-                keptName,
-                SpecificOutputNaming.RemoveChineseFromExtension(keptName),
-                StringComparison.Ordinal);
-
-            return candidateClean && !keptClean;
+            return false;
         }
 
-        private static void RebuildIndex(IList<ArchiveTask> tasks)
+        try
         {
-            if (tasks == null)
+            if (!File.Exists(filePath))
             {
-                return;
+                return false;
             }
 
-            for (int i = 0; i < tasks.Count; i++)
+            var fileInfo = new FileInfo(filePath);
+
+            if ((fileInfo.Attributes & FileAttributes.Directory) == FileAttributes.Directory)
             {
-                tasks[i].Index = i + 1;
+                return false;
             }
+
+            if (!options.IncludeHiddenFiles &&
+                (fileInfo.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
+            {
+                return false;
+            }
+
+            if (!options.IncludeSystemFiles &&
+                (fileInfo.Attributes & FileAttributes.System) == FileAttributes.System)
+            {
+                return false;
+            }
+
+            if (options.MaxFileSizeLimit > 0)
+            {
+                long maxBytes = options.MaxFileSizeLimit * 1024L * 1024L;
+
+                if (fileInfo.Length > maxBytes)
+                {
+                    return false;
+                }
+            }
+
+            string extension = ExtensionHelper.GetLastExtension(filePath);
+
+            return options.ScanMode switch
+            {
+                "ScanAllFiles" => true,
+
+                "ScanKnownArchiveExtensions" =>
+                    ExtensionHelper.IsKnownArchiveExtension(extension),
+
+                "ScanSuspiciousFiles" =>
+                    ExtensionHelper.IsSuspiciousFile(filePath),
+
+                _ => true
+            };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 创建 ArchiveTask。
+    /// </summary>
+    public ArchiveTask CreateArchiveTask(string filePath)
+    {
+        string fullPath = SafePathHelper.GetFullPathSafe(filePath);
+
+        var task = new ArchiveTask
+        {
+            IsSelected = true,
+            Index = 0,
+
+            OriginalPath = fullPath,
+            CurrentPath = fullPath,
+
+            FileName = Path.GetFileName(fullPath),
+            DirectoryPath = Path.GetDirectoryName(fullPath) ?? string.Empty,
+            CurrentExtension = ExtensionHelper.GetLastExtensionDisplay(fullPath),
+
+            DetectedFormat = "Unknown",
+            SuggestedExtension = string.Empty,
+            ExtensionStatus = StatusText.NotChecked,
+            RenamePreviewPath = string.Empty,
+
+            Password = string.Empty,
+            PasswordStatus = StatusText.NotChecked,
+
+            OutputPath = string.Empty,
+            Operation = StatusText.OpWaiting,
+            Status = StatusText.WaitingScan,
+            ProgressText = "-",
+            ErrorMessage = string.Empty,
+
+            IsArchive = false,
+            IsEncrypted = false,
+
+            StartTime = null,
+            EndTime = null,
+            ElapsedText = "-",
+            LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now
+        };
+
+        return task;
+    }
+
+    /// <summary>
+    /// 从文件夹安全枚举文件。
+    /// 递归时避免因为某个子目录权限不足导致整体失败。
+    /// </summary>
+    private static IEnumerable<string> EnumerateFilesSafe(
+        string rootFolder,
+        SearchOption searchOption,
+        CancellationToken cancellationToken)
+    {
+        if (searchOption == SearchOption.TopDirectoryOnly)
+        {
+            IEnumerable<string> files;
+
+            try
+            {
+                files = Directory.EnumerateFiles(rootFolder);
+            }
+            catch
+            {
+                yield break;
+            }
+
+            foreach (string file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
+            }
+
+            yield break;
+        }
+
+        var folders = new Stack<string>();
+        folders.Push(rootFolder);
+
+        while (folders.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string currentFolder = folders.Pop();
+
+            IEnumerable<string> files;
+
+            try
+            {
+                files = Directory.EnumerateFiles(currentFolder);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (string file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
+            }
+
+            IEnumerable<string> subFolders;
+
+            try
+            {
+                subFolders = Directory.EnumerateDirectories(currentFolder);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (string subFolder in subFolders)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                folders.Push(subFolder);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 重建序号。
+    /// </summary>
+    /// <summary>
+    /// 同一份物理文件的多个硬链接名只留一个任务（判据只读 FileIdentity）。
+    /// 不按名字去重：不同文件同名必须保留；按文件索引才能把“硬链接双胞胎”收掉。
+    /// </summary>
+    private static void DeduplicatePhysicalInputs(List<ArchiveTask> tasks)
+    {
+        if (tasks.Count < 2)
+        {
+            return;
+        }
+
+        var accepted = new List<ArchiveTask>(tasks.Count);
+        var byIdentity = new Dictionary<string, ArchiveTask>(StringComparer.Ordinal);
+
+        foreach (ArchiveTask task in tasks)
+        {
+            string path = SafePathHelper.GetFullPathSafe(task.CurrentPath);
+
+            if (string.IsNullOrWhiteSpace(path)
+                || !FileIdentity.TryGetIdentity(path, out ulong volume, out ulong index))
+            {
+                accepted.Add(task);
+                continue;
+            }
+
+            string key = volume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ":"
+                + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            if (!byIdentity.TryGetValue(key, out ArchiveTask? kept))
+            {
+                byIdentity[key] = task;
+                accepted.Add(task);
+                continue;
+            }
+
+            if (IsCleanerPhysicalAlias(task.CurrentPath, kept.CurrentPath))
+            {
+                int position = accepted.IndexOf(kept);
+
+                if (position >= 0)
+                {
+                    accepted[position] = task;
+                }
+
+                byIdentity[key] = task;
+            }
+        }
+
+        tasks.Clear();
+        tasks.AddRange(accepted);
+    }
+
+    /// <summary>带中文字符伪装的名字让位给干净名；两个都干净时保留先出现的。</summary>
+    private static bool IsCleanerPhysicalAlias(string candidate, string kept)
+    {
+        string candidateName = Path.GetFileName(candidate);
+        string keptName = Path.GetFileName(kept);
+
+        bool candidateClean = string.Equals(
+            candidateName,
+            SpecificOutputNaming.RemoveChineseFromExtension(candidateName),
+            StringComparison.Ordinal);
+        bool keptClean = string.Equals(
+            keptName,
+            SpecificOutputNaming.RemoveChineseFromExtension(keptName),
+            StringComparison.Ordinal);
+
+        return candidateClean && !keptClean;
+    }
+
+    private static void RebuildIndex(IList<ArchiveTask> tasks)
+    {
+        if (tasks == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < tasks.Count; i++)
+        {
+            tasks[i].Index = i + 1;
         }
     }
 }

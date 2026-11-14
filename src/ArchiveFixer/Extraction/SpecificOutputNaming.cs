@@ -5,205 +5,204 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// 特定解压的输出文件夹命名（用户 2026-10-25 口径，独立于第一/第二大步）：
+///
+/// 1. 最后一层解压后，根上只有一个文件夹且没有其他文件 ⇒ 用这个文件夹名；
+/// 2. 其余情况（直接是散文件、多个文件夹、文件夹+散文件）⇒ 用最后一层压缩包的基名。
+/// </summary>
+public static class SpecificOutputNaming
 {
     /// <summary>
-    /// 特定解压的输出文件夹命名（用户 2026-10-25 口径，独立于第一/第二大步）：
-    ///
-    /// 1. 最后一层解压后，根上只有一个文件夹且没有其他文件 ⇒ 用这个文件夹名；
-    /// 2. 其余情况（直接是散文件、多个文件夹、文件夹+散文件）⇒ 用最后一层压缩包的基名。
+    /// 特定解压只处理一种简单伪装：**后缀里塞中文字符**（用户 2026-10-25：
+    /// “就删除中文字符就行，而不是一个中文字符，将所有的中文字符删除”）。
+    /// 只清洗**最后一段后缀**，基名里的中文一个字都不动。
     /// </summary>
-    public static class SpecificOutputNaming
+    public static string RemoveChineseFromExtension(string fileName)
     {
-        /// <summary>
-        /// 特定解压只处理一种简单伪装：**后缀里塞中文字符**（用户 2026-10-25：
-        /// “就删除中文字符就行，而不是一个中文字符，将所有的中文字符删除”）。
-        /// 只清洗**最后一段后缀**，基名里的中文一个字都不动。
-        /// </summary>
-        public static string RemoveChineseFromExtension(string fileName)
+        if (string.IsNullOrWhiteSpace(fileName))
         {
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                return fileName ?? string.Empty;
-            }
-
-            int dot = fileName.LastIndexOf('.');
-
-            if (dot < 0 || dot == fileName.Length - 1)
-            {
-                return fileName;
-            }
-
-            string extension = fileName[(dot + 1)..];
-            string cleaned = new string(extension.Where(character => !IsChineseCharacter(character)).ToArray());
-
-            return cleaned.Length == extension.Length
-                ? fileName
-                : fileName[..(dot + 1)] + cleaned;
+            return fileName ?? string.Empty;
         }
 
-        /// <summary>这个文件名（去掉后缀里的中文后）是不是已知归档名。</summary>
-        public static bool IsKnownArchiveFileName(string fileName)
+        int dot = fileName.LastIndexOf('.');
+
+        if (dot < 0 || dot == fileName.Length - 1)
         {
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                return false;
-            }
-
-            if (ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(fileName)))
-            {
-                return true;
-            }
-
-            string cleaned = RemoveChineseFromExtension(fileName);
-
-            return !string.Equals(cleaned, fileName, StringComparison.Ordinal)
-                   && ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(cleaned));
+            return fileName;
         }
 
-        private static bool IsChineseCharacter(char value) =>
-            (value >= '\u4E00' && value <= '\u9FFF')
-            || (value >= '\u3400' && value <= '\u4DBF')
-            || (value >= '\uF900' && value <= '\uFAFF');
+        string extension = fileName[(dot + 1)..];
+        string cleaned = new string(extension.Where(character => !IsChineseCharacter(character)).ToArray());
 
-        /// <summary>
-        /// 特定解压的输出根：**跟着压缩包自己的父目录走**，不跟着导入时选中的合集根走。
-        ///
-        /// <para>用户 2026-10-29 口径：导入一个含多个子文件夹的合集时，
-        /// <c>333\子文件夹\11.7z</c> 必须落到 <c>333\子文件夹\内容物</c>，
-        /// 不能再堆到 <c>333\内容物</c>（那会把不同子文件夹的同名包撞在一起）。</para>
-        ///
-        /// <para>单文件选择同样落在文件自己那一层；只有路径异常、取不到父目录时，
-        /// 才回落到选中的根。自定义输出根由调用方在更外层覆盖，不经过这里。</para>
-        /// </summary>
-        public static string ResolveOutputRoot(
-            string sourceArchive,
-            SourceSelectionKind selectionKind,
-            string? selectionRoot)
+        return cleaned.Length == extension.Length
+            ? fileName
+            : fileName[..(dot + 1)] + cleaned;
+    }
+
+    /// <summary>这个文件名（去掉后缀里的中文后）是不是已知归档名。</summary>
+    public static bool IsKnownArchiveFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
         {
-            string parent = Path.GetDirectoryName(sourceArchive) ?? string.Empty;
+            return false;
+        }
 
-            if (!string.IsNullOrWhiteSpace(parent))
+        if (ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(fileName)))
+        {
+            return true;
+        }
+
+        string cleaned = RemoveChineseFromExtension(fileName);
+
+        return !string.Equals(cleaned, fileName, StringComparison.Ordinal)
+               && ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(cleaned));
+    }
+
+    private static bool IsChineseCharacter(char value) =>
+        (value >= '\u4E00' && value <= '\u9FFF')
+        || (value >= '\u3400' && value <= '\u4DBF')
+        || (value >= '\uF900' && value <= '\uFAFF');
+
+    /// <summary>
+    /// 特定解压的输出根：**跟着压缩包自己的父目录走**，不跟着导入时选中的合集根走。
+    ///
+    /// <para>用户 2026-10-29 口径：导入一个含多个子文件夹的合集时，
+    /// <c>333\子文件夹\11.7z</c> 必须落到 <c>333\子文件夹\内容物</c>，
+    /// 不能再堆到 <c>333\内容物</c>（那会把不同子文件夹的同名包撞在一起）。</para>
+    ///
+    /// <para>单文件选择同样落在文件自己那一层；只有路径异常、取不到父目录时，
+    /// 才回落到选中的根。自定义输出根由调用方在更外层覆盖，不经过这里。</para>
+    /// </summary>
+    public static string ResolveOutputRoot(
+        string sourceArchive,
+        SourceSelectionKind selectionKind,
+        string? selectionRoot)
+    {
+        string parent = Path.GetDirectoryName(sourceArchive) ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(parent))
+        {
+            return parent;
+        }
+
+        if (selectionKind == SourceSelectionKind.Folder
+            && !string.IsNullOrWhiteSpace(selectionRoot)
+            && Directory.Exists(selectionRoot))
+        {
+            return selectionRoot;
+        }
+
+        return string.Empty;
+    }
+
+    public static string Resolve(string lastArchivePath, string contentRoot)
+    {
+        string archiveName = RemoveChineseFromExtension(Path.GetFileName(lastArchivePath));
+
+        if (!string.IsNullOrWhiteSpace(contentRoot) && Directory.Exists(contentRoot))
+        {
+            List<string> entries = Directory
+                .GetFileSystemEntries(contentRoot)
+                .Where(path => !string.Equals(
+                    Path.GetFileName(path),
+                    ".ArchiveFixer.work",
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            List<string> directories = entries.Where(Directory.Exists).ToList();
+            List<string> files = entries.Where(File.Exists).ToList();
+
+            if (directories.Count == 1 && files.Count == 0)
             {
-                return parent;
+                return Path.GetFileName(directories[0]);
             }
 
-            if (selectionKind == SourceSelectionKind.Folder
-                && !string.IsNullOrWhiteSpace(selectionRoot)
-                && Directory.Exists(selectionRoot))
-            {
-                return selectionRoot;
-            }
+            /*
+             * 递归核心的 OutputPath 有时就是 RAR 自带的唯一内容文件夹本身
+             * （不是它的父目录）。这时 basename 就是用户要的名字；
+             * 内部层目录（output / layer-N）不算。
+             */
+            string rootName = Path.GetFileName(
+                contentRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
+            if (directories.Count == 0
+                && files.Count > 0
+                && !string.Equals(rootName, "output", StringComparison.OrdinalIgnoreCase)
+                && !rootName.StartsWith("layer-", StringComparison.OrdinalIgnoreCase))
+            {
+                return rootName;
+            }
+        }
+
+        return StripVolumeSuffix(archiveName);
+    }
+
+    /// <summary>
+    /// 标准分卷的第一卷名（<c>111.7z.001</c> / <c>111.part1.rar</c>）取回 <c>111</c>；
+    /// 普通名字只去掉归档后缀。
+    /// </summary>
+    internal static string StripVolumeSuffix(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
             return string.Empty;
         }
 
-        public static string Resolve(string lastArchivePath, string contentRoot)
+        string[] originalParts = fileName.Split('.');
+        string name = fileName;
+
+        if (originalParts.Length >= 2
+            && IsVolumeMarker(originalParts[^1]))
         {
-            string archiveName = RemoveChineseFromExtension(Path.GetFileName(lastArchivePath));
-
-            if (!string.IsNullOrWhiteSpace(contentRoot) && Directory.Exists(contentRoot))
-            {
-                List<string> entries = Directory
-                    .GetFileSystemEntries(contentRoot)
-                    .Where(path => !string.Equals(
-                        Path.GetFileName(path),
-                        ".ArchiveFixer.work",
-                        StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                List<string> directories = entries.Where(Directory.Exists).ToList();
-                List<string> files = entries.Where(File.Exists).ToList();
-
-                if (directories.Count == 1 && files.Count == 0)
-                {
-                    return Path.GetFileName(directories[0]);
-                }
-
-                /*
-                 * 递归核心的 OutputPath 有时就是 RAR 自带的唯一内容文件夹本身
-                 * （不是它的父目录）。这时 basename 就是用户要的名字；
-                 * 内部层目录（output / layer-N）不算。
-                 */
-                string rootName = Path.GetFileName(
-                    contentRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-
-                if (directories.Count == 0
-                    && files.Count > 0
-                    && !string.Equals(rootName, "output", StringComparison.OrdinalIgnoreCase)
-                    && !rootName.StartsWith("layer-", StringComparison.OrdinalIgnoreCase))
-                {
-                    return rootName;
-                }
-            }
-
-            return StripVolumeSuffix(archiveName);
+            name = string.Join('.', originalParts, 0, originalParts.Length - 1);
         }
 
-        /// <summary>
-        /// 标准分卷的第一卷名（<c>111.7z.001</c> / <c>111.part1.rar</c>）取回 <c>111</c>；
-        /// 普通名字只去掉归档后缀。
-        /// </summary>
-        internal static string StripVolumeSuffix(string fileName)
+        if (ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(name)))
         {
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                return string.Empty;
-            }
-
-            string[] originalParts = fileName.Split('.');
-            string name = fileName;
-
-            if (originalParts.Length >= 2
-                && IsVolumeMarker(originalParts[^1]))
-            {
-                name = string.Join('.', originalParts, 0, originalParts.Length - 1);
-            }
-
-            if (ExtensionHelper.IsKnownArchiveExtension(Path.GetExtension(name)))
-            {
-                name = name[..^Path.GetExtension(name).Length];
-            }
-
-            string[] parts = name.Split('.');
-
-            if (parts.Length >= 2 && IsVolumeMarker(parts[^1]))
-            {
-                return string.Join('.', parts, 0, parts.Length - 1);
-            }
-
-            return name;
+            name = name[..^Path.GetExtension(name).Length];
         }
 
-        private static bool IsVolumeMarker(string segment)
+        string[] parts = name.Split('.');
+
+        if (parts.Length >= 2 && IsVolumeMarker(parts[^1]))
         {
-            if (segment.Length == 3 && segment.All(char.IsAsciiDigit))
-            {
-                return true;
-            }
-
-            if (segment.StartsWith("part", StringComparison.OrdinalIgnoreCase)
-                && segment.Length > 4
-                && segment[4..].All(char.IsAsciiDigit))
-            {
-                return true;
-            }
-
-            return segment.Length == 3
-                   && (segment[0] is 'z' or 'Z' or 'r' or 'R')
-                   && segment[1..].All(char.IsAsciiDigit);
+            return string.Join('.', parts, 0, parts.Length - 1);
         }
 
-        private static string StripArchiveExtension(string name)
+        return name;
+    }
+
+    private static bool IsVolumeMarker(string segment)
+    {
+        if (segment.Length == 3 && segment.All(char.IsAsciiDigit))
         {
-            int dot = name.LastIndexOf('.');
-
-            if (dot > 0 && ExtensionHelper.IsKnownArchiveExtension(name[dot..]))
-            {
-                return name[..dot];
-            }
-
-            return name;
+            return true;
         }
+
+        if (segment.StartsWith("part", StringComparison.OrdinalIgnoreCase)
+            && segment.Length > 4
+            && segment[4..].All(char.IsAsciiDigit))
+        {
+            return true;
+        }
+
+        return segment.Length == 3
+               && (segment[0] is 'z' or 'Z' or 'r' or 'R')
+               && segment[1..].All(char.IsAsciiDigit);
+    }
+
+    private static string StripArchiveExtension(string name)
+    {
+        int dot = name.LastIndexOf('.');
+
+        if (dot > 0 && ExtensionHelper.IsKnownArchiveExtension(name[dot..]))
+        {
+            return name[..dot];
+        }
+
+        return name;
     }
 }

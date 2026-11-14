@@ -2,40 +2,39 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public class WorkspaceRootNoFallbackTests
 {
-    public class WorkspaceRootNoFallbackTests
+    [Fact]
+    public void UnresolvedWorkspaceRootDoesNotFallBackToDataRootWork()
     {
-        [Fact]
-        public void UnresolvedWorkspaceRootDoesNotFallBackToDataRootWork()
+        var pathService = new PathService
         {
-            var pathService = new PathService
-            {
-                DataRootDirectory = @"C:\data-root"
-            };
+            DataRootDirectory = @"C:\data-root"
+        };
 
-            Assert.False(pathService.WorkspaceRootResolved);
-            Assert.Equal(string.Empty, pathService.WorkDirectory);
-            Assert.Equal(
-                string.Empty,
-                pathService.BuildTaskWorkDirectory(new ArchiveTask(@"C:\in\a.7z")));
-        }
+        Assert.False(pathService.WorkspaceRootResolved);
+        Assert.Equal(string.Empty, pathService.WorkDirectory);
+        Assert.Equal(
+            string.Empty,
+            pathService.BuildTaskWorkDirectory(new ArchiveTask(@"C:\in\a.7z")));
+    }
 
-        [Fact]
-        public void ResolvedWorkspaceRootIsUsedAsIs()
+    [Fact]
+    public void ResolvedWorkspaceRootIsUsedAsIs()
+    {
+        var pathService = new PathService
         {
-            var pathService = new PathService
-            {
-                DataRootDirectory = @"C:\data-root",
-                WorkDirectory = @"D:\out\.ArchiveFixer.work"
-            };
+            DataRootDirectory = @"C:\data-root",
+            WorkDirectory = @"D:\out\.ArchiveFixer.work"
+        };
 
-            Assert.True(pathService.WorkspaceRootResolved);
-            Assert.Equal(@"D:\out\.ArchiveFixer.work", pathService.WorkDirectory);
-            Assert.StartsWith(
-                @"D:\out\.ArchiveFixer.work\",
-                pathService.BuildTaskWorkDirectory(new ArchiveTask(@"C:\in\a.7z")),
-                System.StringComparison.Ordinal);
-        }
+        Assert.True(pathService.WorkspaceRootResolved);
+        Assert.Equal(@"D:\out\.ArchiveFixer.work", pathService.WorkDirectory);
+        Assert.StartsWith(
+            @"D:\out\.ArchiveFixer.work\",
+            pathService.BuildTaskWorkDirectory(new ArchiveTask(@"C:\in\a.7z")),
+            System.StringComparison.Ordinal);
     }
 }

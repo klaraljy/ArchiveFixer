@@ -14,486 +14,647 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 
-namespace ArchiveFixer
+namespace ArchiveFixer;
+
+/// <summary>
+/// 主窗口的 code-behind（用户 2026-09-24 第 11 条之后）。
+///
+/// <para>
+/// 界面已经拆成「菜单 + 六个选项卡 + 底栏」，所以这里只剩三类东西：
+/// 菜单项的处理（视图 / 帮助 / 退出）、拖放导入、以及 Ctrl+A 的抢占。
+/// 原来堆在这里的日志跟随滚动、密码框同步、右键菜单、详情窗口全部跟着控件
+/// 搬进了对应的选项卡（<c>Views\Tabs\</c>）。
+/// </para>
+/// <para>
+/// 菜单项刻意用 <c>Click</c> 而不是新造一堆命令：它们做的都是"操作界面本身"
+/// （开日志窗口、收起日志区、滚动到选中行、打开文档），没有业务语义，不该塞进 ViewModel。
+/// </para>
+/// </summary>
+public partial class MainWindow : Window
 {
+    private readonly DialogService _dialogService = new();
+    private TrayIconService? _trayIcon;
+    private bool _allowClose;
+    private MainViewModel? _watchedViewModel;
+    private readonly WindowPlacementService _windowPlacement;
+    private bool _restoredWindowPlacement;
+
+    /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
+    private const string UsageDocRelativePath = @"docs\使用说明.md";
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _windowPlacement = new WindowPlacementService(ArchiveFixer.App.DataRootDirectory);
+        RestoreWindowPlacement();
+
+        Loaded += MainWindow_Loaded;
+
+        /*
+         * Ctrl+A 的可靠入口（用户 2026-09-22 追加需求："有一个全选的选项"）。
+         *
+         * 为什么不用 Window.InputBindings 里的 KeyBinding：DataGrid **自己**注册了 Ctrl+A
+         * （它选的是"行高亮"，跟勾选框是两套东西），焦点在表格里时那条键轮不到窗口级绑定。
+         * PreviewKeyDown 是**隧道**事件，在 DataGrid 看到之前就到达窗口 —— 于是
+         * "Ctrl+A = 勾选全部"这件事在本窗口里是确定的。
+         */
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
+    }
+
     /// <summary>
-    /// 主窗口的 code-behind（用户 2026-09-24 第 11 条之后）。
+    /// 接上"跳到某一页"的请求（<see cref="MainViewModel.TabRequested"/>）。
     ///
     /// <para>
-    /// 界面已经拆成「菜单 + 六个选项卡 + 底栏」，所以这里只剩三类东西：
-    /// 菜单项的处理（视图 / 帮助 / 退出）、拖放导入、以及 Ctrl+A 的抢占。
-    /// 原来堆在这里的日志跟随滚动、密码框同步、右键菜单、详情窗口全部跟着控件
-    /// 搬进了对应的选项卡（<c>Views\Tabs\</c>）。
-    /// </para>
-    /// <para>
-    /// 菜单项刻意用 <c>Click</c> 而不是新造一堆命令：它们做的都是"操作界面本身"
-    /// （开日志窗口、收起日志区、滚动到选中行、打开文档），没有业务语义，不该塞进 ViewModel。
+    /// 为什么由窗口来切页，而不是让 ViewModel 去碰 TabControl：ViewModel 不该知道
+    /// 界面长什么样。设置与打包搬进选项卡之后，那两条旧命令的语义就只剩"切到那一页"。
     /// </para>
     /// </summary>
-    public partial class MainWindow : Window
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        private readonly DialogService _dialogService = new();
-        private TrayIconService? _trayIcon;
-        private bool _allowClose;
-        private MainViewModel? _watchedViewModel;
-        private readonly WindowPlacementService _windowPlacement;
-        private bool _restoredWindowPlacement;
+        FitInitialWindowToWorkArea();
 
-        /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
-        private const string UsageDocRelativePath = @"docs\使用说明.md";
-
-        public MainWindow()
+        if (DataContext is MainViewModel viewModel)
         {
-            InitializeComponent();
+            viewModel.TabRequested -= ViewModel_TabRequested;
+            viewModel.TabRequested += ViewModel_TabRequested;
 
-            _windowPlacement = new WindowPlacementService(ArchiveFixer.App.DataRootDirectory);
-            RestoreWindowPlacement();
+            SubscribeTaskProgress(viewModel);
+            ImportStartupPaths(viewModel);
+        }
+    }
 
-            Loaded += MainWindow_Loaded;
-
-            /*
-             * Ctrl+A 的可靠入口（用户 2026-09-22 追加需求："有一个全选的选项"）。
-             *
-             * 为什么不用 Window.InputBindings 里的 KeyBinding：DataGrid **自己**注册了 Ctrl+A
-             * （它选的是"行高亮"，跟勾选框是两套东西），焦点在表格里时那条键轮不到窗口级绑定。
-             * PreviewKeyDown 是**隧道**事件，在 DataGrid 看到之前就到达窗口 —— 于是
-             * "Ctrl+A = 勾选全部"这件事在本窗口里是确定的。
-             */
-            PreviewKeyDown += MainWindow_PreviewKeyDown;
+    /// <summary>
+    /// 首次显示按当前工作区夹一次，避免默认尺寸/最小尺寸在 1366×768、
+    /// 125%–150% 缩放下把标题栏和按钮顶到屏幕外。用户之后仍可自由缩放。
+    /// </summary>
+    private void FitInitialWindowToWorkArea()
+    {
+        if (_restoredWindowPlacement)
+        {
+            return;
         }
 
-        /// <summary>
-        /// 接上"跳到某一页"的请求（<see cref="MainViewModel.TabRequested"/>）。
-        ///
-        /// <para>
-        /// 为什么由窗口来切页，而不是让 ViewModel 去碰 TabControl：ViewModel 不该知道
-        /// 界面长什么样。设置与打包搬进选项卡之后，那两条旧命令的语义就只剩"切到那一页"。
-        /// </para>
-        /// </summary>
-        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        Rect workArea = SystemParameters.WorkArea;
+
+        if (workArea.Width < 320 || workArea.Height < 240)
         {
-            FitInitialWindowToWorkArea();
-
-            if (DataContext is MainViewModel viewModel)
-            {
-                viewModel.TabRequested -= ViewModel_TabRequested;
-                viewModel.TabRequested += ViewModel_TabRequested;
-
-                SubscribeTaskProgress(viewModel);
-                ImportStartupPaths(viewModel);
-            }
+            return;
         }
 
-        /// <summary>
-        /// 首次显示按当前工作区夹一次，避免默认尺寸/最小尺寸在 1366×768、
-        /// 125%–150% 缩放下把标题栏和按钮顶到屏幕外。用户之后仍可自由缩放。
-        /// </summary>
-        private void FitInitialWindowToWorkArea()
+        double maxWidth = Math.Max(320, workArea.Width * 0.96);
+        double maxHeight = Math.Max(240, workArea.Height * 0.96);
+
+        MinWidth = Math.Min(MinWidth, maxWidth);
+        MinHeight = Math.Min(MinHeight, maxHeight);
+        Width = Math.Min(Math.Max(Width, MinWidth), maxWidth);
+        Height = Math.Min(Math.Max(Height, MinHeight), maxHeight);
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        // 启动期不在 UI 线程上直接读盘：坏盘上这一句会把窗口拖死（2026-11-10 真机：
+        // 读 window-placement.json 卡在内核 I/O，窗口出现不了，连进程都杀不掉）。
+        // 超时就当没有位置记录，按默认位置显示。
+        WindowPlacementService.Placement? placement = ArchiveFixer.Helpers.SafeIo.Run(
+            () => _windowPlacement.Load(),
+            (WindowPlacementService.Placement?)null,
+            ArchiveFixer.Helpers.SafeIo.DefaultTimeout);
+
+        if (placement == null || !WindowPlacementService.IsVisibleOnScreen(placement))
         {
-            if (_restoredWindowPlacement)
-            {
-                return;
-            }
-
-            Rect workArea = SystemParameters.WorkArea;
-
-            if (workArea.Width < 320 || workArea.Height < 240)
-            {
-                return;
-            }
-
-            double maxWidth = Math.Max(320, workArea.Width * 0.96);
-            double maxHeight = Math.Max(240, workArea.Height * 0.96);
-
-            MinWidth = Math.Min(MinWidth, maxWidth);
-            MinHeight = Math.Min(MinHeight, maxHeight);
-            Width = Math.Min(Math.Max(Width, MinWidth), maxWidth);
-            Height = Math.Min(Math.Max(Height, MinHeight), maxHeight);
+            return;
         }
 
-        private void RestoreWindowPlacement()
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = placement.Left;
+        Top = placement.Top;
+        Width = placement.Width;
+        Height = placement.Height;
+        _restoredWindowPlacement = true;
+
+        if (placement.Maximized)
         {
-            // 启动期不在 UI 线程上直接读盘：坏盘上这一句会把窗口拖死（2026-11-10 真机：
-            // 读 window-placement.json 卡在内核 I/O，窗口出现不了，连进程都杀不掉）。
-            // 超时就当没有位置记录，按默认位置显示。
-            WindowPlacementService.Placement? placement = ArchiveFixer.Helpers.SafeIo.Run(
-                () => _windowPlacement.Load(),
-                (WindowPlacementService.Placement?)null,
-                ArchiveFixer.Helpers.SafeIo.DefaultTimeout);
+            WindowState = WindowState.Maximized;
+        }
+    }
 
-            if (placement == null || !WindowPlacementService.IsVisibleOnScreen(placement))
-            {
-                return;
-            }
-
-            WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = placement.Left;
-            Top = placement.Top;
-            Width = placement.Width;
-            Height = placement.Height;
-            _restoredWindowPlacement = true;
-
-            if (placement.Maximized)
-            {
-                WindowState = WindowState.Maximized;
-            }
+    private void SubscribeTaskProgress(MainViewModel viewModel)
+    {
+        if (ReferenceEquals(_watchedViewModel, viewModel))
+        {
+            return;
         }
 
-        private void SubscribeTaskProgress(MainViewModel viewModel)
+        UnsubscribeTaskProgress();
+
+        _watchedViewModel = viewModel;
+        viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        viewModel.Tasks.CollectionChanged += Tasks_CollectionChanged;
+
+        foreach (ArchiveTask task in viewModel.Tasks)
         {
-            if (ReferenceEquals(_watchedViewModel, viewModel))
-            {
-                return;
-            }
-
-            UnsubscribeTaskProgress();
-
-            _watchedViewModel = viewModel;
-            viewModel.PropertyChanged += ViewModel_PropertyChanged;
-            viewModel.Tasks.CollectionChanged += Tasks_CollectionChanged;
-
-            foreach (ArchiveTask task in viewModel.Tasks)
-            {
-                task.PropertyChanged += Task_PropertyChanged;
-            }
-
-            RefreshShellProgress();
+            task.PropertyChanged += Task_PropertyChanged;
         }
 
-        private void UnsubscribeTaskProgress()
+        RefreshShellProgress();
+    }
+
+    private void UnsubscribeTaskProgress()
+    {
+        if (_watchedViewModel == null)
         {
-            if (_watchedViewModel == null)
-            {
-                return;
-            }
+            return;
+        }
 
-            _watchedViewModel.PropertyChanged -= ViewModel_PropertyChanged;
-            _watchedViewModel.Tasks.CollectionChanged -= Tasks_CollectionChanged;
+        _watchedViewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        _watchedViewModel.Tasks.CollectionChanged -= Tasks_CollectionChanged;
 
-            foreach (ArchiveTask task in _watchedViewModel.Tasks)
+        foreach (ArchiveTask task in _watchedViewModel.Tasks)
+        {
+            task.PropertyChanged -= Task_PropertyChanged;
+        }
+
+        _watchedViewModel = null;
+    }
+
+    private void Tasks_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems != null)
+        {
+            foreach (ArchiveTask task in e.OldItems.OfType<ArchiveTask>())
             {
                 task.PropertyChanged -= Task_PropertyChanged;
             }
-
-            _watchedViewModel = null;
         }
 
-        private void Tasks_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        if (e.NewItems != null)
         {
-            if (e.OldItems != null)
+            foreach (ArchiveTask task in e.NewItems.OfType<ArchiveTask>())
             {
-                foreach (ArchiveTask task in e.OldItems.OfType<ArchiveTask>())
-                {
-                    task.PropertyChanged -= Task_PropertyChanged;
-                }
+                task.PropertyChanged += Task_PropertyChanged;
             }
+        }
 
-            if (e.NewItems != null)
-            {
-                foreach (ArchiveTask task in e.NewItems.OfType<ArchiveTask>())
-                {
-                    task.PropertyChanged += Task_PropertyChanged;
-                }
-            }
+        RefreshShellProgress();
+    }
 
+    private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ArchiveTask.ProgressPercent)
+            or nameof(ArchiveTask.ProgressEntry)
+            or nameof(ArchiveTask.EstimatedRemainingText)
+            or nameof(ArchiveTask.ProgressText)
+            or nameof(ArchiveTask.HasLiveProgress)
+            or nameof(ArchiveTask.EndTime)
+            or nameof(ArchiveTask.Status)
+            or nameof(ArchiveTask.HasResponsivenessHint))
+        {
             RefreshShellProgress();
         }
+    }
 
-        private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(MainViewModel.IsBusy))
         {
-            if (e.PropertyName is nameof(ArchiveTask.ProgressPercent)
-                or nameof(ArchiveTask.ProgressEntry)
-                or nameof(ArchiveTask.EstimatedRemainingText)
-                or nameof(ArchiveTask.ProgressText)
-                or nameof(ArchiveTask.HasLiveProgress)
-                or nameof(ArchiveTask.EndTime)
-                or nameof(ArchiveTask.Status)
-                or nameof(ArchiveTask.HasResponsivenessHint))
-            {
-                RefreshShellProgress();
-            }
+            RefreshShellProgress();
+        }
+    }
+
+    /// <summary>
+    /// 同步托盘悬停文字和窗口底栏进度。
+    /// ⛔ 不碰任务栏：TaskbarItemInfo 会让缩略图下面多出一条空白（用户 2026-11-10 要求整块去掉）。
+    /// </summary>
+    private void RefreshShellProgress()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(RefreshShellProgress));
+            return;
         }
 
-        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        if (_watchedViewModel == null)
         {
-            if (e.PropertyName is nameof(MainViewModel.IsBusy))
-            {
-                RefreshShellProgress();
-            }
+            return;
         }
 
-        /// <summary>
-        /// 同步托盘悬停文字和窗口底栏进度。
-        /// ⛔ 不碰任务栏：TaskbarItemInfo 会让缩略图下面多出一条空白（用户 2026-11-10 要求整块去掉）。
-        /// </summary>
-        private void RefreshShellProgress()
+        ArchiveTask? active = _watchedViewModel.Tasks
+            .Where(task => task.HasLiveProgress)
+            .OrderByDescending(task => task.ProgressPercent)
+            .FirstOrDefault();
+
+        if (active != null)
         {
-            if (!Dispatcher.CheckAccess())
-            {
-                Dispatcher.BeginInvoke(new Action(RefreshShellProgress));
-                return;
-            }
-
-            if (_watchedViewModel == null)
-            {
-                return;
-            }
-
-            ArchiveTask? active = _watchedViewModel.Tasks
-                .Where(task => task.HasLiveProgress)
-                .OrderByDescending(task => task.ProgressPercent)
-                .FirstOrDefault();
-
-            if (active != null)
-            {
-                string eta = string.IsNullOrWhiteSpace(active.EstimatedRemainingText)
-                    ? string.Empty
-                    : string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.ProgressRemainingSuffixFormat,
-                        active.EstimatedRemainingText);
-
-                _trayIcon?.SetStatusText(string.Format(
+            string eta = string.IsNullOrWhiteSpace(active.EstimatedRemainingText)
+                ? string.Empty
+                : string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.TrayProgressFormat,
-                    active.ProgressPercent,
-                    eta));
+                    StatusText.ProgressRemainingSuffixFormat,
+                    active.EstimatedRemainingText);
 
-                if (BottomProgressText != null && BottomProgressBar != null)
-                {
-                    string detail = string.IsNullOrWhiteSpace(active.ProgressEntry)
-                        ? active.ProgressText
-                        : active.ProgressEntry;
-
-                    BottomProgressText.Text = string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.BottomProgressFormat,
-                        detail,
-                        active.ProgressPercent,
-                        eta);
-
-                    BottomProgressBar.IsIndeterminate = false;
-                    BottomProgressBar.Value = Math.Clamp(active.ProgressPercent, 0, 100);
-                }
-
-                return;
-            }
+            _trayIcon?.SetStatusText(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.TrayProgressFormat,
+                active.ProgressPercent,
+                eta));
 
             if (BottomProgressText != null && BottomProgressBar != null)
             {
-                BottomProgressText.Text = StatusText.BottomBusyText;
-                BottomProgressBar.IsIndeterminate = true;
-                BottomProgressBar.Value = 0;
+                string detail = string.IsNullOrWhiteSpace(active.ProgressEntry)
+                    ? active.ProgressText
+                    : active.ProgressEntry;
+
+                BottomProgressText.Text = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.BottomProgressFormat,
+                    detail,
+                    active.ProgressPercent,
+                    eta);
+
+                BottomProgressBar.IsIndeterminate = false;
+                BottomProgressBar.Value = Math.Clamp(active.ProgressPercent, 0, 100);
             }
 
-            _trayIcon?.SetStatusText(
-                _watchedViewModel.IsBusy ? StatusText.TrayBusyText : StatusText.TrayIdleText);
+            return;
         }
 
-        /// <summary>
-        /// 把**启动参数里带的路径**导入进来（用户 2026-09-28 第 3 条："右键 → 打开方式 → 选我们的 exe，
-        /// 就直接让我们的应用启动，然后自动选中这个文件"）。
-        ///
-        /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都是把路径当**命令行参数**递进来；
-        /// 以前这里什么都不做，用户看到的是"窗口开了、列表是空的"。这里转手交给
-        /// <c>AddPathsAsync</c> —— 与①页「添加文件/文件夹」、拖进窗口那条路**同一份导入实现**
-        /// （识别、无用物提醒、空间体检全都跟着走）。</para>
-        ///
-        /// <para>只处理**存在**的路径；参数里的选项（<c>-x</c> 之类）按"不是路径"忽略掉，不报错。</para>
-        /// </summary>
-        private async void ImportStartupPaths(MainViewModel viewModel)
+        if (BottomProgressText != null && BottomProgressBar != null)
         {
+            BottomProgressText.Text = StatusText.BottomBusyText;
+            BottomProgressBar.IsIndeterminate = true;
+            BottomProgressBar.Value = 0;
+        }
+
+        _trayIcon?.SetStatusText(
+            _watchedViewModel.IsBusy ? StatusText.TrayBusyText : StatusText.TrayIdleText);
+    }
+
+    /// <summary>
+    /// 把**启动参数里带的路径**导入进来（用户 2026-09-28 第 3 条："右键 → 打开方式 → 选我们的 exe，
+    /// 就直接让我们的应用启动，然后自动选中这个文件"）。
+    ///
+    /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都是把路径当**命令行参数**递进来；
+    /// 以前这里什么都不做，用户看到的是"窗口开了、列表是空的"。这里转手交给
+    /// <c>AddPathsAsync</c> —— 与①页「添加文件/文件夹」、拖进窗口那条路**同一份导入实现**
+    /// （识别、无用物提醒、空间体检全都跟着走）。</para>
+    ///
+    /// <para>只处理**存在**的路径；参数里的选项（<c>-x</c> 之类）按"不是路径"忽略掉，不报错。</para>
+    /// </summary>
+    private async void ImportStartupPaths(MainViewModel viewModel)
+    {
+        try
+        {
+            List<string> paths = App.StartupPaths
+                .Where(p => !string.IsNullOrWhiteSpace(p) && (File.Exists(p) || Directory.Exists(p)))
+                .ToList();
+
+            if (paths.Count == 0)
+            {
+                return;
+            }
+
+            await viewModel.AddPathsAsync(paths);
+        }
+        catch (Exception ex)
+        {
+            // 启动参数导入失败不该影响主界面：写进日志，用户自己还能手动「添加文件」。
             try
             {
-                List<string> paths = App.StartupPaths
-                    .Where(p => !string.IsNullOrWhiteSpace(p) && (File.Exists(p) || Directory.Exists(p)))
-                    .ToList();
-
-                if (paths.Count == 0)
-                {
-                    return;
-                }
-
-                await viewModel.AddPathsAsync(paths);
+                viewModel.AppendLog("WARN", $"启动参数里的路径没能导入：{ex.Message}");
             }
-            catch (Exception ex)
+            catch
             {
-                // 启动参数导入失败不该影响主界面：写进日志，用户自己还能手动「添加文件」。
-                try
-                {
-                    viewModel.AppendLog("WARN", $"启动参数里的路径没能导入：{ex.Message}");
-                }
-                catch
-                {
-                    // 连日志都写不进去就只能算了 —— 主界面已经能用。
-                }
+                // 连日志都写不进去就只能算了 —— 主界面已经能用。
             }
         }
+    }
 
-        private void ViewModel_TabRequested(int index)
+    private void ViewModel_TabRequested(int index)
+    {
+        if (index >= 0 && index < MainTabControl.Items.Count)
         {
-            if (index >= 0 && index < MainTabControl.Items.Count)
-            {
-                MainTabControl.SelectedIndex = index;
-            }
+            MainTabControl.SelectedIndex = index;
+        }
+    }
+
+    /// <summary>
+    /// 切到③「清理与删除」页时，让那一页上的档位控件**按最新设置重新求值**。
+    ///
+    /// <para>第 34 条：一键处理的弹窗也会读/改"源包操作 / 删除操作"这两档
+    /// （弹窗的 GroupName 现在已经与①③页隔开，见 <c>OneClickOptionsWindow.xaml</c>），
+    /// 切进③页时按设置重新求值一次，黑点永远回到真值上。</para>
+    ///
+    /// <para>只做重新求值，不写任何设置，所以不可能与别的入口形成来回覆盖。</para>
+    /// </summary>
+    private void MainTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, MainTabControl))
+        {
+            return;
         }
 
-        /// <summary>
-        /// 切到③「清理与删除」页时，让那一页上的档位控件**按最新设置重新求值**。
-        ///
-        /// <para>第 34 条：一键处理的弹窗也会读/改"源包操作 / 删除操作"这两档
-        /// （弹窗的 GroupName 现在已经与①③页隔开，见 <c>OneClickOptionsWindow.xaml</c>），
-        /// 切进③页时按设置重新求值一次，黑点永远回到真值上。</para>
-        ///
-        /// <para>只做重新求值，不写任何设置，所以不可能与别的入口形成来回覆盖。</para>
-        /// </summary>
-        private void MainTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        if (DataContext is not MainViewModel viewModel)
         {
-            if (!ReferenceEquals(e.OriginalSource, MainTabControl))
-            {
-                return;
-            }
-
-            if (DataContext is not MainViewModel viewModel)
-            {
-                return;
-            }
-
-            if (ReferenceEquals(MainTabControl.SelectedItem, CleanupTabItem))
-            {
-                viewModel.SettingsEditor.NotifyProcessingOptionsChanged();
-            }
+            return;
         }
 
-        protected override void OnSourceInitialized(EventArgs e)
+        if (ReferenceEquals(MainTabControl.SelectedItem, CleanupTabItem))
         {
-            base.OnSourceInitialized(e);
+            viewModel.SettingsEditor.NotifyProcessingOptionsChanged();
+        }
+    }
 
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+
+        /*
+         * 只有**生产宿主**才建真实托盘图标：测试用普通 Application 起窗口，
+         * 建了托盘就会在用户桌面上弹「程序仍在运行」气泡（实测：每次跑测试集都弹一次，
+         * 用户 2026-11-10：「老是出现这个弹窗」）。判据与 ShouldShutdownAfterClose 同一套：
+         * Application.Current is App 才是生产宿主。
+         */
+        if (Application.Current is App && WindowClosePolicy.IsProductionHost())
+        {
+            _trayIcon = new TrayIconService(this);
+            _trayIcon.ExitRequested += ExitApplication;
+        }
+    }
+
+    /// <summary>第二次启动 / 托盘左键 / 托盘菜单「打开」都走这里。</summary>
+    public void RestoreFromTray()
+    {
+        if (_trayIcon != null)
+        {
+            _trayIcon.Restore();
+            return;
+        }
+
+        ShowInTaskbar = true;
+        Show();
+
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_allowClose)
+        {
             /*
-             * 只有**生产宿主**才建真实托盘图标：测试用普通 Application 起窗口，
-             * 建了托盘就会在用户桌面上弹「程序仍在运行」气泡（实测：每次跑测试集都弹一次，
-             * 用户 2026-11-10：「老是出现这个弹窗」）。判据与 ShouldShutdownAfterClose 同一套：
-             * Application.Current is App 才是生产宿主。
+             * WinRAR 式关闭（用户 2026-11-07 确认）：
+             * - 没有任务在跑：X = 正常退出；
+             * - 任务列表非空：X = 收进托盘（忙闲无关），真正退出走托盘/菜单「退出」。
+             * 这里只负责决定“不让这次关闭”，不替用户取消任务。
              */
-            if (Application.Current is App && WindowClosePolicy.IsProductionHost())
+            if (DataContext is MainViewModel viewModel
+                && WindowClosePolicy.ShouldHideToTray(viewModel.Tasks.Count))
             {
-                _trayIcon = new TrayIconService(this);
-                _trayIcon.ExitRequested += ExitApplication;
-            }
-        }
-
-        /// <summary>第二次启动 / 托盘左键 / 托盘菜单「打开」都走这里。</summary>
-        public void RestoreFromTray()
-        {
-            if (_trayIcon != null)
-            {
-                _trayIcon.Restore();
+                e.Cancel = true;
+                _trayIcon?.HideToTray(showHint: viewModel.IsBusy);
                 return;
-            }
-
-            ShowInTaskbar = true;
-            Show();
-
-            if (WindowState == WindowState.Minimized)
-            {
-                WindowState = WindowState.Normal;
-            }
-
-            Activate();
-        }
-
-        protected override void OnClosing(CancelEventArgs e)
-        {
-            if (!_allowClose)
-            {
-                /*
-                 * WinRAR 式关闭（用户 2026-11-07 确认）：
-                 * - 没有任务在跑：X = 正常退出；
-                 * - 任务列表非空：X = 收进托盘（忙闲无关），真正退出走托盘/菜单「退出」。
-                 * 这里只负责决定“不让这次关闭”，不替用户取消任务。
-                 */
-                if (DataContext is MainViewModel viewModel
-                    && WindowClosePolicy.ShouldHideToTray(viewModel.Tasks.Count))
-                {
-                    e.Cancel = true;
-                    _trayIcon?.HideToTray(showHint: viewModel.IsBusy);
-                    return;
-                }
-
-                _allowClose = true;
-            }
-
-            _trayIcon?.Dispose();
-            _trayIcon = null;
-            base.OnClosing(e);
-        }
-
-        private void ExitApplication()
-        {
-            if (DataContext is MainViewModel viewModel && viewModel.IsBusy)
-            {
-                bool confirmed = _dialogService.ShowConfirm(
-                    "当前还在处理任务。现在退出会停止程序，但不会自动保留正在处理的工作区。确定退出吗？");
-
-                if (!confirmed)
-                {
-                    return;
-                }
             }
 
             _allowClose = true;
-            _trayIcon?.Dispose();
-            _trayIcon = null;
-            System.Windows.Application.Current.Shutdown();
         }
 
-        protected override void OnClosed(EventArgs e)
+        _trayIcon?.Dispose();
+        _trayIcon = null;
+        base.OnClosing(e);
+    }
+
+    private void ExitApplication()
+    {
+        if (DataContext is MainViewModel viewModel && viewModel.IsBusy)
         {
-            _windowPlacement.Save(this);
+            bool confirmed = _dialogService.ShowConfirm(
+                "当前还在处理任务。现在退出会停止程序，但不会自动保留正在处理的工作区。确定退出吗？");
 
-            UnsubscribeTaskProgress();
-
-            _trayIcon?.SetStatusText(StatusText.TrayIdleText);
-
-            if (DataContext is MainViewModel viewModel)
+            if (!confirmed)
             {
-                viewModel.TabRequested -= ViewModel_TabRequested;
-
-                /*
-                 * 关窗前的最后一次落盘（用户 2026-09-26 要的"改了就自动存、重启还在"）：
-                 * 自动保存是每 800 ms 一跳，用户完全可能"改完立刻关窗" —— 那一下没跳到的改动
-                 * 必须在关窗这一刻补上，否则他会看到"我刚改的又没了"（那正是他报的那类"没保存"）。
-                 */
-                viewModel.FlushSettingsAutoSave();
-            }
-
-            base.OnClosed(e);
-
-            // ShutdownMode=OnExplicitShutdown：空闲时用户点 X，必须由这里真正结束进程。
-            // 只在“当前 Application 的主窗口就是这一扇”时关闭，避免 UI 探针关闭测试窗口时误杀进程。
-            if (System.Windows.Application.Current is ArchiveFixer.App application
-                && WindowClosePolicy.ShouldShutdownAfterClose(
-                    _allowClose,
-                    isProductionApplication: true)
-                && application.Dispatcher.HasShutdownStarted == false)
-            {
-                application.Shutdown();
+                return;
             }
         }
 
-        /// <summary>
-        /// Ctrl+A / Ctrl+D / Ctrl+I：全选 / 全不选 / 反选（都作用在**勾选框**上）。
-        ///
-        /// <para>
-        /// Ctrl+D 与 Ctrl+I 走 <c>Window.InputBindings</c> 就够了（DataGrid 没用这两个键），
-        /// 只有 Ctrl+A 需要在这里抢下来。任务表格现在住在①任务页里，
-        /// 所以"焦点在不在表格里"这件事由那一页回答（<see cref="TaskTab.IsKeyboardFocusWithinTaskGrid"/>）——
-        /// 它顺带保证了密码框里的 Ctrl+A（全选文本）不会被吃掉。
-        /// </para>
-        /// </summary>
-        private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        _allowClose = true;
+        _trayIcon?.Dispose();
+        _trayIcon = null;
+        System.Windows.Application.Current.Shutdown();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _windowPlacement.Save(this);
+
+        UnsubscribeTaskProgress();
+
+        _trayIcon?.SetStatusText(StatusText.TrayIdleText);
+
+        if (DataContext is MainViewModel viewModel)
         {
-            if (e.Key != Key.A || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+            viewModel.TabRequested -= ViewModel_TabRequested;
+
+            /*
+             * 关窗前的最后一次落盘（用户 2026-09-26 要的"改了就自动存、重启还在"）：
+             * 自动保存是每 800 ms 一跳，用户完全可能"改完立刻关窗" —— 那一下没跳到的改动
+             * 必须在关窗这一刻补上，否则他会看到"我刚改的又没了"（那正是他报的那类"没保存"）。
+             */
+            viewModel.FlushSettingsAutoSave();
+        }
+
+        base.OnClosed(e);
+
+        // ShutdownMode=OnExplicitShutdown：空闲时用户点 X，必须由这里真正结束进程。
+        // 只在“当前 Application 的主窗口就是这一扇”时关闭，避免 UI 探针关闭测试窗口时误杀进程。
+        if (System.Windows.Application.Current is ArchiveFixer.App application
+            && WindowClosePolicy.ShouldShutdownAfterClose(
+                _allowClose,
+                isProductionApplication: true)
+            && application.Dispatcher.HasShutdownStarted == false)
+        {
+            application.Shutdown();
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+A / Ctrl+D / Ctrl+I：全选 / 全不选 / 反选（都作用在**勾选框**上）。
+    ///
+    /// <para>
+    /// Ctrl+D 与 Ctrl+I 走 <c>Window.InputBindings</c> 就够了（DataGrid 没用这两个键），
+    /// 只有 Ctrl+A 需要在这里抢下来。任务表格现在住在①任务页里，
+    /// 所以"焦点在不在表格里"这件事由那一页回答（<see cref="TaskTab.IsKeyboardFocusWithinTaskGrid"/>）——
+    /// 它顺带保证了密码框里的 Ctrl+A（全选文本）不会被吃掉。
+    /// </para>
+    /// </summary>
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.A || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        if (Keyboard.FocusedElement is not DependencyObject focused ||
+            !TaskTabHost.IsKeyboardFocusWithinTaskGrid(focused))
+        {
+            return;
+        }
+
+        if (!viewModel.SelectAllTasksCommand.CanExecute(null))
+        {
+            return;
+        }
+
+        viewModel.SelectAllTasksCommand.Execute(null);
+        e.Handled = true;
+    }
+
+    private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ExitApplication();
+    }
+
+    private void LogWindowMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var window = new LogWindow
+            {
+                DataContext = DataContext,
+                Owner = this
+            };
+
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            _dialogService.ShowException(ex, "打开日志窗口失败");
+        }
+    }
+
+    private void ToggleLogAreaMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        // 日志区在①任务页里：菜单与页内那个「收起 / 展开」按钮走的是同一份状态。
+        TaskTabHost.ToggleLogArea();
+    }
+
+    private void JumpToSelectedTaskMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        TaskTabHost.ScrollToSelectedTask();
+    }
+
+    private void UsageMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        string? doc = LocateUsageDoc();
+
+        if (doc == null || !SafePathHelper.OpenFileInExplorer(doc))
+        {
+            /*
+             * 用户 2026-09-27 真机："我选中最上端的帮助点击提示显示路径错误"。
+             *
+             * 现场：绿色目录 `E:\ArchiveFixer\` 里没有 `docs\`，而这个方法从程序目录往上爬 6 层
+             * 找 `docs\使用说明.md`（那是给开发态准备的），于是必然找不到 —— 而他看到的
+             * 只是一句"找不到…路径错误"，不知道该去哪儿找、也不知道还有别的入口。
+             *
+             * 现在三件事一起给：①**列出我真找过的位置**；②告诉他把 docs 放到程序旁边就能用；
+             * ③指路那颗**永远打得开**的「说明」（程序自带、不依赖文件）。
+             */
+            _dialogService.ShowInfo(
+                "找不到《使用说明》文档。" + Environment.NewLine + Environment.NewLine
+                + "我找过这些位置：" + Environment.NewLine
+                + DescribeUsageDocSearch() + Environment.NewLine
+                + "解决办法：把仓库里的 docs 目录整个放到程序目录旁边（ArchiveFixer.exe 所在的那一层），"
+                + "或者直接点选项卡那一排最右端的「说明」—— 那份是程序自带的，不依赖任何文件。");
+        }
+    }
+
+    /// <summary>把"我找过哪些位置"逐行写出来（找不到文档时给用户看，⛔ 不再只说一句路径错）。</summary>
+    private static string DescribeUsageDocSearch()
+    {
+        var builder = new System.Text.StringBuilder();
+
+        try
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+            for (int depth = 0; directory != null && depth < 6; depth++)
+            {
+                builder.AppendLine("　· " + Path.Combine(directory.FullName, UsageDocRelativePath));
+
+                directory = directory.Parent;
+            }
+        }
+        catch
+        {
+            builder.AppendLine("　· （列目录时出错，位置读不出来）");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _dialogService.ShowInfo(
+            "快捷键" + Environment.NewLine + Environment.NewLine
+            + "Ctrl+A　勾选全部任务" + Environment.NewLine
+            + "Ctrl+D　取消全部勾选" + Environment.NewLine
+            + "Ctrl+I　反选" + Environment.NewLine + Environment.NewLine
+            + "勾选是一切的入口：一键处理 / 只解压 / 删除其余物 / 清理空文件夹都只作用于勾选中的任务，"
+            + "一个都没勾就什么都不做。");
+    }
+
+    private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+        {
+            _dialogService.ShowInfo(viewModel.AboutText);
+        }
+    }
+
+    /// <summary>
+    /// 找《使用说明》：先看程序目录旁的 <c>docs\</c>（分发态），再从程序目录往上找仓库根（开发态）。
+    /// 找不到就返回 null，由调用方给一句人能看懂的提示 —— 绝不静默无反应。
+    /// </summary>
+    private static string? LocateUsageDoc()
+    {
+        try
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+            for (int depth = 0; directory != null && depth < 6; depth++)
+            {
+                string candidate = Path.Combine(directory.FullName, UsageDocRelativePath);
+
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+        catch
+        {
+            // 找文档失败不是功能故障：调用方会给出提示。
+        }
+
+        return null;
+    }
+
+    private async void Window_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 return;
             }
@@ -503,197 +664,35 @@ namespace ArchiveFixer
                 return;
             }
 
-            if (Keyboard.FocusedElement is not DependencyObject focused ||
-                !TaskTabHost.IsKeyboardFocusWithinTaskGrid(focused))
+            string[]? paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+
+            if (paths == null || paths.Length == 0)
             {
                 return;
             }
 
-            if (!viewModel.SelectAllTasksCommand.CanExecute(null))
-            {
-                return;
-            }
-
-            viewModel.SelectAllTasksCommand.Execute(null);
             e.Handled = true;
-        }
 
-        private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
+            await viewModel.AddPathsAsync(paths);
+        }
+        catch (Exception ex)
         {
-            ExitApplication();
+            // 拖拽导入失败也要走统一对话框（系统 MessageBox 与本程序的观感不搭）
+            _dialogService.ShowException(ex, "拖拽导入失败");
         }
+    }
 
-        private void LogWindowMenuItem_Click(object sender, RoutedEventArgs e)
+    private void Window_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
         {
-            try
-            {
-                var window = new LogWindow
-                {
-                    DataContext = DataContext,
-                    Owner = this
-                };
-
-                window.Show();
-            }
-            catch (Exception ex)
-            {
-                _dialogService.ShowException(ex, "打开日志窗口失败");
-            }
+            e.Effects = DragDropEffects.Copy;
         }
-
-        private void ToggleLogAreaMenuItem_Click(object sender, RoutedEventArgs e)
+        else
         {
-            // 日志区在①任务页里：菜单与页内那个「收起 / 展开」按钮走的是同一份状态。
-            TaskTabHost.ToggleLogArea();
+            e.Effects = DragDropEffects.None;
         }
 
-        private void JumpToSelectedTaskMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            TaskTabHost.ScrollToSelectedTask();
-        }
-
-        private void UsageMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            string? doc = LocateUsageDoc();
-
-            if (doc == null || !SafePathHelper.OpenFileInExplorer(doc))
-            {
-                /*
-                 * 用户 2026-09-27 真机："我选中最上端的帮助点击提示显示路径错误"。
-                 *
-                 * 现场：绿色目录 `E:\ArchiveFixer\` 里没有 `docs\`，而这个方法从程序目录往上爬 6 层
-                 * 找 `docs\使用说明.md`（那是给开发态准备的），于是必然找不到 —— 而他看到的
-                 * 只是一句"找不到…路径错误"，不知道该去哪儿找、也不知道还有别的入口。
-                 *
-                 * 现在三件事一起给：①**列出我真找过的位置**；②告诉他把 docs 放到程序旁边就能用；
-                 * ③指路那颗**永远打得开**的「说明」（程序自带、不依赖文件）。
-                 */
-                _dialogService.ShowInfo(
-                    "找不到《使用说明》文档。" + Environment.NewLine + Environment.NewLine
-                    + "我找过这些位置：" + Environment.NewLine
-                    + DescribeUsageDocSearch() + Environment.NewLine
-                    + "解决办法：把仓库里的 docs 目录整个放到程序目录旁边（ArchiveFixer.exe 所在的那一层），"
-                    + "或者直接点选项卡那一排最右端的「说明」—— 那份是程序自带的，不依赖任何文件。");
-            }
-        }
-
-        /// <summary>把"我找过哪些位置"逐行写出来（找不到文档时给用户看，⛔ 不再只说一句路径错）。</summary>
-        private static string DescribeUsageDocSearch()
-        {
-            var builder = new System.Text.StringBuilder();
-
-            try
-            {
-                var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-                for (int depth = 0; directory != null && depth < 6; depth++)
-                {
-                    builder.AppendLine("　· " + Path.Combine(directory.FullName, UsageDocRelativePath));
-
-                    directory = directory.Parent;
-                }
-            }
-            catch
-            {
-                builder.AppendLine("　· （列目录时出错，位置读不出来）");
-            }
-
-            return builder.ToString().TrimEnd();
-        }
-
-        private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            _dialogService.ShowInfo(
-                "快捷键" + Environment.NewLine + Environment.NewLine
-                + "Ctrl+A　勾选全部任务" + Environment.NewLine
-                + "Ctrl+D　取消全部勾选" + Environment.NewLine
-                + "Ctrl+I　反选" + Environment.NewLine + Environment.NewLine
-                + "勾选是一切的入口：一键处理 / 只解压 / 删除其余物 / 清理空文件夹都只作用于勾选中的任务，"
-                + "一个都没勾就什么都不做。");
-        }
-
-        private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is MainViewModel viewModel)
-            {
-                _dialogService.ShowInfo(viewModel.AboutText);
-            }
-        }
-
-        /// <summary>
-        /// 找《使用说明》：先看程序目录旁的 <c>docs\</c>（分发态），再从程序目录往上找仓库根（开发态）。
-        /// 找不到就返回 null，由调用方给一句人能看懂的提示 —— 绝不静默无反应。
-        /// </summary>
-        private static string? LocateUsageDoc()
-        {
-            try
-            {
-                var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-                for (int depth = 0; directory != null && depth < 6; depth++)
-                {
-                    string candidate = Path.Combine(directory.FullName, UsageDocRelativePath);
-
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-
-                    directory = directory.Parent;
-                }
-            }
-            catch
-            {
-                // 找文档失败不是功能故障：调用方会给出提示。
-            }
-
-            return null;
-        }
-
-        private async void Window_Drop(object sender, DragEventArgs e)
-        {
-            try
-            {
-                if (!e.Data.GetDataPresent(DataFormats.FileDrop))
-                {
-                    return;
-                }
-
-                if (DataContext is not MainViewModel viewModel)
-                {
-                    return;
-                }
-
-                string[]? paths = e.Data.GetData(DataFormats.FileDrop) as string[];
-
-                if (paths == null || paths.Length == 0)
-                {
-                    return;
-                }
-
-                e.Handled = true;
-
-                await viewModel.AddPathsAsync(paths);
-            }
-            catch (Exception ex)
-            {
-                // 拖拽导入失败也要走统一对话框（系统 MessageBox 与本程序的观感不搭）
-                _dialogService.ShowException(ex, "拖拽导入失败");
-            }
-        }
-
-        private void Window_PreviewDragOver(object sender, DragEventArgs e)
-        {
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
-            {
-                e.Effects = DragDropEffects.Copy;
-            }
-            else
-            {
-                e.Effects = DragDropEffects.None;
-            }
-
-            e.Handled = true;
-        }
+        e.Handled = true;
     }
 }

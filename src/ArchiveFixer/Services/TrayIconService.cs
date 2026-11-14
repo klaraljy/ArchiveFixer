@@ -3,185 +3,184 @@ using System.Drawing;
 using System.Windows;
 using System.Windows.Forms;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Services;
+
+/// <summary>
+/// 主窗口的托盘图标：X 关闭只隐藏到托盘，左键恢复，右键菜单才有“退出”。
+/// </summary>
+public sealed class TrayIconService : IDisposable
 {
-    /// <summary>
-    /// 主窗口的托盘图标：X 关闭只隐藏到托盘，左键恢复，右键菜单才有“退出”。
-    /// </summary>
-    public sealed class TrayIconService : IDisposable
+    private readonly Window _window;
+    private readonly NotifyIcon _notifyIcon;
+    private WindowState _lastWindowState;
+    private bool _hidden;
+    private bool _hideHintShown;
+
+    public TrayIconService(Window window)
     {
-        private readonly Window _window;
-        private readonly NotifyIcon _notifyIcon;
-        private WindowState _lastWindowState;
-        private bool _hidden;
-        private bool _hideHintShown;
+        _window = window ?? throw new ArgumentNullException(nameof(window));
+        _lastWindowState = window.WindowState == WindowState.Minimized
+            ? WindowState.Normal
+            : window.WindowState;
 
-        public TrayIconService(Window window)
+        Icon icon = TryLoadIcon();
+        var menu = new ContextMenuStrip();
+        var openItem = new ToolStripMenuItem("打开 ArchiveFixer");
+        var exitItem = new ToolStripMenuItem("退出");
+
+        openItem.Click += (_, _) => Dispatch(Restore);
+        exitItem.Click += (_, _) => Dispatch(() => ExitRequested?.Invoke());
+        menu.Items.Add(openItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(exitItem);
+
+        _notifyIcon = new NotifyIcon
         {
-            _window = window ?? throw new ArgumentNullException(nameof(window));
-            _lastWindowState = window.WindowState == WindowState.Minimized
-                ? WindowState.Normal
-                : window.WindowState;
-
-            Icon icon = TryLoadIcon();
-            var menu = new ContextMenuStrip();
-            var openItem = new ToolStripMenuItem("打开 ArchiveFixer");
-            var exitItem = new ToolStripMenuItem("退出");
-
-            openItem.Click += (_, _) => Dispatch(Restore);
-            exitItem.Click += (_, _) => Dispatch(() => ExitRequested?.Invoke());
-            menu.Items.Add(openItem);
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(exitItem);
-
-            _notifyIcon = new NotifyIcon
+            Icon = icon,
+            Text = "ArchiveFixer",
+            Visible = true,
+            ContextMenuStrip = menu
+        };
+        _notifyIcon.MouseClick += (_, args) =>
+        {
+            if (args.Button == MouseButtons.Left)
             {
-                Icon = icon,
-                Text = "ArchiveFixer",
-                Visible = true,
-                ContextMenuStrip = menu
-            };
-            _notifyIcon.MouseClick += (_, args) =>
-            {
-                if (args.Button == MouseButtons.Left)
-                {
-                    Dispatch(Restore);
-                }
-            };
+                Dispatch(Restore);
+            }
+        };
+    }
+
+    /// <summary>用户在托盘菜单点了“退出”。</summary>
+    public event Action? ExitRequested;
+
+    /// <summary>更新悬停提示（Windows 托盘没有标准进度条属性，只能显示短文字）。</summary>
+    public void SetStatusText(string? text)
+    {
+        try
+        {
+            string value = string.IsNullOrWhiteSpace(text) ? "ArchiveFixer" : text!;
+
+            // NotifyIcon.Text 有长度限制；保留最早的关键信息，避免 Windows 截断。
+            _notifyIcon.Text = value.Length > 63 ? value[..63] : value;
+        }
+        catch
+        {
+            // 托盘文字失败不影响任务。
+        }
+    }
+
+    public void HideToTray(bool showHint = true)
+    {
+        if (_hidden)
+        {
+            return;
         }
 
-        /// <summary>用户在托盘菜单点了“退出”。</summary>
-        public event Action? ExitRequested;
+        _lastWindowState = _window.WindowState == WindowState.Minimized
+            ? WindowState.Normal
+            : _window.WindowState;
+        _hidden = true;
+        _window.ShowInTaskbar = false;
+        _window.Hide();
 
-        /// <summary>更新悬停提示（Windows 托盘没有标准进度条属性，只能显示短文字）。</summary>
-        public void SetStatusText(string? text)
+        if (showHint && !_hideHintShown)
         {
+            _hideHintShown = true;
+
             try
             {
-                string value = string.IsNullOrWhiteSpace(text) ? "ArchiveFixer" : text!;
-
-                // NotifyIcon.Text 有长度限制；保留最早的关键信息，避免 Windows 截断。
-                _notifyIcon.Text = value.Length > 63 ? value[..63] : value;
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "ArchiveFixer",
+                    "程序仍在运行，任务没有停止。左键托盘图标恢复窗口，右键菜单可以退出。",
+                    ToolTipIcon.Info);
             }
             catch
             {
-                // 托盘文字失败不影响任务。
+                // 系统通知被关闭/托盘实现不支持时，不影响隐藏与恢复。
             }
         }
+    }
 
-        public void HideToTray(bool showHint = true)
+    public void Restore()
+    {
+        if (!_hidden)
         {
-            if (_hidden)
-            {
-                return;
-            }
-
-            _lastWindowState = _window.WindowState == WindowState.Minimized
-                ? WindowState.Normal
-                : _window.WindowState;
-            _hidden = true;
-            _window.ShowInTaskbar = false;
-            _window.Hide();
-
-            if (showHint && !_hideHintShown)
-            {
-                _hideHintShown = true;
-
-                try
-                {
-                    _notifyIcon.ShowBalloonTip(
-                        3000,
-                        "ArchiveFixer",
-                        "程序仍在运行，任务没有停止。左键托盘图标恢复窗口，右键菜单可以退出。",
-                        ToolTipIcon.Info);
-                }
-                catch
-                {
-                    // 系统通知被关闭/托盘实现不支持时，不影响隐藏与恢复。
-                }
-            }
-        }
-
-        public void Restore()
-        {
-            if (!_hidden)
-            {
-                if (_window.WindowState == WindowState.Minimized)
-                {
-                    _window.WindowState = WindowState.Normal;
-                }
-
-                _window.Activate();
-                return;
-            }
-
-            _hidden = false;
-            _window.ShowInTaskbar = true;
-            _window.Show();
-
-            if (_lastWindowState == WindowState.Maximized)
-            {
-                _window.WindowState = WindowState.Maximized;
-            }
-            else
+            if (_window.WindowState == WindowState.Minimized)
             {
                 _window.WindowState = WindowState.Normal;
             }
 
             _window.Activate();
+            return;
         }
 
-        public void Dispose()
+        _hidden = false;
+        _window.ShowInTaskbar = true;
+        _window.Show();
+
+        if (_lastWindowState == WindowState.Maximized)
         {
-            try
-            {
-                _notifyIcon.Visible = false;
-                _notifyIcon.Dispose();
-            }
-            catch
-            {
-            }
+            _window.WindowState = WindowState.Maximized;
+        }
+        else
+        {
+            _window.WindowState = WindowState.Normal;
         }
 
-        private void Dispatch(Action? action)
+        _window.Activate();
+    }
+
+    public void Dispose()
+    {
+        try
         {
-            if (action == null)
-            {
-                return;
-            }
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+        }
+        catch
+        {
+        }
+    }
 
-            System.Windows.Application? application = System.Windows.Application.Current;
-
-            if (application == null)
-            {
-                action();
-                return;
-            }
-
-            application.Dispatcher.BeginInvoke(action);
+    private void Dispatch(Action? action)
+    {
+        if (action == null)
+        {
+            return;
         }
 
-        private static Icon TryLoadIcon()
-        {
-            try
-            {
-                string? executable = Environment.ProcessPath;
+        System.Windows.Application? application = System.Windows.Application.Current;
 
-                if (!string.IsNullOrWhiteSpace(executable))
+        if (application == null)
+        {
+            action();
+            return;
+        }
+
+        application.Dispatcher.BeginInvoke(action);
+    }
+
+    private static Icon TryLoadIcon()
+    {
+        try
+        {
+            string? executable = Environment.ProcessPath;
+
+            if (!string.IsNullOrWhiteSpace(executable))
+            {
+                Icon? icon = Icon.ExtractAssociatedIcon(executable);
+
+                if (icon != null)
                 {
-                    Icon? icon = Icon.ExtractAssociatedIcon(executable);
-
-                    if (icon != null)
-                    {
-                        return icon;
-                    }
+                    return icon;
                 }
             }
-            catch
-            {
-            }
-
-            return SystemIcons.Application;
         }
+        catch
+        {
+        }
+
+        return SystemIcons.Application;
     }
 }

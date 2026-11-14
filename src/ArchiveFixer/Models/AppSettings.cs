@@ -4,1253 +4,1252 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ArchiveFixer.Models
+namespace ArchiveFixer.Models;
+
+/*
+ * ⛔ 2026-10-15：「其余物清理默认档」那张词表（RestRemovalModes）与设置项
+ * `AppSettings.RestRemovalDefaultMode` **整条删除**。
+ *
+ * 用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」＋
+ * 「这个删除操作有两个选项，留下和彻底删除……默认留下」
+ * ⇒ 手工清理（用户点按钮才发生的那一种）只剩一个动作 = **彻底删除**，没有"档"可存，
+ *   于是它不再是一个设置项（系统固定值）。
+ *
+ * ⚠ 老配置里存过的 RestRemovalDefaultMode 一律被忽略（反序列化丢掉这个字段），
+ * 行为统一成"彻底删除"，而**两道确认照旧**：先预览条目数与总大小 → 红色确认 →
+ * 勾"我知道不可恢复"再确认一次（见 `MainViewModel.DeriveCleanupDecision`）。
+ */
+
+/// <summary>
+/// 应用程序设置。
+/// 对应 appsettings.json。
+/// </summary>
+public class AppSettings
 {
+    /// <summary>
+    /// 旧版本/未来版本写进 appsettings.json、当前模型不认识的键。
+    /// 读入后原样保留，保存时一起写回；避免升级后静默丢掉旧设置。
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnknownSettings { get; set; }
+
+    public bool RecursiveScan { get; set; } = true;
+
+    public string ScanMode { get; set; } = "ScanAllFiles";
+
+    public string UnknownFormatAction { get; set; } = "MarkUnknown";
+
+    public string DefaultExtension { get; set; } = ".7z";
+
+    public bool ExtractToOriginalDirectory { get; set; } = true;
+
+    public string CustomOutputDirectory { get; set; } = string.Empty;
+
+    public bool KeepArchiveNameFolder { get; set; } = true;
+
+    /// <summary>
+    /// 新落点模式的唯一持久化格；null = 旧配置，读入时由两个旧布尔迁移一次。
+    /// </summary>
+    public OutputPlacementMode? PlacementMode { get; set; }
+
+    /// <summary>
+    /// 同名冲突处理档（<see cref="ConflictActions"/> 的四个值之一）。
+    ///
+    /// **默认 <c>AutoRename</c>**：同名时把新产物落成 <c>名字(1)</c>，不丢产物、不动旧文件，
+    /// 也绝不默认覆盖（AGENTS.md §6 第 3 条）。
+    ///
+    /// 它管两处：**解压落位**（输出目录已存在且非空 / 定稿搬运时同名）与**改名冲突**
+    /// （改名预览里逐条显示、确认后才落盘）。<c>Ask</c> 档在解压落位时真的会问
+    /// （<c>Services/DialogService.ShowConflictDecisionAsync</c>），不再是"写着一个询问、跑起来自动改名"。
+    /// </summary>
+    public string ConflictAction { get; set; } = ConflictActions.AutoRename;
+
+    public bool TestBeforeExtract { get; set; } = false;
+
+    public bool EnableLog { get; set; } = true;
+
+    /// <summary>
+    /// **详细日志（排查用）**：只控制**屏幕显示与导出**（用户 2026-10-26 口径）。
+    ///
+    /// <para>默认 <c>false</c> = 屏幕上的成功任务只留一行摘要；打开 = 屏幕上每步都写。
+    /// ⚠ <b>不再控制文件日志</b>：`data\logs` 里的内部诊断日志始终详细，用户选普通档时
+    /// 详细行只写内部 `.log` / `.jsonl`，不上屏幕、也不进普通导出。
+    /// ⚠ **失败 / 取消的任务不受这个开关影响** —— 它们屏幕上永远保留全部细节。</para>
+    /// </summary>
+    public bool VerboseLog { get; set; } = false;
+
+    public bool AutoScanAfterDrop { get; set; } = true;
+
+    /// <summary>
+    /// 改名前是否先弹预览。
+    ///
+    /// <para>
+    /// ⚠ <b>这个配置键对本程序的行为没有任何影响，而且这是刻意的</b>（AGENTS.md §6 不变量 3）：
+    /// 「改名必须先预览」是红线，主流程 <c>RenameCoordinator</c> 的五个入口**一律硬编码**
+    /// <c>PreviewBeforeRename = true</c>，<c>RenameOptions.Normalize</c> 也会把它强制回 true。
+    /// 设置窗口里那个复选框早已删除（留着就是"改了没用"的开关）。
+    /// </para>
+    /// <para>
+    /// 之所以还留着这个属性：<c>Models/RenameOptions.cs</c>（本次不在授权文件清单里）
+    /// 的 <c>FromSettings</c> 仍会读它，删掉属性会编译不过。
+    /// **将来能一并改的时候，正确做法是连属性带 <c>RenameOptions</c> 那一行一起删掉**，
+    /// 而不是让它变成"看起来能关掉预览"的假开关。
+    /// </para>
+    /// </summary>
+    public bool PreviewBeforeRename { get; set; } = true;
+
+    public string OverwriteMode { get; set; } = "SkipExisting";
+
+    public bool TryEmptyPasswordFirst { get; set; } = true;
+
+    public bool UseGlobalPasswordForAllTasks { get; set; } = true;
+
+    /// <summary>
+    /// 同时解压几个包（1~8，**默认 4**）。
+    ///
+    /// <para>
+    /// 默认值 2026-09-22 由 1 改成 4，依据是**并行实测**（真样本、三档、逐字节校验）：
+    /// 并发 1→4 的吞吐是 **3.08×**（保守口径 2.70×），而 4→8 只再快 **1.9%** ——
+    /// 但单包耗时从 6.63 s 涨到 10.91 s（+108%）、整机 CPU 均值从 48.7% 涨到 72.7%。
+    /// 根因是**6 物理核超订**：第 1 波 8 个并发的单包耗时 11.9–14.2 s，降到 4 个立刻回到 5.9–6.8 s。
+    /// 所以"4"是这台机器上的拐点：拿满了并行收益，又不把机器拖到超订。
+    /// 正确性三档 **36/36 逐字节一致**，界面心跳三档都没有 &gt;400 ms 的卡顿，取消语义 6/6 通过。
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ 它与空间无关：**并发越高，同时在盘上的峰值越大** —— 空间不够时仍由空间门在启动前拦下
+    /// （见 <c>Storage/SpaceGate.cs</c> 与 <c>Storage/SpaceReservationLedger.cs</c>）。
+    /// 设置界面在它旁边给一句"建议不超过物理核心数（当前检测到 N 核）"。
+    /// </para>
+    /// </summary>
+    public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
+
+    /// <summary>
+    /// 「全速」旧设置（已退役）。保留字段只为兼容旧 appsettings.json；运行时不再读取。
+    /// </summary>
+    public bool RunAtFullSpeed { get; set; }
+
+    /// <summary>
+    /// **内部/测试专用**的并发覆盖（0 = 使用 <see cref="MaxParallelExtractCount"/>）。
+    ///
+    /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发只由 <see cref="MaxParallelExtractCount"/> 决定。
+    /// 它只留着给无头夹具/排障固定串行（旧守门用例大量依赖"同时只跑 1 个"）。</para>
+    /// </summary>
+    public int ConcurrencyOverride { get; set; }
+
+    /// <summary>
+    /// 并发数的出厂默认值（**2**）。用户可手动选 1–4；HDD/移动盘建议 1，SSD 建议 2。
+    ///
+    /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
+    /// <see cref="CreateDefault"/> 与属性初始化器都引用它，改一处就够了。</para>
+    /// </summary>
+    public const int DefaultMaxParallelExtractCount = 2;
+
+    /// <summary>
+    /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理
+    /// （取值见 <see cref="RestHandlingModes"/>：<c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>）。
+    ///
+    /// <para><b>用户 2026-09-25 亲自定的三档</b>，取代了原先那套「危险模式 + 自测凭证 + 风险四条 + 红横幅」
+    /// （他明确要求"全部删掉，字体变红就是最好的操作"）：这一项就是 ③「清理与删除」页那个"删除操作"
+    /// 单选框存的值，**默认 <see cref="RestHandlingModes.Keep"/>（不动其余物）**。</para>
+    ///
+    /// <para>红线（与哪一档无关，由 <c>Storage/RestItemPurger</c> 的五道门槛执行）：
+    /// 只有"解压成功 + 输出校验通过 + 未取消 + 落在本任务输出根之内 + 路径就是定稿那一刻记下来的那条"
+    /// 才动；**失败 / 部分完成 / 取消 → 一个字节都不删**（不变量 1）。</para>
+    /// </summary>
+    public string RestHandlingAfterVerify { get; set; } = RestHandlingModes.Keep;
+
+    /// <summary>
+    /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条；2026-11-04 起默认自动，不再给界面开关）。
+    ///
+    /// <para>他遇到的形状：一个文件（例如 <c>封面.jpg</c>）里装着的正是 <c>set.7z.001</c>，
+    /// 而 <c>set.7z.002/.003</c> 就躺在**同一个目录**里。引擎按**文件名**在**同一个目录**里找同组的其他卷，
+    /// 而抠出来的那一段既不在那个目录、名字也不带卷号 → 报"分卷缺失"，两边永远凑不上。</para>
+    ///
+    /// <para>打开之后：程序在工作区里摆一套"名字成套、同在一个目录"的卷
+    /// （首卷 = 容器里那一段，改成标准首卷名；后续卷 = 同盘**硬链接**、跨盘才复制且先查空间），
+    /// 拿拼好的那一套去解压。**用户的源文件一个字节都不动**（见 <c>Extraction/SplitVolumeAssembler</c>）。</para>
+    ///
+    /// <para>⛔ 为什么默认关：它会读用户的源目录、并在盘上造名字 / 复制卷。
+    /// 判不准的场合（同族两组以上缺首卷、族认不出来且不止一组）**一律不动**，
+    /// 照旧如实报"分卷缺失"并给出改名建议。</para>
+    /// </summary>
+    public bool AssembleSplitVolumesFromContainer { get; set; } = true;
+
+    // ==================== 打包（用户 2026-09-26 第 46 条：与解压那套**完全独立**）====================
+
+    /// <summary>
+    /// 最终 <c>.rar</c> 放哪：<c>Local</c>（默认，源旁边）/ <c>Custom</c>（指定位置）。
+    ///
+    /// <para>取值见 <c>Packing/PackingOptions.cs</c> 的 <c>PackingTargetMode</c>。
+    /// ⛔ 与解压侧的落点（<see cref="ExtractToOriginalDirectory"/> / <see cref="CustomOutputDirectory"/>）
+    /// **各存各的**：用户明确要求"两者绝对不能同步"。</para>
+    /// </summary>
+    public string PackTargetMode { get; set; } = "Local";
+
+    /// <summary>打包的指定位置（<see cref="PackTargetMode"/> = Custom 时用；留空 = 回落本地）。</summary>
+    public string PackCustomOutputDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 打包的**原包操作**：<c>KeepInPlace</c>（默认，一个字节都不碰）/ <c>MoveToRest</c>
+    /// （移入其余物 = 装 7z 分卷的那个文件夹里面）。
+    /// </summary>
+    public string PackSourceHandling { get; set; } = "KeepInPlace";
+
+    /// <summary>
+    /// 打包的**其余物操作**（其余物 = 装 7z 分卷的那个文件夹）：
+    /// <c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>（**默认 Delete** —— 用户原话："这个对用户来说一点用没有"）。
+    ///
+    /// <para>⛔ 只有 <c>.rar</c> 生成且校验通过之后才动；失败 / 取消一个字节都不动。</para>
+    /// </summary>
+    public string PackRestHandling { get; set; } = "Delete";
+
+    /// <summary>
+    /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
+    /// 解压子进程（7z.exe）继承这个优先级，于是批量解压不再和桌面抢 CPU / 磁盘。
+    ///
+    /// <para>
+    /// 为什么升成设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 D 组 / §3 第 9 条）：
+    /// 这一段以前是 <c>App.xaml.cs</c> 里的**硬编码**，用户觉得慢的时候**没有任何可调项**
+    /// （WinRAR 把它放在"设置 / 常规 / 系统"里，并且写明"通常常规优先级是最优选择"）。
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ <b>它与 <see cref="MaxParallelExtractCount"/> 是两个互相独立的旋钮</b>：
+    /// 这一项决定"让不让出 CPU / 磁盘优先级"（快慢与是否拖慢别的程序），
+    /// 并发数决定"同时跑几个包"（吞吐与内存/磁盘压力）。
+    /// 改其中一个**绝不会**顺手改另一个 —— 抄的正是 WinRAR 6.02 修过的那个坑
+    /// （"以前版本忽略了 <c>-ri</c>，并在存在 <c>-ibck</c> 时设置了较低优先级"：
+    /// 两个调节项互相覆盖，用户调了 A 却被 B 决定）。
+    /// </para>
+    /// </summary>
     /*
-     * ⛔ 2026-10-15：「其余物清理默认档」那张词表（RestRemovalModes）与设置项
-     * `AppSettings.RestRemovalDefaultMode` **整条删除**。
+     * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
+     * ⇒ 属性初值、`CreateDefault`、`Normalize` 三处必须一致（老配置缺这一项时读到的就是这里的初值）。
+     */
+    public bool LowProcessPriority { get; set; } = false;
+
+    /// <summary>
+    /// 定稿完成后在资源管理器里打开输出目录（**默认关**）。
+    ///
+    /// <para>
+    /// ⚠ 这是"会动用户桌面"的行为（依据 <c>docs/WinRAR功能参考.md</c> §2 C 组 / §3 第 7 条）：
+    /// ① 只有用户**显式打开**这一项才执行，绝不做成默认；
+    /// ② 打开时**只打开文件夹** —— 复用既有 <c>SafePathHelper.OpenDirectory</c>
+    ///    （<c>explorer.exe &lt;目录&gt;</c>），**不得**把主窗口置前 / 最大化 / 抢焦点，
+    ///    也不得切换前台窗口（AGENTS.md §13 同精神：只打开文件夹，不抢焦点）。
+    /// </para>
+    ///
+    /// <para>
+    /// 只在本任务**真正定稿成功**（内容物已落 <c>destDir</c>、输出校验通过）之后触发；
+    /// 失败 / 部分完成 / 取消时一律不打开 —— 那时候打开一个空的或半截的目录只会误导用户。
+    /// </para>
+    /// </summary>
+    public bool OpenOutputFolderWhenDone { get; set; } = false;
+
+    /*
+     * ⛔ 2026-10-15：这里原来是 `RestRemovalDefaultMode`（取值 RecycleBin / Permanent，
+     * 只决定手工清理确认框里那个"改为彻底删除"勾选框的默认状态）。
      *
-     * 用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」＋
-     * 「这个删除操作有两个选项，留下和彻底删除……默认留下」
-     * ⇒ 手工清理（用户点按钮才发生的那一种）只剩一个动作 = **彻底删除**，没有"档"可存，
-     *   于是它不再是一个设置项（系统固定值）。
+     * 回收站那一档整条下线之后**只剩一个动作**（彻底删除）⇒ 没有默认档可存
+     * ⇒ 这个设置项与它那一整张词表（`RestRemovalModes`）一起删除，改成**系统固定值**。
+     * 老配置里存过的值一律被忽略（反序列化丢掉这个字段）。
      *
-     * ⚠ 老配置里存过的 RestRemovalDefaultMode 一律被忽略（反序列化丢掉这个字段），
-     * 行为统一成"彻底删除"，而**两道确认照旧**：先预览条目数与总大小 → 红色确认 →
-     * 勾"我知道不可恢复"再确认一次（见 `MainViewModel.DeriveCleanupDecision`）。
+     * ⚠ 两道确认一个字都没少：先预览条目数与总大小 → 红色确认 → 勾"我知道不可恢复"再确认
+     * （见 `MainViewModel.DeriveCleanupDecision`）。
      */
 
     /// <summary>
-    /// 应用程序设置。
-    /// 对应 appsettings.json。
+    /// 危险条目统计（**默认开**）：在**既有那一遍**解压前条目预检里顺便数出可执行 / 脚本类条目
+    /// （<c>.exe/.scr/.lnk/.bat/.cmd/.ps1/.vbs</c>），把"本包含 N 个可执行文件"写进任务详情与失败清单。
+    ///
+    /// <para>
+    /// **只提示、绝不阻断**（依据 <c>docs/WinRAR功能参考.md</c> §2 F 组 / §3 第 5 条）：
+    /// 我们的场景里安装器 / 补丁**经常就是内容物**，所以**不做** WinRAR 那种全局硬排除掩码
+    /// —— 那会把内容物一起丢掉，而且全局开关容易被遗忘、排障时变成隐形行为。
+    /// </para>
+    ///
+    /// <para>
+    /// 关掉它只是"不统计、不提示"，**落盘行为一模一样**（不变量 4 的路径清洗与落点校验与它无关，照旧执行）。
+    /// </para>
     /// </summary>
-    public class AppSettings
+    public bool ReportDangerousEntries { get; set; } = true;
+
+    /// <summary>
+    /// 解压前的提醒（**默认开**）：扫一遍源目录，把"可能的无用物"与"一个可用密码都没有"的包列出来，
+    /// 让用户先看一眼再决定（AGENTS.md §9.7；用户 2026-09-24 第 15 条要求这一项可关）。
+    ///
+    /// <para>
+    /// 关掉它 = **不扫、不弹**，直接开始解压。它与弹窗里那个"本次运行不再提示"是两件事：
+    /// 后者只记内存、进程一退就失效，这一项是落盘的长期选择。
+    /// </para>
+    /// </summary>
+    public bool RemindBeforeExtract { get; set; } = true;
+
+    public bool RememberLastOutputDirectory { get; set; } = true;
+
+    /// <summary>
+    /// 「导出日志」对话框**上次成功导出到的目录**（用户 2026-10-01 真机 `giu910`：导出落进了其余物）。
+    ///
+    /// <para>只服务一件事：下次打开保存对话框时从这儿开始（⛔ 不是"默认导出到这儿"、⛔ 不是任何自动行为）。
+    /// 落进其余物 / 工作区的目录**不记**——那两个地方程序自己会整份删掉，日志落那儿哪天就跟着没了。</para>
+    /// </summary>
+    public string LastLogExportDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 扫描时是否包含隐藏文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
+    /// </summary>
+    public bool IncludeHiddenFiles { get; set; } = false;
+
+    /// <summary>
+    /// 扫描时是否包含系统文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
+    /// </summary>
+    public bool IncludeSystemFiles { get; set; } = false;
+
+    /// <summary>
+    /// 扫描时的单文件大小上限，单位 **MB**（0 = 不限制，默认）。
+    /// 设置界面在⑥设置页的「扫描与识别」里。超过上限的文件不进任务列表。
+    /// </summary>
+    public long MaxFileSizeLimit { get; set; } = 0;
+
+    /*
+     * 这里曾经有一个 PreservePasswordLeadingTrailingSpaces（默认 true）。
+     *
+     * 它 2026-09-22 被**删除**了，原因是它是一句谎话：全项目**没有任何一处读它**，
+     * 而界面上也没有这一项 —— 用户（或将来接手的人）在 appsettings.json 里把它改成 false，
+     * 以为密码会被 Trim，实际一个字节的行为都不会变。
+     *
+     * "密码不 Trim"本来就已经是硬行为（AGENTS.md §9.1：密码可能就带首尾空格），
+     * 需要的是"想 Trim 就得先想清楚为什么"，不需要一个做不到的开关。
+     * 旧配置里若还留着这个键，System.Text.Json 会**忽略**未知成员，不影响启动。
+     */
+
+    /// <summary>
+    /// 从归档同目录的说明文件（.txt/.bat/…）里提取密码候选。
+    /// **默认关闭**：这是"猜"出来的候选，必须由用户显式开启（AGENTS.md §9.4）。
+    /// </summary>
+    public bool EnableSidecarPassword { get; set; } = false;
+
+    /// <summary>用户自定义的 7z.exe 路径；空表示用程序目录内置的。路径只由 ToolLocator 解析（AGENTS.md §3.1）。</summary>
+    public string CustomSevenZipExePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 用户自定义的 UnRAR.exe 路径；空表示按"已装的 WinRAR 目录 → 内置 tools\unrar"自动解析。
+    ///
+    /// 与 <see cref="CustomSevenZipExePath"/> 同一口径：路径**只**由 <c>ToolLocator</c> 解析，
+    /// 别的文件里不许再拼一遍（AGENTS.md §3.1）。
+    /// </summary>
+    public string CustomUnRarExePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 用户自定义的 <c>Rar.exe</c> 路径（**打包**功能做外层 rar 时用；用户 2026-09-23 决定加这一格）。
+    ///
+    /// <para>空表示按 <c>ToolLocator</c> 的解析链自动找：本机已装 WinRAR 目录里的 <c>Rar.exe</c>，
+    /// 再退 <c>WinRAR.exe</c>。</para>
+    ///
+    /// <para>⚠ <b>许可边界（AGENTS.md §3.1）</b>：<c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**，
+    /// RARLAB 的 EULA 明确禁止随其它软件包分发（§3.1 / §3.2 / §3.3 / §10），所以这一格指向的
+    /// 只能是**用户自己安装 / 下载的**那一份 —— 程序只检测与调用，绝不复制、绝不内置、绝不随包分发。
+    /// 这也正是这一格存在的理由：不提供自选路径，用户把 WinRAR 装到非默认目录时就只能去改
+    /// 系统环境变量。</para>
+    /// </summary>
+    public string CustomRarExePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// **引擎优先级**（用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）。
+    ///
+    /// <para>
+    /// 存的是引擎 id 的**有序列表**（<c>winrar</c> = RARLAB UnRAR，<c>sevenzip</c> = 7-Zip 命令行，
+    /// 词表见 <see cref="EngineIds"/>）。默认 <c>["winrar", "sevenzip"]</c>。
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ 它是**同能力时的先后**，不是"只能用第一个"：选择规则是
+    /// **先按能力筛（谁能干这活），再用优先级做 tiebreaker**，不可用的引擎直接跳过 ——
+    /// 不许因为"排第一但没装"就打不开包（AGENTS.md §3.1）。
+    /// 所以 zip/7z 包永远走 7-Zip（UnRAR 不支持这些格式），RAR 包默认先走 UnRAR。
+    /// </para>
+    ///
+    /// <para>
+    /// 旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 补成默认值，
+    /// 不需要额外的兼容分支（与 MaxPasswordAttemptsPerLayer 同一套容错口径）。
+    /// </para>
+    /// </summary>
+    public List<string>? EnginePriority { get; set; }
+
+    /// <summary>
+    /// 保留受损的文件（**默认关**）：解压时给**RAR 引擎**加"保留校验和不符的半成品"的开关
+    /// （UnRAR 的 <c>-kb</c>，来源 <c>docs/WinRAR功能参考.md</c> §2 C 组）。
+    ///
+    /// <para>
+    /// ⚠ <b>它只对 UnRAR 生效</b>，对本机 7-Zip 26.01 **不加任何参数**，依据是实测：
+    /// <c>7z x -kb</c> 直接报 <c>Command Line Error: Unknown switch: -kb</c>（退出码 7）——
+    /// <c>-kb</c> 是 RAR / UnRAR 的开关；而 7-Zip **本来就保留**校验失败的半成品
+    /// （实测截断包里被截断的文件仍留在输出目录），也就不需要这个开关。
+    /// 若照文档建议给 7-Zip 加上，用户一开这项，**所有解压都会以命令行错误失败**。
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ <b>它绝不改变任务成败的判定</b>（AGENTS.md §6 不变量 6）：
+    /// 校验和不符的包仍然是**失败 / 部分完成**，只是磁盘上会留下那个半成品，
+    /// 让用户还能试着抢救半个视频 / 半张图。状态由引擎退出码与错误分类决定，与本开关无关。
+    /// </para>
+    /// </summary>
+    public bool KeepBrokenFiles { get; set; } = false;
+
+    /// <summary>把多个包的产物归集（移动）到一个目标目录（AGENTS.md §9.5）。</summary>
+    public bool CollectResultsToDirectory { get; set; } = false;
+
+    /// <summary>
+    /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
+    ///
+    /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限统一：
+    /// 他原话是"你为什么只弄了两层，我要的一键解压时多重解压"——
+    /// 两个上限一个 3 一个 10 只会让人以为"有一处没生效"。</para>
+    ///
+    /// <para>⚠ <b>2026-09-26 又调回 5</b>（他原话："现在将默认的最大的解压层数从 10 改到 5 吧，
+    /// 用户有需要自己会改的"）：理由是他想明白了真实形状 —— 里面的压缩包**可能是用户想留的东西**
+    /// （游戏包里的 mod 压缩包不止一个，程序判不出来，我们只做提醒、不做判定）。
+    /// 默认少解几层 = 少一次"把你想要的东西拆了"的机会；真要深挖的人在②页改成 10 就行。
+    /// 一键处理每一批的轮数**跟着这一格走**（见 <c>OneClickCoordinator.RoundLimit</c>），
+    /// 所以"界面写 5、程序跑到 10"这种不一致不会发生。</para>
+    /// </summary>
+    public int MaxRecursionDepth { get; set; } = 7;
+
+    /// <summary>
+    /// 一次性迁移标记：旧的"最大层数默认 3"已经统一成 10（用户 2026-09-24 拍板）。
+    ///
+    /// <para>为什么要标记而不是每次都判 <c>== 3</c>：用户完全可能在②页把 3 改回来当自己的选择，
+    /// 那时每次都"纠正"成 10 就变成了"设置改不动"。标记落盘之后迁移只发生一次。</para>
+    /// </summary>
+    public bool RecursionDefaultUnifiedToTen { get; set; }
+
+    /// <summary>
+    /// 每一层（每个归档）最多真的试几个密码候选。
+    ///
+    /// 为什么必须有上限（不变量 8）：密码本可能有几百条，一个包逐条试过去会烧掉整晚；
+    /// 到上限时状态是「达到密码尝试上限」，**不是**"密码错误"（AGENTS.md §9.2）——
+    /// 前者是"还没试完就停了"，后者是"试过的都不对"，两者的处置方式完全不同。
+    ///
+    /// 范围 1–1000：下限 1 保证至少试一个候选（否则等于不解压），
+    /// 上限 1000 是兜底 —— 再大就不是"帮用户省事"，而是把时间烧在一个可能失败的包上。
+    /// </summary>
+    public int MaxPasswordAttemptsPerLayer { get; set; } = 10;
+
+    // ================================================================
+    // 解压前的资源预算上限（不变量 8；用户 2026-09-25 第 36 条：必须看得见、改得动）
+    // ================================================================
+
+    /*
+     * 为什么这四条从"写死在代码里"变成"设置项"（用户真机报的第 36 条）：
+     *
+     * 他拿一个 12.22 GiB 的包跑一键处理，里面是一组 5 GB 的分卷（`Code Complete-BZ.7z.001` 那类），
+     * 失败清单上写着"单个文件解压后 5242880000 字节（4.88 GiB）超过单文件上限 4294967296 字节（4 GiB）"。
+     * 那四条上限当时是**硬编码**的（`ResourceBudgetOptions` 的 4 GiB / 20 GiB），界面上一个字都没有，
+     * 于是他看到的是一句像"这个包有问题"的判决 —— 而实际上是程序自己的安全阀，而且他改不了。
+     *
+     * 处置（与"危险模式"退役同一口径：不要仪式，要看得见、改得动）：
+     * ① 默认值调到真实资源包绝不会碰到的量级（单文件 64 GiB / 总大小 512 GiB）；
+     * ② 四条全部落进设置（⑥设置 →「安全上限」），超范围就夹回并**当场告诉他**；
+     * ③ 拒绝文案必须自己说清"这是程序的上限、不是包坏了、去哪儿调"（`ResourceBudget` 的 `CapHint`）。
+     *
+     * ⛔ 不许再退回"写死"：不变量 8 要求的是**上限存在**，不是"上限不许用户改"。
+     */
+
+    /// <summary>解压后单个文件大小上限的默认值（64 GiB）。</summary>
+    public const int DefaultMaxSingleExtractedFileGiB = 64;
+
+    /// <summary>解压后总大小上限的默认值（512 GiB）。</summary>
+    public const int DefaultMaxExtractedTotalGiB = 512;
+
+    /// <summary>解压后文件数上限的默认值（20 万个）。</summary>
+    public const int DefaultMaxExtractedFileCount = 200_000;
+
+    /// <summary>展开比上限的默认值（1000 倍，超过视为压缩炸弹）。</summary>
+    public const double DefaultMaxExtractionRatio = 1000d;
+
+    /// <summary>两个大小上限允许的取值范围（GiB）：下限 1，上限 4096（4 TiB）。</summary>
+    public const int MinExtractionCapGiB = 1;
+
+    /// <summary>两个大小上限允许的取值范围（GiB）的上界。</summary>
+    public const int MaxExtractionCapGiB = 4096;
+
+    /// <summary>
+    /// 解压后**单个文件**的大小上限（GiB，默认 64）。
+    ///
+    /// <para>判的是"归档里最大的那一个条目"（`ResourceBudget` 规则 2a），超了就**不解这个包**。
+    /// 默认值取 64 GiB：任何真实视频 / 镜像都够，而"一个 1 KB 的文件声称要写 4 TiB"这种
+    /// 单条目炸弹仍然会被拦住（另有展开比与目标盘空间两道）。</para>
+    /// </summary>
+    public int MaxSingleExtractedFileGiB { get; set; } = DefaultMaxSingleExtractedFileGiB;
+
+    /// <summary>
+    /// 解压后**总大小**上限（GiB，默认 512）。永远不小于单文件那一档（见
+    /// <see cref="NormalizeTotalCapGiB"/>），否则它形同虚设。
+    /// </summary>
+    public int MaxExtractedTotalGiB { get; set; } = DefaultMaxExtractedTotalGiB;
+
+    /// <summary>解压后**文件数**上限（默认 20 万）。</summary>
+    public int MaxExtractedFileCount { get; set; } = DefaultMaxExtractedFileCount;
+
+    /// <summary>**展开比**上限（默认 1000 倍）：解压后总大小 ÷ 压缩包体积，超了按压缩炸弹拒绝。</summary>
+    public double MaxExtractionRatio { get; set; } = DefaultMaxExtractionRatio;
+
+    /// <summary>把"单文件上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
+    public static int NormalizeSingleFileCapGiB(int value)
     {
-        /// <summary>
-        /// 旧版本/未来版本写进 appsettings.json、当前模型不认识的键。
-        /// 读入后原样保留，保存时一起写回；避免升级后静默丢掉旧设置。
-        /// </summary>
-        [JsonExtensionData]
-        public Dictionary<string, JsonElement>? UnknownSettings { get; set; }
-
-        public bool RecursiveScan { get; set; } = true;
-
-        public string ScanMode { get; set; } = "ScanAllFiles";
-
-        public string UnknownFormatAction { get; set; } = "MarkUnknown";
-
-        public string DefaultExtension { get; set; } = ".7z";
-
-        public bool ExtractToOriginalDirectory { get; set; } = true;
-
-        public string CustomOutputDirectory { get; set; } = string.Empty;
-
-        public bool KeepArchiveNameFolder { get; set; } = true;
-
-        /// <summary>
-        /// 新落点模式的唯一持久化格；null = 旧配置，读入时由两个旧布尔迁移一次。
-        /// </summary>
-        public OutputPlacementMode? PlacementMode { get; set; }
-
-        /// <summary>
-        /// 同名冲突处理档（<see cref="ConflictActions"/> 的四个值之一）。
-        ///
-        /// **默认 <c>AutoRename</c>**：同名时把新产物落成 <c>名字(1)</c>，不丢产物、不动旧文件，
-        /// 也绝不默认覆盖（AGENTS.md §6 第 3 条）。
-        ///
-        /// 它管两处：**解压落位**（输出目录已存在且非空 / 定稿搬运时同名）与**改名冲突**
-        /// （改名预览里逐条显示、确认后才落盘）。<c>Ask</c> 档在解压落位时真的会问
-        /// （<c>Services/DialogService.ShowConflictDecisionAsync</c>），不再是"写着一个询问、跑起来自动改名"。
-        /// </summary>
-        public string ConflictAction { get; set; } = ConflictActions.AutoRename;
-
-        public bool TestBeforeExtract { get; set; } = false;
-
-        public bool EnableLog { get; set; } = true;
-
-        /// <summary>
-        /// **详细日志（排查用）**：只控制**屏幕显示与导出**（用户 2026-10-26 口径）。
-        ///
-        /// <para>默认 <c>false</c> = 屏幕上的成功任务只留一行摘要；打开 = 屏幕上每步都写。
-        /// ⚠ <b>不再控制文件日志</b>：`data\logs` 里的内部诊断日志始终详细，用户选普通档时
-        /// 详细行只写内部 `.log` / `.jsonl`，不上屏幕、也不进普通导出。
-        /// ⚠ **失败 / 取消的任务不受这个开关影响** —— 它们屏幕上永远保留全部细节。</para>
-        /// </summary>
-        public bool VerboseLog { get; set; } = false;
-
-        public bool AutoScanAfterDrop { get; set; } = true;
-
-        /// <summary>
-        /// 改名前是否先弹预览。
-        ///
-        /// <para>
-        /// ⚠ <b>这个配置键对本程序的行为没有任何影响，而且这是刻意的</b>（AGENTS.md §6 不变量 3）：
-        /// 「改名必须先预览」是红线，主流程 <c>RenameCoordinator</c> 的五个入口**一律硬编码**
-        /// <c>PreviewBeforeRename = true</c>，<c>RenameOptions.Normalize</c> 也会把它强制回 true。
-        /// 设置窗口里那个复选框早已删除（留着就是"改了没用"的开关）。
-        /// </para>
-        /// <para>
-        /// 之所以还留着这个属性：<c>Models/RenameOptions.cs</c>（本次不在授权文件清单里）
-        /// 的 <c>FromSettings</c> 仍会读它，删掉属性会编译不过。
-        /// **将来能一并改的时候，正确做法是连属性带 <c>RenameOptions</c> 那一行一起删掉**，
-        /// 而不是让它变成"看起来能关掉预览"的假开关。
-        /// </para>
-        /// </summary>
-        public bool PreviewBeforeRename { get; set; } = true;
-
-        public string OverwriteMode { get; set; } = "SkipExisting";
-
-        public bool TryEmptyPasswordFirst { get; set; } = true;
-
-        public bool UseGlobalPasswordForAllTasks { get; set; } = true;
-
-        /// <summary>
-        /// 同时解压几个包（1~8，**默认 4**）。
-        ///
-        /// <para>
-        /// 默认值 2026-09-22 由 1 改成 4，依据是**并行实测**（真样本、三档、逐字节校验）：
-        /// 并发 1→4 的吞吐是 **3.08×**（保守口径 2.70×），而 4→8 只再快 **1.9%** ——
-        /// 但单包耗时从 6.63 s 涨到 10.91 s（+108%）、整机 CPU 均值从 48.7% 涨到 72.7%。
-        /// 根因是**6 物理核超订**：第 1 波 8 个并发的单包耗时 11.9–14.2 s，降到 4 个立刻回到 5.9–6.8 s。
-        /// 所以"4"是这台机器上的拐点：拿满了并行收益，又不把机器拖到超订。
-        /// 正确性三档 **36/36 逐字节一致**，界面心跳三档都没有 &gt;400 ms 的卡顿，取消语义 6/6 通过。
-        /// </para>
-        ///
-        /// <para>
-        /// ⚠ 它与空间无关：**并发越高，同时在盘上的峰值越大** —— 空间不够时仍由空间门在启动前拦下
-        /// （见 <c>Storage/SpaceGate.cs</c> 与 <c>Storage/SpaceReservationLedger.cs</c>）。
-        /// 设置界面在它旁边给一句"建议不超过物理核心数（当前检测到 N 核）"。
-        /// </para>
-        /// </summary>
-        public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
-
-        /// <summary>
-        /// 「全速」旧设置（已退役）。保留字段只为兼容旧 appsettings.json；运行时不再读取。
-        /// </summary>
-        public bool RunAtFullSpeed { get; set; }
-
-        /// <summary>
-        /// **内部/测试专用**的并发覆盖（0 = 使用 <see cref="MaxParallelExtractCount"/>）。
-        ///
-        /// <para>⛔ 不暴露界面、不写进设置页：用户侧的并发只由 <see cref="MaxParallelExtractCount"/> 决定。
-        /// 它只留着给无头夹具/排障固定串行（旧守门用例大量依赖"同时只跑 1 个"）。</para>
-        /// </summary>
-        public int ConcurrencyOverride { get; set; }
-
-        /// <summary>
-        /// 并发数的出厂默认值（**2**）。用户可手动选 1–4；HDD/移动盘建议 1，SSD 建议 2。
-        ///
-        /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
-        /// <see cref="CreateDefault"/> 与属性初始化器都引用它，改一处就够了。</para>
-        /// </summary>
-        public const int DefaultMaxParallelExtractCount = 2;
-
-        /// <summary>
-        /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理
-        /// （取值见 <see cref="RestHandlingModes"/>：<c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>）。
-        ///
-        /// <para><b>用户 2026-09-25 亲自定的三档</b>，取代了原先那套「危险模式 + 自测凭证 + 风险四条 + 红横幅」
-        /// （他明确要求"全部删掉，字体变红就是最好的操作"）：这一项就是 ③「清理与删除」页那个"删除操作"
-        /// 单选框存的值，**默认 <see cref="RestHandlingModes.Keep"/>（不动其余物）**。</para>
-        ///
-        /// <para>红线（与哪一档无关，由 <c>Storage/RestItemPurger</c> 的五道门槛执行）：
-        /// 只有"解压成功 + 输出校验通过 + 未取消 + 落在本任务输出根之内 + 路径就是定稿那一刻记下来的那条"
-        /// 才动；**失败 / 部分完成 / 取消 → 一个字节都不删**（不变量 1）。</para>
-        /// </summary>
-        public string RestHandlingAfterVerify { get; set; } = RestHandlingModes.Keep;
-
-        /// <summary>
-        /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条；2026-11-04 起默认自动，不再给界面开关）。
-        ///
-        /// <para>他遇到的形状：一个文件（例如 <c>封面.jpg</c>）里装着的正是 <c>set.7z.001</c>，
-        /// 而 <c>set.7z.002/.003</c> 就躺在**同一个目录**里。引擎按**文件名**在**同一个目录**里找同组的其他卷，
-        /// 而抠出来的那一段既不在那个目录、名字也不带卷号 → 报"分卷缺失"，两边永远凑不上。</para>
-        ///
-        /// <para>打开之后：程序在工作区里摆一套"名字成套、同在一个目录"的卷
-        /// （首卷 = 容器里那一段，改成标准首卷名；后续卷 = 同盘**硬链接**、跨盘才复制且先查空间），
-        /// 拿拼好的那一套去解压。**用户的源文件一个字节都不动**（见 <c>Extraction/SplitVolumeAssembler</c>）。</para>
-        ///
-        /// <para>⛔ 为什么默认关：它会读用户的源目录、并在盘上造名字 / 复制卷。
-        /// 判不准的场合（同族两组以上缺首卷、族认不出来且不止一组）**一律不动**，
-        /// 照旧如实报"分卷缺失"并给出改名建议。</para>
-        /// </summary>
-        public bool AssembleSplitVolumesFromContainer { get; set; } = true;
-
-        // ==================== 打包（用户 2026-09-26 第 46 条：与解压那套**完全独立**）====================
-
-        /// <summary>
-        /// 最终 <c>.rar</c> 放哪：<c>Local</c>（默认，源旁边）/ <c>Custom</c>（指定位置）。
-        ///
-        /// <para>取值见 <c>Packing/PackingOptions.cs</c> 的 <c>PackingTargetMode</c>。
-        /// ⛔ 与解压侧的落点（<see cref="ExtractToOriginalDirectory"/> / <see cref="CustomOutputDirectory"/>）
-        /// **各存各的**：用户明确要求"两者绝对不能同步"。</para>
-        /// </summary>
-        public string PackTargetMode { get; set; } = "Local";
-
-        /// <summary>打包的指定位置（<see cref="PackTargetMode"/> = Custom 时用；留空 = 回落本地）。</summary>
-        public string PackCustomOutputDirectory { get; set; } = string.Empty;
-
-        /// <summary>
-        /// 打包的**原包操作**：<c>KeepInPlace</c>（默认，一个字节都不碰）/ <c>MoveToRest</c>
-        /// （移入其余物 = 装 7z 分卷的那个文件夹里面）。
-        /// </summary>
-        public string PackSourceHandling { get; set; } = "KeepInPlace";
-
-        /// <summary>
-        /// 打包的**其余物操作**（其余物 = 装 7z 分卷的那个文件夹）：
-        /// <c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>（**默认 Delete** —— 用户原话："这个对用户来说一点用没有"）。
-        ///
-        /// <para>⛔ 只有 <c>.rar</c> 生成且校验通过之后才动；失败 / 取消一个字节都不动。</para>
-        /// </summary>
-        public string PackRestHandling { get; set; } = "Delete";
-
-        /// <summary>
-        /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
-        /// 解压子进程（7z.exe）继承这个优先级，于是批量解压不再和桌面抢 CPU / 磁盘。
-        ///
-        /// <para>
-        /// 为什么升成设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 D 组 / §3 第 9 条）：
-        /// 这一段以前是 <c>App.xaml.cs</c> 里的**硬编码**，用户觉得慢的时候**没有任何可调项**
-        /// （WinRAR 把它放在"设置 / 常规 / 系统"里，并且写明"通常常规优先级是最优选择"）。
-        /// </para>
-        ///
-        /// <para>
-        /// ⚠ <b>它与 <see cref="MaxParallelExtractCount"/> 是两个互相独立的旋钮</b>：
-        /// 这一项决定"让不让出 CPU / 磁盘优先级"（快慢与是否拖慢别的程序），
-        /// 并发数决定"同时跑几个包"（吞吐与内存/磁盘压力）。
-        /// 改其中一个**绝不会**顺手改另一个 —— 抄的正是 WinRAR 6.02 修过的那个坑
-        /// （"以前版本忽略了 <c>-ri</c>，并在存在 <c>-ibck</c> 时设置了较低优先级"：
-        /// 两个调节项互相覆盖，用户调了 A 却被 B 决定）。
-        /// </para>
-        /// </summary>
-        /*
-         * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
-         * ⇒ 属性初值、`CreateDefault`、`Normalize` 三处必须一致（老配置缺这一项时读到的就是这里的初值）。
-         */
-        public bool LowProcessPriority { get; set; } = false;
-
-        /// <summary>
-        /// 定稿完成后在资源管理器里打开输出目录（**默认关**）。
-        ///
-        /// <para>
-        /// ⚠ 这是"会动用户桌面"的行为（依据 <c>docs/WinRAR功能参考.md</c> §2 C 组 / §3 第 7 条）：
-        /// ① 只有用户**显式打开**这一项才执行，绝不做成默认；
-        /// ② 打开时**只打开文件夹** —— 复用既有 <c>SafePathHelper.OpenDirectory</c>
-        ///    （<c>explorer.exe &lt;目录&gt;</c>），**不得**把主窗口置前 / 最大化 / 抢焦点，
-        ///    也不得切换前台窗口（AGENTS.md §13 同精神：只打开文件夹，不抢焦点）。
-        /// </para>
-        ///
-        /// <para>
-        /// 只在本任务**真正定稿成功**（内容物已落 <c>destDir</c>、输出校验通过）之后触发；
-        /// 失败 / 部分完成 / 取消时一律不打开 —— 那时候打开一个空的或半截的目录只会误导用户。
-        /// </para>
-        /// </summary>
-        public bool OpenOutputFolderWhenDone { get; set; } = false;
-
-        /*
-         * ⛔ 2026-10-15：这里原来是 `RestRemovalDefaultMode`（取值 RecycleBin / Permanent，
-         * 只决定手工清理确认框里那个"改为彻底删除"勾选框的默认状态）。
-         *
-         * 回收站那一档整条下线之后**只剩一个动作**（彻底删除）⇒ 没有默认档可存
-         * ⇒ 这个设置项与它那一整张词表（`RestRemovalModes`）一起删除，改成**系统固定值**。
-         * 老配置里存过的值一律被忽略（反序列化丢掉这个字段）。
-         *
-         * ⚠ 两道确认一个字都没少：先预览条目数与总大小 → 红色确认 → 勾"我知道不可恢复"再确认
-         * （见 `MainViewModel.DeriveCleanupDecision`）。
-         */
-
-        /// <summary>
-        /// 危险条目统计（**默认开**）：在**既有那一遍**解压前条目预检里顺便数出可执行 / 脚本类条目
-        /// （<c>.exe/.scr/.lnk/.bat/.cmd/.ps1/.vbs</c>），把"本包含 N 个可执行文件"写进任务详情与失败清单。
-        ///
-        /// <para>
-        /// **只提示、绝不阻断**（依据 <c>docs/WinRAR功能参考.md</c> §2 F 组 / §3 第 5 条）：
-        /// 我们的场景里安装器 / 补丁**经常就是内容物**，所以**不做** WinRAR 那种全局硬排除掩码
-        /// —— 那会把内容物一起丢掉，而且全局开关容易被遗忘、排障时变成隐形行为。
-        /// </para>
-        ///
-        /// <para>
-        /// 关掉它只是"不统计、不提示"，**落盘行为一模一样**（不变量 4 的路径清洗与落点校验与它无关，照旧执行）。
-        /// </para>
-        /// </summary>
-        public bool ReportDangerousEntries { get; set; } = true;
-
-        /// <summary>
-        /// 解压前的提醒（**默认开**）：扫一遍源目录，把"可能的无用物"与"一个可用密码都没有"的包列出来，
-        /// 让用户先看一眼再决定（AGENTS.md §9.7；用户 2026-09-24 第 15 条要求这一项可关）。
-        ///
-        /// <para>
-        /// 关掉它 = **不扫、不弹**，直接开始解压。它与弹窗里那个"本次运行不再提示"是两件事：
-        /// 后者只记内存、进程一退就失效，这一项是落盘的长期选择。
-        /// </para>
-        /// </summary>
-        public bool RemindBeforeExtract { get; set; } = true;
-
-        public bool RememberLastOutputDirectory { get; set; } = true;
-
-        /// <summary>
-        /// 「导出日志」对话框**上次成功导出到的目录**（用户 2026-10-01 真机 `giu910`：导出落进了其余物）。
-        ///
-        /// <para>只服务一件事：下次打开保存对话框时从这儿开始（⛔ 不是"默认导出到这儿"、⛔ 不是任何自动行为）。
-        /// 落进其余物 / 工作区的目录**不记**——那两个地方程序自己会整份删掉，日志落那儿哪天就跟着没了。</para>
-        /// </summary>
-        public string LastLogExportDirectory { get; set; } = string.Empty;
-
-        /// <summary>
-        /// 扫描时是否包含隐藏文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
-        /// </summary>
-        public bool IncludeHiddenFiles { get; set; } = false;
-
-        /// <summary>
-        /// 扫描时是否包含系统文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
-        /// </summary>
-        public bool IncludeSystemFiles { get; set; } = false;
-
-        /// <summary>
-        /// 扫描时的单文件大小上限，单位 **MB**（0 = 不限制，默认）。
-        /// 设置界面在⑥设置页的「扫描与识别」里。超过上限的文件不进任务列表。
-        /// </summary>
-        public long MaxFileSizeLimit { get; set; } = 0;
-
-        /*
-         * 这里曾经有一个 PreservePasswordLeadingTrailingSpaces（默认 true）。
-         *
-         * 它 2026-09-22 被**删除**了，原因是它是一句谎话：全项目**没有任何一处读它**，
-         * 而界面上也没有这一项 —— 用户（或将来接手的人）在 appsettings.json 里把它改成 false，
-         * 以为密码会被 Trim，实际一个字节的行为都不会变。
-         *
-         * "密码不 Trim"本来就已经是硬行为（AGENTS.md §9.1：密码可能就带首尾空格），
-         * 需要的是"想 Trim 就得先想清楚为什么"，不需要一个做不到的开关。
-         * 旧配置里若还留着这个键，System.Text.Json 会**忽略**未知成员，不影响启动。
-         */
-
-        /// <summary>
-        /// 从归档同目录的说明文件（.txt/.bat/…）里提取密码候选。
-        /// **默认关闭**：这是"猜"出来的候选，必须由用户显式开启（AGENTS.md §9.4）。
-        /// </summary>
-        public bool EnableSidecarPassword { get; set; } = false;
-
-        /// <summary>用户自定义的 7z.exe 路径；空表示用程序目录内置的。路径只由 ToolLocator 解析（AGENTS.md §3.1）。</summary>
-        public string CustomSevenZipExePath { get; set; } = string.Empty;
-
-        /// <summary>
-        /// 用户自定义的 UnRAR.exe 路径；空表示按"已装的 WinRAR 目录 → 内置 tools\unrar"自动解析。
-        ///
-        /// 与 <see cref="CustomSevenZipExePath"/> 同一口径：路径**只**由 <c>ToolLocator</c> 解析，
-        /// 别的文件里不许再拼一遍（AGENTS.md §3.1）。
-        /// </summary>
-        public string CustomUnRarExePath { get; set; } = string.Empty;
-
-        /// <summary>
-        /// 用户自定义的 <c>Rar.exe</c> 路径（**打包**功能做外层 rar 时用；用户 2026-09-23 决定加这一格）。
-        ///
-        /// <para>空表示按 <c>ToolLocator</c> 的解析链自动找：本机已装 WinRAR 目录里的 <c>Rar.exe</c>，
-        /// 再退 <c>WinRAR.exe</c>。</para>
-        ///
-        /// <para>⚠ <b>许可边界（AGENTS.md §3.1）</b>：<c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**，
-        /// RARLAB 的 EULA 明确禁止随其它软件包分发（§3.1 / §3.2 / §3.3 / §10），所以这一格指向的
-        /// 只能是**用户自己安装 / 下载的**那一份 —— 程序只检测与调用，绝不复制、绝不内置、绝不随包分发。
-        /// 这也正是这一格存在的理由：不提供自选路径，用户把 WinRAR 装到非默认目录时就只能去改
-        /// 系统环境变量。</para>
-        /// </summary>
-        public string CustomRarExePath { get; set; } = string.Empty;
-
-        /// <summary>
-        /// **引擎优先级**（用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）。
-        ///
-        /// <para>
-        /// 存的是引擎 id 的**有序列表**（<c>winrar</c> = RARLAB UnRAR，<c>sevenzip</c> = 7-Zip 命令行，
-        /// 词表见 <see cref="EngineIds"/>）。默认 <c>["winrar", "sevenzip"]</c>。
-        /// </para>
-        ///
-        /// <para>
-        /// ⚠ 它是**同能力时的先后**，不是"只能用第一个"：选择规则是
-        /// **先按能力筛（谁能干这活），再用优先级做 tiebreaker**，不可用的引擎直接跳过 ——
-        /// 不许因为"排第一但没装"就打不开包（AGENTS.md §3.1）。
-        /// 所以 zip/7z 包永远走 7-Zip（UnRAR 不支持这些格式），RAR 包默认先走 UnRAR。
-        /// </para>
-        ///
-        /// <para>
-        /// 旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 补成默认值，
-        /// 不需要额外的兼容分支（与 MaxPasswordAttemptsPerLayer 同一套容错口径）。
-        /// </para>
-        /// </summary>
-        public List<string>? EnginePriority { get; set; }
-
-        /// <summary>
-        /// 保留受损的文件（**默认关**）：解压时给**RAR 引擎**加"保留校验和不符的半成品"的开关
-        /// （UnRAR 的 <c>-kb</c>，来源 <c>docs/WinRAR功能参考.md</c> §2 C 组）。
-        ///
-        /// <para>
-        /// ⚠ <b>它只对 UnRAR 生效</b>，对本机 7-Zip 26.01 **不加任何参数**，依据是实测：
-        /// <c>7z x -kb</c> 直接报 <c>Command Line Error: Unknown switch: -kb</c>（退出码 7）——
-        /// <c>-kb</c> 是 RAR / UnRAR 的开关；而 7-Zip **本来就保留**校验失败的半成品
-        /// （实测截断包里被截断的文件仍留在输出目录），也就不需要这个开关。
-        /// 若照文档建议给 7-Zip 加上，用户一开这项，**所有解压都会以命令行错误失败**。
-        /// </para>
-        ///
-        /// <para>
-        /// ⚠ <b>它绝不改变任务成败的判定</b>（AGENTS.md §6 不变量 6）：
-        /// 校验和不符的包仍然是**失败 / 部分完成**，只是磁盘上会留下那个半成品，
-        /// 让用户还能试着抢救半个视频 / 半张图。状态由引擎退出码与错误分类决定，与本开关无关。
-        /// </para>
-        /// </summary>
-        public bool KeepBrokenFiles { get; set; } = false;
-
-        /// <summary>把多个包的产物归集（移动）到一个目标目录（AGENTS.md §9.5）。</summary>
-        public bool CollectResultsToDirectory { get; set; } = false;
-
-        /// <summary>
-        /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
-        ///
-        /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限统一：
-        /// 他原话是"你为什么只弄了两层，我要的一键解压时多重解压"——
-        /// 两个上限一个 3 一个 10 只会让人以为"有一处没生效"。</para>
-        ///
-        /// <para>⚠ <b>2026-09-26 又调回 5</b>（他原话："现在将默认的最大的解压层数从 10 改到 5 吧，
-        /// 用户有需要自己会改的"）：理由是他想明白了真实形状 —— 里面的压缩包**可能是用户想留的东西**
-        /// （游戏包里的 mod 压缩包不止一个，程序判不出来，我们只做提醒、不做判定）。
-        /// 默认少解几层 = 少一次"把你想要的东西拆了"的机会；真要深挖的人在②页改成 10 就行。
-        /// 一键处理每一批的轮数**跟着这一格走**（见 <c>OneClickCoordinator.RoundLimit</c>），
-        /// 所以"界面写 5、程序跑到 10"这种不一致不会发生。</para>
-        /// </summary>
-        public int MaxRecursionDepth { get; set; } = 7;
-
-        /// <summary>
-        /// 一次性迁移标记：旧的"最大层数默认 3"已经统一成 10（用户 2026-09-24 拍板）。
-        ///
-        /// <para>为什么要标记而不是每次都判 <c>== 3</c>：用户完全可能在②页把 3 改回来当自己的选择，
-        /// 那时每次都"纠正"成 10 就变成了"设置改不动"。标记落盘之后迁移只发生一次。</para>
-        /// </summary>
-        public bool RecursionDefaultUnifiedToTen { get; set; }
-
-        /// <summary>
-        /// 每一层（每个归档）最多真的试几个密码候选。
-        ///
-        /// 为什么必须有上限（不变量 8）：密码本可能有几百条，一个包逐条试过去会烧掉整晚；
-        /// 到上限时状态是「达到密码尝试上限」，**不是**"密码错误"（AGENTS.md §9.2）——
-        /// 前者是"还没试完就停了"，后者是"试过的都不对"，两者的处置方式完全不同。
-        ///
-        /// 范围 1–1000：下限 1 保证至少试一个候选（否则等于不解压），
-        /// 上限 1000 是兜底 —— 再大就不是"帮用户省事"，而是把时间烧在一个可能失败的包上。
-        /// </summary>
-        public int MaxPasswordAttemptsPerLayer { get; set; } = 10;
-
-        // ================================================================
-        // 解压前的资源预算上限（不变量 8；用户 2026-09-25 第 36 条：必须看得见、改得动）
-        // ================================================================
-
-        /*
-         * 为什么这四条从"写死在代码里"变成"设置项"（用户真机报的第 36 条）：
-         *
-         * 他拿一个 12.22 GiB 的包跑一键处理，里面是一组 5 GB 的分卷（`Code Complete-BZ.7z.001` 那类），
-         * 失败清单上写着"单个文件解压后 5242880000 字节（4.88 GiB）超过单文件上限 4294967296 字节（4 GiB）"。
-         * 那四条上限当时是**硬编码**的（`ResourceBudgetOptions` 的 4 GiB / 20 GiB），界面上一个字都没有，
-         * 于是他看到的是一句像"这个包有问题"的判决 —— 而实际上是程序自己的安全阀，而且他改不了。
-         *
-         * 处置（与"危险模式"退役同一口径：不要仪式，要看得见、改得动）：
-         * ① 默认值调到真实资源包绝不会碰到的量级（单文件 64 GiB / 总大小 512 GiB）；
-         * ② 四条全部落进设置（⑥设置 →「安全上限」），超范围就夹回并**当场告诉他**；
-         * ③ 拒绝文案必须自己说清"这是程序的上限、不是包坏了、去哪儿调"（`ResourceBudget` 的 `CapHint`）。
-         *
-         * ⛔ 不许再退回"写死"：不变量 8 要求的是**上限存在**，不是"上限不许用户改"。
-         */
-
-        /// <summary>解压后单个文件大小上限的默认值（64 GiB）。</summary>
-        public const int DefaultMaxSingleExtractedFileGiB = 64;
-
-        /// <summary>解压后总大小上限的默认值（512 GiB）。</summary>
-        public const int DefaultMaxExtractedTotalGiB = 512;
-
-        /// <summary>解压后文件数上限的默认值（20 万个）。</summary>
-        public const int DefaultMaxExtractedFileCount = 200_000;
-
-        /// <summary>展开比上限的默认值（1000 倍，超过视为压缩炸弹）。</summary>
-        public const double DefaultMaxExtractionRatio = 1000d;
-
-        /// <summary>两个大小上限允许的取值范围（GiB）：下限 1，上限 4096（4 TiB）。</summary>
-        public const int MinExtractionCapGiB = 1;
-
-        /// <summary>两个大小上限允许的取值范围（GiB）的上界。</summary>
-        public const int MaxExtractionCapGiB = 4096;
-
-        /// <summary>
-        /// 解压后**单个文件**的大小上限（GiB，默认 64）。
-        ///
-        /// <para>判的是"归档里最大的那一个条目"（`ResourceBudget` 规则 2a），超了就**不解这个包**。
-        /// 默认值取 64 GiB：任何真实视频 / 镜像都够，而"一个 1 KB 的文件声称要写 4 TiB"这种
-        /// 单条目炸弹仍然会被拦住（另有展开比与目标盘空间两道）。</para>
-        /// </summary>
-        public int MaxSingleExtractedFileGiB { get; set; } = DefaultMaxSingleExtractedFileGiB;
-
-        /// <summary>
-        /// 解压后**总大小**上限（GiB，默认 512）。永远不小于单文件那一档（见
-        /// <see cref="NormalizeTotalCapGiB"/>），否则它形同虚设。
-        /// </summary>
-        public int MaxExtractedTotalGiB { get; set; } = DefaultMaxExtractedTotalGiB;
-
-        /// <summary>解压后**文件数**上限（默认 20 万）。</summary>
-        public int MaxExtractedFileCount { get; set; } = DefaultMaxExtractedFileCount;
-
-        /// <summary>**展开比**上限（默认 1000 倍）：解压后总大小 ÷ 压缩包体积，超了按压缩炸弹拒绝。</summary>
-        public double MaxExtractionRatio { get; set; } = DefaultMaxExtractionRatio;
-
-        /// <summary>把"单文件上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
-        public static int NormalizeSingleFileCapGiB(int value)
+        if (value <= 0)
         {
-            if (value <= 0)
-            {
-                return DefaultMaxSingleExtractedFileGiB;
-            }
-
-            return Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+            return DefaultMaxSingleExtractedFileGiB;
         }
 
-        /// <summary>
-        /// 把"总大小上限"夹进合法区间，并保证它**不小于**单文件上限 ——
-        /// 否则单文件那一档永远先命中，用户以为调大了总量却什么都没变。
-        /// </summary>
-        public static int NormalizeTotalCapGiB(int value, int singleFileGiB)
-        {
-            int single = NormalizeSingleFileCapGiB(singleFileGiB);
-            int total = value <= 0
-                ? DefaultMaxExtractedTotalGiB
-                : Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+        return Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+    }
 
-            return Math.Max(single, total);
+    /// <summary>
+    /// 把"总大小上限"夹进合法区间，并保证它**不小于**单文件上限 ——
+    /// 否则单文件那一档永远先命中，用户以为调大了总量却什么都没变。
+    /// </summary>
+    public static int NormalizeTotalCapGiB(int value, int singleFileGiB)
+    {
+        int single = NormalizeSingleFileCapGiB(singleFileGiB);
+        int total = value <= 0
+            ? DefaultMaxExtractedTotalGiB
+            : Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+
+        return Math.Max(single, total);
+    }
+
+    /// <summary>把"文件数上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
+    public static int NormalizeExtractedFileCountCap(int value)
+    {
+        if (value <= 0)
+        {
+            return DefaultMaxExtractedFileCount;
         }
 
-        /// <summary>把"文件数上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
-        public static int NormalizeExtractedFileCountCap(int value)
-        {
-            if (value <= 0)
-            {
-                return DefaultMaxExtractedFileCount;
-            }
+        return Math.Clamp(value, 1, 50_000_000);
+    }
 
-            return Math.Clamp(value, 1, 50_000_000);
+    /// <summary>把"展开比上限"夹进合法区间（NaN / 无穷 / &lt;1 视为没配 → 用默认值）。</summary>
+    public static double NormalizeExtractionRatioCap(double value)
+    {
+        if (!double.IsFinite(value) || value < 1d)
+        {
+            return DefaultMaxExtractionRatio;
         }
 
-        /// <summary>把"展开比上限"夹进合法区间（NaN / 无穷 / &lt;1 视为没配 → 用默认值）。</summary>
-        public static double NormalizeExtractionRatioCap(double value)
-        {
-            if (!double.IsFinite(value) || value < 1d)
-            {
-                return DefaultMaxExtractionRatio;
-            }
+        return Math.Min(value, 1_000_000d);
+    }
 
-            return Math.Min(value, 1_000_000d);
+    /*
+     * ⛔ 这里原来有一个 `CacheRootDirectory`（"缓存根目录"）设置项，2026-09-30 **已彻底删除**。
+     *
+     * 用户原话："这个彻底取消，用户没有定工作区的权力，就是在解压的地方设立隐形的工作区，
+     * 这就完全不存在跨盘的操作"。
+     *
+     * 于是：① 工作区、数据根都不再由用户指定 —— 数据根固定是 %LOCALAPPDATA%\ArchiveFixer，
+     * 工作区固定由**这一单的目标目录**派生（<目标目录>\.ArchiveFixer.work）；
+     * ② 旧 appsettings.json 里残留的 `CacheRootDirectory` 键被**安静忽略**
+     * （System.Text.Json 默认不认未知成员也不抛），⛔ 不迁移、不报错、不警告 ——
+     * 它曾经代表的那个"用户自己挑位置"的权限已经不存在了。
+     */
+
+    /// <summary>
+    /// 上次导入的密码本文件路径（用户 2026-09-21 反复要求：导入一次就够了，不要每次重导）。
+    /// 启动时若文件仍在就自动加载；文件没了就只写一条 WARN，不打扰用户。
+    ///
+    /// <para>⚠ 2026-09-24 起它**不再承载"记住哪一本"**：那件事改由**有序的**
+    /// <see cref="PasswordBookPaths"/> 承担（用户要求多本密码本）。
+    /// 这个老字段刻意**保留、不清空**（见 <see cref="Normalize"/> 的迁移）：
+    /// ① 旧的 <c>appsettings.json</c> 里只有它，要能迁进列表；
+    /// ② 用户回退到旧版本时，那一边还认得它（保留 = 回退不会炸）。</para>
+    /// </summary>
+    public string PasswordBookPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// **记住的密码本路径（有序，可多本）**，启动时按这个顺序逐本合并 —— 用户 2026-09-24 要求。
+    ///
+    /// <para>为什么顺序重要：合并是"只补列表里还没有的值、各本的新条目按书顺序追加"，
+    /// 所以书的先后会影响新增条目的落位。列表本身也是设置界面上"已记住的密码本"
+    /// 那一组的唯一数据源（可逐项移除）。</para>
+    ///
+    /// <para>旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 用老的
+    /// <see cref="PasswordBookPath"/> 补一条（迁移），老用户升级后行为不变。</para>
+    /// </summary>
+    public List<string>? PasswordBookPaths { get; set; }
+
+    /// <summary>
+    /// **记住密码列表**（默认 **开**，用户 2026-09-24 拍板）。
+    ///
+    /// <para>开着：列表的内容 / 顺序 / 启用状态 / 手工条目 / 记住的密码本一起被
+    /// **机器范围 DPAPI 加密**存进 <c>&lt;程序目录&gt;\data\password-list.dat</c>，
+    /// 重启后原样恢复（哪些密码本已经加载过也不再是"C 盘还是 D 盘"那种一次性状态）。</para>
+    ///
+    /// <para>关掉：**既不写、也不读**那个文件（一个字节都不动，旧文件留在原地不删），
+    /// 列表退回"只在本次运行内有效"的老行为 —— 界面上必须把这句话说清楚，
+    /// 否则用户会以为"关掉只是不加密"。</para>
+    ///
+    /// <para>⚠ 代价（用户已知并接受，实现与文档都必须如实写明）：机器范围 = 同机任何本机用户
+    /// 都可能解开；换机器 / 重装系统解不开，那时程序**忽略并提示**（不崩、不覆盖、不删），
+    /// 用户可以点「写回密码本」把列表带走。</para>
+    /// </summary>
+    public bool RememberPasswordList { get; set; } = true;
+
+    /// <summary>
+    /// 一键处理的那**一个**确认框还要不要弹（用户 2026-09-24 第 17 条）。
+    ///
+    /// <para>用户原话：「点击完一键处理，就只能有一个弹窗提醒，**而且这个可以选中以后不弹出**」。
+    /// 勾上之后写进设置、跨重启有效，界面上（⑥ 提醒 页）留着一个开关可以再打开 ——
+    /// 存了却收不回来的开关等于把用户锁在"再也不问"里。</para>
+    ///
+    /// <para>它与 <see cref="RemindJunkAfterImport"/> 是两件事：这一条管**动手前的那一次确认**，
+    /// 那一条管**导入之后的无用物提醒**（⚠ 那一条 2026-09-28 起就不再控制行为、2026-10-04 起
+    /// 界面上那一格也撤了，见它自己的注释）。</para>
+    /// </summary>
+    public bool SkipOneClickConfirm { get; set; }
+
+    /// <summary>
+    /// 导入文件夹 / 文件之后要不要弹一次「无用物提醒」（用户 2026-09-24 第 15 条）。
+    ///
+    /// <para>用户原话：「每次操作的选完文件夹，就要出一个无用物提醒，**用户可以选中关闭以后就不用触发了**」。
+    /// 默认开（他要求的就是"每次选完文件夹就提醒"），关掉之后导入**一次都不弹**。</para>
+    ///
+    /// <para>⚠ <b>2026-09-28 起它不再控制任何行为</b>：那个提醒框退休了，无用物改成
+    /// "导入一完成就自动移出任务列表"（<c>ScanCoordinator.AddPathsAsync</c>），与这个开关无关。</para>
+    ///
+    /// <para>⚠ <b>2026-10-04 起界面上也没有这一格了</b>（用户原话：「要删除的是第二个你已经停止显示的，
+    /// 就是底层自动会做的」）⇒ 这一格连同它的两条文案、以及写它的那个入口
+    /// （<c>MainViewModel.SaveRemindJunkAfterImport</c>）一起删掉。⛔ 属性本身**留着**：
+    /// 不动设置序列化，用户盘上那份 <c>appsettings.json</c> 里这个键照旧读得进来、写回去也还在，
+    /// 只是**安静忽略**（改它不影响任何行为）。</para>
+    ///
+    /// <para>⛔ 与它无关的两件事照旧：① 程序对无用物**一个都不动**（不删/不改名/不搬）；
+    /// ② 无用物扫描的判据与上限一个字都不变；③ "已把 N 个无用物移出列表"那句**日志保留**
+    /// （用户 2026-10-04：「提示还是要有的」）。</para>
+    /// </summary>
+    public bool RemindJunkAfterImport { get; set; } = true;
+
+    /// <summary>
+    /// 失败 / 取消 / 部分完成时**保留**中间产物（用户 2026-09-25 第 25 条追加，**默认关**）。
+    ///
+    /// <para><b>用户原话</b>：「我不希望有这么多的失败残留，还是这么说如果解压 40G，两层，
+    /// 解压失败有 80G 的卸载残留，用户不得气死，你为什么要弄卸载残留，有一个导出失败列表
+    /// 不就可以了吗，而且对于用户来说，失败了就失败了，成功了就成功了」。</para>
+    ///
+    /// <para>默认 <c>false</c> = 没成功就**一个中间产物都不留**：任务工作区（暂存目录、抠出来的内嵌
+    /// 归档副本、已解出的过程物）与递归核心的逐层工作区整份删掉，只留日志与失败清单。
+    /// 打开它才是老行为（留着现场便于排查，③「清理与删除」页能扫到、能清）。</para>
+    ///
+    /// <para>⚠ 这条设置**只影响"没成功"的收尾**：成功路径的清理口径一个字没变
+    /// （仍然只有"解压成功 + 输出校验通过 + 未取消"才清），源包仍然一个字节都不动
+    /// （不变量 1），已经定稿搬出去的内容物也早就不在工作区里了。</para>
+    /// </summary>
+    public bool KeepFailedWorkspace { get; set; }
+
+    /// <summary>
+    /// **部分完成也把已解出的内容放进目标目录**（用户 2026-10-02 拍板的口径 A；**默认关**）。
+    ///
+    /// <para><b>用户原话</b>（`docs/部分完成发布方案.md` §6）：「这个的操作最少差不多就占了两份原包的空间
+    /// 要在开启界面详细写清楚」。他要的场景：一个 558 个条目的包解到 557 个时坏在最后一条上，
+    /// 老口径把已经解出来的 557 个文件**整份丢弃**、报「文件损坏」—— 十几分钟与十几 GiB 白扔。</para>
+    ///
+    /// <para><b>开了它之后的行为</b>（三条一起，缺一不可）：</para>
+    /// <list type="number">
+    /// <item><description>逐条对账（<c>Extraction/PartialPublishPlanner</c>）通过的条目发布到
+    /// <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>（固定子目录，⛔ 不参与落点规则、重跑不撞名）；</description></item>
+    /// <item><description>**源包一定不搬也不删**（哪怕设了「彻底删除」）—— 缺的那些条目只存在源包里；</description></item>
+    /// <item><description>其余物里**除最外层源包以外**的项与这一单的工作区删掉（"留源包 + 已解出内容物"两份）；</description></item>
+    /// </list>
+    ///
+    /// <para><b>它跟「空间不足」模式互斥</b>（用户 2026-10-02 顾虑 2）：那一档的全部价值就是
+    /// "定稿 + 校验通过后当场删源包"回收空间，而部分完成天然回收不了 ⇒ 那一档开着时**本开关不生效**
+    /// （写一行 INFO 说明，⛔ 不偷偷改用户的设置）；同时空间账按"源包还占着"多要一整个源包。</para>
+    /// </summary>
+    public bool PartialPublishEnabled { get; set; }
+
+    /// <summary>归集目标目录。</summary>
+    public string CollectTargetDirectory { get; set; } = string.Empty;
+
+    /// <remarks>
+    /// 2026-10-16：这里原来有一档 <c>OmitMiddleContinuationLayers</c>（用户 2026-09-27 定的「简洁档」，
+    /// 打开后只留第一层与最后一层、省掉中间那些"只产出下一个包"的层）。用户 2026-10-16 拍板删除：
+    /// 界面上一处都没有（②页那一格早已撤），代码里只剩一条恒为 false 的参数链在传它。
+    /// ⇒ 中间层**一律照建**（忠实档），判据唯一出口仍是 <c>PackageLayerRules.ShouldAddInnerPackageLayer</c>。
+    /// </remarks>
+
+    /// <summary>
+    /// 「特定解压」独立整理模式开关（只改内容物落点/命名，不碰源包与过程物删除）。
+    /// </summary>
+    public bool UseSpecificExtraction { get; set; }
+
+    /// <summary>
+    /// **「内容物保留关键词」**（用户 2026-10-04 拍板的新功能「内容物压缩文件不解压」；
+    /// 设置界面在⑥设置页那一栏，**只有这一处入口**）。
+    ///
+    /// <para><b>用户原话</b>：「这个功能同样要有记忆功能，用户可以在里面输入像，
+    /// <c>1_名字里面包含特定字符的压缩文件不解压</c>，你甚至不用去检测他是否是压缩文件，
+    /// 只要文件名里面包含着这个字符就不能动，例如 <c>小明</c>，只要内容物里面有文件的名称包含了"小明"
+    /// 的这些压缩文件碰都不要碰，例如 <c>小明.zip</c>、<c>小明.part1.rar</c>，而且不仅仅是相对于的，
+    /// 包含的也同样是，例如 <c>小明和小红.7z</c> 这种包含的也不要碰」。</para>
+    ///
+    /// <para><b>一行一个关键词</b>（界面上是多行文本框，落盘就是这个字符串数组）。判据唯一出口
+    /// <see cref="ArchiveFixer.Security.ContentKeepRules"/>：**包含即命中**（大小写不敏感）、
+    /// 空行忽略、⛔ 不做通配 / 正则、只吃文件名。</para>
+    ///
+    /// <para><b>默认空 = 这个功能不生效</b>：一个关键词都没有时，程序的行为与加这条功能之前
+    /// **逐字相同**（有回归用例钉住）。归一化只有一处实现
+    /// （<c>ContentKeepRules.NormalizeKeywords</c>），
+    /// <c>null</c>（旧配置里没有这个字段）→ 空列表。</para>
+    ///
+    /// <para>⚠ 作用范围只在**内容物**：用户导入的源包不套用这条（<c>小明.zip</c> 是别人给的包时照常处理）。</para>
+    /// </summary>
+    public List<string>? ContentKeepKeywords { get; set; }
+
+    /// <summary>
+    /// 「源包操作」（决策 D-9，2026-09-22 用户拍板；**2026-09-25 收敛成两档**）。
+    ///
+    /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c>），
+    /// 与其它设置项（RecursionMode / OverwriteMode / TerminalLayoutMode）一样用字符串落盘 ——
+    /// 枚举名比数字抗改，用户手改配置文件也看得懂。
+    ///
+    /// <para><b>默认 <c>KeepInPlace</c></b>（2026-09-25 第 32 条用户拍板："默认是源包原来位置不动"）：
+    /// 程序默认**一个字节都不搬用户的源包**；要整理的人自己选"放入其余物当中"，
+    /// 再由「删除操作」（<see cref="RestHandlingAfterVerify"/>）决定那份其余物是留着、进回收站还是彻底删。</para>
+    ///
+    /// <para><b>2026-09-25 第 32 条：原来的第三档 <c>DeleteAfterVerify</c> 被删掉</b>
+    /// （用户原话：「源包操作里的第 3 项……删掉」）。要删源包请用
+    /// "源包操作 = 放入其余物" + "删除操作 = 回收站 / 彻底删除"（见 <see cref="RestHandlingAfterVerify"/>）——
+    /// 两档组合起来语义更清楚，选项也少一个。旧值在 <see cref="Normalize"/> 里迁移成
+    /// "移入其余物 + 移入回收站"（可还原的那一档）。</para>
+    ///
+    /// <para>⚠ <b>两条路径行为一致</b>（用户 2026-09-22 版本二，推翻早先"地基路径永远不动源包"；
+    /// 2026-09-25 再次确认手动档与一键档是同一批）：手动「只解压」与一键处理读的是同一套设置；
+    /// <c>KeepInPlace</c> 才是"一个字节都不搬"的出口。</para>
+    /// </summary>
+    public string SourceHandling { get; set; } = nameof(SourceHandlingMode.KeepInPlace);
+
+    /// <summary>
+    /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.KeepInPlace"/>。
+    ///
+    /// 容错放在这里（与 <c>ParsePlacementMode</c> 同一口径）：这个字符串可能来自
+    /// 旧配置（缺字段 → 反序列化后是默认值）、用户手改的 json，或将来改名后的枚举。
+    /// 读不懂时**退回最不意外的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
+    ///
+    /// <para>⚠ 回落档必须与 <see cref="SourceHandling"/> 的默认值 / <c>CreateDefault</c> **一致**
+    /// （2026-09-25 第 32 条把默认档改成「留在原地」时，这里漏改过一处：一个手改坏的字符串会把
+    /// 用户从没同意过的"搬走源包"打开 —— 而这一档是**不可逆**的）。读不懂 = 什么都不做。</para>
+    /// </summary>
+    public static SourceHandlingMode ParseSourceHandling(string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value) &&
+            Enum.TryParse(value.Trim(), ignoreCase: true, out SourceHandlingMode mode) &&
+            Enum.IsDefined(mode))
+        {
+            return mode;
         }
 
-        /*
-         * ⛔ 这里原来有一个 `CacheRootDirectory`（"缓存根目录"）设置项，2026-09-30 **已彻底删除**。
-         *
-         * 用户原话："这个彻底取消，用户没有定工作区的权力，就是在解压的地方设立隐形的工作区，
-         * 这就完全不存在跨盘的操作"。
-         *
-         * 于是：① 工作区、数据根都不再由用户指定 —— 数据根固定是 %LOCALAPPDATA%\ArchiveFixer，
-         * 工作区固定由**这一单的目标目录**派生（<目标目录>\.ArchiveFixer.work）；
-         * ② 旧 appsettings.json 里残留的 `CacheRootDirectory` 键被**安静忽略**
-         * （System.Text.Json 默认不认未知成员也不抛），⛔ 不迁移、不报错、不警告 ——
-         * 它曾经代表的那个"用户自己挑位置"的权限已经不存在了。
-         */
+        return SourceHandlingMode.KeepInPlace;
+    }
 
-        /// <summary>
-        /// 上次导入的密码本文件路径（用户 2026-09-21 反复要求：导入一次就够了，不要每次重导）。
-        /// 启动时若文件仍在就自动加载；文件没了就只写一条 WARN，不打扰用户。
-        ///
-        /// <para>⚠ 2026-09-24 起它**不再承载"记住哪一本"**：那件事改由**有序的**
-        /// <see cref="PasswordBookPaths"/> 承担（用户要求多本密码本）。
-        /// 这个老字段刻意**保留、不清空**（见 <see cref="Normalize"/> 的迁移）：
-        /// ① 旧的 <c>appsettings.json</c> 里只有它，要能迁进列表；
-        /// ② 用户回退到旧版本时，那一边还认得它（保留 = 回退不会炸）。</para>
-        /// </summary>
-        public string PasswordBookPath { get; set; } = string.Empty;
+    /// <summary>反解成落盘字符串（界面 ↔ 解压管线共用同一份口径）。</summary>
+    public static string ToSourceHandlingValue(SourceHandlingMode mode)
+    {
+        return mode.ToString();
+    }
 
-        /// <summary>
-        /// **记住的密码本路径（有序，可多本）**，启动时按这个顺序逐本合并 —— 用户 2026-09-24 要求。
-        ///
-        /// <para>为什么顺序重要：合并是"只补列表里还没有的值、各本的新条目按书顺序追加"，
-        /// 所以书的先后会影响新增条目的落位。列表本身也是设置界面上"已记住的密码本"
-        /// 那一组的唯一数据源（可逐项移除）。</para>
-        ///
-        /// <para>旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 用老的
-        /// <see cref="PasswordBookPath"/> 补一条（迁移），老用户升级后行为不变。</para>
-        /// </summary>
-        public List<string>? PasswordBookPaths { get; set; }
+    /// <summary>
+    /// 把"记住的密码本清单"收拾干净：去掉空项、去掉重复（大小写不敏感，Windows 路径口径），
+    /// 并把老字段 <paramref name="legacyBookPath"/> 里那一本**补进清单**（迁移）。
+    ///
+    /// <para>顺序保留（第一本在最前）：合并密码本时"各本书的新条目按书顺序追加"依赖它。</para>
+    /// </summary>
+    public static List<string> NormalizeBookPaths(IEnumerable<string>? paths, string? legacyBookPath)
+    {
+        var result = new List<string>();
 
-        /// <summary>
-        /// **记住密码列表**（默认 **开**，用户 2026-09-24 拍板）。
-        ///
-        /// <para>开着：列表的内容 / 顺序 / 启用状态 / 手工条目 / 记住的密码本一起被
-        /// **机器范围 DPAPI 加密**存进 <c>&lt;程序目录&gt;\data\password-list.dat</c>，
-        /// 重启后原样恢复（哪些密码本已经加载过也不再是"C 盘还是 D 盘"那种一次性状态）。</para>
-        ///
-        /// <para>关掉：**既不写、也不读**那个文件（一个字节都不动，旧文件留在原地不删），
-        /// 列表退回"只在本次运行内有效"的老行为 —— 界面上必须把这句话说清楚，
-        /// 否则用户会以为"关掉只是不加密"。</para>
-        ///
-        /// <para>⚠ 代价（用户已知并接受，实现与文档都必须如实写明）：机器范围 = 同机任何本机用户
-        /// 都可能解开；换机器 / 重装系统解不开，那时程序**忽略并提示**（不崩、不覆盖、不删），
-        /// 用户可以点「写回密码本」把列表带走。</para>
-        /// </summary>
-        public bool RememberPasswordList { get; set; } = true;
-
-        /// <summary>
-        /// 一键处理的那**一个**确认框还要不要弹（用户 2026-09-24 第 17 条）。
-        ///
-        /// <para>用户原话：「点击完一键处理，就只能有一个弹窗提醒，**而且这个可以选中以后不弹出**」。
-        /// 勾上之后写进设置、跨重启有效，界面上（⑥ 提醒 页）留着一个开关可以再打开 ——
-        /// 存了却收不回来的开关等于把用户锁在"再也不问"里。</para>
-        ///
-        /// <para>它与 <see cref="RemindJunkAfterImport"/> 是两件事：这一条管**动手前的那一次确认**，
-        /// 那一条管**导入之后的无用物提醒**（⚠ 那一条 2026-09-28 起就不再控制行为、2026-10-04 起
-        /// 界面上那一格也撤了，见它自己的注释）。</para>
-        /// </summary>
-        public bool SkipOneClickConfirm { get; set; }
-
-        /// <summary>
-        /// 导入文件夹 / 文件之后要不要弹一次「无用物提醒」（用户 2026-09-24 第 15 条）。
-        ///
-        /// <para>用户原话：「每次操作的选完文件夹，就要出一个无用物提醒，**用户可以选中关闭以后就不用触发了**」。
-        /// 默认开（他要求的就是"每次选完文件夹就提醒"），关掉之后导入**一次都不弹**。</para>
-        ///
-        /// <para>⚠ <b>2026-09-28 起它不再控制任何行为</b>：那个提醒框退休了，无用物改成
-        /// "导入一完成就自动移出任务列表"（<c>ScanCoordinator.AddPathsAsync</c>），与这个开关无关。</para>
-        ///
-        /// <para>⚠ <b>2026-10-04 起界面上也没有这一格了</b>（用户原话：「要删除的是第二个你已经停止显示的，
-        /// 就是底层自动会做的」）⇒ 这一格连同它的两条文案、以及写它的那个入口
-        /// （<c>MainViewModel.SaveRemindJunkAfterImport</c>）一起删掉。⛔ 属性本身**留着**：
-        /// 不动设置序列化，用户盘上那份 <c>appsettings.json</c> 里这个键照旧读得进来、写回去也还在，
-        /// 只是**安静忽略**（改它不影响任何行为）。</para>
-        ///
-        /// <para>⛔ 与它无关的两件事照旧：① 程序对无用物**一个都不动**（不删/不改名/不搬）；
-        /// ② 无用物扫描的判据与上限一个字都不变；③ "已把 N 个无用物移出列表"那句**日志保留**
-        /// （用户 2026-10-04：「提示还是要有的」）。</para>
-        /// </summary>
-        public bool RemindJunkAfterImport { get; set; } = true;
-
-        /// <summary>
-        /// 失败 / 取消 / 部分完成时**保留**中间产物（用户 2026-09-25 第 25 条追加，**默认关**）。
-        ///
-        /// <para><b>用户原话</b>：「我不希望有这么多的失败残留，还是这么说如果解压 40G，两层，
-        /// 解压失败有 80G 的卸载残留，用户不得气死，你为什么要弄卸载残留，有一个导出失败列表
-        /// 不就可以了吗，而且对于用户来说，失败了就失败了，成功了就成功了」。</para>
-        ///
-        /// <para>默认 <c>false</c> = 没成功就**一个中间产物都不留**：任务工作区（暂存目录、抠出来的内嵌
-        /// 归档副本、已解出的过程物）与递归核心的逐层工作区整份删掉，只留日志与失败清单。
-        /// 打开它才是老行为（留着现场便于排查，③「清理与删除」页能扫到、能清）。</para>
-        ///
-        /// <para>⚠ 这条设置**只影响"没成功"的收尾**：成功路径的清理口径一个字没变
-        /// （仍然只有"解压成功 + 输出校验通过 + 未取消"才清），源包仍然一个字节都不动
-        /// （不变量 1），已经定稿搬出去的内容物也早就不在工作区里了。</para>
-        /// </summary>
-        public bool KeepFailedWorkspace { get; set; }
-
-        /// <summary>
-        /// **部分完成也把已解出的内容放进目标目录**（用户 2026-10-02 拍板的口径 A；**默认关**）。
-        ///
-        /// <para><b>用户原话</b>（`docs/部分完成发布方案.md` §6）：「这个的操作最少差不多就占了两份原包的空间
-        /// 要在开启界面详细写清楚」。他要的场景：一个 558 个条目的包解到 557 个时坏在最后一条上，
-        /// 老口径把已经解出来的 557 个文件**整份丢弃**、报「文件损坏」—— 十几分钟与十几 GiB 白扔。</para>
-        ///
-        /// <para><b>开了它之后的行为</b>（三条一起，缺一不可）：</para>
-        /// <list type="number">
-        /// <item><description>逐条对账（<c>Extraction/PartialPublishPlanner</c>）通过的条目发布到
-        /// <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>（固定子目录，⛔ 不参与落点规则、重跑不撞名）；</description></item>
-        /// <item><description>**源包一定不搬也不删**（哪怕设了「彻底删除」）—— 缺的那些条目只存在源包里；</description></item>
-        /// <item><description>其余物里**除最外层源包以外**的项与这一单的工作区删掉（"留源包 + 已解出内容物"两份）；</description></item>
-        /// </list>
-        ///
-        /// <para><b>它跟「空间不足」模式互斥</b>（用户 2026-10-02 顾虑 2）：那一档的全部价值就是
-        /// "定稿 + 校验通过后当场删源包"回收空间，而部分完成天然回收不了 ⇒ 那一档开着时**本开关不生效**
-        /// （写一行 INFO 说明，⛔ 不偷偷改用户的设置）；同时空间账按"源包还占着"多要一整个源包。</para>
-        /// </summary>
-        public bool PartialPublishEnabled { get; set; }
-
-        /// <summary>归集目标目录。</summary>
-        public string CollectTargetDirectory { get; set; } = string.Empty;
-
-        /// <remarks>
-        /// 2026-10-16：这里原来有一档 <c>OmitMiddleContinuationLayers</c>（用户 2026-09-27 定的「简洁档」，
-        /// 打开后只留第一层与最后一层、省掉中间那些"只产出下一个包"的层）。用户 2026-10-16 拍板删除：
-        /// 界面上一处都没有（②页那一格早已撤），代码里只剩一条恒为 false 的参数链在传它。
-        /// ⇒ 中间层**一律照建**（忠实档），判据唯一出口仍是 <c>PackageLayerRules.ShouldAddInnerPackageLayer</c>。
-        /// </remarks>
-
-        /// <summary>
-        /// 「特定解压」独立整理模式开关（只改内容物落点/命名，不碰源包与过程物删除）。
-        /// </summary>
-        public bool UseSpecificExtraction { get; set; }
-
-        /// <summary>
-        /// **「内容物保留关键词」**（用户 2026-10-04 拍板的新功能「内容物压缩文件不解压」；
-        /// 设置界面在⑥设置页那一栏，**只有这一处入口**）。
-        ///
-        /// <para><b>用户原话</b>：「这个功能同样要有记忆功能，用户可以在里面输入像，
-        /// <c>1_名字里面包含特定字符的压缩文件不解压</c>，你甚至不用去检测他是否是压缩文件，
-        /// 只要文件名里面包含着这个字符就不能动，例如 <c>小明</c>，只要内容物里面有文件的名称包含了"小明"
-        /// 的这些压缩文件碰都不要碰，例如 <c>小明.zip</c>、<c>小明.part1.rar</c>，而且不仅仅是相对于的，
-        /// 包含的也同样是，例如 <c>小明和小红.7z</c> 这种包含的也不要碰」。</para>
-        ///
-        /// <para><b>一行一个关键词</b>（界面上是多行文本框，落盘就是这个字符串数组）。判据唯一出口
-        /// <see cref="ArchiveFixer.Security.ContentKeepRules"/>：**包含即命中**（大小写不敏感）、
-        /// 空行忽略、⛔ 不做通配 / 正则、只吃文件名。</para>
-        ///
-        /// <para><b>默认空 = 这个功能不生效</b>：一个关键词都没有时，程序的行为与加这条功能之前
-        /// **逐字相同**（有回归用例钉住）。归一化只有一处实现
-        /// （<c>ContentKeepRules.NormalizeKeywords</c>），
-        /// <c>null</c>（旧配置里没有这个字段）→ 空列表。</para>
-        ///
-        /// <para>⚠ 作用范围只在**内容物**：用户导入的源包不套用这条（<c>小明.zip</c> 是别人给的包时照常处理）。</para>
-        /// </summary>
-        public List<string>? ContentKeepKeywords { get; set; }
-
-        /// <summary>
-        /// 「源包操作」（决策 D-9，2026-09-22 用户拍板；**2026-09-25 收敛成两档**）。
-        ///
-        /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c>），
-        /// 与其它设置项（RecursionMode / OverwriteMode / TerminalLayoutMode）一样用字符串落盘 ——
-        /// 枚举名比数字抗改，用户手改配置文件也看得懂。
-        ///
-        /// <para><b>默认 <c>KeepInPlace</c></b>（2026-09-25 第 32 条用户拍板："默认是源包原来位置不动"）：
-        /// 程序默认**一个字节都不搬用户的源包**；要整理的人自己选"放入其余物当中"，
-        /// 再由「删除操作」（<see cref="RestHandlingAfterVerify"/>）决定那份其余物是留着、进回收站还是彻底删。</para>
-        ///
-        /// <para><b>2026-09-25 第 32 条：原来的第三档 <c>DeleteAfterVerify</c> 被删掉</b>
-        /// （用户原话：「源包操作里的第 3 项……删掉」）。要删源包请用
-        /// "源包操作 = 放入其余物" + "删除操作 = 回收站 / 彻底删除"（见 <see cref="RestHandlingAfterVerify"/>）——
-        /// 两档组合起来语义更清楚，选项也少一个。旧值在 <see cref="Normalize"/> 里迁移成
-        /// "移入其余物 + 移入回收站"（可还原的那一档）。</para>
-        ///
-        /// <para>⚠ <b>两条路径行为一致</b>（用户 2026-09-22 版本二，推翻早先"地基路径永远不动源包"；
-        /// 2026-09-25 再次确认手动档与一键档是同一批）：手动「只解压」与一键处理读的是同一套设置；
-        /// <c>KeepInPlace</c> 才是"一个字节都不搬"的出口。</para>
-        /// </summary>
-        public string SourceHandling { get; set; } = nameof(SourceHandlingMode.KeepInPlace);
-
-        /// <summary>
-        /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.KeepInPlace"/>。
-        ///
-        /// 容错放在这里（与 <c>ParsePlacementMode</c> 同一口径）：这个字符串可能来自
-        /// 旧配置（缺字段 → 反序列化后是默认值）、用户手改的 json，或将来改名后的枚举。
-        /// 读不懂时**退回最不意外的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
-        ///
-        /// <para>⚠ 回落档必须与 <see cref="SourceHandling"/> 的默认值 / <c>CreateDefault</c> **一致**
-        /// （2026-09-25 第 32 条把默认档改成「留在原地」时，这里漏改过一处：一个手改坏的字符串会把
-        /// 用户从没同意过的"搬走源包"打开 —— 而这一档是**不可逆**的）。读不懂 = 什么都不做。</para>
-        /// </summary>
-        public static SourceHandlingMode ParseSourceHandling(string? value)
+        void TryAdd(string? candidate)
         {
-            if (!string.IsNullOrWhiteSpace(value) &&
-                Enum.TryParse(value.Trim(), ignoreCase: true, out SourceHandlingMode mode) &&
-                Enum.IsDefined(mode))
-            {
-                return mode;
-            }
-
-            return SourceHandlingMode.KeepInPlace;
-        }
-
-        /// <summary>反解成落盘字符串（界面 ↔ 解压管线共用同一份口径）。</summary>
-        public static string ToSourceHandlingValue(SourceHandlingMode mode)
-        {
-            return mode.ToString();
-        }
-
-        /// <summary>
-        /// 把"记住的密码本清单"收拾干净：去掉空项、去掉重复（大小写不敏感，Windows 路径口径），
-        /// 并把老字段 <paramref name="legacyBookPath"/> 里那一本**补进清单**（迁移）。
-        ///
-        /// <para>顺序保留（第一本在最前）：合并密码本时"各本书的新条目按书顺序追加"依赖它。</para>
-        /// </summary>
-        public static List<string> NormalizeBookPaths(IEnumerable<string>? paths, string? legacyBookPath)
-        {
-            var result = new List<string>();
-
-            void TryAdd(string? candidate)
-            {
-                if (string.IsNullOrWhiteSpace(candidate))
-                {
-                    return;
-                }
-
-                string trimmed = candidate.Trim();
-
-                foreach (string existing in result)
-                {
-                    if (string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return;
-                    }
-                }
-
-                result.Add(trimmed);
-            }
-
-            if (paths != null)
-            {
-                foreach (string path in paths)
-                {
-                    TryAdd(path);
-                }
-            }
-
-            // 迁移：旧配置只有 PasswordBookPath 一个字段（清空它会让用户回退版本后"没配过"）。
-            TryAdd(legacyBookPath);
-
-            return result;
-        }
-
-        public static AppSettings CreateDefault()
-        {
-            return new AppSettings
-            {
-                RecursiveScan = true,
-                ScanMode = "ScanAllFiles",
-                UnknownFormatAction = "MarkUnknown",
-                DefaultExtension = ".7z",
-                ExtractToOriginalDirectory = true,
-                CustomOutputDirectory = string.Empty,
-                KeepArchiveNameFolder = true,
-                ConflictAction = ConflictActions.AutoRename,
-                TestBeforeExtract = false,
-                EnableLog = true,
-
-                // 详细日志默认关：成功只留一行摘要（第 44 条追加）。显式写出来是为了让
-                // "出厂默认"一眼可见，别让人以为它是漏掉的。
-                VerboseLog = false,
-                AutoScanAfterDrop = true,
-                PreviewBeforeRename = true,
-
-                /*
-                 * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：这一批已经是**系统固定值**、
-                 * 界面上没有入口 ⇒ 出厂默认必须跟 `Normalize` 里那张钉子表**逐项一致**
-                 * （否则"新装 = 默认"，老配置 = 归一值，两条路给出不同行为）。
-                 * ⛔ 判据只有一处实现：`FixedDefaultsTests.出厂默认本来就是系统值` 会逐项比对两边。
-                 * ⚠ 本块里只写**原先不是这个值**的那一项（OverwriteMode）；其余各项（RecursionMode /
-                 *    KeepFailedWorkspace / RememberPasswordList …）
-                 *    原本就是系统值，各自在下面写着，⛔ 不许在这里再写一遍（CS1912 会当场打回）。
-                 */
-                OverwriteMode = "AutoRenameExisting",
-                TryEmptyPasswordFirst = true,
-                UseGlobalPasswordForAllTasks = true,
-                MaxParallelExtractCount = DefaultMaxParallelExtractCount,
-                RunAtFullSpeed = false,
-                LowProcessPriority = false,
-                OpenOutputFolderWhenDone = false,
-                ReportDangerousEntries = true,
-                RemindBeforeExtract = true,
-
-                // 第 42 条的全自动拼装：出厂**关**（它会读源目录、并在盘上造名字 / 复制卷）。
-                AssembleSplitVolumesFromContainer = true,
-
-                // 打包（第 46 条）：落点默认本地、原包不动、其余物（装分卷的文件夹）默认彻底删除。
-                PackTargetMode = "Local",
-                PackCustomOutputDirectory = string.Empty,
-                PackSourceHandling = "KeepInPlace",
-                PackRestHandling = "Delete",
-                RememberLastOutputDirectory = true,
-                IncludeHiddenFiles = false,
-                IncludeSystemFiles = false,
-                MaxFileSizeLimit = 0,
-                EnableSidecarPassword = false,
-                CustomSevenZipExePath = string.Empty,
-                CustomUnRarExePath = string.Empty,
-                CustomRarExePath = string.Empty,
-
-                // 用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
-                EnginePriority = new List<string>(EngineIds.DefaultPriority),
-                KeepBrokenFiles = false,
-                RestHandlingAfterVerify = RestHandlingModes.Keep,
-                CollectResultsToDirectory = false,
-                CollectTargetDirectory = string.Empty,
-                PasswordBookPath = string.Empty,
-                PasswordBookPaths = new List<string>(),
-                RememberPasswordList = true,
-                SkipOneClickConfirm = false,
-                RemindJunkAfterImport = true,
-                /*
-                 * 递归模式出厂默认（用户 2026-10-04 当场推翻旧口径）：
-                 * 「那你为什么会将这个**单链解压设为默认**……现在**将默认设为全文件解压**」——
-                 * 出厂默认 = 「展开所有分支」（有压缩包就解压），②页那三档照旧都可选。
-                 *
-                 * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动（`Normalize` 里也不做迁移）——
-                 * 他机器上那份 appsettings.json 里选的是哪一档，就还是哪一档。
-                 */
-
-                /*
-                 * 默认层数 = **7**（用户 2026-10-14 拍板：层数/轮数**保持一个设置**、默认从 5 调到 7，
-                 * 不再有"单层路 / 单链档"，一律展开到底）。
-                 * ⚠ 上限没动：`Normalize` 里仍然是 1..10，`OneClickCoordinator.MaxRoundsCeiling` = 10（不变量 8）⇒ 7 在闸内。
-                 * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动。
-                 */
-                MaxRecursionDepth = 7,
-                RecursionDefaultUnifiedToTen = true,
-                MaxPasswordAttemptsPerLayer = 10,
-
-                // 解压前的资源预算上限（用户 2026-09-25 第 36 条：四条都落进设置，默认值调到真实包碰不到的量级）。
-                MaxSingleExtractedFileGiB = DefaultMaxSingleExtractedFileGiB,
-                MaxExtractedTotalGiB = DefaultMaxExtractedTotalGiB,
-                MaxExtractedFileCount = DefaultMaxExtractedFileCount,
-                MaxExtractionRatio = DefaultMaxExtractionRatio,
-
-                // 内容物保留关键词（用户 2026-10-04）：出厂**空** = 功能不生效，行为与以前一字不差。
-                ContentKeepKeywords = new List<string>(),
-
-                SourceHandling = nameof(SourceHandlingMode.KeepInPlace),
-
-                // 失败 / 取消不留中间产物（用户 2026-09-25 第 25 条追加）：默认关闭，
-                // 老配置里没有这个字段时反序列化出来也是 false —— 与默认档一致，不需要迁移标记。
-                KeepFailedWorkspace = false,
-
-                /*
-                 * 部分完成发布（用户 2026-10-02 拍板，口径见 StatusText 那一组常量与
-                 * `docs/部分完成发布方案.md` §6）：**默认关**。
-                 *
-                 * 为什么默认关、而且不能顺手打开：它让"跑完之后盘上从 1 份变成 2 份"
-                 * （源包 + 已解出的内容物，而且源包一定不删）—— 用户点名的顾虑就是这条
-                 * （"空间不足加上大容量多相同文件一起开"）。要开是他自己的选择，程序不替他决定。
-                 */
-                PartialPublishEnabled = false
-            };
-        }
-
-        /// <summary>
-        /// 只有“本地盘还在、文件确实不存在”才清空工具路径。
-        /// 外接盘/网络盘拔掉时 <see cref="System.IO.File.Exists(string)"/> 也是 false，
-        /// 但那是暂时离线，不能把用户填的路径永久清掉。
-        /// </summary>
-        private static bool ShouldClearToolPath(string? path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || System.IO.File.Exists(path))
-            {
-                return false;
-            }
-
-            try
-            {
-                string? root = System.IO.Path.GetPathRoot(path);
-                return !string.IsNullOrEmpty(root) && System.IO.Directory.Exists(root);
-            }
-            catch
-            {
-                return true;
-            }
-        }
-        /// <summary>
-        /// 明确退役、不能原样保留的旧键。其它未知键按“未来版本设置”原样保留。
-        /// </summary>
-        private void RemoveRetiredUnknownSettings()
-        {
-            if (UnknownSettings == null || UnknownSettings.Count == 0)
+            if (string.IsNullOrWhiteSpace(candidate))
             {
                 return;
             }
 
-            // 2026-09-30 用户拍板彻底删除「缓存根目录」；保留它等于把已经取消的
-            // “用户自定义工作区”权限又带回配置里，因此只对这一个键做清理。
-            UnknownSettings.Remove("CacheRootDirectory");
+            string trimmed = candidate.Trim();
 
-            if (UnknownSettings.Count == 0)
+            foreach (string existing in result)
             {
-                UnknownSettings = null;
+                if (string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            result.Add(trimmed);
+        }
+
+        if (paths != null)
+        {
+            foreach (string path in paths)
+            {
+                TryAdd(path);
             }
         }
 
-        public void Normalize()
+        // 迁移：旧配置只有 PasswordBookPath 一个字段（清空它会让用户回退版本后"没配过"）。
+        TryAdd(legacyBookPath);
+
+        return result;
+    }
+
+    public static AppSettings CreateDefault()
+    {
+        return new AppSettings
         {
-            RemoveRetiredUnknownSettings();
+            RecursiveScan = true,
+            ScanMode = "ScanAllFiles",
+            UnknownFormatAction = "MarkUnknown",
+            DefaultExtension = ".7z",
+            ExtractToOriginalDirectory = true,
+            CustomOutputDirectory = string.Empty,
+            KeepArchiveNameFolder = true,
+            ConflictAction = ConflictActions.AutoRename,
+            TestBeforeExtract = false,
+            EnableLog = true,
 
-            if (string.IsNullOrWhiteSpace(ScanMode))
-            {
-                ScanMode = "ScanAllFiles";
-            }
-
-            if (string.IsNullOrWhiteSpace(UnknownFormatAction))
-            {
-                UnknownFormatAction = "MarkUnknown";
-            }
-
-            if (string.IsNullOrWhiteSpace(DefaultExtension))
-            {
-                DefaultExtension = ".7z";
-            }
-
-            if (!DefaultExtension.StartsWith(".", StringComparison.Ordinal))
-            {
-                DefaultExtension = "." + DefaultExtension;
-            }
+            // 详细日志默认关：成功只留一行摘要（第 44 条追加）。显式写出来是为了让
+            // "出厂默认"一眼可见，别让人以为它是漏掉的。
+            VerboseLog = false,
+            AutoScanAfterDrop = true,
+            PreviewBeforeRename = true,
 
             /*
-             * 同名冲突处理档：空 / 非法一律回落 AutoRename（**绝不默认覆盖**，不变量 3）。
+             * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：这一批已经是**系统固定值**、
+             * 界面上没有入口 ⇒ 出厂默认必须跟 `Normalize` 里那张钉子表**逐项一致**
+             * （否则"新装 = 默认"，老配置 = 归一值，两条路给出不同行为）。
+             * ⛔ 判据只有一处实现：`FixedDefaultsTests.出厂默认本来就是系统值` 会逐项比对两边。
+             * ⚠ 本块里只写**原先不是这个值**的那一项（OverwriteMode）；其余各项（RecursionMode /
+             *    KeepFailedWorkspace / RememberPasswordList …）
+             *    原本就是系统值，各自在下面写着，⛔ 不许在这里再写一遍（CS1912 会当场打回）。
+             */
+            OverwriteMode = "AutoRenameExisting",
+            TryEmptyPasswordFirst = true,
+            UseGlobalPasswordForAllTasks = true,
+            MaxParallelExtractCount = DefaultMaxParallelExtractCount,
+            RunAtFullSpeed = false,
+            LowProcessPriority = false,
+            OpenOutputFolderWhenDone = false,
+            ReportDangerousEntries = true,
+            RemindBeforeExtract = true,
+
+            // 第 42 条的全自动拼装：出厂**关**（它会读源目录、并在盘上造名字 / 复制卷）。
+            AssembleSplitVolumesFromContainer = true,
+
+            // 打包（第 46 条）：落点默认本地、原包不动、其余物（装分卷的文件夹）默认彻底删除。
+            PackTargetMode = "Local",
+            PackCustomOutputDirectory = string.Empty,
+            PackSourceHandling = "KeepInPlace",
+            PackRestHandling = "Delete",
+            RememberLastOutputDirectory = true,
+            IncludeHiddenFiles = false,
+            IncludeSystemFiles = false,
+            MaxFileSizeLimit = 0,
+            EnableSidecarPassword = false,
+            CustomSevenZipExePath = string.Empty,
+            CustomUnRarExePath = string.Empty,
+            CustomRarExePath = string.Empty,
+
+            // 用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
+            EnginePriority = new List<string>(EngineIds.DefaultPriority),
+            KeepBrokenFiles = false,
+            RestHandlingAfterVerify = RestHandlingModes.Keep,
+            CollectResultsToDirectory = false,
+            CollectTargetDirectory = string.Empty,
+            PasswordBookPath = string.Empty,
+            PasswordBookPaths = new List<string>(),
+            RememberPasswordList = true,
+            SkipOneClickConfirm = false,
+            RemindJunkAfterImport = true,
+            /*
+             * 递归模式出厂默认（用户 2026-10-04 当场推翻旧口径）：
+             * 「那你为什么会将这个**单链解压设为默认**……现在**将默认设为全文件解压**」——
+             * 出厂默认 = 「展开所有分支」（有压缩包就解压），②页那三档照旧都可选。
              *
-             * 归一化放在设置层，与 RecursionMode / TerminalLayoutMode / SourceHandling 同一口径：
-             * 到了冲突那一刻才发现"这个档读不懂"是最糟的 —— 用户已经点了解压，程序却要临时猜一个处置方式。
-             * 判定本身只有一处实现（ConflictActions.Normalize），这里不另写一套字符串比较。
-             */
-            ConflictAction = ConflictActions.Normalize(ConflictAction);
-
-            if (string.IsNullOrWhiteSpace(OverwriteMode))
-            {
-                OverwriteMode = "SkipExisting";
-            }
-
-            if (MaxParallelExtractCount < 1)
-            {
-                MaxParallelExtractCount = 1;
-            }
-
-            if (MaxParallelExtractCount > 4)
-            {
-                MaxParallelExtractCount = 4;
-            }
-
-            if (ConcurrencyOverride < 0)
-            {
-                ConcurrencyOverride = 0;
-            }
-
-            if (ConcurrencyOverride > 8)
-            {
-                ConcurrencyOverride = 8;
-            }
-
-            /*
-             * 源包处理档：只认当前枚举值；认不出回落默认档。
-             */
-            SourceHandling = ParseSourceHandling(SourceHandling).ToString();
-
-            /*
-             * 「删除操作」两档：空 / 非法一律回落 **Keep（留下）** —— 保守方向是"宁可不动，绝不误删"。
-             * ⚠ 老配置里存过的 `RecycleBin`（2026-10-15 整条下线）也落进 Keep：
-             * ⛔ 绝不许把它当成 Delete（那是把"可还原"悄悄升级成"不可恢复"，方向正好反了）。
-             * 判定只有一处实现（RestHandlingModes.Normalize），这里不另写一套字符串比较。
-             */
-            RestHandlingAfterVerify = RestHandlingModes.Normalize(RestHandlingAfterVerify);
-
-            if (MaxFileSizeLimit < 0)
-            {
-                MaxFileSizeLimit = 0;
-            }
-
-            /*
-             * 落点旧配置迁移（用户 2026-09-24 第 13 条：删掉"解压到当前目录"与"直接解到指定目录"两档）。
-             *
-             * 落盘一直是**两个布尔**（ExtractToOriginalDirectory + KeepArchiveNameFolder），
-             * 旧的那两档就是 (true,false) 与 (false,false)。它们现在已经没有对应档位了，
-             * 所以这里把 KeepArchiveNameFolder 归一成 true：
-             * · 旧配置读进来**不炸**，行为落到用户要的四条规则上（源目录家族 → 111\222\；
-             *   指定位置 → 顺手保留那个根，但补上同名子文件夹）；
-             * · 归一化放在设置层，与 ConflictAction / SourceHandling 同一口径 ——
-             *   到解压那一刻才发现"这个组合读不懂"是最糟的，那时用户已经点了一键处理。
-             * ⚠ 刻意**不**动 ExtractToOriginalDirectory：它决定"有没有指定位置"，是两档的判据本身。
-             */
-            KeepArchiveNameFolder = true;
-
-            /*
-             * 落点只有**用户可见的两个布尔 + 自定义根**这一份真值。
-             *
-             * `PlacementMode` 是旧版本留下的持久化字段，只作为兼容输出保留：
-             * 它一旦与用户界面的两个布尔不一致，就会把“指定位置”悄悄压成“原地”
-             * （2026-11-05 真机：ExtractToOriginalDirectory=false + CustomOutputDirectory=H:\...\333
-             * 仍在源目录解压，因为旧 PlacementMode=0 赢了）。
-             * 所以每次 Normalize 都从两个布尔重新派生，绝不允许旧字段反向覆盖。
-             */
-            PlacementMode = ArchiveFixer.Extraction.OutputPlacement.NormalizeLegacyMode(
-                ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags(
-                    ExtractToOriginalDirectory,
-                    KeepArchiveNameFolder,
-                    CustomOutputDirectory));
-
-            CustomOutputDirectory ??= string.Empty;
-            CustomSevenZipExePath ??= string.Empty;
-            CustomUnRarExePath ??= string.Empty;
-            CustomRarExePath ??= string.Empty;
-            CollectTargetDirectory ??= string.Empty;
-            PasswordBookPath ??= string.Empty;
-
-            /*
-             * 「失败时保留中间产物」（用户 2026-09-25 第 25 条追加）：**bool 不需要归一化**。
-             *
-             * 它只有开 / 关两种取值，读不出第三种；而旧配置里没有这个字段时，
-             * System.Text.Json 反序列化后就是属性默认值 false —— 与"默认档 = 失败不留残留"完全一致。
-             * 所以这里**一个字都不写**：刻意留这段说明，免得以后有人顺手加一句
-             * `KeepFailedWorkspace = false;` 把用户打开的那一档每次启动都顶掉。
+             * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动（`Normalize` 里也不做迁移）——
+             * 他机器上那份 appsettings.json 里选的是哪一档，就还是哪一档。
              */
 
             /*
-             * 密码本清单（用户 2026-09-24：多本密码本）。
-             *
-             * 迁移放在这里，与其它设置项的容错同一口径：旧配置里只有单个 PasswordBookPath，
-             * 读出来是个 null 列表 —— 这里把它补进去，老用户升级后的"自动加载哪一本"行为不变。
-             *
-             * ⚠ 刻意**不清空老字段** PasswordBookPath：用户回退到旧版本时，那一边仍然靠它认路
-             *（清空 = 回退后"密码本没配过"，等于把用户的配置吃掉一次）。
-             * 于是这份清单在每次 Normalize 时都会把老字段的值并进来 —— 用 Contains 去重，幂等。
+             * 默认层数 = **7**（用户 2026-10-14 拍板：层数/轮数**保持一个设置**、默认从 5 调到 7，
+             * 不再有"单层路 / 单链档"，一律展开到底）。
+             * ⚠ 上限没动：`Normalize` 里仍然是 1..10，`OneClickCoordinator.MaxRoundsCeiling` = 10（不变量 8）⇒ 7 在闸内。
+             * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动。
              */
-            PasswordBookPaths = NormalizeBookPaths(PasswordBookPaths, PasswordBookPath);
-            PasswordBookPath = PasswordBookPaths.Count > 0 ? PasswordBookPaths[PasswordBookPaths.Count - 1] : string.Empty;
+            MaxRecursionDepth = 7,
+            RecursionDefaultUnifiedToTen = true,
+            MaxPasswordAttemptsPerLayer = 10,
+
+            // 解压前的资源预算上限（用户 2026-09-25 第 36 条：四条都落进设置，默认值调到真实包碰不到的量级）。
+            MaxSingleExtractedFileGiB = DefaultMaxSingleExtractedFileGiB,
+            MaxExtractedTotalGiB = DefaultMaxExtractedTotalGiB,
+            MaxExtractedFileCount = DefaultMaxExtractedFileCount,
+            MaxExtractionRatio = DefaultMaxExtractionRatio,
+
+            // 内容物保留关键词（用户 2026-10-04）：出厂**空** = 功能不生效，行为与以前一字不差。
+            ContentKeepKeywords = new List<string>(),
+
+            SourceHandling = nameof(SourceHandlingMode.KeepInPlace),
+
+            // 失败 / 取消不留中间产物（用户 2026-09-25 第 25 条追加）：默认关闭，
+            // 老配置里没有这个字段时反序列化出来也是 false —— 与默认档一致，不需要迁移标记。
+            KeepFailedWorkspace = false,
 
             /*
-             * 引擎优先级：空 / 缺字段 / 手改坏的值一律收拾成"规范写法 + 补全所有已知引擎"。
+             * 部分完成发布（用户 2026-10-02 拍板，口径见 StatusText 那一组常量与
+             * `docs/部分完成发布方案.md` §6）：**默认关**。
              *
-             * 归一化放在设置层，与其它设置项同一口径：到引擎选择那一刻才发现"这个列表读不懂"
-             * 是最糟的 —— 用户已经点了处理，程序却要临时猜用哪个引擎。
-             * 判定只有一处实现（EngineIds.Normalize），这里不另写一套字符串比较。
+             * 为什么默认关、而且不能顺手打开：它让"跑完之后盘上从 1 份变成 2 份"
+             * （源包 + 已解出的内容物，而且源包一定不删）—— 用户点名的顾虑就是这条
+             * （"空间不足加上大容量多相同文件一起开"）。要开是他自己的选择，程序不替他决定。
              */
-            EnginePriority = EngineIds.Normalize(EnginePriority);
+            PartialPublishEnabled = false
+        };
+    }
+
+    /// <summary>
+    /// 只有“本地盘还在、文件确实不存在”才清空工具路径。
+    /// 外接盘/网络盘拔掉时 <see cref="System.IO.File.Exists(string)"/> 也是 false，
+    /// 但那是暂时离线，不能把用户填的路径永久清掉。
+    /// </summary>
+    private static bool ShouldClearToolPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || System.IO.File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            string? root = System.IO.Path.GetPathRoot(path);
+            return !string.IsNullOrEmpty(root) && System.IO.Directory.Exists(root);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+    /// <summary>
+    /// 明确退役、不能原样保留的旧键。其它未知键按“未来版本设置”原样保留。
+    /// </summary>
+    private void RemoveRetiredUnknownSettings()
+    {
+        if (UnknownSettings == null || UnknownSettings.Count == 0)
+        {
+            return;
+        }
+
+        // 2026-09-30 用户拍板彻底删除「缓存根目录」；保留它等于把已经取消的
+        // “用户自定义工作区”权限又带回配置里，因此只对这一个键做清理。
+        UnknownSettings.Remove("CacheRootDirectory");
+
+        if (UnknownSettings.Count == 0)
+        {
+            UnknownSettings = null;
+        }
+    }
+
+    public void Normalize()
+    {
+        RemoveRetiredUnknownSettings();
+
+        if (string.IsNullOrWhiteSpace(ScanMode))
+        {
+            ScanMode = "ScanAllFiles";
+        }
+
+        if (string.IsNullOrWhiteSpace(UnknownFormatAction))
+        {
+            UnknownFormatAction = "MarkUnknown";
+        }
+
+        if (string.IsNullOrWhiteSpace(DefaultExtension))
+        {
+            DefaultExtension = ".7z";
+        }
+
+        if (!DefaultExtension.StartsWith(".", StringComparison.Ordinal))
+        {
+            DefaultExtension = "." + DefaultExtension;
+        }
+
+        /*
+         * 同名冲突处理档：空 / 非法一律回落 AutoRename（**绝不默认覆盖**，不变量 3）。
+         *
+         * 归一化放在设置层，与 RecursionMode / TerminalLayoutMode / SourceHandling 同一口径：
+         * 到了冲突那一刻才发现"这个档读不懂"是最糟的 —— 用户已经点了解压，程序却要临时猜一个处置方式。
+         * 判定本身只有一处实现（ConflictActions.Normalize），这里不另写一套字符串比较。
+         */
+        ConflictAction = ConflictActions.Normalize(ConflictAction);
+
+        if (string.IsNullOrWhiteSpace(OverwriteMode))
+        {
+            OverwriteMode = "SkipExisting";
+        }
+
+        if (MaxParallelExtractCount < 1)
+        {
+            MaxParallelExtractCount = 1;
+        }
+
+        if (MaxParallelExtractCount > 4)
+        {
+            MaxParallelExtractCount = 4;
+        }
+
+        if (ConcurrencyOverride < 0)
+        {
+            ConcurrencyOverride = 0;
+        }
+
+        if (ConcurrencyOverride > 8)
+        {
+            ConcurrencyOverride = 8;
+        }
+
+        /*
+         * 源包处理档：只认当前枚举值；认不出回落默认档。
+         */
+        SourceHandling = ParseSourceHandling(SourceHandling).ToString();
+
+        /*
+         * 「删除操作」两档：空 / 非法一律回落 **Keep（留下）** —— 保守方向是"宁可不动，绝不误删"。
+         * ⚠ 老配置里存过的 `RecycleBin`（2026-10-15 整条下线）也落进 Keep：
+         * ⛔ 绝不许把它当成 Delete（那是把"可还原"悄悄升级成"不可恢复"，方向正好反了）。
+         * 判定只有一处实现（RestHandlingModes.Normalize），这里不另写一套字符串比较。
+         */
+        RestHandlingAfterVerify = RestHandlingModes.Normalize(RestHandlingAfterVerify);
+
+        if (MaxFileSizeLimit < 0)
+        {
+            MaxFileSizeLimit = 0;
+        }
+
+        /*
+         * 落点旧配置迁移（用户 2026-09-24 第 13 条：删掉"解压到当前目录"与"直接解到指定目录"两档）。
+         *
+         * 落盘一直是**两个布尔**（ExtractToOriginalDirectory + KeepArchiveNameFolder），
+         * 旧的那两档就是 (true,false) 与 (false,false)。它们现在已经没有对应档位了，
+         * 所以这里把 KeepArchiveNameFolder 归一成 true：
+         * · 旧配置读进来**不炸**，行为落到用户要的四条规则上（源目录家族 → 111\222\；
+         *   指定位置 → 顺手保留那个根，但补上同名子文件夹）；
+         * · 归一化放在设置层，与 ConflictAction / SourceHandling 同一口径 ——
+         *   到解压那一刻才发现"这个组合读不懂"是最糟的，那时用户已经点了一键处理。
+         * ⚠ 刻意**不**动 ExtractToOriginalDirectory：它决定"有没有指定位置"，是两档的判据本身。
+         */
+        KeepArchiveNameFolder = true;
+
+        /*
+         * 落点只有**用户可见的两个布尔 + 自定义根**这一份真值。
+         *
+         * `PlacementMode` 是旧版本留下的持久化字段，只作为兼容输出保留：
+         * 它一旦与用户界面的两个布尔不一致，就会把“指定位置”悄悄压成“原地”
+         * （2026-11-05 真机：ExtractToOriginalDirectory=false + CustomOutputDirectory=H:\...\333
+         * 仍在源目录解压，因为旧 PlacementMode=0 赢了）。
+         * 所以每次 Normalize 都从两个布尔重新派生，绝不允许旧字段反向覆盖。
+         */
+        PlacementMode = ArchiveFixer.Extraction.OutputPlacement.NormalizeLegacyMode(
+            ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags(
+                ExtractToOriginalDirectory,
+                KeepArchiveNameFolder,
+                CustomOutputDirectory));
+
+        CustomOutputDirectory ??= string.Empty;
+        CustomSevenZipExePath ??= string.Empty;
+        CustomUnRarExePath ??= string.Empty;
+        CustomRarExePath ??= string.Empty;
+        CollectTargetDirectory ??= string.Empty;
+        PasswordBookPath ??= string.Empty;
+
+        /*
+         * 「失败时保留中间产物」（用户 2026-09-25 第 25 条追加）：**bool 不需要归一化**。
+         *
+         * 它只有开 / 关两种取值，读不出第三种；而旧配置里没有这个字段时，
+         * System.Text.Json 反序列化后就是属性默认值 false —— 与"默认档 = 失败不留残留"完全一致。
+         * 所以这里**一个字都不写**：刻意留这段说明，免得以后有人顺手加一句
+         * `KeepFailedWorkspace = false;` 把用户打开的那一档每次启动都顶掉。
+         */
+
+        /*
+         * 密码本清单（用户 2026-09-24：多本密码本）。
+         *
+         * 迁移放在这里，与其它设置项的容错同一口径：旧配置里只有单个 PasswordBookPath，
+         * 读出来是个 null 列表 —— 这里把它补进去，老用户升级后的"自动加载哪一本"行为不变。
+         *
+         * ⚠ 刻意**不清空老字段** PasswordBookPath：用户回退到旧版本时，那一边仍然靠它认路
+         *（清空 = 回退后"密码本没配过"，等于把用户的配置吃掉一次）。
+         * 于是这份清单在每次 Normalize 时都会把老字段的值并进来 —— 用 Contains 去重，幂等。
+         */
+        PasswordBookPaths = NormalizeBookPaths(PasswordBookPaths, PasswordBookPath);
+        PasswordBookPath = PasswordBookPaths.Count > 0 ? PasswordBookPaths[PasswordBookPaths.Count - 1] : string.Empty;
+
+        /*
+         * 引擎优先级：空 / 缺字段 / 手改坏的值一律收拾成"规范写法 + 补全所有已知引擎"。
+         *
+         * 归一化放在设置层，与其它设置项同一口径：到引擎选择那一刻才发现"这个列表读不懂"
+         * 是最糟的 —— 用户已经点了处理，程序却要临时猜用哪个引擎。
+         * 判定只有一处实现（EngineIds.Normalize），这里不另写一套字符串比较。
+         */
+        EnginePriority = EngineIds.Normalize(EnginePriority);
 
 
 
-            /*
-             * 「内容物保留关键词」（用户 2026-10-04）：
-             *
-             * 归一化放在设置层，与 EnginePriority 同一口径 —— 到解压那一刻才发现
-             * "这一行读不懂"是最糟的（用户已经点了一键处理）。判定只有一处实现
-             * （ContentKeepRules.NormalizeKeywords），这里不另写一套字符串比较。
-             *
-             * ⚠ null（旧配置里没有这个字段）与空列表**在这里是同一个结果**：都是"这个功能不生效"。
-             */
-            ContentKeepKeywords = ArchiveFixer.Security.ContentKeepRules
-                .NormalizeKeywords(ContentKeepKeywords);
+        /*
+         * 「内容物保留关键词」（用户 2026-10-04）：
+         *
+         * 归一化放在设置层，与 EnginePriority 同一口径 —— 到解压那一刻才发现
+         * "这一行读不懂"是最糟的（用户已经点了一键处理）。判定只有一处实现
+         * （ContentKeepRules.NormalizeKeywords），这里不另写一套字符串比较。
+         *
+         * ⚠ null（旧配置里没有这个字段）与空列表**在这里是同一个结果**：都是"这个功能不生效"。
+         */
+        ContentKeepKeywords = ArchiveFixer.Security.ContentKeepRules
+            .NormalizeKeywords(ContentKeepKeywords);
 
-            /*
-             * 一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）：
-             *
-             * 旧默认值是 3，而**从没主动选过 3** 的用户读到的那个 3 其实是"旧默认"，不是他的选择 ——
-             * 光把默认值改成 10 对他没用（他的设置文件里存着 3）。所以这里迁一次，并落一个标记：
-             * 迁移只发生一次，他之后在②页把 3 改回来就是他的选择，不会被再次顶掉。
-             */
-            if (!RecursionDefaultUnifiedToTen)
-            {
-                if (MaxRecursionDepth == 3)
-                {
-                    MaxRecursionDepth = 10;
-                }
-
-                RecursionDefaultUnifiedToTen = true;
-            }
-
-            // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
-            if (MaxRecursionDepth < 1)
-            {
-                MaxRecursionDepth = 1;
-            }
-
-            if (MaxRecursionDepth > 10)
+        /*
+         * 一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）：
+         *
+         * 旧默认值是 3，而**从没主动选过 3** 的用户读到的那个 3 其实是"旧默认"，不是他的选择 ——
+         * 光把默认值改成 10 对他没用（他的设置文件里存着 3）。所以这里迁一次，并落一个标记：
+         * 迁移只发生一次，他之后在②页把 3 改回来就是他的选择，不会被再次顶掉。
+         */
+        if (!RecursionDefaultUnifiedToTen)
+        {
+            if (MaxRecursionDepth == 3)
             {
                 MaxRecursionDepth = 10;
             }
 
-            // 密码尝试上限：下限 1（至少试一个候选），上限 1000（再大就不是省事而是烧时间）。
-            // 旧配置文件里没有这一项 → 反序列化后拿到的是默认值 10，不需要额外兼容分支。
-            if (MaxPasswordAttemptsPerLayer < 1)
-            {
-                MaxPasswordAttemptsPerLayer = 1;
-            }
-
-            if (MaxPasswordAttemptsPerLayer > 1000)
-            {
-                MaxPasswordAttemptsPerLayer = 1000;
-            }
-
-            /*
-             * 解压前的资源预算上限（用户 2026-09-25 第 36 条）：四条都夹回合法区间。
-             * 夹的规则只有一处实现（上面那四个 NormalizeXxxCap），`ResourceBudgetOptions.FromSettings`
-             * 读的时候用的是同一批函数 —— 界面、落盘、真正判包三处口径不许分叉。
-             */
-            MaxSingleExtractedFileGiB = NormalizeSingleFileCapGiB(MaxSingleExtractedFileGiB);
-            MaxExtractedTotalGiB = NormalizeTotalCapGiB(MaxExtractedTotalGiB, MaxSingleExtractedFileGiB);
-            MaxExtractedFileCount = NormalizeExtractedFileCountCap(MaxExtractedFileCount);
-            MaxExtractionRatio = NormalizeExtractionRatioCap(MaxExtractionRatio);
-
-            // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
-            if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && ShouldClearToolPath(CustomSevenZipExePath))
-            {
-                CustomSevenZipExePath = string.Empty;
-            }
-
-            /*
-             * 自定义 UnRAR 路径同理；但**兜底方向不同**：UnRAR 还有"已装 WinRAR 目录"与"内置"两档，
-             * 所以清空它只是回到"自动解析"，不会让引擎不可用（ToolLocator 里两级回落）。
-             */
-            if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && ShouldClearToolPath(CustomUnRarExePath))
-            {
-                CustomUnRarExePath = string.Empty;
-            }
-
-            /*
-             * 自定义 Rar.exe 路径同理（打包的外层 rar 用）。清空它只是回到"自动解析"，
-             * 不会让打包不可用 —— 界面上还可以把外层容器改成 7z 或"不做外层"。
-             *
-             * ⚠ 这里**不做任何"帮用户找一份 Rar.exe 塞进来"的事**：那是分发共享软件的第一步
-             * （AGENTS.md §3.1）。这一格永远是用户自己填的。
-             */
-            if (!string.IsNullOrWhiteSpace(CustomRarExePath) && ShouldClearToolPath(CustomRarExePath))
-            {
-                CustomRarExePath = string.Empty;
-            }
-
-            /*
-             * ================================================================
-             * 系统固定默认值（用户 2026-10-14 最终设计 + 当场逐项拍板）
-             * ================================================================
-             *
-             * 用户原话：「我觉得有些删除的选项里面都应该时系统底层会做的而不是让用户来选择的」
-             * ＋ 对"删除 = 从界面移出、值固定成系统默认（功能一个都不删）"的当场确认：「对，就是这个意思」。
-             *
-             * ⇒ 这一批设置项的**界面入口已经删掉**（设置页「启动时行为 / 扫描与识别」两组、
-             *    ②页「续解省略中间层 / 解压覆盖策略」、③页「部分完成的内容」等），所以必须在这里把值钉死：
-             *    否则用户机器上 appsettings.json 里存过的旧值会变成**界面上看不见的暗档** ——
-             *    行为跟他以为的不一样，还没地方改回来（这是最坏的一种退化）。
-             *
-             * ⛔ 钉的就是用户逐项确认过的那张表（出处 docs/大改动-2026-10-14-口径与冲突.md §17.6）；
-             * ⛔ 这些项**从此没有用户入口**：界面写什么程序就跑什么，所以他存过的旧值一律归到这里。
-             * ⚠ 与"只改出厂默认、不迁移用户存过的值"那条老规矩的区别：那条针对的是**还有入口**的项；
-             *    这一批已经没有入口了，保留旧值等于让用户背着一个改不掉的暗档。
-             */
-            RememberLastOutputDirectory = true;      // 记住上次输出目录（开）
-            LowProcessPriority = false;              // 低运行优先级（关 —— 用户 2026-10-14 定的是"不降"）
-            RecursiveScan = true;                    // 递归扫描文件夹（开）
-            AutoScanAfterDrop = true;                // 导入后自动扫描（开）
-            ScanMode = "ScanAllFiles";               // 扫描模式（扫描全部文件）
-            UnknownFormatAction = "MarkUnknown";     // 未知格式处理（标记未知）
-            DefaultExtension = ".7z";                // 默认补充后缀（这一格是**后缀字符串**，出厂值 .7z）
-            OverwriteMode = "AutoRenameExisting";    // 解压覆盖策略（自动重命名已存在文件）
-            KeepFailedWorkspace = false;             // 工作区（失败 / 取消也默认清干净）
-            RememberPasswordList = true;             // 记住密码列表（系统默认操作，界面上没有开关）
-
-            /*
-             * 嵌套：**一律展开所有分支**（用户 2026-10-14 口径逐字：「我不是将单层路给删掉了吗，
-             * 现在就是全面解压所有分路」＋最终设计「三档功能全部删除，只默认解开所有分支」）。
-             *
-             * ⚠ 用户 2026-10-14 夜当场纠正过我一次：我原先把这一项"留到不再有单层路那一刀"，
-             * 那是理解偏了 —— **单层路已经删了**，所以老配置里存过的 SingleLayer / SingleChain
-             * 必须现在就归一掉（否则就是一个界面上看不见、还在生效的档位）。
-             *
-             * ⚠ 跟着红的 5 条既有守门（`WorkspaceRootTests` 2 / `PartialPublishTests` 2 /
-             * `RecursionLogAndProbePathFixesTests` 1）属于"场景建立在**已删模式**上"——
-             * 按新现实重写（见各自注释），⛔ 不是把判据放宽。
-             */
-            /*
-             * ⛔ 2026-10-15 红检记录（临时撤掉这一行跑过一轮，已还原）：撤掉之后
-             * `InnerLayerContinuationTests` 23 红 → 2 红、`ExtractionPipelineFixTests` 10 → 0、
-             * `ChainManifestCompletenessTests` 3 → 0、`OutputVerificationGateTests` 3 → 0
-             * ⇒ **这一条 pin 是那 ~36 条红的唯一根因**（夹具把 `SingleLayer` 当"只造一层场景"的工具，
-             * 而 `Save()` → `Normalize()` 会把它覆盖掉）。⚠ 这些用例测的是**已删的"一轮 = 一层"**那条路
-             * ⇒ 按 `AllBranches` 新现实重写（⛔ 不是撤掉 pin —— 撤掉就违反用户口径）。
-             */
-            /*
-             * ⛔ 这里**故意没有**钉 `PartialPublishEnabled`（"部分完成的内容也发布到成品目录"）。
-             *
-             * 用户口径是「这个功能我要淘汰，就是将这个功能做到底层设计上面，就是『损坏压缩包的解压情况』，
-             * 这种情况下我们会自动开启，而且用户不能操作」—— 要的是**损坏压缩包那一档自动发布**。
-             * 而这个开关现在同时管着一堆**无关**行为（取消途中不发布、工作区探针产物、逐层回收口径），
-             * 实测直接钉 true 会打红 5 条既有守门（`PartialPublishTests` 3 条 + `WorkspaceRootTests` 2 条
-             * + `RecursionLogAndProbePathFixesTests` 1 条）⇒ 那是"改错了层"。
-             * ⇒ 留给「损坏压缩包 ⇒ 自动留内容物」那一刀：先把语义收窄到那一档，再钉值、再删界面。
-             */
+            RecursionDefaultUnifiedToTen = true;
         }
+
+        // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
+        if (MaxRecursionDepth < 1)
+        {
+            MaxRecursionDepth = 1;
+        }
+
+        if (MaxRecursionDepth > 10)
+        {
+            MaxRecursionDepth = 10;
+        }
+
+        // 密码尝试上限：下限 1（至少试一个候选），上限 1000（再大就不是省事而是烧时间）。
+        // 旧配置文件里没有这一项 → 反序列化后拿到的是默认值 10，不需要额外兼容分支。
+        if (MaxPasswordAttemptsPerLayer < 1)
+        {
+            MaxPasswordAttemptsPerLayer = 1;
+        }
+
+        if (MaxPasswordAttemptsPerLayer > 1000)
+        {
+            MaxPasswordAttemptsPerLayer = 1000;
+        }
+
+        /*
+         * 解压前的资源预算上限（用户 2026-09-25 第 36 条）：四条都夹回合法区间。
+         * 夹的规则只有一处实现（上面那四个 NormalizeXxxCap），`ResourceBudgetOptions.FromSettings`
+         * 读的时候用的是同一批函数 —— 界面、落盘、真正判包三处口径不许分叉。
+         */
+        MaxSingleExtractedFileGiB = NormalizeSingleFileCapGiB(MaxSingleExtractedFileGiB);
+        MaxExtractedTotalGiB = NormalizeTotalCapGiB(MaxExtractedTotalGiB, MaxSingleExtractedFileGiB);
+        MaxExtractedFileCount = NormalizeExtractedFileCountCap(MaxExtractedFileCount);
+        MaxExtractionRatio = NormalizeExtractionRatioCap(MaxExtractionRatio);
+
+        // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
+        if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && ShouldClearToolPath(CustomSevenZipExePath))
+        {
+            CustomSevenZipExePath = string.Empty;
+        }
+
+        /*
+         * 自定义 UnRAR 路径同理；但**兜底方向不同**：UnRAR 还有"已装 WinRAR 目录"与"内置"两档，
+         * 所以清空它只是回到"自动解析"，不会让引擎不可用（ToolLocator 里两级回落）。
+         */
+        if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && ShouldClearToolPath(CustomUnRarExePath))
+        {
+            CustomUnRarExePath = string.Empty;
+        }
+
+        /*
+         * 自定义 Rar.exe 路径同理（打包的外层 rar 用）。清空它只是回到"自动解析"，
+         * 不会让打包不可用 —— 界面上还可以把外层容器改成 7z 或"不做外层"。
+         *
+         * ⚠ 这里**不做任何"帮用户找一份 Rar.exe 塞进来"的事**：那是分发共享软件的第一步
+         * （AGENTS.md §3.1）。这一格永远是用户自己填的。
+         */
+        if (!string.IsNullOrWhiteSpace(CustomRarExePath) && ShouldClearToolPath(CustomRarExePath))
+        {
+            CustomRarExePath = string.Empty;
+        }
+
+        /*
+         * ================================================================
+         * 系统固定默认值（用户 2026-10-14 最终设计 + 当场逐项拍板）
+         * ================================================================
+         *
+         * 用户原话：「我觉得有些删除的选项里面都应该时系统底层会做的而不是让用户来选择的」
+         * ＋ 对"删除 = 从界面移出、值固定成系统默认（功能一个都不删）"的当场确认：「对，就是这个意思」。
+         *
+         * ⇒ 这一批设置项的**界面入口已经删掉**（设置页「启动时行为 / 扫描与识别」两组、
+         *    ②页「续解省略中间层 / 解压覆盖策略」、③页「部分完成的内容」等），所以必须在这里把值钉死：
+         *    否则用户机器上 appsettings.json 里存过的旧值会变成**界面上看不见的暗档** ——
+         *    行为跟他以为的不一样，还没地方改回来（这是最坏的一种退化）。
+         *
+         * ⛔ 钉的就是用户逐项确认过的那张表（出处 docs/大改动-2026-10-14-口径与冲突.md §17.6）；
+         * ⛔ 这些项**从此没有用户入口**：界面写什么程序就跑什么，所以他存过的旧值一律归到这里。
+         * ⚠ 与"只改出厂默认、不迁移用户存过的值"那条老规矩的区别：那条针对的是**还有入口**的项；
+         *    这一批已经没有入口了，保留旧值等于让用户背着一个改不掉的暗档。
+         */
+        RememberLastOutputDirectory = true;      // 记住上次输出目录（开）
+        LowProcessPriority = false;              // 低运行优先级（关 —— 用户 2026-10-14 定的是"不降"）
+        RecursiveScan = true;                    // 递归扫描文件夹（开）
+        AutoScanAfterDrop = true;                // 导入后自动扫描（开）
+        ScanMode = "ScanAllFiles";               // 扫描模式（扫描全部文件）
+        UnknownFormatAction = "MarkUnknown";     // 未知格式处理（标记未知）
+        DefaultExtension = ".7z";                // 默认补充后缀（这一格是**后缀字符串**，出厂值 .7z）
+        OverwriteMode = "AutoRenameExisting";    // 解压覆盖策略（自动重命名已存在文件）
+        KeepFailedWorkspace = false;             // 工作区（失败 / 取消也默认清干净）
+        RememberPasswordList = true;             // 记住密码列表（系统默认操作，界面上没有开关）
+
+        /*
+         * 嵌套：**一律展开所有分支**（用户 2026-10-14 口径逐字：「我不是将单层路给删掉了吗，
+         * 现在就是全面解压所有分路」＋最终设计「三档功能全部删除，只默认解开所有分支」）。
+         *
+         * ⚠ 用户 2026-10-14 夜当场纠正过我一次：我原先把这一项"留到不再有单层路那一刀"，
+         * 那是理解偏了 —— **单层路已经删了**，所以老配置里存过的 SingleLayer / SingleChain
+         * 必须现在就归一掉（否则就是一个界面上看不见、还在生效的档位）。
+         *
+         * ⚠ 跟着红的 5 条既有守门（`WorkspaceRootTests` 2 / `PartialPublishTests` 2 /
+         * `RecursionLogAndProbePathFixesTests` 1）属于"场景建立在**已删模式**上"——
+         * 按新现实重写（见各自注释），⛔ 不是把判据放宽。
+         */
+        /*
+         * ⛔ 2026-10-15 红检记录（临时撤掉这一行跑过一轮，已还原）：撤掉之后
+         * `InnerLayerContinuationTests` 23 红 → 2 红、`ExtractionPipelineFixTests` 10 → 0、
+         * `ChainManifestCompletenessTests` 3 → 0、`OutputVerificationGateTests` 3 → 0
+         * ⇒ **这一条 pin 是那 ~36 条红的唯一根因**（夹具把 `SingleLayer` 当"只造一层场景"的工具，
+         * 而 `Save()` → `Normalize()` 会把它覆盖掉）。⚠ 这些用例测的是**已删的"一轮 = 一层"**那条路
+         * ⇒ 按 `AllBranches` 新现实重写（⛔ 不是撤掉 pin —— 撤掉就违反用户口径）。
+         */
+        /*
+         * ⛔ 这里**故意没有**钉 `PartialPublishEnabled`（"部分完成的内容也发布到成品目录"）。
+         *
+         * 用户口径是「这个功能我要淘汰，就是将这个功能做到底层设计上面，就是『损坏压缩包的解压情况』，
+         * 这种情况下我们会自动开启，而且用户不能操作」—— 要的是**损坏压缩包那一档自动发布**。
+         * 而这个开关现在同时管着一堆**无关**行为（取消途中不发布、工作区探针产物、逐层回收口径），
+         * 实测直接钉 true 会打红 5 条既有守门（`PartialPublishTests` 3 条 + `WorkspaceRootTests` 2 条
+         * + `RecursionLogAndProbePathFixesTests` 1 条）⇒ 那是"改错了层"。
+         * ⇒ 留给「损坏压缩包 ⇒ 自动留内容物」那一刀：先把语义收窄到那一档，再钉值、再删界面。
+         */
     }
 }

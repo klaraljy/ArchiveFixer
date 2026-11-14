@@ -5,364 +5,363 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// **本批的源根 → 产出物 → 内容组账本骨架**。
+///
+/// <para>第一阶段登记源根；第二阶段登记产出物并给候选分卷片发租约。
+/// ⛔ 这里不判组、不碰盘、不删除。</para>
+/// </summary>
+public sealed class ExtractionContentGraph
 {
-    /// <summary>
-    /// **本批的源根 → 产出物 → 内容组账本骨架**。
-    ///
-    /// <para>第一阶段登记源根；第二阶段登记产出物并给候选分卷片发租约。
-    /// ⛔ 这里不判组、不碰盘、不删除。</para>
-    /// </summary>
-    public sealed class ExtractionContentGraph
+    private readonly Dictionary<string, SourceRootRecord> _rootsByRootId =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string> _rootIdByTaskId =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string> _rootIdByPath =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, ProducedArtifactRecord> _artifactsByPath =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, ContentGroup> _contentGroups =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyCollection<SourceRootRecord> SourceRoots => _rootsByRootId.Values;
+
+    public IReadOnlyCollection<ProducedArtifactRecord> Artifacts => _artifactsByPath.Values;
+
+    public IReadOnlyCollection<ContentGroup> ContentGroups => _contentGroups.Values;
+
+    public int Count => _rootsByRootId.Count;
+
+    public int ArtifactCount => _artifactsByPath.Count;
+
+    public int GroupCount => _contentGroups.Count;
+
+    /// <summary>批首清空；⛔ 不把上一批的源根/产出物带进下一批。</summary>
+    public void Clear()
     {
-        private readonly Dictionary<string, SourceRootRecord> _rootsByRootId =
-            new(StringComparer.OrdinalIgnoreCase);
+        _rootsByRootId.Clear();
+        _rootIdByTaskId.Clear();
+        _rootIdByPath.Clear();
+        _artifactsByPath.Clear();
+        _contentGroups.Clear();
+    }
 
-        private readonly Dictionary<string, string> _rootIdByTaskId =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private readonly Dictionary<string, string> _rootIdByPath =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private readonly Dictionary<string, ProducedArtifactRecord> _artifactsByPath =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private readonly Dictionary<string, ContentGroup> _contentGroups =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        public IReadOnlyCollection<SourceRootRecord> SourceRoots => _rootsByRootId.Values;
-
-        public IReadOnlyCollection<ProducedArtifactRecord> Artifacts => _artifactsByPath.Values;
-
-        public IReadOnlyCollection<ContentGroup> ContentGroups => _contentGroups.Values;
-
-        public int Count => _rootsByRootId.Count;
-
-        public int ArtifactCount => _artifactsByPath.Count;
-
-        public int GroupCount => _contentGroups.Count;
-
-        /// <summary>批首清空；⛔ 不把上一批的源根/产出物带进下一批。</summary>
-        public void Clear()
+    /// <summary>
+    /// 登记一个源根。重复登记同一原始路径时保留同一条 RootId，只刷新当前路径与落点域。
+    /// </summary>
+    public SourceRootRecord RegisterSourceRoot(
+        ArchiveTask? task,
+        string? placementKey,
+        SourceHandlingMode sourceHandling)
+    {
+        if (task == null)
         {
-            _rootsByRootId.Clear();
-            _rootIdByTaskId.Clear();
-            _rootIdByPath.Clear();
-            _artifactsByPath.Clear();
-            _contentGroups.Clear();
+            throw new ArgumentNullException(nameof(task));
         }
 
-        /// <summary>
-        /// 登记一个源根。重复登记同一原始路径时保留同一条 RootId，只刷新当前路径与落点域。
-        /// </summary>
-        public SourceRootRecord RegisterSourceRoot(
-            ArchiveTask? task,
-            string? placementKey,
-            SourceHandlingMode sourceHandling)
+        string originalPath = NormalizePath(task.OriginalPath);
+
+        if (originalPath.Length == 0)
         {
-            if (task == null)
-            {
-                throw new ArgumentNullException(nameof(task));
-            }
-
-            string originalPath = NormalizePath(task.OriginalPath);
-
-            if (originalPath.Length == 0)
-            {
-                originalPath = NormalizePath(task.CurrentPath);
-            }
-
-            if (originalPath.Length == 0)
-            {
-                throw new ArgumentException("源根没有可规范化的原始路径。", nameof(task));
-            }
-
-            var record = new SourceRootRecord
-            {
-                RootId = originalPath,
-                TaskId = task.TaskId,
-                OriginalPath = originalPath,
-                CurrentPath = NormalizePath(task.CurrentPath),
-                PlacementKey = placementKey ?? string.Empty,
-                IsFolderSelection = task.SourceSelectionKind == SourceSelectionKind.Folder,
-                SelectionRoot = NormalizePath(task.SourceSelectionRoot),
-                SourceHandling = sourceHandling
-            };
-
-            _rootsByRootId[record.RootId] = record;
-
-            if (!string.IsNullOrWhiteSpace(record.TaskId))
-            {
-                _rootIdByTaskId[record.TaskId] = record.RootId;
-            }
-
-            IndexPath(record.OriginalPath, record.RootId);
-            IndexPath(record.CurrentPath, record.RootId);
-
-            return record;
+            originalPath = NormalizePath(task.CurrentPath);
         }
 
-        /// <summary>
-        /// 按任务、当前路径或链根路径找源根。找不到返回 false —— 调用方必须按“归属不明”处理。
-        /// </summary>
-        public bool TryGetSourceRoot(ArchiveTask? task, out SourceRootRecord root)
+        if (originalPath.Length == 0)
         {
-            root = null!;
+            throw new ArgumentException("源根没有可规范化的原始路径。", nameof(task));
+        }
 
-            if (task == null)
-            {
-                return false;
-            }
+        var record = new SourceRootRecord
+        {
+            RootId = originalPath,
+            TaskId = task.TaskId,
+            OriginalPath = originalPath,
+            CurrentPath = NormalizePath(task.CurrentPath),
+            PlacementKey = placementKey ?? string.Empty,
+            IsFolderSelection = task.SourceSelectionKind == SourceSelectionKind.Folder,
+            SelectionRoot = NormalizePath(task.SourceSelectionRoot),
+            SourceHandling = sourceHandling
+        };
 
-            if (!string.IsNullOrWhiteSpace(task.TaskId)
-                && _rootIdByTaskId.TryGetValue(task.TaskId, out string? byTask)
-                && _rootsByRootId.TryGetValue(byTask, out SourceRootRecord? taskRoot))
-            {
-                root = taskRoot;
-                return true;
-            }
+        _rootsByRootId[record.RootId] = record;
 
-            foreach (string? path in new[]
-                     {
-                         task.OriginalPath,
-                         task.CurrentPath,
-                         task.RootSourcePath,
-                         task.ChainRootIdentity
-                     })
-            {
-                if (TryGetByPath(path, out root))
-                {
-                    return true;
-                }
-            }
+        if (!string.IsNullOrWhiteSpace(record.TaskId))
+        {
+            _rootIdByTaskId[record.TaskId] = record.RootId;
+        }
 
+        IndexPath(record.OriginalPath, record.RootId);
+        IndexPath(record.CurrentPath, record.RootId);
+
+        return record;
+    }
+
+    /// <summary>
+    /// 按任务、当前路径或链根路径找源根。找不到返回 false —— 调用方必须按“归属不明”处理。
+    /// </summary>
+    public bool TryGetSourceRoot(ArchiveTask? task, out SourceRootRecord root)
+    {
+        root = null!;
+
+        if (task == null)
+        {
             return false;
         }
 
-        public bool TryGetByPath(string? path, out SourceRootRecord root)
+        if (!string.IsNullOrWhiteSpace(task.TaskId)
+            && _rootIdByTaskId.TryGetValue(task.TaskId, out string? byTask)
+            && _rootsByRootId.TryGetValue(byTask, out SourceRootRecord? taskRoot))
         {
-            root = null!;
-            string normalized = NormalizePath(path);
-
-            if (normalized.Length == 0
-                || !_rootIdByPath.TryGetValue(normalized, out string? rootId)
-                || !_rootsByRootId.TryGetValue(rootId, out SourceRootRecord? record))
-            {
-                return false;
-            }
-
-            root = record;
+            root = taskRoot;
             return true;
         }
 
-        public bool TryGetByRootId(string? rootId, out SourceRootRecord root)
+        foreach (string? path in new[]
+                 {
+                     task.OriginalPath,
+                     task.CurrentPath,
+                     task.RootSourcePath,
+                     task.ChainRootIdentity
+                 })
         {
-            root = null!;
-
-            if (string.IsNullOrWhiteSpace(rootId)
-                || !_rootsByRootId.TryGetValue(rootId, out SourceRootRecord? record))
+            if (TryGetByPath(path, out root))
             {
-                return false;
-            }
-
-            root = record;
-            return true;
-        }
-
-        /// <summary>产出物/账本项要挂的来源根身份；找不到就返回空串，⛔ 不编一个。</summary>
-        public string ResolveRootId(ArchiveTask? task)
-        {
-            return TryGetSourceRoot(task, out SourceRootRecord root) ? root.RootId : string.Empty;
-        }
-
-        public string ResolvePlacementKey(ArchiveTask? task)
-        {
-            return TryGetSourceRoot(task, out SourceRootRecord root) ? root.PlacementKey : string.Empty;
-        }
-
-        /// <summary>
-        /// 登记一个产出物；同一路径保留后到的事实，但**绝不把已有租约降级成无租约**。
-        /// </summary>
-        public ProducedArtifactRecord RegisterArtifact(
-            string? path,
-            string? originRootId,
-            string? producedByTaskId,
-            ArtifactRole role,
-            string? candidateLeaseId,
-            string? placementKey)
-        {
-            string normalized = NormalizePath(path);
-
-            if (normalized.Length == 0)
-            {
-                throw new ArgumentException("产出物路径为空。", nameof(path));
-            }
-
-            _artifactsByPath.TryGetValue(normalized, out ProducedArtifactRecord? previous);
-
-            string lease = string.IsNullOrWhiteSpace(candidateLeaseId)
-                ? previous?.CandidateLeaseId ?? string.Empty
-                : candidateLeaseId;
-
-            ArtifactRole effectiveRole = role == ArtifactRole.Unknown && lease.Length > 0
-                ? previous?.Role ?? role
-                : role;
-
-            var record = new ProducedArtifactRecord
-            {
-                Path = normalized,
-                OriginRootId = string.IsNullOrWhiteSpace(originRootId)
-                    ? previous?.OriginRootId ?? string.Empty
-                    : originRootId,
-                ProducedByTaskId = string.IsNullOrWhiteSpace(producedByTaskId)
-                    ? previous?.ProducedByTaskId ?? string.Empty
-                    : producedByTaskId,
-                Role = effectiveRole,
-                CandidateLeaseId = lease,
-                PlacementKey = string.IsNullOrWhiteSpace(placementKey)
-                    ? previous?.PlacementKey ?? string.Empty
-                    : placementKey
-            };
-
-            _artifactsByPath[normalized] = record;
-            return record;
-        }
-
-        /// <summary>给候选分卷片发租约；返回租约 id。重复调用同一路径只刷新，不叠加。</summary>
-        public string LeaseCandidate(
-            string? path,
-            string? originRootId,
-            string? producedByTaskId,
-            string? placementKey)
-        {
-            ProducedArtifactRecord record = RegisterArtifact(
-                path,
-                originRootId,
-                producedByTaskId,
-                ArtifactRole.CandidateVolumePiece,
-                Guid.NewGuid().ToString("N"),
-                placementKey);
-
-            return record.CandidateLeaseId;
-        }
-
-        public bool TryGetArtifact(string? path, out ProducedArtifactRecord artifact)
-        {
-            artifact = null!;
-            string normalized = NormalizePath(path);
-
-            return normalized.Length > 0
-                && _artifactsByPath.TryGetValue(normalized, out ProducedArtifactRecord? record)
-                && (artifact = record) != null;
-        }
-
-        /// <summary>这一份现在是否被交界前租约保护。</summary>
-        public bool IsLeased(string? path) =>
-            TryGetArtifact(path, out ProducedArtifactRecord artifact) && artifact.HasCandidateLease;
-
-        /// <summary>
-        /// 交界屏障登记/更新一个内容组。组键只读 prepared 事实；同键后到事实覆盖旧状态，
-        /// 但来源根与落点域是累加的（后到片仍属于同一组）。
-        /// </summary>
-        public ContentGroup RegisterContentGroup(
-            PreparedVolumeGroup? prepared,
-            FirstStepFileLedger? ledger)
-        {
-            if (prepared == null || string.IsNullOrWhiteSpace(prepared.BaseName))
-            {
-                throw new ArgumentException("内容组没有可用基名。", nameof(prepared));
-            }
-
-            string groupId = BuildGroupId(prepared.BaseName, prepared.Family, prepared.OriginalSourceLayer);
-
-            if (!_contentGroups.TryGetValue(groupId, out ContentGroup? group))
-            {
-                group = new ContentGroup
-                {
-                    GroupId = groupId,
-                    BaseName = prepared.BaseName,
-                    Family = prepared.Family,
-                    SourceLayer = prepared.OriginalSourceLayer
-                };
-
-                _contentGroups[groupId] = group;
-            }
-
-            group.MergePrepared(prepared, ledger);
-            return group;
-        }
-
-        public bool TryGetContentGroup(
-            string? baseName,
-            VolumeNamingFamily? family,
-            string? sourceLayer,
-            out ContentGroup group)
-        {
-            group = null!;
-
-            if (string.IsNullOrWhiteSpace(baseName))
-            {
-                return false;
-            }
-
-            string groupId = BuildGroupId(baseName, family, sourceLayer);
-
-            if (_contentGroups.TryGetValue(groupId, out ContentGroup? found))
-            {
-                group = found;
                 return true;
             }
+        }
 
+        return false;
+    }
+
+    public bool TryGetByPath(string? path, out SourceRootRecord root)
+    {
+        root = null!;
+        string normalized = NormalizePath(path);
+
+        if (normalized.Length == 0
+            || !_rootIdByPath.TryGetValue(normalized, out string? rootId)
+            || !_rootsByRootId.TryGetValue(rootId, out SourceRootRecord? record))
+        {
             return false;
         }
 
-        public bool TryGetContentGroup(string? groupId, out ContentGroup group)
+        root = record;
+        return true;
+    }
+
+    public bool TryGetByRootId(string? rootId, out SourceRootRecord root)
+    {
+        root = null!;
+
+        if (string.IsNullOrWhiteSpace(rootId)
+            || !_rootsByRootId.TryGetValue(rootId, out SourceRootRecord? record))
         {
-            group = null!;
+            return false;
+        }
 
-            if (string.IsNullOrWhiteSpace(groupId)
-                || !_contentGroups.TryGetValue(groupId, out ContentGroup? found))
+        root = record;
+        return true;
+    }
+
+    /// <summary>产出物/账本项要挂的来源根身份；找不到就返回空串，⛔ 不编一个。</summary>
+    public string ResolveRootId(ArchiveTask? task)
+    {
+        return TryGetSourceRoot(task, out SourceRootRecord root) ? root.RootId : string.Empty;
+    }
+
+    public string ResolvePlacementKey(ArchiveTask? task)
+    {
+        return TryGetSourceRoot(task, out SourceRootRecord root) ? root.PlacementKey : string.Empty;
+    }
+
+    /// <summary>
+    /// 登记一个产出物；同一路径保留后到的事实，但**绝不把已有租约降级成无租约**。
+    /// </summary>
+    public ProducedArtifactRecord RegisterArtifact(
+        string? path,
+        string? originRootId,
+        string? producedByTaskId,
+        ArtifactRole role,
+        string? candidateLeaseId,
+        string? placementKey)
+    {
+        string normalized = NormalizePath(path);
+
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException("产出物路径为空。", nameof(path));
+        }
+
+        _artifactsByPath.TryGetValue(normalized, out ProducedArtifactRecord? previous);
+
+        string lease = string.IsNullOrWhiteSpace(candidateLeaseId)
+            ? previous?.CandidateLeaseId ?? string.Empty
+            : candidateLeaseId;
+
+        ArtifactRole effectiveRole = role == ArtifactRole.Unknown && lease.Length > 0
+            ? previous?.Role ?? role
+            : role;
+
+        var record = new ProducedArtifactRecord
+        {
+            Path = normalized,
+            OriginRootId = string.IsNullOrWhiteSpace(originRootId)
+                ? previous?.OriginRootId ?? string.Empty
+                : originRootId,
+            ProducedByTaskId = string.IsNullOrWhiteSpace(producedByTaskId)
+                ? previous?.ProducedByTaskId ?? string.Empty
+                : producedByTaskId,
+            Role = effectiveRole,
+            CandidateLeaseId = lease,
+            PlacementKey = string.IsNullOrWhiteSpace(placementKey)
+                ? previous?.PlacementKey ?? string.Empty
+                : placementKey
+        };
+
+        _artifactsByPath[normalized] = record;
+        return record;
+    }
+
+    /// <summary>给候选分卷片发租约；返回租约 id。重复调用同一路径只刷新，不叠加。</summary>
+    public string LeaseCandidate(
+        string? path,
+        string? originRootId,
+        string? producedByTaskId,
+        string? placementKey)
+    {
+        ProducedArtifactRecord record = RegisterArtifact(
+            path,
+            originRootId,
+            producedByTaskId,
+            ArtifactRole.CandidateVolumePiece,
+            Guid.NewGuid().ToString("N"),
+            placementKey);
+
+        return record.CandidateLeaseId;
+    }
+
+    public bool TryGetArtifact(string? path, out ProducedArtifactRecord artifact)
+    {
+        artifact = null!;
+        string normalized = NormalizePath(path);
+
+        return normalized.Length > 0
+            && _artifactsByPath.TryGetValue(normalized, out ProducedArtifactRecord? record)
+            && (artifact = record) != null;
+    }
+
+    /// <summary>这一份现在是否被交界前租约保护。</summary>
+    public bool IsLeased(string? path) =>
+        TryGetArtifact(path, out ProducedArtifactRecord artifact) && artifact.HasCandidateLease;
+
+    /// <summary>
+    /// 交界屏障登记/更新一个内容组。组键只读 prepared 事实；同键后到事实覆盖旧状态，
+    /// 但来源根与落点域是累加的（后到片仍属于同一组）。
+    /// </summary>
+    public ContentGroup RegisterContentGroup(
+        PreparedVolumeGroup? prepared,
+        FirstStepFileLedger? ledger)
+    {
+        if (prepared == null || string.IsNullOrWhiteSpace(prepared.BaseName))
+        {
+            throw new ArgumentException("内容组没有可用基名。", nameof(prepared));
+        }
+
+        string groupId = BuildGroupId(prepared.BaseName, prepared.Family, prepared.OriginalSourceLayer);
+
+        if (!_contentGroups.TryGetValue(groupId, out ContentGroup? group))
+        {
+            group = new ContentGroup
             {
-                return false;
-            }
+                GroupId = groupId,
+                BaseName = prepared.BaseName,
+                Family = prepared.Family,
+                SourceLayer = prepared.OriginalSourceLayer
+            };
 
+            _contentGroups[groupId] = group;
+        }
+
+        group.MergePrepared(prepared, ledger);
+        return group;
+    }
+
+    public bool TryGetContentGroup(
+        string? baseName,
+        VolumeNamingFamily? family,
+        string? sourceLayer,
+        out ContentGroup group)
+    {
+        group = null!;
+
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return false;
+        }
+
+        string groupId = BuildGroupId(baseName, family, sourceLayer);
+
+        if (_contentGroups.TryGetValue(groupId, out ContentGroup? found))
+        {
             group = found;
             return true;
         }
 
-        private static string BuildGroupId(
-            string baseName,
-            VolumeNamingFamily? family,
-            string? sourceLayer)
+        return false;
+    }
+
+    public bool TryGetContentGroup(string? groupId, out ContentGroup group)
+    {
+        group = null!;
+
+        if (string.IsNullOrWhiteSpace(groupId)
+            || !_contentGroups.TryGetValue(groupId, out ContentGroup? found))
         {
-            return baseName + "|" + (family?.ToString() ?? "?") + "|" + (sourceLayer ?? string.Empty);
+            return false;
         }
 
-        private void IndexPath(string? path, string rootId)
-        {
-            string normalized = NormalizePath(path);
+        group = found;
+        return true;
+    }
 
-            if (normalized.Length > 0)
-            {
-                _rootIdByPath[normalized] = rootId;
-            }
+    private static string BuildGroupId(
+        string baseName,
+        VolumeNamingFamily? family,
+        string? sourceLayer)
+    {
+        return baseName + "|" + (family?.ToString() ?? "?") + "|" + (sourceLayer ?? string.Empty);
+    }
+
+    private void IndexPath(string? path, string rootId)
+    {
+        string normalized = NormalizePath(path);
+
+        if (normalized.Length > 0)
+        {
+            _rootIdByPath[normalized] = rootId;
+        }
+    }
+
+    private static string NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
         }
 
-        private static string NormalizePath(string? path)
+        try
         {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                return Path.GetFullPath(path);
-            }
-            catch
-            {
-                return path.Trim();
-            }
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path.Trim();
         }
     }
 }

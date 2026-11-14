@@ -8,269 +8,268 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public sealed class SpecificExtractionRunnerTests : IDisposable
 {
-    public sealed class SpecificExtractionRunnerTests : IDisposable
+    private readonly string _root;
+
+    public SpecificExtractionRunnerTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "SpecificRunner_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public SpecificExtractionRunnerTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "SpecificRunner_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
+            Directory.Delete(_root, true);
         }
-
-        public void Dispose()
+        catch
         {
-            try
+        }
+    }
+
+    [Fact]
+    public async Task 两层_最后一层是散图片_用最后一层压缩包名()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            new string?[] { "pwd" });
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
+        Assert.Equal("inner", Path.GetFileName(result.OutputPath));
+    }
+
+    [Fact]
+    public async Task 每层开始都回调_列表能显示正在解哪一层()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+        var starts = new List<(int Depth, string Archive)>();
+        var runner = new SpecificExtractionRunner(engine);
+        await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            new string?[] { "pwd" },
+            onLayerStarted: (depth, archive) => starts.Add((depth, archive)));
+
+        Assert.Equal(new[] { (0, "outer.7z"), (1, "inner.rar") }, starts);
+    }
+
+    [Fact]
+    public async Task 最后一层只有一个文件夹_用文件夹名()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "22222"));
+            File.WriteAllText(Path.Combine(dir, "22222", "01.jpg"), "x");
+        });
+
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            new string?[] { "pwd" });
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("22222", Path.GetFileName(result.OutputPath));
+        Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
+    }
+
+    [Fact]
+    public async Task 每一层都从密码候选开始_无密码排在最前()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+        var runner = new SpecificExtractionRunner(engine);
+        await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            new string?[] { null, "", "pwd" });
+
+        // 每层都要重新走候选链；无密码排在最前，成功后不再烧后面的候选。
+        Assert.True(engine.Requests.Count >= 2);
+        Assert.All(engine.Requests, request => Assert.Null(request.Password));
+    }
+
+    [Fact]
+    public async Task 每层重新取候选_成功密码回调给上层记账()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+        engine.FailNullPasswords.Add("inner.rar");
+
+        int providerCalls = 0;
+        var successes = new List<string?>();
+
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            Array.Empty<string?>(),
+            passwordProvider: () =>
             {
-                Directory.Delete(_root, true);
-            }
-            catch
+                providerCalls++;
+                return providerCalls == 1
+                    ? new string?[] { null }
+                    : new string?[] { null, "pwd" };
+            },
+            onPasswordSuccess: password => successes.Add(password));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(2, providerCalls);
+        Assert.Equal(
+            new string?[] { null, "pwd" },
+            engine.Requests
+                .Where(request => request.ArchivePath.EndsWith("inner.rar", StringComparison.OrdinalIgnoreCase))
+                .Select(request => request.Password)
+                .ToArray());
+        Assert.Equal(new string?[] { null, "pwd" }, successes.ToArray());
+    }
+
+    [Fact]
+    public async Task 标准分卷后缀带中文_引擎从标准名入口解压()
+    {
+        string source = Path.Combine(_root, "outer.rar");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.rar", dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "111.7z.001删"), "x");
+            File.WriteAllText(Path.Combine(dir, "111.7z.002删"), "x");
+        });
+        engine.Add("111.7z.001", dir => File.WriteAllText(Path.Combine(dir, "content.bin"), "x"));
+
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            Path.Combine(_root, "out"),
+            Path.Combine(_root, "work"),
+            new string?[] { "" });
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains(
+            engine.Requests,
+            request => request.ArchivePath.EndsWith(
+                Path.Combine("standard-volume-entry", "111.7z.001"),
+                StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            engine.Requests,
+            request => request.ArchivePath.EndsWith("111.7z.001删", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task 输出名已存在时_自动改名_结果路径指向真实目录()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
+        engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+        string outputRoot = Path.Combine(_root, "out");
+        Directory.CreateDirectory(Path.Combine(outputRoot, "inner"));
+
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            outputRoot,
+            Path.Combine(_root, "work"),
+            new string?[] { "pwd" });
+
+        Assert.True(result.Success, result.Message);
+        Assert.NotEqual(Path.Combine(outputRoot, "inner"), result.OutputPath);
+        Assert.True(Directory.Exists(result.OutputPath), "返回的路径必须是实际落地的目录（可能是自动改名后的）");
+        Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
+    }
+
+    private sealed class ScriptedEngine : IArchiveEngine
+    {
+        private readonly Dictionary<string, Action<string>> _writers = new(StringComparer.OrdinalIgnoreCase);
+
+        public List<ArchiveRequest> Requests { get; } = new();
+
+        public HashSet<string> FailNullPasswords { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Add(string fileName, Action<string> writer) => _writers[fileName] = writer;
+
+        public string Id => "scripted";
+        public string DisplayName => "Scripted";
+        public string Version => "1";
+        public bool IsAvailable => true;
+        public EngineCapabilities Capabilities => new();
+
+        public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ArchiveProbeResult { IsArchive = true });
+
+        public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ArchiveListResult { Success = true });
+
+        public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ArchiveOperationResult { Success = true });
+
+        public Task<ArchiveOperationResult> ExtractAsync(
+            ArchiveRequest request,
+            ExtractOptions options,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(new ArchiveRequest { ArchivePath = request.ArchivePath, Password = request.Password });
+
+            string fileName = Path.GetFileName(request.ArchivePath);
+
+            if (request.Password is null && FailNullPasswords.Contains(fileName))
             {
-            }
-        }
-
-        [Fact]
-        public async Task 两层_最后一层是散图片_用最后一层压缩包名()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
-
-            var runner = new SpecificExtractionRunner(engine);
-            SpecificExtractionRunResult result = await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                new string?[] { "pwd" });
-
-            Assert.True(result.Success, result.Message);
-            Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
-            Assert.Equal("inner", Path.GetFileName(result.OutputPath));
-        }
-
-        [Fact]
-        public async Task 每层开始都回调_列表能显示正在解哪一层()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
-
-            var starts = new List<(int Depth, string Archive)>();
-            var runner = new SpecificExtractionRunner(engine);
-            await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                new string?[] { "pwd" },
-                onLayerStarted: (depth, archive) => starts.Add((depth, archive)));
-
-            Assert.Equal(new[] { (0, "outer.7z"), (1, "inner.rar") }, starts);
-        }
-
-        [Fact]
-        public async Task 最后一层只有一个文件夹_用文件夹名()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir =>
-            {
-                Directory.CreateDirectory(Path.Combine(dir, "22222"));
-                File.WriteAllText(Path.Combine(dir, "22222", "01.jpg"), "x");
-            });
-
-            var runner = new SpecificExtractionRunner(engine);
-            SpecificExtractionRunResult result = await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                new string?[] { "pwd" });
-
-            Assert.True(result.Success, result.Message);
-            Assert.Equal("22222", Path.GetFileName(result.OutputPath));
-            Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
-        }
-
-        [Fact]
-        public async Task 每一层都从密码候选开始_无密码排在最前()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
-
-            var runner = new SpecificExtractionRunner(engine);
-            await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                new string?[] { null, "", "pwd" });
-
-            // 每层都要重新走候选链；无密码排在最前，成功后不再烧后面的候选。
-            Assert.True(engine.Requests.Count >= 2);
-            Assert.All(engine.Requests, request => Assert.Null(request.Password));
-        }
-
-        [Fact]
-        public async Task 每层重新取候选_成功密码回调给上层记账()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
-            engine.FailNullPasswords.Add("inner.rar");
-
-            int providerCalls = 0;
-            var successes = new List<string?>();
-
-            var runner = new SpecificExtractionRunner(engine);
-            SpecificExtractionRunResult result = await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                Array.Empty<string?>(),
-                passwordProvider: () =>
+                return Task.FromResult(new ArchiveOperationResult
                 {
-                    providerCalls++;
-                    return providerCalls == 1
-                        ? new string?[] { null }
-                        : new string?[] { null, "pwd" };
-                },
-                onPasswordSuccess: password => successes.Add(password));
-
-            Assert.True(result.Success, result.Message);
-            Assert.Equal(2, providerCalls);
-            Assert.Equal(
-                new string?[] { null, "pwd" },
-                engine.Requests
-                    .Where(request => request.ArchivePath.EndsWith("inner.rar", StringComparison.OrdinalIgnoreCase))
-                    .Select(request => request.Password)
-                    .ToArray());
-            Assert.Equal(new string?[] { null, "pwd" }, successes.ToArray());
-        }
-
-        [Fact]
-        public async Task 标准分卷后缀带中文_引擎从标准名入口解压()
-        {
-            string source = Path.Combine(_root, "outer.rar");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.rar", dir =>
-            {
-                File.WriteAllText(Path.Combine(dir, "111.7z.001删"), "x");
-                File.WriteAllText(Path.Combine(dir, "111.7z.002删"), "x");
-            });
-            engine.Add("111.7z.001", dir => File.WriteAllText(Path.Combine(dir, "content.bin"), "x"));
-
-            var runner = new SpecificExtractionRunner(engine);
-            SpecificExtractionRunResult result = await runner.RunAsync(
-                source,
-                Path.Combine(_root, "out"),
-                Path.Combine(_root, "work"),
-                new string?[] { "" });
-
-            Assert.True(result.Success, result.Message);
-            Assert.Contains(
-                engine.Requests,
-                request => request.ArchivePath.EndsWith(
-                    Path.Combine("standard-volume-entry", "111.7z.001"),
-                    StringComparison.OrdinalIgnoreCase));
-            Assert.DoesNotContain(
-                engine.Requests,
-                request => request.ArchivePath.EndsWith("111.7z.001删", StringComparison.OrdinalIgnoreCase));
-        }
-
-        [Fact]
-        public async Task 输出名已存在时_自动改名_结果路径指向真实目录()
-        {
-            string source = Path.Combine(_root, "outer.7z");
-            File.WriteAllText(source, "x");
-
-            var engine = new ScriptedEngine();
-            engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "inner.rar"), "x"));
-            engine.Add("inner.rar", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
-
-            string outputRoot = Path.Combine(_root, "out");
-            Directory.CreateDirectory(Path.Combine(outputRoot, "inner"));
-
-            var runner = new SpecificExtractionRunner(engine);
-            SpecificExtractionRunResult result = await runner.RunAsync(
-                source,
-                outputRoot,
-                Path.Combine(_root, "work"),
-                new string?[] { "pwd" });
-
-            Assert.True(result.Success, result.Message);
-            Assert.NotEqual(Path.Combine(outputRoot, "inner"), result.OutputPath);
-            Assert.True(Directory.Exists(result.OutputPath), "返回的路径必须是实际落地的目录（可能是自动改名后的）");
-            Assert.True(File.Exists(Path.Combine(result.OutputPath, "01.jpg")));
-        }
-
-        private sealed class ScriptedEngine : IArchiveEngine
-        {
-            private readonly Dictionary<string, Action<string>> _writers = new(StringComparer.OrdinalIgnoreCase);
-
-            public List<ArchiveRequest> Requests { get; } = new();
-
-            public HashSet<string> FailNullPasswords { get; } = new(StringComparer.OrdinalIgnoreCase);
-
-            public void Add(string fileName, Action<string> writer) => _writers[fileName] = writer;
-
-            public string Id => "scripted";
-            public string DisplayName => "Scripted";
-            public string Version => "1";
-            public bool IsAvailable => true;
-            public EngineCapabilities Capabilities => new();
-
-            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => Task.FromResult(new ArchiveProbeResult { IsArchive = true });
-
-            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => Task.FromResult(new ArchiveListResult { Success = true });
-
-            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => Task.FromResult(new ArchiveOperationResult { Success = true });
-
-            public Task<ArchiveOperationResult> ExtractAsync(
-                ArchiveRequest request,
-                ExtractOptions options,
-                CancellationToken cancellationToken = default)
-            {
-                Requests.Add(new ArchiveRequest { ArchivePath = request.ArchivePath, Password = request.Password });
-
-                string fileName = Path.GetFileName(request.ArchivePath);
-
-                if (request.Password is null && FailNullPasswords.Contains(fileName))
-                {
-                    return Task.FromResult(new ArchiveOperationResult
-                    {
-                        Success = false,
-                        Message = "这一层不接受无密码"
-                    });
-                }
-
-                if (_writers.TryGetValue(fileName, out Action<string>? writer))
-                {
-                    writer(options.CustomOutputDirectory);
-                }
-
-                return Task.FromResult(new ArchiveOperationResult { Success = true });
+                    Success = false,
+                    Message = "这一层不接受无密码"
+                });
             }
+
+            if (_writers.TryGetValue(fileName, out Action<string>? writer))
+            {
+                writer(options.CustomOutputDirectory);
+            }
+
+            return Task.FromResult(new ArchiveOperationResult { Success = true });
         }
     }
 }

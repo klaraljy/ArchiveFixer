@@ -7,145 +7,144 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 
-namespace ArchiveFixer.Views
+namespace ArchiveFixer.Views;
+
+public partial class RenamePreviewWindow : Window
 {
-    public partial class RenamePreviewWindow : Window
+    private readonly DialogService _dialogService = new();
+
+    public RenamePreviewViewModel ViewModel { get; }
+
+    public RenamePreviewWindow()
+        : this(Array.Empty<RenamePreviewItem>())
     {
-        private readonly DialogService _dialogService = new();
+    }
 
-        public RenamePreviewViewModel ViewModel { get; }
+    public RenamePreviewWindow(IEnumerable<RenamePreviewItem> previewItems)
+    {
+        InitializeComponent();
 
-        public RenamePreviewWindow()
-            : this(Array.Empty<RenamePreviewItem>())
+        // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+        WindowMinimizePolicy.Apply(this);
+
+        ViewModel = new RenamePreviewViewModel(previewItems);
+        DataContext = ViewModel;
+
+        ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+    }
+
+    public RenamePreviewWindow(
+        IEnumerable<RenamePreviewItem> previewItems,
+        IEnumerable<ArchiveTask> tasks)
+        : this(previewItems)
+    {
+    }
+
+    private void ConfirmButton_Click(object sender, RoutedEventArgs e)
+    {
+        CommitDataGridEdit();
+
+        /*
+         * 「询问」档的逐条确认（真实缺陷修正）：还有撞名的行没选怎么办时**不放行**。
+         *
+         * 为什么必须在这里拦一下：Ask 这一档的语义就是"先问你"，用户没答就走人等于
+         * 又回到了"界面说询问、代码悄悄改名"的老毛病（只是这次是悄悄自动重命名而已）。
+         * 拦下来的代价只有一次点击 —— 下拉框就在这一行里，备选里也给了"自动重命名（默认，不覆盖）"。
+         *
+         * 刻意**不再弹第二个对话框**：预览本来就是"先给你看"的那个地方（不变量 3），
+         * 要问就地问在这里。
+         */
+        int pending = ViewModel.Items.Count(item => item.NeedsConflictChoice &&
+                                                    string.IsNullOrWhiteSpace(item.ConflictChoice));
+
+        if (pending > 0)
         {
-        }
-
-        public RenamePreviewWindow(IEnumerable<RenamePreviewItem> previewItems)
-        {
-            InitializeComponent();
-
-            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
-            WindowMinimizePolicy.Apply(this);
-
-            ViewModel = new RenamePreviewViewModel(previewItems);
-            DataContext = ViewModel;
-
-            ViewModel.PropertyChanged += ViewModel_PropertyChanged;
-        }
-
-        public RenamePreviewWindow(
-            IEnumerable<RenamePreviewItem> previewItems,
-            IEnumerable<ArchiveTask> tasks)
-            : this(previewItems)
-        {
-        }
-
-        private void ConfirmButton_Click(object sender, RoutedEventArgs e)
-        {
-            CommitDataGridEdit();
+            ViewModel.Message = $"还有 {pending} 个同名冲突没选怎么办（在「冲突」列里选，或点下面的「冲突全部自动重命名」）。";
 
             /*
-             * 「询问」档的逐条确认（真实缺陷修正）：还有撞名的行没选怎么办时**不放行**。
-             *
-             * 为什么必须在这里拦一下：Ask 这一档的语义就是"先问你"，用户没答就走人等于
-             * 又回到了"界面说询问、代码悄悄改名"的老毛病（只是这次是悄悄自动重命名而已）。
-             * 拦下来的代价只有一次点击 —— 下拉框就在这一行里，备选里也给了"自动重命名（默认，不覆盖）"。
-             *
-             * 刻意**不再弹第二个对话框**：预览本来就是"先给你看"的那个地方（不变量 3），
-             * 要问就地问在这里。
+             * ⚠ 走自绘对话框，**不用系统 MessageBox**：
+             * ① 全项目其它提示都已经收敛到 AppDialogWindow（用户点名批评过系统框"灰底、字挤、正文不能复制"），
+             *    只有这里是漏网的一处；
+             * ② MessageBox 会**抢焦点**并且正文不可复制 —— 用户想把这段说明贴回来问人时只能手抄
+             *    （AGENTS.md §13 的同一精神：能不抢焦点就不抢）。
              */
-            int pending = ViewModel.Items.Count(item => item.NeedsConflictChoice &&
-                                                        string.IsNullOrWhiteSpace(item.ConflictChoice));
+            _dialogService.ShowWarning(
+                $"有 {pending} 个目标文件已经存在，请先在「冲突」那一列里选择怎么办。{Environment.NewLine}{Environment.NewLine}"
+                + $"· 自动重命名：产物落成 名字(1)，已有文件一个字节都不动（默认，不覆盖）{Environment.NewLine}"
+                + $"· 跳过：这一条不改名{Environment.NewLine}"
+                + $"· 覆盖：先移开旧文件再落位，中途失败不丢文件{Environment.NewLine}{Environment.NewLine}"
+                + "嫌麻烦可以直接点「冲突全部自动重命名」。");
 
-            if (pending > 0)
-            {
-                ViewModel.Message = $"还有 {pending} 个同名冲突没选怎么办（在「冲突」列里选，或点下面的「冲突全部自动重命名」）。";
-
-                /*
-                 * ⚠ 走自绘对话框，**不用系统 MessageBox**：
-                 * ① 全项目其它提示都已经收敛到 AppDialogWindow（用户点名批评过系统框"灰底、字挤、正文不能复制"），
-                 *    只有这里是漏网的一处；
-                 * ② MessageBox 会**抢焦点**并且正文不可复制 —— 用户想把这段说明贴回来问人时只能手抄
-                 *    （AGENTS.md §13 的同一精神：能不抢焦点就不抢）。
-                 */
-                _dialogService.ShowWarning(
-                    $"有 {pending} 个目标文件已经存在，请先在「冲突」那一列里选择怎么办。{Environment.NewLine}{Environment.NewLine}"
-                    + $"· 自动重命名：产物落成 名字(1)，已有文件一个字节都不动（默认，不覆盖）{Environment.NewLine}"
-                    + $"· 跳过：这一条不改名{Environment.NewLine}"
-                    + $"· 覆盖：先移开旧文件再落位，中途失败不丢文件{Environment.NewLine}{Environment.NewLine}"
-                    + "嫌麻烦可以直接点「冲突全部自动重命名」。");
-
-                return;
-            }
-
-            ViewModel.Confirm();
-
-            if (ViewModel.DialogResult == true)
-            {
-                DialogResult = true;
-                Close();
-            }
+            return;
         }
 
-        /// <summary>
-        /// 「冲突全部自动重命名」：一次把**所有**待选的冲突都设成自动重命名。
-        ///
-        /// 为什么要这一下：一批几十个撞名文件时逐个点下拉框确实烦，而"全部走自动重命名"
-        /// 正是 WinRAR「全部重命名」那一档的等价物（也是这里最安全的默认 —— 绝不覆盖）。
-        /// </summary>
-        private void ConflictAllAutoRenameButton_Click(object sender, RoutedEventArgs e)
+        ViewModel.Confirm();
+
+        if (ViewModel.DialogResult == true)
         {
-            CommitDataGridEdit();
-
-            int count = 0;
-
-            foreach (RenamePreviewItem item in ViewModel.Items)
-            {
-                if (!item.NeedsConflictChoice)
-                {
-                    continue;
-                }
-
-                item.ConflictChoice = "AutoRename";
-                count++;
-            }
-
-            ViewModel.Message = count > 0
-                ? $"已把 {count} 个同名冲突设为自动重命名（不会覆盖任何已有文件）。"
-                : "当前没有需要选择的同名冲突。";
+            DialogResult = true;
+            Close();
         }
+    }
 
-        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    /// <summary>
+    /// 「冲突全部自动重命名」：一次把**所有**待选的冲突都设成自动重命名。
+    ///
+    /// 为什么要这一下：一批几十个撞名文件时逐个点下拉框确实烦，而"全部走自动重命名"
+    /// 正是 WinRAR「全部重命名」那一档的等价物（也是这里最安全的默认 —— 绝不覆盖）。
+    /// </summary>
+    private void ConflictAllAutoRenameButton_Click(object sender, RoutedEventArgs e)
+    {
+        CommitDataGridEdit();
+
+        int count = 0;
+
+        foreach (RenamePreviewItem item in ViewModel.Items)
         {
-            if (e.PropertyName != nameof(RenamePreviewViewModel.DialogResult))
+            if (!item.NeedsConflictChoice)
             {
-                return;
+                continue;
             }
 
-            if (ViewModel.DialogResult == false)
-            {
-                DialogResult = false;
-                Close();
-            }
+            item.ConflictChoice = "AutoRename";
+            count++;
         }
 
-        private void CommitDataGridEdit()
+        ViewModel.Message = count > 0
+            ? $"已把 {count} 个同名冲突设为自动重命名（不会覆盖任何已有文件）。"
+            : "当前没有需要选择的同名冲突。";
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(RenamePreviewViewModel.DialogResult))
         {
-            try
-            {
-                RenamePreviewGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-                RenamePreviewGrid.CommitEdit(DataGridEditingUnit.Row, true);
-            }
-            catch
-            {
-                // 提交编辑失败不应导致窗口崩溃。
-            }
+            return;
         }
 
-        protected override void OnClosed(EventArgs e)
+        if (ViewModel.DialogResult == false)
         {
-            ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
-            base.OnClosed(e);
+            DialogResult = false;
+            Close();
         }
+    }
+
+    private void CommitDataGridEdit()
+    {
+        try
+        {
+            RenamePreviewGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+            RenamePreviewGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        }
+        catch
+        {
+            // 提交编辑失败不应导致窗口崩溃。
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        base.OnClosed(e);
     }
 }

@@ -20,764 +20,763 @@ using System.Threading.Tasks;
 using System.Windows;
 
 
-namespace ArchiveFixer.ViewModels
+namespace ArchiveFixer.ViewModels;
+
+/// <summary>整组候选收集与收拢（组目录/参考名/成员判定/槽位键/规范名准备；第 9 块，同一 partial 类）。</summary>
+internal sealed partial class ExtractionCoordinator
 {
-    /// <summary>整组候选收集与收拢（组目录/参考名/成员判定/槽位键/规范名准备；第 9 块，同一 partial 类）。</summary>
-    internal sealed partial class ExtractionCoordinator
+    /// <summary>
+    /// **这一组的锚（第 1 卷卡）该从哪拿** —— 两处，按可信度排：
+    ///
+    /// <list type="number">
+    /// <item><description>**这一单自己那一份**（<paramref name="owner"/> 的 `CurrentPath`）：批末重判里
+    /// "这一组该拼到哪一层"就是**按这一单**算出来的，所以它手上那份就是这一组的入口。</description></item>
+    /// <item><description>**目标层里那一份**（<see cref="ResolveGroupFirstVolumeCard"/>）。</description></item>
+    /// </list>
+    ///
+    /// <para>为什么必须有第 ① 处（真机 `19191919` 探针逐字）：那一刻
+    /// `目标层=有 目录在=是 层内文件数=2 **层内第1卷=无**`（入口还没被链接进那一层），
+    /// 而同一份探针里 `片=aaa-L2 卡号=1 卡类=VolumeFirstPiece` ⇒ 锚其实**就在这一单自己手上**；
+    /// 只盯目标层 ⇒ 锚=无 ⇒ 规范名推不出来（`[规范名·进] … 锚=无`）⇒ 那一片永远接不进这一组。</para>
+    ///
+    /// <para>⛔ 两处都拿不到 ⇒ null（判不出 ⇒ 什么都不做）。</para>
+    /// </summary>
+    private static FileNatureCard? ResolveGroupAnchorCard(
+        ArchiveTask? owner,
+        string targetDir,
+        string baseName,
+        string? groupEntryPath = null)
     {
-        /// <summary>
-        /// **这一组的锚（第 1 卷卡）该从哪拿** —— 两处，按可信度排：
-        ///
-        /// <list type="number">
-        /// <item><description>**这一单自己那一份**（<paramref name="owner"/> 的 `CurrentPath`）：批末重判里
-        /// "这一组该拼到哪一层"就是**按这一单**算出来的，所以它手上那份就是这一组的入口。</description></item>
-        /// <item><description>**目标层里那一份**（<see cref="ResolveGroupFirstVolumeCard"/>）。</description></item>
-        /// </list>
-        ///
-        /// <para>为什么必须有第 ① 处（真机 `19191919` 探针逐字）：那一刻
-        /// `目标层=有 目录在=是 层内文件数=2 **层内第1卷=无**`（入口还没被链接进那一层），
-        /// 而同一份探针里 `片=aaa-L2 卡号=1 卡类=VolumeFirstPiece` ⇒ 锚其实**就在这一单自己手上**；
-        /// 只盯目标层 ⇒ 锚=无 ⇒ 规范名推不出来（`[规范名·进] … 锚=无`）⇒ 那一片永远接不进这一组。</para>
-        ///
-        /// <para>⛔ 两处都拿不到 ⇒ null（判不出 ⇒ 什么都不做）。</para>
-        /// </summary>
-        private static FileNatureCard? ResolveGroupAnchorCard(
-            ArchiveTask? owner,
-            string targetDir,
-            string baseName,
-            string? groupEntryPath = null)
+        /* ① **外层交下来的入口**最可信：收拢那一趟的成员名单里就有它（探针逐字见上面那段）。 */
+        if (!string.IsNullOrWhiteSpace(groupEntryPath) && File.Exists(groupEntryPath))
         {
-            /* ① **外层交下来的入口**最可信：收拢那一趟的成员名单里就有它（探针逐字见上面那段）。 */
-            if (!string.IsNullOrWhiteSpace(groupEntryPath) && File.Exists(groupEntryPath))
+            FileNatureCard groupEntryCard = FileNature.Inspect(groupEntryPath);
+            if (groupEntryCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
             {
-                FileNatureCard groupEntryCard = FileNature.Inspect(groupEntryPath);
-                if (groupEntryCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
-                {
-                    return groupEntryCard;
-                }
+                return groupEntryCard;
             }
-
-            string ownerPath = owner?.CurrentPath ?? string.Empty;
-
-            if (ownerPath.Length > 0)
-            {
-                FileNatureCard ownerCard = FileNature.Inspect(ownerPath);
-
-                /*
-                 * ⛔ **权威是 `BodyKind`，不是 `FirstVolumeFlag`** —— §29.8 那条写死的教训，
-                 * 本轮又实测一次（探针逐字）：`[取锚·owner] 单=aaa-L2.part1.rar 卡类=VolumeFirstPiece
-                 * **首卷位=False** raw=0` ⇒ 锚本来就在这一单手上，被那个标志挡掉了。
-                 * （真机 `4444` 的入口当年也是同一形状：`VolumeFirstPiece` + `First=False`。）
-                 */
-                if (ownerCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
-                {
-                    return ownerCard;
-                }
-            }
-
-            return ResolveGroupFirstVolumeCard(targetDir, baseName);
         }
 
-        /// <summary>
-        /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数、以及"本族入口形状"的样本都要用它；
-        /// 用户 2026-10-16 拍板）。
-        ///
-        /// <para>先在<paramref name="targetDir"/> **这一层**里找与这一片**同基名**、卡上自报"我就是第 1 卷"
-        /// （<see cref="FileNatureCard.FirstVolumeFlag"/>）的那一份；同基名一个都没有时（真机 `19191919`：
-        /// 这一片的名字被改烂成 `aaa-L2-976`，基名本身就是垃圾 ⇒ 按基名永远找不到入口），
-        /// 退回"**这一层里唯一的那个自报第 1 卷的片**" —— ⛔ 必须**恰好一份**才采信，
-        /// 两份以上 ⇒ 判不出（⛔ 不猜）。⛔ 只扫一层、⛔ 一个字节都不动、⛔ 找不到 ⇒ null。</para>
-        /// </summary>
-        private static FileNatureCard? ResolveGroupFirstVolumeCard(string targetDir, string baseName)
+        string ownerPath = owner?.CurrentPath ?? string.Empty;
+
+        if (ownerPath.Length > 0)
         {
-            if (targetDir.Length == 0 || !Directory.Exists(targetDir))
-            {
-                return null;
-            }
+            FileNatureCard ownerCard = FileNature.Inspect(ownerPath);
 
-            FileNatureCard? uniqueFirstVolume = null;
-            int firstVolumeCount = 0;
-
-            foreach (string candidate in Directory.EnumerateFiles(targetDir))
-            {
-                FileNatureCard card = FileNature.Inspect(candidate);
-
-                // ⛔ 权威同样是 `BodyKind`（见 `ResolveGroupAnchorCard` 那条实测教训），⛔ 不要求首卷标志。
-                if (card.BodyKind != ArchiveBodyKind.VolumeFirstPiece)
-                {
-                    continue;
-                }
-
-                if (baseName.Length > 0
-                    && VolumeGatherStep.BaseNameRelatedToGroup(FileNameHelper.GetFileName(candidate), baseName))
-                {
-                    return card;   // 同基名的那一份最可信
-                }
-
-                firstVolumeCount++;
-                uniqueFirstVolume = card;
-            }
-
-            return firstVolumeCount == 1 ? uniqueFirstVolume : null;
-        }
-
-        /// <summary>
-        /// **这一份的"槽位号"该信谁**（专属算法的入口判据，唯一出口）。
-        ///
-        /// <para>次序（用户 2026-10-14：「**专属算法不就是靠识别的吗**」）：**先问底层识别卡，卡上没有才问名字**：
-        /// ① 卡上有卷号（RAR5 主头 / RAR4 新编号 / 跨盘 ZIP 末片写着第几盘）⇒ 用卡上的；
-        /// ② 卡上写着 <see cref="ArchiveBodyKind.VolumeFirstPiece"/>（起始头自述的整包比这一份大）⇒ **1**；
-        /// ③ 卡上写着 <see cref="ArchiveBodyKind.VolumePiece"/>（"我是这一组的一片、**但不是第一片**"）
-        ///    而**名字读出来是 1** ⇒ 那个 1 是假的（卷标记被伪装吃掉之后，名字那把尺子会退回"1"）
-        ///    ⇒ **判不出**（null），交给"缺口 + 体积"（末片最小）去定 —— ⛔ 不许拿假锚点去补片；
-        /// ④ 卡上什么都没有（7z 的中间片之类）⇒ 回落到名字那把尺子（老口径，⛔ 不放宽）。</para>
-        ///
-        /// <para>现场（官方环台 `10101010`，卡逐字）：那一组三片分别叫 `pack111-L2.7z`、`pack111-L2.7z.002`、
-        /// `pack111-L2.7z` —— 第 1 片与第 3 片的**名字一模一样**（名字尺子都读成 1）⇒ 旧口径把第 3 片也摆在
-        /// 1 号槽 ⇒ 组永远凑不齐；而卡上写得清清楚楚：第 1 片 `专属算法=VolumeFirstPiece`、
-        /// 第 3 片 `专属算法=VolumePiece`（体积 26 214 400 vs 10 490 213，末片最小）。</para>
-        /// </summary>
-        internal static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
-        {
             /*
-             * ⚠ 2026-10-14：这套顺序（**卡 → 内容 → 名字**）已经收成一个唯一出口 ——
-             * <see cref="VolumePieceFacts.ResolveSlotIndex"/>（用户口径：「把现在的专属算法顺序给我弄好了」）。
-             * ⛔ 别处不许再自己拼一遍。
+             * ⛔ **权威是 `BodyKind`，不是 `FirstVolumeFlag`** —— §29.8 那条写死的教训，
+             * 本轮又实测一次（探针逐字）：`[取锚·owner] 单=aaa-L2.part1.rar 卡类=VolumeFirstPiece
+             * **首卷位=False** raw=0` ⇒ 锚本来就在这一单手上，被那个标志挡掉了。
+             * （真机 `4444` 的入口当年也是同一形状：`VolumeFirstPiece` + `First=False`。）
              */
-            return VolumePieceFacts.ResolveSlotIndex(path, card);
+            if (ownerCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+            {
+                return ownerCard;
+            }
         }
 
-        /// <summary>
-        /// 这一组的第 1 卷是不是**同批另一个任务**在负责（判据与
-        /// <see cref="SkipWhenAnotherTaskOwnsThisVolumeGroup"/> 同一个口径：任务表里有没有别人指着它）。
-        /// 是 ⇒ 这一单不许把起点改过去（那一组只解一次，别的卷按「跟班卷」跳过）。
-        /// </summary>
-        internal bool IsFirstVolumeOwnedByAnotherTask(ArchiveTask task, string firstVolumePath)
+        return ResolveGroupFirstVolumeCard(targetDir, baseName);
+    }
+
+    /// <summary>
+    /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数、以及"本族入口形状"的样本都要用它；
+    /// 用户 2026-10-16 拍板）。
+    ///
+    /// <para>先在<paramref name="targetDir"/> **这一层**里找与这一片**同基名**、卡上自报"我就是第 1 卷"
+    /// （<see cref="FileNatureCard.FirstVolumeFlag"/>）的那一份；同基名一个都没有时（真机 `19191919`：
+    /// 这一片的名字被改烂成 `aaa-L2-976`，基名本身就是垃圾 ⇒ 按基名永远找不到入口），
+    /// 退回"**这一层里唯一的那个自报第 1 卷的片**" —— ⛔ 必须**恰好一份**才采信，
+    /// 两份以上 ⇒ 判不出（⛔ 不猜）。⛔ 只扫一层、⛔ 一个字节都不动、⛔ 找不到 ⇒ null。</para>
+    /// </summary>
+    private static FileNatureCard? ResolveGroupFirstVolumeCard(string targetDir, string baseName)
+    {
+        if (targetDir.Length == 0 || !Directory.Exists(targetDir))
         {
-            string first = SafePathHelper.GetFullPathSafe(firstVolumePath);
+            return null;
+        }
 
-            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+        FileNatureCard? uniqueFirstVolume = null;
+        int firstVolumeCount = 0;
+
+        foreach (string candidate in Directory.EnumerateFiles(targetDir))
+        {
+            FileNatureCard card = FileNature.Inspect(candidate);
+
+            // ⛔ 权威同样是 `BodyKind`（见 `ResolveGroupAnchorCard` 那条实测教训），⛔ 不要求首卷标志。
+            if (card.BodyKind != ArchiveBodyKind.VolumeFirstPiece)
             {
-                if (candidate == null || ReferenceEquals(candidate, task))
-                {
-                    continue;
-                }
-
-                if (string.Equals(
-                        SafePathHelper.GetFullPathSafe(candidate.CurrentPath),
-                        first,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                continue;
             }
 
-            return false;
+            if (baseName.Length > 0
+                && VolumeGatherStep.BaseNameRelatedToGroup(FileNameHelper.GetFileName(candidate), baseName))
+            {
+                return card;   // 同基名的那一份最可信
+            }
+
+            firstVolumeCount++;
+            uniqueFirstVolume = card;
         }
 
-        /// <summary>
-        /// **底层识别卡**说"这一份是某一分卷组的一片"（用户 2026-10-17：「定稿分类读卡」——
-        /// 分卷片不再当内容物）。⛔ 不看后缀、⛔ 不猜：判据唯一出口
-        /// <see cref="VolumePieceFacts.CardSaysItIsOneOfTheGroup"/>（`BodyKind` = 首片 / 后续片）。
-        /// </summary>
-        private static bool CardSaysItIsOneOfTheGroup(string path) => StageFilePredicates.CardSaysItIsOneOfTheGroup(path);
+        return firstVolumeCount == 1 ? uniqueFirstVolume : null;
+    }
 
-        /// <summary>
-        /// 找卷的基准那一句（只在**基准不是入口那一卷**时补出来）：用户口径是"以一开始的分卷文件为准，
-        /// 不要以 001 为准" —— 这一行就是它落地的证据（窗口的父文件夹是**基准**那一层的父文件夹）。
-        /// ⛔ 只写目录名，不写完整路径（§8）。
-        /// </summary>
-        private static string DescribeGatherAnchor(
-            VolumeGatherPlanner.CrossLayerVolumeGather decision,
-            string entryPath)
+    /// <summary>
+    /// **这一份的"槽位号"该信谁**（专属算法的入口判据，唯一出口）。
+    ///
+    /// <para>次序（用户 2026-10-14：「**专属算法不就是靠识别的吗**」）：**先问底层识别卡，卡上没有才问名字**：
+    /// ① 卡上有卷号（RAR5 主头 / RAR4 新编号 / 跨盘 ZIP 末片写着第几盘）⇒ 用卡上的；
+    /// ② 卡上写着 <see cref="ArchiveBodyKind.VolumeFirstPiece"/>（起始头自述的整包比这一份大）⇒ **1**；
+    /// ③ 卡上写着 <see cref="ArchiveBodyKind.VolumePiece"/>（"我是这一组的一片、**但不是第一片**"）
+    ///    而**名字读出来是 1** ⇒ 那个 1 是假的（卷标记被伪装吃掉之后，名字那把尺子会退回"1"）
+    ///    ⇒ **判不出**（null），交给"缺口 + 体积"（末片最小）去定 —— ⛔ 不许拿假锚点去补片；
+    /// ④ 卡上什么都没有（7z 的中间片之类）⇒ 回落到名字那把尺子（老口径，⛔ 不放宽）。</para>
+    ///
+    /// <para>现场（官方环台 `10101010`，卡逐字）：那一组三片分别叫 `pack111-L2.7z`、`pack111-L2.7z.002`、
+    /// `pack111-L2.7z` —— 第 1 片与第 3 片的**名字一模一样**（名字尺子都读成 1）⇒ 旧口径把第 3 片也摆在
+    /// 1 号槽 ⇒ 组永远凑不齐；而卡上写得清清楚楚：第 1 片 `专属算法=VolumeFirstPiece`、
+    /// 第 3 片 `专属算法=VolumePiece`（体积 26 214 400 vs 10 490 213，末片最小）。</para>
+    /// </summary>
+    internal static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
+    {
+        /*
+         * ⚠ 2026-10-14：这套顺序（**卡 → 内容 → 名字**）已经收成一个唯一出口 ——
+         * <see cref="VolumePieceFacts.ResolveSlotIndex"/>（用户口径：「把现在的专属算法顺序给我弄好了」）。
+         * ⛔ 别处不许再自己拼一遍。
+         */
+        return VolumePieceFacts.ResolveSlotIndex(path, card);
+    }
+
+    /// <summary>
+    /// 这一组的第 1 卷是不是**同批另一个任务**在负责（判据与
+    /// <see cref="SkipWhenAnotherTaskOwnsThisVolumeGroup"/> 同一个口径：任务表里有没有别人指着它）。
+    /// 是 ⇒ 这一单不许把起点改过去（那一组只解一次，别的卷按「跟班卷」跳过）。
+    /// </summary>
+    internal bool IsFirstVolumeOwnedByAnotherTask(ArchiveTask task, string firstVolumePath)
+    {
+        string first = SafePathHelper.GetFullPathSafe(firstVolumePath);
+
+        foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
         {
-            string? anchor = decision.AnchorPath;
+            if (candidate == null || ReferenceEquals(candidate, task))
+            {
+                continue;
+            }
 
-            if (string.IsNullOrWhiteSpace(anchor)
-                || string.Equals(
-                    SafePathHelper.GetFullPathSafe(anchor),
-                    SafePathHelper.GetFullPathSafe(entryPath),
+            if (string.Equals(
+                    SafePathHelper.GetFullPathSafe(candidate.CurrentPath),
+                    first,
                     StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            return "。" + string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                StatusText.VolumeGatherAnchorFormat,
-                Path.GetFileName(anchor),
-                Path.GetFileName(Path.GetDirectoryName(anchor) ?? string.Empty));
-        }
-
-        /// <summary>
-        /// 把一片从**我们自己的过程物目录**挪进这一组的目录（同盘改名、零字节；失败 ⇒ false 由调用方退回硬链接）。
-        /// ⛔ 只用于过程物：用户目录里的片从这条路走不进来。
-        /// </summary>
-        private static bool TryMovePieceIntoGroup(string piecePath, string target)
-        {
-            try
-            {
-                FileOperations.Move(piecePath, target);
-                return File.Exists(target);
-            }
-            catch
-            {
-                // 挪不动（被占用 / 目标刚出现）⇒ 交给调用方退回"建硬链接"那一档。
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// **这一单"属于哪一组"的引用名**：那把「同一组 = 族 + 基名」的尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）
-        /// 要一个**组内成员的名字**当引用，这个成员就是**这一单自己**。
-        ///
-        /// <para><b>为什么必须改（真机 FFFF 2026-10-10 夜，定案到行）</b>：这里各处原来一律写死
-        /// `<基名>.zip` —— 那等于**假定每一组都是跨盘 ZIP 族**。族一旦不是 <c>ZipSpanned</c>
-        /// （`X.partN.rar` 是新式族、`X.7z.001` 是数字族、`X.r00` 是老式族），
-        /// `BelongsToSameGroup(别的片, "X.zip")` **恒为 false**（尺子自己写着：`x.rar` 与 `x.part1.rar`
-        /// 不同组、族不同就是不同组）⇒ 收拢那一档连"这一组有哪些成员"都收不出来。</para>
-        ///
-        /// <para>调试器实测（`steps-ffff2.json`，暂停在 `RecheckDeferredVolumeDeficits:10698`）：
-        /// 那一批的待判单是 `111_.part4.rar`、`baseName = "111_"` ⇒ 引用名是 `111_.zip`，
-        /// 而四片叫 `111_.part1.rar` / `111_.part2` / `111_.part3.rar` / `111_.part4.rar`
-        /// ⇒ 一个成员都匹配不上 ⇒ 入口那一层推不出来 ⇒ 整组到最后也没解开
-        /// （真机：成功 0 / 失败 3；我这边同一批：成功 0 / 失败 0 / 跳过 3 / 部分完成 3）。
-        /// 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`
-        /// （**改之前是红的**，逐字红在 `Assert.NotNull() Failure: Value is null`）。</para>
-        ///
-        /// <para>⛔ **判不出就照旧**：这一单的名字解析不出来时退回老的 `<基名>.zip`
-        /// —— 一个字都不放宽，只是"不认得就不认"。⛔ 同一个问题（"哪些文件属于这一组"）
-        /// 只许有这一个出口，各处不许再自己拼 `<基名>.zip`。</para>
-        /// </summary>
-        internal static string ResolveGroupReferenceName(ArchiveTask? task, string baseName, string? memberPath = null)
-        {
-            /*
-             * ⚠ **优先拿"手上这一片"的名字**（2026-10-11 订正）：它按定义就在这一组里；而"调用方那一单自己的文件名"
-             * 在**接片**那条路上拿不到（调用方给的是 null）⇒ 老写法只能退回 `<基名>.zip`，
-             * 可那把尺子只对**跨盘 ZIP 族**成立 —— RAR 新式（`X.partN.rar`）/ 数字族（`X.7z.001`）
-             * 用 `X.zip` 去比，`BelongsToSameGroup` 恒 false ⇒ 这一组的成员**一个都收不进来**
-             * （真机 FFFF：`111_` 那一组就是这么互相看不见的）。
-             *
-             * ⛔ 判据与老口径**同一把尺子**（`BelongsToSameGroup` 自比），只是参照物多了一个来源；
-             * 名字解析不出来 ⇒ 照旧退回 `<基名>.zip`（一个字都不放宽）。
-             */
-            string ownPath = !string.IsNullOrWhiteSpace(memberPath)
-                ? memberPath!
-                : task?.CurrentPath ?? string.Empty;
-
-            string own = FileNameHelper.GetFileName(ownPath);
-
-            /*
-             * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
-             * ⛔ 不新造"能不能解析"的第二把尺子（`Analyze` 是私有的，这里也不该去开它）。
-             */
-            if (own.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(own, own))
-            {
-                return own;
-            }
-
-            /*
-             * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字）：名字**解析不出来**时退回 `<基名>.zip`
-             * 那一条等于**假定每一组都是跨盘 ZIP 族** —— 逐字 `这一组的引用名=「pack111-L2.7z.zip」`
-             * ⇒ 紧接着 `这一组该拼到哪一层 —— 判不出`（三片都齐了也拼不到一层去）。
-             *
-             * <para>⇒ 这一格也改成**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说
-             * "我是这一组的第一片 / 一片"（`VolumeFirstPiece` / `VolumePiece`）⇒ 拿**卡拼出来的规范名**
-             * 当引用名（那正是这一组入口该有的名字，`pack111-L2.7z.txt` ⇒ `pack111-L2.7z.001`）；
-             * 卡上也给不出 ⇒ 才退回老口径 `<基名>.zip`（⛔ 一个字都不放宽）。</para>
-             */
-            if (ownPath.Length > 0)
-            {
-                string fromCard = VolumeNameOrchestration.ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
-
-                if (fromCard.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(fromCard, fromCard))
-                {
-                    return fromCard;
-                }
-
-                /*
-                 * ⚠ 2026-10-17（本轮判据输入定死）：名字与卡都拼不出规范名时（真机 `aaa-L2.txt`：
-                 * 卡上 `分卷身份=VolumeMember` 但 `BodyKind=Unknown`、规范名空），老写法退回
-                 * `<基名>.zip` ⇒ 与 `.rar` / `.7z` 族的兄弟**一个都匹配不上**（判据输入逐字：
-                 * `这一层文件 3 个｜参照名=「aaa-L2.zip」｜同族候选 0 个`）⇒ 收拢永远收不到一起。
-                 *
-                 * <p>现在的口径：**拿同层里真实存在的"这一族的成员"当参照名**（卡说它是某族的一片），
-                 * 那个名字天然就在这一组里、族也天然对得上。⛔ 找不到才退回 `<基名>.zip`（老兜底不变）。</p>
-                 */
-                string? ownDirectory = Path.GetDirectoryName(ownPath);
-
-                if (!string.IsNullOrWhiteSpace(ownDirectory) && Directory.Exists(ownDirectory))
-                {
-                    foreach (string sibling in Directory.EnumerateFiles(ownDirectory))
-                    {
-                        if (SafePathHelper.PathEquals(sibling, ownPath))
-                        {
-                            continue;
-                        }
-
-                        if (VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(sibling)))
-                        {
-                            return FileNameHelper.GetFileName(sibling);
-                        }
-                    }
-                }
-            }
-
-            return baseName + ".zip";
-        }
-
-        /// <summary>
-        /// 这一组该**拼到哪一层** = 入口包（引擎要打开、要对它输密码的那一份）所在目录，
-        /// 也就是这一组该**落**的那一层（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」；
-        /// 见 <see cref="Detection.GroupVolumeDirectory"/>：RAR 分卷 = `.part1.rar`、7z 分卷 = `.7z.001`、
-        /// zip 分卷 = `.zip`（跨盘那一族）或 `.zip.001`（7-Zip 切的通用分片））。
-        ///
-        /// <para><b>判据是"程序性"的（2026-10-11 订正）</b>：答案只能是 **(族, 基名, 盘上事实)** 的纯函数 ——
-        /// ① 入口包**在盘上** ⇒ 它所在那一层（纯查盘：任务表里这一组的成员 + 各单产出树里已经落盘的这一组成员，
-        /// 一起交给 <see cref="Detection.GroupVolumeDirectory.Resolve"/>）；② 还不在盘上 ⇒ 沿**产出链**推它将来落在哪一层
-        /// （与落点实现同一个出口）；③ 两条都答不出 ⇒ **空串 = 这一次不决定**。
-        /// ⛔ 顺序只决定"什么时候算得出来"，**不决定"算出来是什么"**。</para>
-        ///
-        /// <para>⛔ 判据全部转调既有那几把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/> 认"同一组"，
-        /// 所以脏名 `111.z0删除2` 照样认得出；<see cref="Detection.GroupVolumeDirectory.Resolve"/> 认"入口包在哪儿"），
-        /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟。</para>
-        /// </summary>
-        /// <param name="memberPath">
-        /// **手上这一片**（可选）：它是这一组的成员，拿它的名字当"同一组"那把尺子的参照物
-        /// —— ⛔ 不再一律退回 `<基名>.zip`（那只对跨盘 ZIP 族成立）。
-        /// ⚠ **闸门**：它的名字必须解析得出一条"**没被改坏**"的线索（见方法体里那句"干不干净"），
-        /// 名字带垃圾尾巴的那一档（实测 `333.7z.001.txt`）**不许**启用新判据 —— 那一档连规范名都算不对
-        /// （会算出 `333.7z.001.001`），照旧走老口径（行为与改动前逐字相同）。
-        /// </param>
-        /// <summary>
-        /// **这一份算不算"这一组"的成员**（唯一出口）。
-        ///
-        /// <para>① 名字那把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）说"是" ⇒ 是；
-        /// ② 名字说"不是"时**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说"我是这一组的一片"
-        /// （`VolumeFirstPiece` / `VolumePiece`）**而且基名与这一组有关系**（一个是另一个的前缀也算）⇒ 也算。
-        /// 现场（官方环台 `10101010`）：入口那一份叫 `pack111-L2.7z`（卷标记被伪装法吃掉 ⇒
-        /// 名字尺子连"像分卷"都判不出）⇒ 它进不了成员表 ⇒ 逐字 `任务表里这一组的单 0 个，入口包=判不出`
-        /// ⇒ 三片都齐了也拼不到一层去。</para>
-        ///
-        /// <para>⛔ 判不出（读不到卡 / 基名对不上）⇒ 照旧"不是"（一个字不放宽）。</para>
-        /// </summary>
-        private static bool MemberBelongsToGroup(string path, string tailName)
-        {
-            string name = FileNameHelper.GetFileName(path);
-
-            if (name.Length == 0)
-            {
-                return false;
-            }
-
-            if (LegacyVolumeNames.BelongsToSameGroup(name, tailName))
             {
                 return true;
             }
-
-            FileNatureCard card = FileNature.Inspect(path);
-
-            if (!VolumePieceFacts.CardSaysItIsOneOfTheGroup(card))
-            {
-                return false;
-            }
-
-            return VolumeGatherStep.BaseNameRelatedToGroup(name, FileNameHelper.GetArchiveBaseName(tailName));
         }
 
-        internal string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
+        return false;
+    }
+
+    /// <summary>
+    /// **底层识别卡**说"这一份是某一分卷组的一片"（用户 2026-10-17：「定稿分类读卡」——
+    /// 分卷片不再当内容物）。⛔ 不看后缀、⛔ 不猜：判据唯一出口
+    /// <see cref="VolumePieceFacts.CardSaysItIsOneOfTheGroup"/>（`BodyKind` = 首片 / 后续片）。
+    /// </summary>
+    private static bool CardSaysItIsOneOfTheGroup(string path) => StageFilePredicates.CardSaysItIsOneOfTheGroup(path);
+
+    /// <summary>
+    /// 找卷的基准那一句（只在**基准不是入口那一卷**时补出来）：用户口径是"以一开始的分卷文件为准，
+    /// 不要以 001 为准" —— 这一行就是它落地的证据（窗口的父文件夹是**基准**那一层的父文件夹）。
+    /// ⛔ 只写目录名，不写完整路径（§8）。
+    /// </summary>
+    private static string DescribeGatherAnchor(
+        VolumeGatherPlanner.CrossLayerVolumeGather decision,
+        string entryPath)
+    {
+        string? anchor = decision.AnchorPath;
+
+        if (string.IsNullOrWhiteSpace(anchor)
+            || string.Equals(
+                SafePathHelper.GetFullPathSafe(anchor),
+                SafePathHelper.GetFullPathSafe(entryPath),
+                StringComparison.OrdinalIgnoreCase))
         {
-            /*
-             * ⚠ "手上这一片的名字干不干净" = **它自己算出来的规范名就是它自己**（唯一出口
-             * `LegacyVolumeNames.TryGetCanonicalName`）。
-             * ⛔ 脏名那一档不许启用新判据：`333.7z.001.txt` 那一档的规范名是 `333.7z.001.001`（错的），
-             * 拿它当参照物会牵出一串错名字（实测：`PlacementRulesTests.文件未指定位置…` 多出一个同名目录）。
-             * 判不出 ⇒ 当作"不干净" ⇒ 老口径。
-             */
-            string memberName = FileNameHelper.GetFileName(memberPath ?? string.Empty);
-            bool memberNameIsClean = memberName.Length > 0
-                && LegacyVolumeNames.TryGetCanonicalName(memberName, out string memberCanonical)
-                && string.Equals(memberCanonical, memberName, StringComparison.OrdinalIgnoreCase);
+            return string.Empty;
+        }
 
-            /*
-             * ⚠ 2026-10-13 订正（困难批 `run-2222`，逐字）：这道"干不干净"的闸门**不许把 `memberPath` 整个丢掉**。
-             *
-             * 现场：手上这一片叫 `bbb-L2.part98598542删除1.rar`（EEE 式伪装），它的规范名是 `bbb-L2.part1.rar`
-             * ⇒ `memberNameIsClean = false` ⇒ 老写法走**两参**重载（`memberPath` 根本没参与）⇒ 引用名退回
-             * `<基名>.zip`（**zip 族**）⇒ 与这一组的兄弟（partN 族）`BelongsToSameGroup` **一个都匹配不上**
-             * ⇒ 逐字 `这一组的引用名=「bbb-L2.zip」，任务表里这一组的单 0 个` ⇒ `这一组该拼到哪一层 —— 判不出`
-             * ⇒ 整组永远缺片 ⇒ ①红。（同一份里名字干净的那一片 `bbb-L2.part2.rar` 反而能判出来：
-             * `批末重判 —— 这一组该拼到哪一层 = …\bbb\bbb\bbb`。）
-             *
-             * ⛔ **安全性一个字没放宽**：`ResolveGroupReferenceName` 内部本来就拿**同一把尺子自比**
-             * （`BelongsToSameGroup(own, own)`），解析不出来的名字（`333.7z.001.txt` 那一档）照样退回
-             * `<基名>.zip` —— 老口径与它的守门用例行为不变，这里只是把"手上这一片"重新交给那把尺子。
-             */
-            string tailName = ResolveGroupReferenceName(task, baseName, memberPath);
+        return "。" + string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            StatusText.VolumeGatherAnchorFormat,
+            Path.GetFileName(anchor),
+            Path.GetFileName(Path.GetDirectoryName(anchor) ?? string.Empty));
+    }
 
-            var members = new List<string>();
+    /// <summary>
+    /// 把一片从**我们自己的过程物目录**挪进这一组的目录（同盘改名、零字节；失败 ⇒ false 由调用方退回硬链接）。
+    /// ⛔ 只用于过程物：用户目录里的片从这条路走不进来。
+    /// </summary>
+    private static bool TryMovePieceIntoGroup(string piecePath, string target)
+    {
+        try
+        {
+            FileOperations.Move(piecePath, target);
+            return File.Exists(target);
+        }
+        catch
+        {
+            // 挪不动（被占用 / 目标刚出现）⇒ 交给调用方退回"建硬链接"那一档。
+            return false;
+        }
+    }
 
-            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+    /// <summary>
+    /// **这一单"属于哪一组"的引用名**：那把「同一组 = 族 + 基名」的尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）
+    /// 要一个**组内成员的名字**当引用，这个成员就是**这一单自己**。
+    ///
+    /// <para><b>为什么必须改（真机 FFFF 2026-10-10 夜，定案到行）</b>：这里各处原来一律写死
+    /// `<基名>.zip` —— 那等于**假定每一组都是跨盘 ZIP 族**。族一旦不是 <c>ZipSpanned</c>
+    /// （`X.partN.rar` 是新式族、`X.7z.001` 是数字族、`X.r00` 是老式族），
+    /// `BelongsToSameGroup(别的片, "X.zip")` **恒为 false**（尺子自己写着：`x.rar` 与 `x.part1.rar`
+    /// 不同组、族不同就是不同组）⇒ 收拢那一档连"这一组有哪些成员"都收不出来。</para>
+    ///
+    /// <para>调试器实测（`steps-ffff2.json`，暂停在 `RecheckDeferredVolumeDeficits:10698`）：
+    /// 那一批的待判单是 `111_.part4.rar`、`baseName = "111_"` ⇒ 引用名是 `111_.zip`，
+    /// 而四片叫 `111_.part1.rar` / `111_.part2` / `111_.part3.rar` / `111_.part4.rar`
+    /// ⇒ 一个成员都匹配不上 ⇒ 入口那一层推不出来 ⇒ 整组到最后也没解开
+    /// （真机：成功 0 / 失败 3；我这边同一批：成功 0 / 失败 0 / 跳过 3 / 部分完成 3）。
+    /// 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`
+    /// （**改之前是红的**，逐字红在 `Assert.NotNull() Failure: Value is null`）。</para>
+    ///
+    /// <para>⛔ **判不出就照旧**：这一单的名字解析不出来时退回老的 `<基名>.zip`
+    /// —— 一个字都不放宽，只是"不认得就不认"。⛔ 同一个问题（"哪些文件属于这一组"）
+    /// 只许有这一个出口，各处不许再自己拼 `<基名>.zip`。</para>
+    /// </summary>
+    internal static string ResolveGroupReferenceName(ArchiveTask? task, string baseName, string? memberPath = null)
+    {
+        /*
+         * ⚠ **优先拿"手上这一片"的名字**（2026-10-11 订正）：它按定义就在这一组里；而"调用方那一单自己的文件名"
+         * 在**接片**那条路上拿不到（调用方给的是 null）⇒ 老写法只能退回 `<基名>.zip`，
+         * 可那把尺子只对**跨盘 ZIP 族**成立 —— RAR 新式（`X.partN.rar`）/ 数字族（`X.7z.001`）
+         * 用 `X.zip` 去比，`BelongsToSameGroup` 恒 false ⇒ 这一组的成员**一个都收不进来**
+         * （真机 FFFF：`111_` 那一组就是这么互相看不见的）。
+         *
+         * ⛔ 判据与老口径**同一把尺子**（`BelongsToSameGroup` 自比），只是参照物多了一个来源；
+         * 名字解析不出来 ⇒ 照旧退回 `<基名>.zip`（一个字都不放宽）。
+         */
+        string ownPath = !string.IsNullOrWhiteSpace(memberPath)
+            ? memberPath!
+            : task?.CurrentPath ?? string.Empty;
+
+        string own = FileNameHelper.GetFileName(ownPath);
+
+        /*
+         * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
+         * ⛔ 不新造"能不能解析"的第二把尺子（`Analyze` 是私有的，这里也不该去开它）。
+         */
+        if (own.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(own, own))
+        {
+            return own;
+        }
+
+        /*
+         * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字）：名字**解析不出来**时退回 `<基名>.zip`
+         * 那一条等于**假定每一组都是跨盘 ZIP 族** —— 逐字 `这一组的引用名=「pack111-L2.7z.zip」`
+         * ⇒ 紧接着 `这一组该拼到哪一层 —— 判不出`（三片都齐了也拼不到一层去）。
+         *
+         * <para>⇒ 这一格也改成**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说
+         * "我是这一组的第一片 / 一片"（`VolumeFirstPiece` / `VolumePiece`）⇒ 拿**卡拼出来的规范名**
+         * 当引用名（那正是这一组入口该有的名字，`pack111-L2.7z.txt` ⇒ `pack111-L2.7z.001`）；
+         * 卡上也给不出 ⇒ 才退回老口径 `<基名>.zip`（⛔ 一个字都不放宽）。</para>
+         */
+        if (ownPath.Length > 0)
+        {
+            string fromCard = VolumeNameOrchestration.ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
+
+            if (fromCard.Length > 0 && LegacyVolumeNames.BelongsToSameGroup(fromCard, fromCard))
             {
-                string path = candidate?.CurrentPath ?? string.Empty;
-
-                if (path.Length > 0 && MemberBelongsToGroup(path, tailName))
-                {
-                    members.Add(path);
-                }
+                return fromCard;
             }
 
             /*
-             * ⚠ 2026-10-14（walk 档一步步走查的直接结论）：**卡说"我是这一组的一片"时，名字干不干净不该再当闸门**。
+             * ⚠ 2026-10-17（本轮判据输入定死）：名字与卡都拼不出规范名时（真机 `aaa-L2.txt`：
+             * 卡上 `分卷身份=VolumeMember` 但 `BodyKind=Unknown`、规范名空），老写法退回
+             * `<基名>.zip` ⇒ 与 `.rar` / `.7z` 族的兄弟**一个都匹配不上**（判据输入逐字：
+             * `这一层文件 3 个｜参照名=「aaa-L2.zip」｜同族候选 0 个`）⇒ 收拢永远收不到一起。
              *
-             * <para>走查逐字（三片摆在一层目录时）：`pack111-L2.7z.txt` 的卡写着
-             * `格式=SevenZip 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`
-             * ⇒ 槽位 1、规范名 `pack111-L2.7z.001`、入口=它自己、目标层=它所在那一层 —— **整条链是通的**。
-             * 可真跑时它卡在 `任务表里这一组的单 0 个，入口包=判不出`：因为"名字不干净"（`.txt` 尾巴）
-             * ⇒ 下面那两段收拢**整段不跑**（连产出树都不扫）⇒ 成员表恒空 ⇒ 那一组永远拼不到一起。</para>
-             *
-             * <para>⇒ 判据：名字干净 **或** 卡说它是这一组的一片 ⇒ 都按"可用"处理。⛔ 判不出（读不到卡 / 名字也解析不出）
-             * ⇒ 照旧老口径（那两段不跑）。</para>
+             * <p>现在的口径：**拿同层里真实存在的"这一族的成员"当参照名**（卡说它是某族的一片），
+             * 那个名字天然就在这一组里、族也天然对得上。⛔ 找不到才退回 `<基名>.zip`（老兜底不变）。</p>
              */
-            bool memberUsable = memberNameIsClean
-                || (memberName.Length > 0
-                    && VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(memberPath!)));
+            string? ownDirectory = Path.GetDirectoryName(ownPath);
 
-            // 手上这一片也算成员（它可能还没进任务表，或者来自别的单那条链）。
-            if (memberUsable && !members.Contains(memberPath!))
+            if (!string.IsNullOrWhiteSpace(ownDirectory) && Directory.Exists(ownDirectory))
             {
-                members.Add(memberPath!);
-            }
-
-            /*
-             * ===== ① 入口包在盘上 ⇒ 它所在那一层 =====
-             * 成员除了"任务表里这一组的"，还要包括**各单产出树里已经落盘的这一组成员** ——
-             * 分卷的片是别的单解出来的产物，它们不在任务表里（任务表只装用户导入的那些包），
-             * 只看任务表就会漏掉入口包（真机 FFFF：入口包 `111_.part1.rar` 是 `111__.rar` 那条链解出来的）。
-             * ⛔ 仍然只由那把唯一尺子回答"入口包在哪一层"，⛔ 不按名字单独找入口包
-             * （实测踩到：就地整理那一档下"按名字在产出树里找"会把**源文件自己**当成入口）。
-             */
-            if (memberUsable)
-            {
-                foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+                foreach (string sibling in Directory.EnumerateFiles(ownDirectory))
                 {
-                    if (other == null)
+                    if (SafePathHelper.PathEquals(sibling, ownPath))
                     {
                         continue;
                     }
 
-                    foreach (string directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                    if (VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(sibling)))
                     {
-                        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                        {
-                            continue;
-                        }
+                        return FileNameHelper.GetFileName(sibling);
+                    }
+                }
+            }
+        }
 
-                        foreach (string candidate in CollectVolumeFilesInDirectory(directory))
+        return baseName + ".zip";
+    }
+
+    /// <summary>
+    /// 这一组该**拼到哪一层** = 入口包（引擎要打开、要对它输密码的那一份）所在目录，
+    /// 也就是这一组该**落**的那一层（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」；
+    /// 见 <see cref="Detection.GroupVolumeDirectory"/>：RAR 分卷 = `.part1.rar`、7z 分卷 = `.7z.001`、
+    /// zip 分卷 = `.zip`（跨盘那一族）或 `.zip.001`（7-Zip 切的通用分片））。
+    ///
+    /// <para><b>判据是"程序性"的（2026-10-11 订正）</b>：答案只能是 **(族, 基名, 盘上事实)** 的纯函数 ——
+    /// ① 入口包**在盘上** ⇒ 它所在那一层（纯查盘：任务表里这一组的成员 + 各单产出树里已经落盘的这一组成员，
+    /// 一起交给 <see cref="Detection.GroupVolumeDirectory.Resolve"/>）；② 还不在盘上 ⇒ 沿**产出链**推它将来落在哪一层
+    /// （与落点实现同一个出口）；③ 两条都答不出 ⇒ **空串 = 这一次不决定**。
+    /// ⛔ 顺序只决定"什么时候算得出来"，**不决定"算出来是什么"**。</para>
+    ///
+    /// <para>⛔ 判据全部转调既有那几把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/> 认"同一组"，
+    /// 所以脏名 `111.z0删除2` 照样认得出；<see cref="Detection.GroupVolumeDirectory.Resolve"/> 认"入口包在哪儿"），
+    /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟。</para>
+    /// </summary>
+    /// <param name="memberPath">
+    /// **手上这一片**（可选）：它是这一组的成员，拿它的名字当"同一组"那把尺子的参照物
+    /// —— ⛔ 不再一律退回 `<基名>.zip`（那只对跨盘 ZIP 族成立）。
+    /// ⚠ **闸门**：它的名字必须解析得出一条"**没被改坏**"的线索（见方法体里那句"干不干净"），
+    /// 名字带垃圾尾巴的那一档（实测 `333.7z.001.txt`）**不许**启用新判据 —— 那一档连规范名都算不对
+    /// （会算出 `333.7z.001.001`），照旧走老口径（行为与改动前逐字相同）。
+    /// </param>
+    /// <summary>
+    /// **这一份算不算"这一组"的成员**（唯一出口）。
+    ///
+    /// <para>① 名字那把尺子（<see cref="LegacyVolumeNames.BelongsToSameGroup"/>）说"是" ⇒ 是；
+    /// ② 名字说"不是"时**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说"我是这一组的一片"
+    /// （`VolumeFirstPiece` / `VolumePiece`）**而且基名与这一组有关系**（一个是另一个的前缀也算）⇒ 也算。
+    /// 现场（官方环台 `10101010`）：入口那一份叫 `pack111-L2.7z`（卷标记被伪装法吃掉 ⇒
+    /// 名字尺子连"像分卷"都判不出）⇒ 它进不了成员表 ⇒ 逐字 `任务表里这一组的单 0 个，入口包=判不出`
+    /// ⇒ 三片都齐了也拼不到一层去。</para>
+    ///
+    /// <para>⛔ 判不出（读不到卡 / 基名对不上）⇒ 照旧"不是"（一个字不放宽）。</para>
+    /// </summary>
+    private static bool MemberBelongsToGroup(string path, string tailName)
+    {
+        string name = FileNameHelper.GetFileName(path);
+
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        if (LegacyVolumeNames.BelongsToSameGroup(name, tailName))
+        {
+            return true;
+        }
+
+        FileNatureCard card = FileNature.Inspect(path);
+
+        if (!VolumePieceFacts.CardSaysItIsOneOfTheGroup(card))
+        {
+            return false;
+        }
+
+        return VolumeGatherStep.BaseNameRelatedToGroup(name, FileNameHelper.GetArchiveBaseName(tailName));
+    }
+
+    internal string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
+    {
+        /*
+         * ⚠ "手上这一片的名字干不干净" = **它自己算出来的规范名就是它自己**（唯一出口
+         * `LegacyVolumeNames.TryGetCanonicalName`）。
+         * ⛔ 脏名那一档不许启用新判据：`333.7z.001.txt` 那一档的规范名是 `333.7z.001.001`（错的），
+         * 拿它当参照物会牵出一串错名字（实测：`PlacementRulesTests.文件未指定位置…` 多出一个同名目录）。
+         * 判不出 ⇒ 当作"不干净" ⇒ 老口径。
+         */
+        string memberName = FileNameHelper.GetFileName(memberPath ?? string.Empty);
+        bool memberNameIsClean = memberName.Length > 0
+            && LegacyVolumeNames.TryGetCanonicalName(memberName, out string memberCanonical)
+            && string.Equals(memberCanonical, memberName, StringComparison.OrdinalIgnoreCase);
+
+        /*
+         * ⚠ 2026-10-13 订正（困难批 `run-2222`，逐字）：这道"干不干净"的闸门**不许把 `memberPath` 整个丢掉**。
+         *
+         * 现场：手上这一片叫 `bbb-L2.part98598542删除1.rar`（EEE 式伪装），它的规范名是 `bbb-L2.part1.rar`
+         * ⇒ `memberNameIsClean = false` ⇒ 老写法走**两参**重载（`memberPath` 根本没参与）⇒ 引用名退回
+         * `<基名>.zip`（**zip 族**）⇒ 与这一组的兄弟（partN 族）`BelongsToSameGroup` **一个都匹配不上**
+         * ⇒ 逐字 `这一组的引用名=「bbb-L2.zip」，任务表里这一组的单 0 个` ⇒ `这一组该拼到哪一层 —— 判不出`
+         * ⇒ 整组永远缺片 ⇒ ①红。（同一份里名字干净的那一片 `bbb-L2.part2.rar` 反而能判出来：
+         * `批末重判 —— 这一组该拼到哪一层 = …\bbb\bbb\bbb`。）
+         *
+         * ⛔ **安全性一个字没放宽**：`ResolveGroupReferenceName` 内部本来就拿**同一把尺子自比**
+         * （`BelongsToSameGroup(own, own)`），解析不出来的名字（`333.7z.001.txt` 那一档）照样退回
+         * `<基名>.zip` —— 老口径与它的守门用例行为不变，这里只是把"手上这一片"重新交给那把尺子。
+         */
+        string tailName = ResolveGroupReferenceName(task, baseName, memberPath);
+
+        var members = new List<string>();
+
+        foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+        {
+            string path = candidate?.CurrentPath ?? string.Empty;
+
+            if (path.Length > 0 && MemberBelongsToGroup(path, tailName))
+            {
+                members.Add(path);
+            }
+        }
+
+        /*
+         * ⚠ 2026-10-14（walk 档一步步走查的直接结论）：**卡说"我是这一组的一片"时，名字干不干净不该再当闸门**。
+         *
+         * <para>走查逐字（三片摆在一层目录时）：`pack111-L2.7z.txt` 的卡写着
+         * `格式=SevenZip 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`
+         * ⇒ 槽位 1、规范名 `pack111-L2.7z.001`、入口=它自己、目标层=它所在那一层 —— **整条链是通的**。
+         * 可真跑时它卡在 `任务表里这一组的单 0 个，入口包=判不出`：因为"名字不干净"（`.txt` 尾巴）
+         * ⇒ 下面那两段收拢**整段不跑**（连产出树都不扫）⇒ 成员表恒空 ⇒ 那一组永远拼不到一起。</para>
+         *
+         * <para>⇒ 判据：名字干净 **或** 卡说它是这一组的一片 ⇒ 都按"可用"处理。⛔ 判不出（读不到卡 / 名字也解析不出）
+         * ⇒ 照旧老口径（那两段不跑）。</para>
+         */
+        bool memberUsable = memberNameIsClean
+            || (memberName.Length > 0
+                && VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(memberPath!)));
+
+        // 手上这一片也算成员（它可能还没进任务表，或者来自别的单那条链）。
+        if (memberUsable && !members.Contains(memberPath!))
+        {
+            members.Add(memberPath!);
+        }
+
+        /*
+         * ===== ① 入口包在盘上 ⇒ 它所在那一层 =====
+         * 成员除了"任务表里这一组的"，还要包括**各单产出树里已经落盘的这一组成员** ——
+         * 分卷的片是别的单解出来的产物，它们不在任务表里（任务表只装用户导入的那些包），
+         * 只看任务表就会漏掉入口包（真机 FFFF：入口包 `111_.part1.rar` 是 `111__.rar` 那条链解出来的）。
+         * ⛔ 仍然只由那把唯一尺子回答"入口包在哪一层"，⛔ 不按名字单独找入口包
+         * （实测踩到：就地整理那一档下"按名字在产出树里找"会把**源文件自己**当成入口）。
+         */
+        if (memberUsable)
+        {
+            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null)
+                {
+                    continue;
+                }
+
+                foreach (string directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                {
+                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                    {
+                        continue;
+                    }
+
+                    foreach (string candidate in CollectVolumeFilesInDirectory(directory))
+                    {
+                        if (MemberBelongsToGroup(candidate, tailName)
+                            && !members.Contains(candidate))
                         {
-                            if (MemberBelongsToGroup(candidate, tailName)
-                                && !members.Contains(candidate))
-                            {
-                                members.Add(candidate);
-                            }
+                            members.Add(candidate);
                         }
                     }
                 }
             }
+        }
 
-            Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
+        Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
 
-            if (entry.Directory.Length > 0 && Directory.Exists(entry.Directory))
+        if (entry.Directory.Length > 0 && Directory.Exists(entry.Directory))
+        {
+            return entry.Directory;
+        }
+
+        /*
+         * ===== ② 入口包**还没落地**：按产出链**一层一层**推它将来落在哪一层（用户 2026-10-06 拍板）=====
+         *
+         * ⛔ **旧口径（"任务表里第一单那一层"）已作废**：真机 2026-10-06 14:33 那次就是它把入口包
+         * `111.zip` 接到了 `111(4)`（日志逐字：`已按规范卷名 111.zip 接到「111(4)」这一层`），
+         * 于是列表第一项挂着 48 MB、产物也跟着落错层。用户原话：「**我说过多少遍在 `111.zip` 所在位置**，
+         * 你为什么还解压在列表第一项」。
+         *
+         * 只认一个出口（与落点实现同一份判据 `ResolveProducerEntryArchivePathCore`）：
+         * 沿产出链把入口包的落点**逐层叠**出来，取它所在那一层。
+         * ⚠ 问的是"**产出入口包**的那一单"，⛔ 不是"谁先吐过一片"。
+         */
+        foreach (string member in members)
+        {
+            /*
+             * ⚠ 必须传**这一片自己那一单**（找不到就退回调用方给的那一单）：产出方的判据里有一条
+             * `ReferenceEquals(candidate, task)` —— 传个临时对象进去，等于把"产出方是不是我自己"
+             * 判错（实测踩到：单层路这一档因此拿到空串，收片层退回旧口径、整组凑不齐）。
+             */
+            ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
+
+            string predicted = ResolveProducerEntryArchivePathCore(
+                owner,
+                BuildExtractOptions(tryExtractUnknownFormat: false),
+                member,
+                0);
+
+            if (predicted.Length == 0)
             {
-                return entry.Directory;
+                continue;
             }
 
-            /*
-             * ===== ② 入口包**还没落地**：按产出链**一层一层**推它将来落在哪一层（用户 2026-10-06 拍板）=====
-             *
-             * ⛔ **旧口径（"任务表里第一单那一层"）已作废**：真机 2026-10-06 14:33 那次就是它把入口包
-             * `111.zip` 接到了 `111(4)`（日志逐字：`已按规范卷名 111.zip 接到「111(4)」这一层`），
-             * 于是列表第一项挂着 48 MB、产物也跟着落错层。用户原话：「**我说过多少遍在 `111.zip` 所在位置**，
-             * 你为什么还解压在列表第一项」。
-             *
-             * 只认一个出口（与落点实现同一份判据 `ResolveProducerEntryArchivePathCore`）：
-             * 沿产出链把入口包的落点**逐层叠**出来，取它所在那一层。
-             * ⚠ 问的是"**产出入口包**的那一单"，⛔ 不是"谁先吐过一片"。
-             */
-            foreach (string member in members)
+            string? layer = Path.GetDirectoryName(predicted);
+
+            if (!string.IsNullOrWhiteSpace(layer))
             {
-                /*
-                 * ⚠ 必须传**这一片自己那一单**（找不到就退回调用方给的那一单）：产出方的判据里有一条
-                 * `ReferenceEquals(candidate, task)` —— 传个临时对象进去，等于把"产出方是不是我自己"
-                 * 判错（实测踩到：单层路这一档因此拿到空串，收片层退回旧口径、整组凑不齐）。
-                 */
-                ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
+                return layer!;
+            }
+        }
 
-                string predicted = ResolveProducerEntryArchivePathCore(
-                    owner,
-                    BuildExtractOptions(tryExtractUnknownFormat: false),
-                    member,
-                    0);
+        /*
+         * ===== ③ 判不出 ⇒ **空串 = 这一次不决定**（调用方"什么都不做"，等入口包出现后再问一次）=====
+         *
+         * ⛔ **这里删掉了一条兜底**（2026-10-11，真机 FFFF 那一批 + 复现用例把它钉死）：
+         * 原来最后还问 `ResolveGroupProducerDirectory(baseName)` = "**谁先把这一组的片吐出来**，
+         * 就落谁那条链的落点目录"（读 `_groupPieceProducers`）—— 于是这一组的层**由时序决定**：
+         * 同一份输入，谁先跑完谁定层。真机那一批就是它把四片全收进了 `1113__.rar` 那条链的层
+         * （它只是恰好第一个吐出 part3），而真正的入口包 `111_.part1.rar` 是**最后**才出来的
+         * （它得先穿两层 rar→zip），反被搬进别人的层（盘上同一个 inode 挂了三四个名字，
+         * `fsutil hardlink list` 逐字可查）。
+         * ⇒ **"谁先到"不许当判据**；判不出时正解是"这一次不决定"，不是"先占一层"。
+         * ⛔ `_groupPieceProducers` 那份账照旧保留：它回答"有哪些片被产出来了 / 该谁收场"，
+         *   **不回答层**（谁先产出一片与"入口包在哪"是两件事）。
+         */
+        string observed = !string.IsNullOrWhiteSpace(memberPath)
+            ? memberPath!
+            : task?.CurrentPath ?? string.Empty;
+        string entryName = LegacyVolumeNames.TryGetFirstVolumeName(FileNameHelper.GetFileName(observed))
+            ?? string.Empty;
+        string producerName = "判不出";
 
-                if (predicted.Length == 0)
-                {
-                    continue;
-                }
+        foreach (string member in members)
+        {
+            ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
 
-                string? layer = Path.GetDirectoryName(predicted);
+            if (FindProducerTaskForPackage(owner, member, entryName) is { } producerTask)
+            {
+                producerName = producerTask.LogName;
+                break;
+            }
+        }
 
-                if (!string.IsNullOrWhiteSpace(layer))
-                {
-                    return layer!;
-                }
+        /*
+         * ⚠ 这一行是"判不出"那一档的**判据输入**（规矩：只拿一份用户日志就能定位）——
+         * 它此前一个字都不写，真机 FFFF 那一批就是卡在这里看不出是"尺子不认"还是"产出方找不到"。
+         */
+        AppendLog(
+            "WARN",
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.CriterionInputsGroupLayerFormat,
+                FileNameHelper.GetFileName(observed),
+                tailName,
+                members.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                entryName.Length == 0 ? "判不出" : entryName,
+                producerName,
+                memberNameIsClean ? "是" : "否",
+                memberUsable ? "是" : "否",
+                observed.Length > 0 ? FileNature.Inspect(observed).BodyKind.ToString() : "（没有这一片）",
+                $"task={(task == null ? "null" : "有")} memberPath={(string.IsNullOrWhiteSpace(memberPath) ? "空" : "有")}",
+                observed,
+                SafeFileSizeText(observed)));
+
+        return string.Empty;
+    }
+
+    /// <summary>按路径找任务表里那一单（找不到 ⇒ null；⛔ 只读，不新建）。</summary>
+    /// <summary>"这一份多大"（判据输入用；读不到 ⇒ "判不出"）。</summary>
+    private static string SafeFileSizeText(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "（不在盘上）";
+        }
+        catch
+        {
+            return "判不出";
+        }
+    }
+
+    /// <summary>这一份是不是已经在某个「其余物」目录里（按路径段判；是 ⇒ 不再搬第二遍）。</summary>
+    private static bool IsInsideProcessArtifactDirectory(string path)
+    {
+        string? directory = Path.GetDirectoryName(path);
+
+        while (!string.IsNullOrWhiteSpace(directory))
+        {
+            if (ProcessArtifactLayout.IsArtifactDirectoryName(Path.GetFileName(directory)))
+            {
+                return true;
             }
 
-            /*
-             * ===== ③ 判不出 ⇒ **空串 = 这一次不决定**（调用方"什么都不做"，等入口包出现后再问一次）=====
-             *
-             * ⛔ **这里删掉了一条兜底**（2026-10-11，真机 FFFF 那一批 + 复现用例把它钉死）：
-             * 原来最后还问 `ResolveGroupProducerDirectory(baseName)` = "**谁先把这一组的片吐出来**，
-             * 就落谁那条链的落点目录"（读 `_groupPieceProducers`）—— 于是这一组的层**由时序决定**：
-             * 同一份输入，谁先跑完谁定层。真机那一批就是它把四片全收进了 `1113__.rar` 那条链的层
-             * （它只是恰好第一个吐出 part3），而真正的入口包 `111_.part1.rar` 是**最后**才出来的
-             * （它得先穿两层 rar→zip），反被搬进别人的层（盘上同一个 inode 挂了三四个名字，
-             * `fsutil hardlink list` 逐字可查）。
-             * ⇒ **"谁先到"不许当判据**；判不出时正解是"这一次不决定"，不是"先占一层"。
-             * ⛔ `_groupPieceProducers` 那份账照旧保留：它回答"有哪些片被产出来了 / 该谁收场"，
-             *   **不回答层**（谁先产出一片与"入口包在哪"是两件事）。
-             */
-            string observed = !string.IsNullOrWhiteSpace(memberPath)
-                ? memberPath!
-                : task?.CurrentPath ?? string.Empty;
-            string entryName = LegacyVolumeNames.TryGetFirstVolumeName(FileNameHelper.GetFileName(observed))
-                ?? string.Empty;
-            string producerName = "判不出";
+            directory = Path.GetDirectoryName(directory);
+        }
 
-            foreach (string member in members)
+        return false;
+    }
+
+    internal ArchiveTask? FindTaskByPath(string path)
+    {
+        foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+        {
+            if (candidate == null)
             {
-                ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
-
-                if (FindProducerTaskForPackage(owner, member, entryName) is { } producerTask)
-                {
-                    producerName = producerTask.LogName;
-                    break;
-                }
+                continue;
             }
 
-            /*
-             * ⚠ 这一行是"判不出"那一档的**判据输入**（规矩：只拿一份用户日志就能定位）——
-             * 它此前一个字都不写，真机 FFFF 那一批就是卡在这里看不出是"尺子不认"还是"产出方找不到"。
-             */
+            if (SafePathHelper.PathEquals(candidate.CurrentPath, path))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// **把这一片收进"那一组该在的那一层"**（批末补齐那一站用的唯一出口）。
+    /// </summary>
+    /// <param name="memberPath">
+    /// 手上这一片（可选）：<c>null</c> ⇒ 老口径（拿这一单自己的包基名当参照物）。
+    /// 传了它 ⇒ 参照物换成它自己的名字（停的是**别人那一组**时唯一说得清的办法）。
+    /// </param>
+    /// <summary>
+    /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
+    /// 判据 = 既有宽尺子 `LegacyVolumeNames.BelongsToSameGroup`，参照名 = 手上那一片。
+    /// </summary>
+    /// <summary>枚举一个目录里的**所有**文件（读不动 ⇒ 空表，不抛）。</summary>
+    internal static IEnumerable<string> SafeEnumerateFiles(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            return Directory.GetFiles(directory);
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+
+    /// <summary>
+    /// **手上那一片的取法 = 唯一一处**（用户 2026-10-17：删掉 `memberPath` / `task.CurrentPath`
+    /// 两套取法）。调用方给了 `memberPath` 就用它（接片那条路手上就是别人那一份），
+    /// 否则用这一单账上的路径；两个都没有 ⇒ 空串（下游按"判不出"办）。
+    /// </summary>
+    private static string ResolveObservedPiecePath(ArchiveTask? task, string? memberPath)
+        => !string.IsNullOrWhiteSpace(memberPath)
+            ? memberPath!
+            : task?.CurrentPath ?? string.Empty;
+
+    /// <summary>
+    /// 收片 / 组读取之间传槽位用的**键**：盘上物理身份（卷序列号:文件索引）；判不出身份才退回完整路径。
+    /// <para>⛔ 用身份不用路径（2026-10-18 困难批 `19191919` 实测）：接片会移动 / 建硬链接，
+    /// 路径随动作而变 —— 按原路径查表会落空、又退回"名字优先"，两片就撞同一个规范名。</para>
+    /// </summary>
+    private static string VolumeSlotKey(string path)
+    {
+        FileNatureCard card = FileNature.Inspect(path);
+
+        return card.HasIdentity
+            ? card.VolumeSerial.ToString("X8", CultureInfo.InvariantCulture)
+              + ":"
+              + card.FileIndex.ToString("X", CultureInfo.InvariantCulture)
+            : SafePathHelper.GetFullPathSafe(path);
+    }
+
+    /// <summary>
+    /// **按试开确认的顺序，先清掉入口层里"旧规范名"**（2026-10-18 新批 `24242424` 定案）。
+    ///
+    /// <para>现场：入口层已有 `.z01`/`.z02` 两个**我们自己早先建的硬链接**，但内容顺序把另一份中段片
+    /// 排到槽位 1 ⇒ 接片那一档按内容算出的规范名与旧链接撞名（目标名已被别的文件占着）⇒ 一片接不进、
+    /// 整组永远缺卷。旧链接是零字节硬链接（linkCount &gt; 1），删掉名字不丢字节；而用户源包 / 任务源路径
+    /// 一律不碰（⛔ 红线不变）。</para>
+    ///
+    /// <para>清完再由既有接片出口按内容槽位建正确的规范名；⛔ 不在这里建链接、不碰非规范名的原件。</para>
+    /// </summary>
+    private void PrepareCanonicalVolumeNamesForConfirmedOrder(
+        string entryLayer,
+        IReadOnlyList<string> orderedPieces,
+        string stem,
+        VolumeNamingFamily family,
+        string logName)
+    {
+        IReadOnlyList<string> names = VolumeNumberFromContent.BuildStandardNames(stem, family, orderedPieces.Count);
+
+        if (names.Count != orderedPieces.Count)
+        {
+            return;
+        }
+
+        for (int index = 0; index < names.Count; index++)
+        {
+            string target = Path.Combine(entryLayer, names[index]);
+
+            if (!File.Exists(target))
+            {
+                continue;
+            }
+
+            bool samePhysical = FileIdentity.IsSamePhysicalFile(target, orderedPieces[index]);
+            bool hasLinks = FileIdentity.TryGetLinkCount(target, out uint linkCount);
+            bool userSource = IsUserImportedSourcePath(target);
+            bool taskSource = IsAnyTaskSourcePath(target);
+
             AppendLog(
-                "WARN",
-                string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.CriterionInputsGroupLayerFormat,
-                    FileNameHelper.GetFileName(observed),
-                    tailName,
-                    members.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    entryName.Length == 0 ? "判不出" : entryName,
-                    producerName,
-                    memberNameIsClean ? "是" : "否",
-                    memberUsable ? "是" : "否",
-                    observed.Length > 0 ? FileNature.Inspect(observed).BodyKind.ToString() : "（没有这一片）",
-                    $"task={(task == null ? "null" : "有")} memberPath={(string.IsNullOrWhiteSpace(memberPath) ? "空" : "有")}",
-                    observed,
-                    SafeFileSizeText(observed)));
+                "INFO",
+                $"{logName}：规范名预清理判据 —— {names[index]}"
+                + $"｜同一份={samePhysical}"
+                + $"｜链接数={(hasLinks ? linkCount.ToString(CultureInfo.InvariantCulture) : "判不出")}"
+                + $"｜用户源={userSource}｜任务源={taskSource}");
 
-            return string.Empty;
-        }
-
-        /// <summary>按路径找任务表里那一单（找不到 ⇒ null；⛔ 只读，不新建）。</summary>
-        /// <summary>"这一份多大"（判据输入用；读不到 ⇒ "判不出"）。</summary>
-        private static string SafeFileSizeText(string path)
-        {
-            try
+            if (samePhysical
+                || !hasLinks
+                || linkCount <= 1
+                || userSource
+                || taskSource)
             {
-                return File.Exists(path)
-                    ? new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    : "（不在盘上）";
-            }
-            catch
-            {
-                return "判不出";
-            }
-        }
-
-        /// <summary>这一份是不是已经在某个「其余物」目录里（按路径段判；是 ⇒ 不再搬第二遍）。</summary>
-        private static bool IsInsideProcessArtifactDirectory(string path)
-        {
-            string? directory = Path.GetDirectoryName(path);
-
-            while (!string.IsNullOrWhiteSpace(directory))
-            {
-                if (ProcessArtifactLayout.IsArtifactDirectoryName(Path.GetFileName(directory)))
-                {
-                    return true;
-                }
-
-                directory = Path.GetDirectoryName(directory);
-            }
-
-            return false;
-        }
-
-        internal ArchiveTask? FindTaskByPath(string path)
-        {
-            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
-            {
-                if (candidate == null)
-                {
-                    continue;
-                }
-
-                if (SafePathHelper.PathEquals(candidate.CurrentPath, path))
-                {
-                    return candidate;
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// **把这一片收进"那一组该在的那一层"**（批末补齐那一站用的唯一出口）。
-        /// </summary>
-        /// <param name="memberPath">
-        /// 手上这一片（可选）：<c>null</c> ⇒ 老口径（拿这一单自己的包基名当参照物）。
-        /// 传了它 ⇒ 参照物换成它自己的名字（停的是**别人那一组**时唯一说得清的办法）。
-        /// </param>
-        /// <summary>
-        /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
-        /// 判据 = 既有宽尺子 `LegacyVolumeNames.BelongsToSameGroup`，参照名 = 手上那一片。
-        /// </summary>
-        /// <summary>枚举一个目录里的**所有**文件（读不动 ⇒ 空表，不抛）。</summary>
-        internal static IEnumerable<string> SafeEnumerateFiles(string? directory)
-        {
-            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-            {
-                return Array.Empty<string>();
+                continue;
             }
 
             try
             {
-                return Directory.GetFiles(directory);
-            }
-            catch
-            {
-                return Array.Empty<string>();
-            }
-        }
-
-
-        /// <summary>
-        /// **手上那一片的取法 = 唯一一处**（用户 2026-10-17：删掉 `memberPath` / `task.CurrentPath`
-        /// 两套取法）。调用方给了 `memberPath` 就用它（接片那条路手上就是别人那一份），
-        /// 否则用这一单账上的路径；两个都没有 ⇒ 空串（下游按"判不出"办）。
-        /// </summary>
-        private static string ResolveObservedPiecePath(ArchiveTask? task, string? memberPath)
-            => !string.IsNullOrWhiteSpace(memberPath)
-                ? memberPath!
-                : task?.CurrentPath ?? string.Empty;
-
-        /// <summary>
-        /// 收片 / 组读取之间传槽位用的**键**：盘上物理身份（卷序列号:文件索引）；判不出身份才退回完整路径。
-        /// <para>⛔ 用身份不用路径（2026-10-18 困难批 `19191919` 实测）：接片会移动 / 建硬链接，
-        /// 路径随动作而变 —— 按原路径查表会落空、又退回"名字优先"，两片就撞同一个规范名。</para>
-        /// </summary>
-        private static string VolumeSlotKey(string path)
-        {
-            FileNatureCard card = FileNature.Inspect(path);
-
-            return card.HasIdentity
-                ? card.VolumeSerial.ToString("X8", CultureInfo.InvariantCulture)
-                  + ":"
-                  + card.FileIndex.ToString("X", CultureInfo.InvariantCulture)
-                : SafePathHelper.GetFullPathSafe(path);
-        }
-
-        /// <summary>
-        /// **按试开确认的顺序，先清掉入口层里"旧规范名"**（2026-10-18 新批 `24242424` 定案）。
-        ///
-        /// <para>现场：入口层已有 `.z01`/`.z02` 两个**我们自己早先建的硬链接**，但内容顺序把另一份中段片
-        /// 排到槽位 1 ⇒ 接片那一档按内容算出的规范名与旧链接撞名（目标名已被别的文件占着）⇒ 一片接不进、
-        /// 整组永远缺卷。旧链接是零字节硬链接（linkCount &gt; 1），删掉名字不丢字节；而用户源包 / 任务源路径
-        /// 一律不碰（⛔ 红线不变）。</para>
-        ///
-        /// <para>清完再由既有接片出口按内容槽位建正确的规范名；⛔ 不在这里建链接、不碰非规范名的原件。</para>
-        /// </summary>
-        private void PrepareCanonicalVolumeNamesForConfirmedOrder(
-            string entryLayer,
-            IReadOnlyList<string> orderedPieces,
-            string stem,
-            VolumeNamingFamily family,
-            string logName)
-        {
-            IReadOnlyList<string> names = VolumeNumberFromContent.BuildStandardNames(stem, family, orderedPieces.Count);
-
-            if (names.Count != orderedPieces.Count)
-            {
-                return;
-            }
-
-            for (int index = 0; index < names.Count; index++)
-            {
-                string target = Path.Combine(entryLayer, names[index]);
-
-                if (!File.Exists(target))
-                {
-                    continue;
-                }
-
-                bool samePhysical = FileIdentity.IsSamePhysicalFile(target, orderedPieces[index]);
-                bool hasLinks = FileIdentity.TryGetLinkCount(target, out uint linkCount);
-                bool userSource = IsUserImportedSourcePath(target);
-                bool taskSource = IsAnyTaskSourcePath(target);
+                FileOperations.Delete(target);
 
                 AppendLog(
                     "INFO",
-                    $"{logName}：规范名预清理判据 —— {names[index]}"
-                    + $"｜同一份={samePhysical}"
-                    + $"｜链接数={(hasLinks ? linkCount.ToString(CultureInfo.InvariantCulture) : "判不出")}"
-                    + $"｜用户源={userSource}｜任务源={taskSource}");
-
-                if (samePhysical
-                    || !hasLinks
-                    || linkCount <= 1
-                    || userSource
-                    || taskSource)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    FileOperations.Delete(target);
-
-                    AppendLog(
-                        "INFO",
-                        $"{logName}：按试开确认的顺序，收掉入口层里旧的规范名 {names[index]}"
-                        + "（零字节硬链接，删名字不丢字节）");
-                }
-                catch (Exception ex)
-                {
-                    AppendLog("WARN", $"{logName}：旧的规范名 {names[index]} 没能收掉（{ex.Message}）");
-                }
+                    $"{logName}：按试开确认的顺序，收掉入口层里旧的规范名 {names[index]}"
+                    + "（零字节硬链接，删名字不丢字节）");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{logName}：旧的规范名 {names[index]} 没能收掉（{ex.Message}）");
             }
         }
-
-
-        // ===== 搬出后的入口薄转发（实现见 ExtractionVolumeCandidateCollector）=====
-        private ExtractionVolumeCandidateCollector? _volumeCandidateCollector;
-        private ExtractionVolumeCandidateCollector VolumeCandidateCollector =>
-            _volumeCandidateCollector ??= new ExtractionVolumeCandidateCollector(this);
-
-        internal List<string> CollectVolumeCandidatePaths(
-            ArchiveTask task,
-            string entryLayer,
-            out string referenceName,
-            out int scannedInEntryLayer) =>
-            VolumeCandidateCollector.CollectVolumeCandidatePaths(
-                task, entryLayer, out referenceName, out scannedInEntryLayer);
     }
+
+
+    // ===== 搬出后的入口薄转发（实现见 ExtractionVolumeCandidateCollector）=====
+    private ExtractionVolumeCandidateCollector? _volumeCandidateCollector;
+    private ExtractionVolumeCandidateCollector VolumeCandidateCollector =>
+        _volumeCandidateCollector ??= new ExtractionVolumeCandidateCollector(this);
+
+    internal List<string> CollectVolumeCandidatePaths(
+        ArchiveTask task,
+        string entryLayer,
+        out string referenceName,
+        out int scannedInEntryLayer) =>
+        VolumeCandidateCollector.CollectVolumeCandidatePaths(
+            task, entryLayer, out referenceName, out scannedInEntryLayer);
 }

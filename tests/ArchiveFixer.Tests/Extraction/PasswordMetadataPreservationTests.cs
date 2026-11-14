@@ -8,105 +8,104 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public sealed class PasswordMetadataPreservationTests : IDisposable
 {
-    public sealed class PasswordMetadataPreservationTests : IDisposable
+    private readonly string _root;
+
+    public PasswordMetadataPreservationTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "af-meta-orphan-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public PasswordMetadataPreservationTests()
-        {
-            _root = Path.Combine(Path.GetTempPath(), "af-meta-orphan-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
-        }
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
 
-        public void Dispose()
-        {
-            try { Directory.Delete(_root, recursive: true); } catch { }
-        }
+    [Fact]
+    public void 改密码值后旧值元数据不会静默消失()
+    {
+        File.WriteAllText(
+            Path.Combine(_root, PasswordTextStore.FileName),
+            "old-secret\r\n",
+            new UTF8Encoding(true));
 
-        [Fact]
-        public void 改密码值后旧值元数据不会静默消失()
-        {
-            File.WriteAllText(
-                Path.Combine(_root, PasswordTextStore.FileName),
-                "old-secret\r\n",
-                new UTF8Encoding(true));
-
-            File.WriteAllText(
-                Path.Combine(_root, PasswordMetadataStore.FileName),
-                JsonSerializer.Serialize(new[]
+        File.WriteAllText(
+            Path.Combine(_root, PasswordMetadataStore.FileName),
+            JsonSerializer.Serialize(new[]
+            {
+                new PasswordMetadataEntry
                 {
-                    new PasswordMetadataEntry
-                    {
-                        Value = "old-secret",
-                        IsEnabled = true,
-                        Remark = "改值前的备注"
-                    }
-                }),
-                new UTF8Encoding(false));
+                    Value = "old-secret",
+                    IsEnabled = true,
+                    Remark = "改值前的备注"
+                }
+            }),
+            new UTF8Encoding(false));
 
-            var service = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
-            service.Passwords[0].Value = "new-secret";
-
-            using JsonDocument saved = JsonDocument.Parse(
-                File.ReadAllText(Path.Combine(_root, PasswordMetadataStore.FileName)));
-
-            var values = saved.RootElement.EnumerateArray()
-                .Select(item => item.GetProperty("Value").GetString())
-                .ToHashSet(StringComparer.Ordinal);
-
-            Assert.Contains("old-secret", values);
-            Assert.Contains("new-secret", values);
-        }
-
-        [Fact]
-        public void 删除密码后它的元数据不会静默消失()
+        var service = new PasswordService
         {
-            File.WriteAllText(
-                Path.Combine(_root, PasswordTextStore.FileName),
-                "keep-secret\r\nremove-secret\r\n",
-                new UTF8Encoding(true));
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
 
-            var metadata = new List<PasswordMetadataEntry>
-            {
-                new() { Value = "keep-secret", IsEnabled = true, Remark = "保留条目" },
-                new() { Value = "remove-secret", IsEnabled = false, Remark = "删除后也要留备注" },
-                new() { Value = "orphan-secret", IsEnabled = false, Remark = "列表里暂时没有" }
-            };
+        Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
+        service.Passwords[0].Value = "new-secret";
 
-            File.WriteAllText(
-                Path.Combine(_root, PasswordMetadataStore.FileName),
-                JsonSerializer.Serialize(metadata),
-                new UTF8Encoding(false));
+        using JsonDocument saved = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(_root, PasswordMetadataStore.FileName)));
 
-            var service = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
+        var values = saved.RootElement.EnumerateArray()
+            .Select(item => item.GetProperty("Value").GetString())
+            .ToHashSet(StringComparer.Ordinal);
 
-            Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
+        Assert.Contains("old-secret", values);
+        Assert.Contains("new-secret", values);
+    }
 
-            var remove = service.Passwords.Single(item => item.Value == "remove-secret");
-            Assert.True(service.RemovePassword(remove));
+    [Fact]
+    public void 删除密码后它的元数据不会静默消失()
+    {
+        File.WriteAllText(
+            Path.Combine(_root, PasswordTextStore.FileName),
+            "keep-secret\r\nremove-secret\r\n",
+            new UTF8Encoding(true));
 
-            using JsonDocument saved = JsonDocument.Parse(
-                File.ReadAllText(Path.Combine(_root, PasswordMetadataStore.FileName)));
+        var metadata = new List<PasswordMetadataEntry>
+        {
+            new() { Value = "keep-secret", IsEnabled = true, Remark = "保留条目" },
+            new() { Value = "remove-secret", IsEnabled = false, Remark = "删除后也要留备注" },
+            new() { Value = "orphan-secret", IsEnabled = false, Remark = "列表里暂时没有" }
+        };
 
-            var values = saved.RootElement.EnumerateArray()
-                .Select(item => item.GetProperty("Value").GetString())
-                .ToHashSet(StringComparer.Ordinal);
+        File.WriteAllText(
+            Path.Combine(_root, PasswordMetadataStore.FileName),
+            JsonSerializer.Serialize(metadata),
+            new UTF8Encoding(false));
 
-            Assert.Contains("keep-secret", values);
-            Assert.Contains("remove-secret", values);
-            Assert.Contains("orphan-secret", values);
-        }
+        var service = new PasswordService
+        {
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
+
+        var remove = service.Passwords.Single(item => item.Value == "remove-secret");
+        Assert.True(service.RemovePassword(remove));
+
+        using JsonDocument saved = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(_root, PasswordMetadataStore.FileName)));
+
+        var values = saved.RootElement.EnumerateArray()
+            .Select(item => item.GetProperty("Value").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("keep-secret", values);
+        Assert.Contains("remove-secret", values);
+        Assert.Contains("orphan-secret", values);
     }
 }

@@ -5,103 +5,102 @@ using ArchiveFixer.Models;
 using System.Linq;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public sealed class ContentGroupFailureFactsTests
 {
-    public sealed class ContentGroupFailureFactsTests
+    [Fact]
+    public void Missing_and_corrupted_are_group_facts()
     {
-        [Fact]
-        public void Missing_and_corrupted_are_group_facts()
+        var group = new ContentGroup
         {
-            var group = new ContentGroup
-            {
-                GroupId = "g",
-                BaseName = "aaa-L4",
-                Family = VolumeNamingFamily.ZipNumbered,
-                SourceLayer = @"X:\src"
-            };
+            GroupId = "g",
+            BaseName = "aaa-L4",
+            Family = VolumeNamingFamily.ZipNumbered,
+            SourceLayer = @"X:\src"
+        };
 
-            Assert.True(group.MarkFinalGroupFailure(FinalGroupFailureKind.Incomplete, "缺片"));
-            Assert.Equal(FinalContentState.Missing, group.FinalState);
-            Assert.Equal(FinalGroupFailureKind.Incomplete, group.FailureKind);
-            Assert.False(group.FinalContentVerified);
+        Assert.True(group.MarkFinalGroupFailure(FinalGroupFailureKind.Incomplete, "缺片"));
+        Assert.Equal(FinalContentState.Missing, group.FinalState);
+        Assert.Equal(FinalGroupFailureKind.Incomplete, group.FailureKind);
+        Assert.False(group.FinalContentVerified);
 
-            var corrupted = new ContentGroup
-            {
-                GroupId = "g2",
-                BaseName = "aaa-L5",
-                Family = VolumeNamingFamily.ZipNumbered,
-                SourceLayer = @"X:\src"
-            };
-
-            Assert.True(corrupted.MarkFinalGroupFailure(FinalGroupFailureKind.Corrupted, "坏片"));
-            Assert.Equal(FinalGroupFailureKind.Corrupted, corrupted.FailureKind);
-            Assert.Equal(FinalContentState.Missing, corrupted.FinalState);
-        }
-
-        [Fact]
-        public void Merge_without_entry_clears_old_current_process_path()
+        var corrupted = new ContentGroup
         {
-            var group = new ContentGroup
-            {
-                GroupId = "g3",
-                BaseName = "aaa-L4",
-                Family = VolumeNamingFamily.ZipNumbered,
-                SourceLayer = @"X:\src"
-            };
+            GroupId = "g2",
+            BaseName = "aaa-L5",
+            Family = VolumeNamingFamily.ZipNumbered,
+            SourceLayer = @"X:\src"
+        };
 
-            group.MergePrepared(new PreparedVolumeGroup
+        Assert.True(corrupted.MarkFinalGroupFailure(FinalGroupFailureKind.Corrupted, "坏片"));
+        Assert.Equal(FinalGroupFailureKind.Corrupted, corrupted.FailureKind);
+        Assert.Equal(FinalContentState.Missing, corrupted.FinalState);
+    }
+
+    [Fact]
+    public void Merge_without_entry_clears_old_current_process_path()
+    {
+        var group = new ContentGroup
+        {
+            GroupId = "g3",
+            BaseName = "aaa-L4",
+            Family = VolumeNamingFamily.ZipNumbered,
+            SourceLayer = @"X:\src"
+        };
+
+        group.MergePrepared(new PreparedVolumeGroup
+        {
+            BaseName = "aaa-L4",
+            Family = VolumeNamingFamily.ZipNumbered,
+            OriginalSourceLayer = @"X:\src",
+            EntryLayer = @"X:\work\group-entry",
+            OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
+            EntryCanonicalName = "aaa-L4.zip.001",
+            State = PreparedGroupState.Complete,
+            Pieces = new[]
             {
-                BaseName = "aaa-L4",
-                Family = VolumeNamingFamily.ZipNumbered,
-                OriginalSourceLayer = @"X:\src",
-                EntryLayer = @"X:\work\group-entry",
-                OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
-                EntryCanonicalName = "aaa-L4.zip.001",
-                State = PreparedGroupState.Complete,
-                Pieces = new[]
+                new PreparedVolumePiece
                 {
-                    new PreparedVolumePiece
-                    {
-                        CanonicalName = "aaa-L4.zip.001",
-                        OriginalPath = @"X:\src\aaa-L4.zip.001"
-                    }
+                    CanonicalName = "aaa-L4.zip.001",
+                    OriginalPath = @"X:\src\aaa-L4.zip.001"
                 }
-            }, ledger: null);
+            }
+        }, ledger: null);
 
-            Assert.False(string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath));
+        Assert.False(string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath));
 
-            group.MergePrepared(new PreparedVolumeGroup
-            {
-                BaseName = "aaa-L4",
-                Family = VolumeNamingFamily.ZipNumbered,
-                OriginalSourceLayer = @"X:\src",
-                OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
-                State = PreparedGroupState.Complete
-            }, ledger: null);
-
-            Assert.Equal(string.Empty, group.CurrentProcessArtifactPath);
-            Assert.Empty(group.CurrentProcessArtifactPaths);
-        }
-
-        [Fact]
-        public void Source_and_process_producers_are_separated()
+        group.MergePrepared(new PreparedVolumeGroup
         {
-            var group = new ContentGroup
-            {
-                GroupId = "g",
-                BaseName = "aaa-L4",
-                Family = VolumeNamingFamily.ZipNumbered,
-                SourceLayer = @"X:\src"
-            };
+            BaseName = "aaa-L4",
+            Family = VolumeNamingFamily.ZipNumbered,
+            OriginalSourceLayer = @"X:\src",
+            OriginalEntryPath = @"X:\src\aaa-L4.zip.001",
+            State = PreparedGroupState.Complete
+        }, ledger: null);
 
-            group.RecordFinalLayerProducer("src.rar", @"X:\src\src.rar", isSource: true);
-            group.RecordFinalLayerProducer("mid.7z", @"X:\out\mid.7z", isSource: false);
+        Assert.Equal(string.Empty, group.CurrentProcessArtifactPath);
+        Assert.Empty(group.CurrentProcessArtifactPaths);
+    }
 
-            Assert.Single(group.FinalLayerProducers, item => item.IsSource);
-            Assert.Single(group.FinalLayerProducers, item => !item.IsSource);
-            Assert.Equal(@"X:\src\src.rar", group.FinalLayerProducers[0].Path);
-            Assert.Equal(@"X:\out\mid.7z", group.FinalLayerProducers[1].Path);
-        }
+    [Fact]
+    public void Source_and_process_producers_are_separated()
+    {
+        var group = new ContentGroup
+        {
+            GroupId = "g",
+            BaseName = "aaa-L4",
+            Family = VolumeNamingFamily.ZipNumbered,
+            SourceLayer = @"X:\src"
+        };
+
+        group.RecordFinalLayerProducer("src.rar", @"X:\src\src.rar", isSource: true);
+        group.RecordFinalLayerProducer("mid.7z", @"X:\out\mid.7z", isSource: false);
+
+        Assert.Single(group.FinalLayerProducers, item => item.IsSource);
+        Assert.Single(group.FinalLayerProducers, item => !item.IsSource);
+        Assert.Equal(@"X:\src\src.rar", group.FinalLayerProducers[0].Path);
+        Assert.Equal(@"X:\out\mid.7z", group.FinalLayerProducers[1].Path);
     }
 }
 

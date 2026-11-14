@@ -6,113 +6,112 @@ using System.IO;
 using System.Linq;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// 用户 2026-10-25：密码列表改为程序自带的英文名明文清单，顺序就是尝试顺序。
+/// 这里钉住三件事：顺序原样写回、旧 DPAPI 记忆能迁移、外部路径不再是加载来源。
+/// </summary>
+[Collection("ArchiveFixerGlobalState")]
+public sealed class PasswordTextStoreTests : IDisposable
 {
-    /// <summary>
-    /// 用户 2026-10-25：密码列表改为程序自带的英文名明文清单，顺序就是尝试顺序。
-    /// 这里钉住三件事：顺序原样写回、旧 DPAPI 记忆能迁移、外部路径不再是加载来源。
-    /// </summary>
-    [Collection("ArchiveFixerGlobalState")]
-    public sealed class PasswordTextStoreTests : IDisposable
+    private readonly string _root;
+
+    public PasswordTextStoreTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerPasswordText", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public PasswordTextStoreTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerPasswordText", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
+            Directory.Delete(_root, recursive: true);
         }
-
-        public void Dispose()
+        catch
         {
-            try
-            {
-                Directory.Delete(_root, recursive: true);
-            }
-            catch
-            {
-            }
         }
+    }
 
-        [Fact]
-        public void 内置清单_顺序原样写回_重启后按同一顺序恢复()
+    [Fact]
+    public void 内置清单_顺序原样写回_重启后按同一顺序恢复()
+    {
+        var service = new PasswordService
         {
-            var service = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
 
-            Assert.True(service.AddPassword("first"));
-            Assert.True(service.AddPassword("second"));
-            Assert.True(service.AddPassword("third"));
+        Assert.True(service.AddPassword("first"));
+        Assert.True(service.AddPassword("second"));
+        Assert.True(service.AddPassword("third"));
 
-            // 上下移动就是尝试顺序；集合变更会立即写 txt。
-            Assert.True(service.MoveDown(service.Passwords[0]));
+        // 上下移动就是尝试顺序；集合变更会立即写 txt。
+        Assert.True(service.MoveDown(service.Passwords[0]));
 
-            string[] lines = File.ReadAllLines(Path.Combine(_root, PasswordTextStore.FileName));
-            Assert.Equal(new[] { "second", "first", "third" }, lines);
+        string[] lines = File.ReadAllLines(Path.Combine(_root, PasswordTextStore.FileName));
+        Assert.Equal(new[] { "second", "first", "third" }, lines);
 
-            var restarted = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, restarted.LoadRememberedList());
-            Assert.Equal(new[] { "second", "first", "third" }, restarted.Passwords.Select(item => item.Value));
-        }
-
-        [Fact]
-        public void 启用状态与备注_跟密码值一起重启恢复()
+        var restarted = new PasswordService
         {
-            var service = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
 
-            Assert.True(service.AddPassword("disabled-secret"));
-            service.Passwords[0].IsEnabled = false;
-            service.Passwords[0].Remark = "测试备注";
+        Assert.Equal(PasswordListLoadStatus.Loaded, restarted.LoadRememberedList());
+        Assert.Equal(new[] { "second", "first", "third" }, restarted.Passwords.Select(item => item.Value));
+    }
 
-            var restarted = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, restarted.LoadRememberedList());
-            var item = Assert.Single(restarted.Passwords);
-            Assert.Equal("disabled-secret", item.Value);
-            Assert.False(item.IsEnabled);
-            Assert.Equal("测试备注", item.Remark);
-        }
-
-        [Fact]
-        public void 旧DPAPI记忆_首次读取后迁移到passwords_txt()
+    [Fact]
+    public void 启用状态与备注_跟密码值一起重启恢复()
+    {
+        var service = new PasswordService
         {
-            var oldStore = new PasswordListStore { DataRootDirectory = _root };
-            var snapshot = new PasswordListSnapshot();
-            snapshot.Entries.Add(new PasswordListEntry { Value = "old-a", Source = "ManualList", Enabled = true });
-            snapshot.Entries.Add(new PasswordListEntry { Value = "old-b", Source = "ManualList", Enabled = true });
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
 
-            Assert.True(oldStore.Save(snapshot).Success);
-            Assert.False(File.Exists(Path.Combine(_root, PasswordTextStore.FileName)));
+        Assert.True(service.AddPassword("disabled-secret"));
+        service.Passwords[0].IsEnabled = false;
+        service.Passwords[0].Remark = "测试备注";
 
-            var service = new PasswordService
-            {
-                DataRootDirectory = _root,
-                UseTextStore = true
-            };
+        var restarted = new PasswordService
+        {
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
 
-            Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
-            Assert.Equal(new[] { "old-a", "old-b" }, service.Passwords.Select(item => item.Value));
+        Assert.Equal(PasswordListLoadStatus.Loaded, restarted.LoadRememberedList());
+        var item = Assert.Single(restarted.Passwords);
+        Assert.Equal("disabled-secret", item.Value);
+        Assert.False(item.IsEnabled);
+        Assert.Equal("测试备注", item.Remark);
+    }
 
-            string textPath = Path.Combine(_root, PasswordTextStore.FileName);
-            Assert.True(File.Exists(textPath));
-            Assert.Equal(new[] { "old-a", "old-b" }, File.ReadAllLines(textPath));
-            Assert.True(File.Exists(oldStore.FilePath), "旧 DPAPI 记忆要保留，不能迁移后删掉");
-        }
+    [Fact]
+    public void 旧DPAPI记忆_首次读取后迁移到passwords_txt()
+    {
+        var oldStore = new PasswordListStore { DataRootDirectory = _root };
+        var snapshot = new PasswordListSnapshot();
+        snapshot.Entries.Add(new PasswordListEntry { Value = "old-a", Source = "ManualList", Enabled = true });
+        snapshot.Entries.Add(new PasswordListEntry { Value = "old-b", Source = "ManualList", Enabled = true });
+
+        Assert.True(oldStore.Save(snapshot).Success);
+        Assert.False(File.Exists(Path.Combine(_root, PasswordTextStore.FileName)));
+
+        var service = new PasswordService
+        {
+            DataRootDirectory = _root,
+            UseTextStore = true
+        };
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
+        Assert.Equal(new[] { "old-a", "old-b" }, service.Passwords.Select(item => item.Value));
+
+        string textPath = Path.Combine(_root, PasswordTextStore.FileName);
+        Assert.True(File.Exists(textPath));
+        Assert.Equal(new[] { "old-a", "old-b" }, File.ReadAllLines(textPath));
+        Assert.True(File.Exists(oldStore.FilePath), "旧 DPAPI 记忆要保留，不能迁移后删掉");
     }
 }

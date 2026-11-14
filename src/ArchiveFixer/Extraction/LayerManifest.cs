@@ -3,137 +3,136 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// **一层归档的清单结论**（条目数 + 解压后总字节）—— 检验等级 L3 的预期来源。
+///
+/// <para><b>为什么要有这个东西</b>（用户 2026-09-30 真机报的 bug）：一条展开多层的续解链里，
+/// 只有"最终落地的那些文件"才是用户要的内容物，而它们由**最里那一层（叶子层）**产出。
+/// 老口径拿第 0 层的清单去核对这些文件必然对不上，于是干脆整段放弃核对
+/// （<c>ExtractionCoordinator</c> 里"展开 &gt; 1 层就给一份 Success=false 的空预期"），
+/// 结果 L4 只能判「判不出完整性」⇒ 源包一个字节都不敢动 —— 明明每一层都列得出清单。</para>
+///
+/// <para><b>口径只有一个</b>：折算（仅大小写去重）走 <see cref="OutputVerifier.CollapseCaseOnlyDuplicates"/>，
+/// ⛔ 这里不许再写第二套折算规则。</para>
+/// </summary>
+public sealed class LayerManifest
 {
-    /// <summary>
-    /// **一层归档的清单结论**（条目数 + 解压后总字节）—— 检验等级 L3 的预期来源。
-    ///
-    /// <para><b>为什么要有这个东西</b>（用户 2026-09-30 真机报的 bug）：一条展开多层的续解链里，
-    /// 只有"最终落地的那些文件"才是用户要的内容物，而它们由**最里那一层（叶子层）**产出。
-    /// 老口径拿第 0 层的清单去核对这些文件必然对不上，于是干脆整段放弃核对
-    /// （<c>ExtractionCoordinator</c> 里"展开 &gt; 1 层就给一份 Success=false 的空预期"），
-    /// 结果 L4 只能判「判不出完整性」⇒ 源包一个字节都不敢动 —— 明明每一层都列得出清单。</para>
-    ///
-    /// <para><b>口径只有一个</b>：折算（仅大小写去重）走 <see cref="OutputVerifier.CollapseCaseOnlyDuplicates"/>，
-    /// ⛔ 这里不许再写第二套折算规则。</para>
-    /// </summary>
-    public sealed class LayerManifest
+    /// <summary>这一层的清单**没取到**（引擎列不出来 / 加密头没密码 / 截断），
+    /// 原因写在 <see cref="Reason"/> 里（必须点名是哪一层、为什么）。</summary>
+    public static LayerManifest Unavailable(string reason)
     {
-        /// <summary>这一层的清单**没取到**（引擎列不出来 / 加密头没密码 / 截断），
-        /// 原因写在 <see cref="Reason"/> 里（必须点名是哪一层、为什么）。</summary>
-        public static LayerManifest Unavailable(string reason)
+        return new LayerManifest { Available = false, Reason = reason ?? string.Empty };
+    }
+
+    /// <summary>引擎**真的列出了**这一层：记下折算后的条目数与解压后总字节。</summary>
+    public static LayerManifest From(ArchiveListResult? list)
+    {
+        if (list == null || !list.Success)
         {
-            return new LayerManifest { Available = false, Reason = reason ?? string.Empty };
+            return Unavailable(DescribeListFailure(list));
         }
 
-        /// <summary>引擎**真的列出了**这一层：记下折算后的条目数与解压后总字节。</summary>
-        public static LayerManifest From(ArchiveListResult? list)
+        (int fileCount, long totalSize, _, _) = OutputVerifier.CollapseCaseOnlyDuplicates(list);
+
+        /*
+         * ⛔ 清单"成功但一个条目都没有" = **没有清单**（2026-10-02 真机：中文界面 UnRAR 的 lt 键名
+         * 全被本地化，按英文键读出来就是这份 0 个文件 / 0 字节的假清单 —— 见
+         * UnRarListParser.ParsedListing.HeaderRecognized 与 UnRarEngine.InterpretListing）。
+         *
+         * 为什么必须在这一层就掐掉：空清单能核对的东西是零，而 `<c>actual &gt;= expected</c>`
+         * 在 expected 两个 0 时**天然成立** ⇒ 下游 `ManifestCrossChecked=true`
+         * ⇒ 报「完整性：可证完整（拿归档清单逐条核对过…对得上）」并放行"搬走 + 永久删除源包"。
+         * 兜底只有一条：算"取不到清单" ⇒ L4 判不出 ⇒ 什么都不做（红线）。
+         */
+        if (fileCount == 0 && totalSize == 0)
         {
-            if (list == null || !list.Success)
-            {
-                return Unavailable(DescribeListFailure(list));
-            }
+            return Unavailable("引擎报回来的清单是空的（0 个文件 / 0 字节）—— 空清单核对不了产物，按「判不出」处理");
+        }
 
-            (int fileCount, long totalSize, _, _) = OutputVerifier.CollapseCaseOnlyDuplicates(list);
-
+        return new LayerManifest
+        {
+            Available = true,
+            FileCount = fileCount,
+            TotalSize = totalSize,
             /*
-             * ⛔ 清单"成功但一个条目都没有" = **没有清单**（2026-10-02 真机：中文界面 UnRAR 的 lt 键名
-             * 全被本地化，按英文键读出来就是这份 0 个文件 / 0 字节的假清单 —— 见
-             * UnRarListParser.ParsedListing.HeaderRecognized 与 UnRarEngine.InterpretListing）。
-             *
-             * 为什么必须在这一层就掐掉：空清单能核对的东西是零，而 `<c>actual &gt;= expected</c>`
-             * 在 expected 两个 0 时**天然成立** ⇒ 下游 `ManifestCrossChecked=true`
-             * ⇒ 报「完整性：可证完整（拿归档清单逐条核对过…对得上）」并放行"搬走 + 永久删除源包"。
-             * 兜底只有一条：算"取不到清单" ⇒ L4 判不出 ⇒ 什么都不做（红线）。
+             * 保留**逐条文件事实**：L4 的“只缺 0 字节条目”政策需要知道缺的是谁、大小多少。
+             * 目录条目在这里先滤掉；大小写折叠仍交给 OutputVerifier 的唯一出口。
              */
-            if (fileCount == 0 && totalSize == 0)
-            {
-                return Unavailable("引擎报回来的清单是空的（0 个文件 / 0 字节）—— 空清单核对不了产物，按「判不出」处理");
-            }
+            Entries = list.Entries?
+                .Where(entry => entry != null
+                    && !entry.IsDirectory
+                    && !string.IsNullOrWhiteSpace(entry.Path))
+                .Select(entry => new ArchiveEntry
+                {
+                    Path = entry.Path,
+                    Size = entry.Size,
+                    IsDirectory = false,
+                    IsEncrypted = entry.IsEncrypted
+                })
+                .ToArray()
+                ?? Array.Empty<ArchiveEntry>()
+        };
+    }
 
-            return new LayerManifest
-            {
-                Available = true,
-                FileCount = fileCount,
-                TotalSize = totalSize,
-                /*
-                 * 保留**逐条文件事实**：L4 的“只缺 0 字节条目”政策需要知道缺的是谁、大小多少。
-                 * 目录条目在这里先滤掉；大小写折叠仍交给 OutputVerifier 的唯一出口。
-                 */
-                Entries = list.Entries?
-                    .Where(entry => entry != null
-                        && !entry.IsDirectory
-                        && !string.IsNullOrWhiteSpace(entry.Path))
-                    .Select(entry => new ArchiveEntry
-                    {
-                        Path = entry.Path,
-                        Size = entry.Size,
-                        IsDirectory = false,
-                        IsEncrypted = entry.IsEncrypted
-                    })
-                    .ToArray()
-                    ?? Array.Empty<ArchiveEntry>()
-            };
-        }
-
-        /// <summary>引擎给不出清单时的一句原因（不含层号/包名 —— 那是调用方拼的，它才知道自己在哪一层）。</summary>
-        public static string DescribeListFailure(ArchiveListResult? list)
+    /// <summary>引擎给不出清单时的一句原因（不含层号/包名 —— 那是调用方拼的，它才知道自己在哪一层）。</summary>
+    public static string DescribeListFailure(ArchiveListResult? list)
+    {
+        if (list == null)
         {
-            if (list == null)
-            {
-                return "引擎没能列出这一层的目录（列目录失败或超时）";
-            }
-
-            string reason = string.IsNullOrWhiteSpace(list.Message) ? "引擎没能列出这一层的目录" : list.Message;
-
-            return string.Equals(list.ErrorType, EngineErrorTypes.EncryptedHeaders, StringComparison.Ordinal)
-                ? reason + "（这是加密头归档：配上密码就能列出清单）"
-                : reason;
+            return "引擎没能列出这一层的目录（列目录失败或超时）";
         }
 
-        /// <summary>有没有可信清单。</summary>
-        public bool Available { get; init; }
+        string reason = string.IsNullOrWhiteSpace(list.Message) ? "引擎没能列出这一层的目录" : list.Message;
 
-        /// <summary>折算后的文件条目数（仅大小写去重后）。</summary>
-        public int FileCount { get; init; }
+        return string.Equals(list.ErrorType, EngineErrorTypes.EncryptedHeaders, StringComparison.Ordinal)
+            ? reason + "（这是加密头归档：配上密码就能列出清单）"
+            : reason;
+    }
 
-        /// <summary>折算后的解压后总字节。</summary>
-        public long TotalSize { get; init; }
+    /// <summary>有没有可信清单。</summary>
+    public bool Available { get; init; }
 
-        /// <summary>
-        /// 这一层的**文件条目**（目录已滤掉；大小写折叠仍由 OutputVerifier 做）。
-        /// 空 = 引擎没给逐条清单，只能按两个总数核对。
-        /// </summary>
-        public IReadOnlyList<ArchiveEntry> Entries { get; init; } = Array.Empty<ArchiveEntry>();
+    /// <summary>折算后的文件条目数（仅大小写去重后）。</summary>
+    public int FileCount { get; init; }
 
-        /// <summary>取不到时的原因（给用户看的一句话）；取得到时为空串。</summary>
-        public string Reason { get; init; } = string.Empty;
+    /// <summary>折算后的解压后总字节。</summary>
+    public long TotalSize { get; init; }
 
-        /// <summary>
-        /// 折成 <see cref="OutputVerifier.Verify"/> 要的那种"预期清单"。
-        ///
-        /// <para><c>Entries</c> 刻意留空：折算已经在 <see cref="From"/> 里做过一次，
-        /// 而 <see cref="OutputVerifier.CollapseCaseOnlyDuplicates"/> 在 <c>Entries</c> 为空时
-        /// 会原样退回这两个总数（见那里的第一支）—— 于是折算口径仍然只有一处，不会折两遍。</para>
-        /// </summary>
-        public ArchiveListResult ToExpected()
+    /// <summary>
+    /// 这一层的**文件条目**（目录已滤掉；大小写折叠仍由 OutputVerifier 做）。
+    /// 空 = 引擎没给逐条清单，只能按两个总数核对。
+    /// </summary>
+    public IReadOnlyList<ArchiveEntry> Entries { get; init; } = Array.Empty<ArchiveEntry>();
+
+    /// <summary>取不到时的原因（给用户看的一句话）；取得到时为空串。</summary>
+    public string Reason { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 折成 <see cref="OutputVerifier.Verify"/> 要的那种"预期清单"。
+    ///
+    /// <para><c>Entries</c> 刻意留空：折算已经在 <see cref="From"/> 里做过一次，
+    /// 而 <see cref="OutputVerifier.CollapseCaseOnlyDuplicates"/> 在 <c>Entries</c> 为空时
+    /// 会原样退回这两个总数（见那里的第一支）—— 于是折算口径仍然只有一处，不会折两遍。</para>
+    /// </summary>
+    public ArchiveListResult ToExpected()
+    {
+        return new ArchiveListResult
         {
-            return new ArchiveListResult
-            {
-                Success = true,
-                FileCount = FileCount,
-                TotalUncompressedSize = TotalSize,
-                Entries = Entries,
-                Message = $"本层清单：{FileCount} 个文件 / {TotalSize} 字节"
-            };
-        }
+            Success = true,
+            FileCount = FileCount,
+            TotalUncompressedSize = TotalSize,
+            Entries = Entries,
+            Message = $"本层清单：{FileCount} 个文件 / {TotalSize} 字节"
+        };
+    }
 
-        /// <summary>本层清单在日志/证据里的一行说法（不含层号 —— 层号由调用方拼）。</summary>
-        public string Describe()
-        {
-            return Available
-                ? $"清单 {FileCount} 个文件 / {TotalSize} 字节"
-                : Reason;
-        }
+    /// <summary>本层清单在日志/证据里的一行说法（不含层号 —— 层号由调用方拼）。</summary>
+    public string Describe()
+    {
+        return Available
+            ? $"清单 {FileCount} 个文件 / {TotalSize} 字节"
+            : Reason;
     }
 }

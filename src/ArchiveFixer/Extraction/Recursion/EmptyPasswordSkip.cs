@@ -1,11 +1,10 @@
 using System;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+internal enum EmptyPasswordSkip
 {
-    internal enum EmptyPasswordSkip
-    {
-        None,
-        EncryptedEntry,
-        EncryptedHeaders
-    }
+    None,
+    EncryptedEntry,
+    EncryptedHeaders
 }

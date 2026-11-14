@@ -5,269 +5,268 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// **"接片"那一档该搬还是该只建链接**（真机 CCCC 2026-10-06 18:13，用户原话：
+/// 「**出现了解压失败的文字，明明成功了**」）。
+///
+/// <para><b>现场</b>：`111(2)_.zip` 这一单自己解出来的那一片 `111.z01` 被"接片"那一档
+/// 从**它自己的暂存目录**里搬走 ⇒ 收尾链紧接着读暂存目录读到空
+/// ⇒「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包一个字节都不处理。
+/// 触发它是一段竞态：同一批另一单恰好在**两次接片调用之间**把这一组的入口包落到落点层
+/// ⇒ 第一次接片不认识那一层（什么都不做）、第二次认识 ⇒ 搬走的就是暂存目录里那一份。</para>
+///
+/// <para><b>红检</b>：把 <see cref="ExtractionCoordinator.ShouldMovePieceIntoGroup"/> 里的
+/// "暂存目录那一档不搬"撤掉（恢复成只看"是不是过程物目录"）⇒
+/// <c>暂存目录里的那一份_只建链接绝不搬走</c> 当场变红。</para>
+/// </summary>
+public class PieceHandoverStageGuardTests : IDisposable
 {
-    /// <summary>
-    /// **"接片"那一档该搬还是该只建链接**（真机 CCCC 2026-10-06 18:13，用户原话：
-    /// 「**出现了解压失败的文字，明明成功了**」）。
-    ///
-    /// <para><b>现场</b>：`111(2)_.zip` 这一单自己解出来的那一片 `111.z01` 被"接片"那一档
-    /// 从**它自己的暂存目录**里搬走 ⇒ 收尾链紧接着读暂存目录读到空
-    /// ⇒「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包一个字节都不处理。
-    /// 触发它是一段竞态：同一批另一单恰好在**两次接片调用之间**把这一组的入口包落到落点层
-    /// ⇒ 第一次接片不认识那一层（什么都不做）、第二次认识 ⇒ 搬走的就是暂存目录里那一份。</para>
-    ///
-    /// <para><b>红检</b>：把 <see cref="ExtractionCoordinator.ShouldMovePieceIntoGroup"/> 里的
-    /// "暂存目录那一档不搬"撤掉（恢复成只看"是不是过程物目录"）⇒
-    /// <c>暂存目录里的那一份_只建链接绝不搬走</c> 当场变红。</para>
-    /// </summary>
-    public class PieceHandoverStageGuardTests : IDisposable
+    private readonly string _root;
+
+    public PieceHandoverStageGuardTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "af-piece-handover-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public PieceHandoverStageGuardTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "af-piece-handover-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
-        }
-
-        public void Dispose()
-        {
-            try
+            if (Directory.Exists(_root))
             {
-                if (Directory.Exists(_root))
-                {
-                    Directory.Delete(_root, recursive: true);
-                }
-            }
-            catch
-            {
-                // 临时目录清不掉不影响结论。
+                Directory.Delete(_root, recursive: true);
             }
         }
-
-        /// <summary>
-        /// **"目标位上那一份是不是这一片自己"只有一个出口**（用户 2026-10-12，大测试 `run-8888` 实测）：
-        /// 那一行日志写着「目标名已经被别的文件占着」，而**目标名就是这一片自己的路径** ——
-        /// 老写法只用 `File.Exists(target)` 判，把"早就在位 / 已经被接过一次"说成了"被别人占着"。
-        /// 这一条钉住那个出口的三种事实：同一条路径 ⇒ true；别人 ⇒ false；**这一片自己已经不在了 ⇒ false**
-        /// （判不出就不认 —— 正是"判不出 ⇒ 什么都不做"那一档，⛔ 绝不覆盖）。
-        /// </summary>
-        [Fact]
-        public void 目标位上是不是这一片自己_三种事实各钉一格()
+        catch
         {
-            string piece = Path.Combine(_root, "打包111(2)", "打包111.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(piece)!);
-            File.WriteAllBytes(piece, new byte[64]);
-
-            // ① 目标位就是这一片自己 ⇒ true（该走"已经在位"那一支）。
-            Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, piece));
-
-            // ② 目标位上是**别人**的文件 ⇒ false（照旧"绝不覆盖"）。
-            string other = Path.Combine(_root, "别处", "打包111.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(other)!);
-            File.WriteAllBytes(other, new byte[64]);
-
-            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
-
-            // ③ 这一片**已经不在了**（被前一次接片搬走/改名）⇒ false（判不出 ⇒ 不认）。
-            File.Delete(piece);
-
-            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+            // 临时目录清不掉不影响结论。
         }
+    }
 
-        /// <summary>
-        /// ⛔ **本单自己的暂存目录里的那一份：只建链接，绝不搬走** —— 那是收尾链（结果校验 / 定稿）
-        /// 要读的那一份，搬走 = 把自己这一单唯一的产物拿走（真机就是这样变成「解压失败」的）。
-        /// </summary>
-        [Fact]
-        public void 暂存目录里的那一份_只建链接绝不搬走()
-        {
-            string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
-            string piece = Path.Combine(stage, "111.z01");
+    /// <summary>
+    /// **"目标位上那一份是不是这一片自己"只有一个出口**（用户 2026-10-12，大测试 `run-8888` 实测）：
+    /// 那一行日志写着「目标名已经被别的文件占着」，而**目标名就是这一片自己的路径** ——
+    /// 老写法只用 `File.Exists(target)` 判，把"早就在位 / 已经被接过一次"说成了"被别人占着"。
+    /// 这一条钉住那个出口的三种事实：同一条路径 ⇒ true；别人 ⇒ false；**这一片自己已经不在了 ⇒ false**
+    /// （判不出就不认 —— 正是"判不出 ⇒ 什么都不做"那一档，⛔ 绝不覆盖）。
+    /// </summary>
+    [Fact]
+    public void 目标位上是不是这一片自己_三种事实各钉一格()
+    {
+        string piece = Path.Combine(_root, "打包111(2)", "打包111.zip");
+        Directory.CreateDirectory(Path.GetDirectoryName(piece)!);
+        File.WriteAllBytes(piece, new byte[64]);
 
-            Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, stage));
+        // ① 目标位就是这一片自己 ⇒ true（该走"已经在位"那一支）。
+        Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, piece));
 
-            // 更深一层（暂存目录的子目录）也算暂存目录。
-            Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                Path.Combine(stage, "111(2)_", "111.z01"),
-                stage));
-        }
+        // ② 目标位上是**别人**的文件 ⇒ false（照旧"绝不覆盖"）。
+        string other = Path.Combine(_root, "别处", "打包111.zip");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        File.WriteAllBytes(other, new byte[64]);
 
-        /// <summary>
-        /// 同一个工作区里**递归层目录**那一份照旧用"移动"（那些目录收尾会整份删掉，
-        /// 留一份在里面等于接了一个马上就要消失的名字）。
-        /// </summary>
-        [Fact]
-        public void 递归层目录里的那一份_照旧搬走()
-        {
-            string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
-            string recursive = Path.Combine(
-                _root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output");
+        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
 
-            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                Path.Combine(recursive, "111.z01"),
-                stage));
-        }
+        // ③ 这一片**已经不在了**（被前一次接片搬走/改名）⇒ false（判不出 ⇒ 不认）。
+        File.Delete(piece);
 
-        /// <summary>
-        /// 其余物里的那一份同样是"会被整份删掉的过程物目录" ⇒ 搬；而**用户目录里的那一份**
-        /// 两条都不成立 ⇒ 只建链接（⛔ 名字与字节都不许动）。
-        /// </summary>
-        [Fact]
-        public void 其余物那一份_搬走_用户源目录那一份_只建链接()
-        {
-            string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
+        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+    }
 
-            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                Path.Combine(_root, "111", "111", "其余物", "111.zip"),
-                stage));
+    /// <summary>
+    /// ⛔ **本单自己的暂存目录里的那一份：只建链接，绝不搬走** —— 那是收尾链（结果校验 / 定稿）
+    /// 要读的那一份，搬走 = 把自己这一单唯一的产物拿走（真机就是这样变成「解压失败」的）。
+    /// </summary>
+    [Fact]
+    public void 暂存目录里的那一份_只建链接绝不搬走()
+    {
+        string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
+        string piece = Path.Combine(stage, "111.z01");
 
-            Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                Path.Combine(_root, "111(4)", "111.z03"),
-                stage));
-        }
+        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, stage));
 
-        /// <summary>
-        /// 暂存目录**算不出来**（判不出）⇒ 落回老口径（只看"是不是过程物目录"），
-        /// ⛔ 不因为判不出就把"该搬的"变成"不该搬的"。
-        /// </summary>
-        [Fact]
-        public void 暂存目录算不出来_落回老口径()
-        {
-            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output", "111.z01"),
-                string.Empty));
-        }
+        // 更深一层（暂存目录的子目录）也算暂存目录。
+        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            Path.Combine(stage, "111(2)_", "111.z01"),
+            stage));
+    }
 
-        /// <summary>
-        /// ⛔ **目标位上已经有同名文件时，先问一句"是不是这一片自己"**（2026-10-11 环台实测的假拒绝）。
-        ///
-        /// <para><b>现场</b>：同一秒的日志里，接片那一档说「目标名已经被别的文件占着（⛔ 绝不覆盖）」，
-        /// 而同一单的定稿又说「已经在目标位上、而且是「同一份文件」」；判据输入里逐字写着
-        /// 「同名位上=同一份文件（就是这一片自己，只是名字已经在位）」——
-        /// 那不是被占用，是**这一片早就在位** ⇒ 必须算接片成功（否则后面那套记账整段被跳过，
-        /// 产出方那一份"已经落地的片"就没人收）。
-        /// 实测对照（同一份样本、同一个环台）：修前 6 条假拒绝 / 0 条"早就在位"；修后 0 条 / 11 条。</para>
-        ///
-        /// <para><b>红检</b>：把判据换成"只要目标位存在就算这一片自己"（或换成永远 false）⇒
-        /// 下面第 ③（或第 ②）条当场变红。</para>
-        /// </summary>
-        [Fact]
-        public void 目标位上已经是这一片自己_才算早就在位_别人的文件算被占()
-        {
-            string piece = Path.Combine(_root, "111.zip");
+    /// <summary>
+    /// 同一个工作区里**递归层目录**那一份照旧用"移动"（那些目录收尾会整份删掉，
+    /// 留一份在里面等于接了一个马上就要消失的名字）。
+    /// </summary>
+    [Fact]
+    public void 递归层目录里的那一份_照旧搬走()
+    {
+        string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
+        string recursive = Path.Combine(
+            _root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output");
 
-            File.WriteAllBytes(piece, new byte[1024]);
+        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            Path.Combine(recursive, "111.z01"),
+            stage));
+    }
 
-            string targetDirectory = Path.Combine(_root, "111", "111");
-            Directory.CreateDirectory(targetDirectory);
+    /// <summary>
+    /// 其余物里的那一份同样是"会被整份删掉的过程物目录" ⇒ 搬；而**用户目录里的那一份**
+    /// 两条都不成立 ⇒ 只建链接（⛔ 名字与字节都不许动）。
+    /// </summary>
+    [Fact]
+    public void 其余物那一份_搬走_用户源目录那一份_只建链接()
+    {
+        string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
 
-            string target = Path.Combine(targetDirectory, "111.zip");
+        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            Path.Combine(_root, "111", "111", "其余物", "111.zip"),
+            stage));
 
-            // ① 目标位还空着 ⇒ 不是"早就在位"。
-            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            Path.Combine(_root, "111(4)", "111.z03"),
+            stage));
+    }
 
-            // ② 同一份物理文件（硬链接）⇒ 就是这一片自己。
-            Assert.True(HardLinkHelper.TryCreateHardLink(target, piece));
+    /// <summary>
+    /// 暂存目录**算不出来**（判不出）⇒ 落回老口径（只看"是不是过程物目录"），
+    /// ⛔ 不因为判不出就把"该搬的"变成"不该搬的"。
+    /// </summary>
+    [Fact]
+    public void 暂存目录算不出来_落回老口径()
+    {
+        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output", "111.z01"),
+            string.Empty));
+    }
 
-            Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+    /// <summary>
+    /// ⛔ **目标位上已经有同名文件时，先问一句"是不是这一片自己"**（2026-10-11 环台实测的假拒绝）。
+    ///
+    /// <para><b>现场</b>：同一秒的日志里，接片那一档说「目标名已经被别的文件占着（⛔ 绝不覆盖）」，
+    /// 而同一单的定稿又说「已经在目标位上、而且是「同一份文件」」；判据输入里逐字写着
+    /// 「同名位上=同一份文件（就是这一片自己，只是名字已经在位）」——
+    /// 那不是被占用，是**这一片早就在位** ⇒ 必须算接片成功（否则后面那套记账整段被跳过，
+    /// 产出方那一份"已经落地的片"就没人收）。
+    /// 实测对照（同一份样本、同一个环台）：修前 6 条假拒绝 / 0 条"早就在位"；修后 0 条 / 11 条。</para>
+    ///
+    /// <para><b>红检</b>：把判据换成"只要目标位存在就算这一片自己"（或换成永远 false）⇒
+    /// 下面第 ③（或第 ②）条当场变红。</para>
+    /// </summary>
+    [Fact]
+    public void 目标位上已经是这一片自己_才算早就在位_别人的文件算被占()
+    {
+        string piece = Path.Combine(_root, "111.zip");
 
-            // ③ 目标位换成**另一个**文件 ⇒ 别人的 ⇒ 绝不覆盖。
-            File.Delete(target);
-            File.WriteAllBytes(target, new byte[2048]);
+        File.WriteAllBytes(piece, new byte[1024]);
 
-            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
-        }
+        string targetDirectory = Path.Combine(_root, "111", "111");
+        Directory.CreateDirectory(targetDirectory);
 
-        /// <summary>
-        /// ⛔ **"过路层"其余物删之前那道前置闸门，引用名必须按这一单自己的族取**（2026-10-11 统一）。
-        ///
-        /// <para><b>为什么</b>：这里原来把引用名写死 `<组基名>.zip`，而"同一组"的尺子是**族 + 基名** ——
-        /// 组只要是 RAR 新式（`X.partN.rar`）或数字族（`X.7z.001`），
-        /// `BelongsToSameGroup(组内成员, "X.zip")` 恒为 false ⇒ 闸门永远判"里面有不属于这一组的东西"
-        /// ⇒ **那一层其余物永远删不掉**（用户选了「其余物：彻底删除」也不动），而 ZIP 族恰好能过
-        /// ⇒ 同一个设置两种结果。引用名改走唯一出口 `ResolveGroupReferenceName`（这一单自己的文件名）。</para>
-        ///
-        /// <para><b>红检</b>：把闸门里的引用名换回 `<组基名>.zip` ⇒ 下面第 ① 条当场变红。</para>
-        /// </summary>
-        [Fact]
-        public void 过路层那道前置闸门_要按这一单自己的族判_不许写死zip()
-        {
-            string own = Path.Combine(_root, "111_", "111_.part1.rar");
-            Directory.CreateDirectory(Path.GetDirectoryName(own)!);
-            File.WriteAllBytes(own, new byte[1024]);
+        string target = Path.Combine(targetDirectory, "111.zip");
 
-            var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
+        // ① 目标位还空着 ⇒ 不是"早就在位"。
+        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
 
-            // ① 那一层里全是这一组的成员（含坏名字的片）⇒ 放行。
-            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
-                task,
-                "111_",
-                new[] { "111_.part2.rar", "111_.par删t3.rcar" }));
+        // ② 同一份物理文件（硬链接）⇒ 就是这一片自己。
+        Assert.True(HardLinkHelper.TryCreateHardLink(target, piece));
 
-            // ② 里混了别人的东西 ⇒ 判不出 ⇒ 不许删。
-            Assert.False(ExtractionCoordinator.AllRestFilesBelongToGroup(
-                task,
-                "111_",
-                new[] { "111_.part2.rar", "别的.zip" }));
+        Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
 
-            // ③ 对照：数字族（X.7z.001）同样要放行 —— 修前写死 zip 时它跟 RAR 新式族一样放行不了。
-            string numeric = Path.Combine(_root, "set", "set.7z.001");
-            Directory.CreateDirectory(Path.GetDirectoryName(numeric)!);
-            File.WriteAllBytes(numeric, new byte[1024]);
+        // ③ 目标位换成**另一个**文件 ⇒ 别人的 ⇒ 绝不覆盖。
+        File.Delete(target);
+        File.WriteAllBytes(target, new byte[2048]);
 
-            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
-                new ArchiveFixer.Models.ArchiveTask(numeric, 2),
-                "set.7z",
-                new[] { "set.7z.002", "set.7z.003" }));
+        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+    }
 
-            // ④ 对照：跨盘 ZIP 族（修前唯一能过的那一族）照旧放行 —— ⛔ 不许因为这次改动把它弄坏。
-            string tail = Path.Combine(_root, "111", "111.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(tail)!);
-            File.WriteAllBytes(tail, new byte[1024]);
+    /// <summary>
+    /// ⛔ **"过路层"其余物删之前那道前置闸门，引用名必须按这一单自己的族取**（2026-10-11 统一）。
+    ///
+    /// <para><b>为什么</b>：这里原来把引用名写死 `<组基名>.zip`，而"同一组"的尺子是**族 + 基名** ——
+    /// 组只要是 RAR 新式（`X.partN.rar`）或数字族（`X.7z.001`），
+    /// `BelongsToSameGroup(组内成员, "X.zip")` 恒为 false ⇒ 闸门永远判"里面有不属于这一组的东西"
+    /// ⇒ **那一层其余物永远删不掉**（用户选了「其余物：彻底删除」也不动），而 ZIP 族恰好能过
+    /// ⇒ 同一个设置两种结果。引用名改走唯一出口 `ResolveGroupReferenceName`（这一单自己的文件名）。</para>
+    ///
+    /// <para><b>红检</b>：把闸门里的引用名换回 `<组基名>.zip` ⇒ 下面第 ① 条当场变红。</para>
+    /// </summary>
+    [Fact]
+    public void 过路层那道前置闸门_要按这一单自己的族判_不许写死zip()
+    {
+        string own = Path.Combine(_root, "111_", "111_.part1.rar");
+        Directory.CreateDirectory(Path.GetDirectoryName(own)!);
+        File.WriteAllBytes(own, new byte[1024]);
 
-            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
-                new ArchiveFixer.Models.ArchiveTask(tail, 3),
-                "111",
-                new[] { "111.z01", "111.z02" }));
-        }
+        var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
 
-        /// <summary>
-        /// ⛔ **别的"还没收场"的那条链里的片：也只许建链接**（2026-10-11 定案到行）。
-        ///
-        /// <para><b>为什么</b>：收拢那一档（`TryGatherGroupPiecesInto` → `TryAdoptUnresolvedVolumePiece`）
-        /// 传进来的"暂存目录"是**消费方**的，而被收的那一片常常属于**另一条还在跑的链**
-        /// （躺在它自己的 `…\recursive\&lt;那一单&gt;_&lt;ts&gt;_&lt;hash&gt;\layer-000\output\` 里）。
-        /// 按老判据它是"过程物目录里的东西"、又不在**调用方**的暂存目录里 ⇒ 判成"搬"
-        /// ⇒ 那条链的定稿/校验读到空 ⇒ **假「解压失败」**
-        /// （全量并行负载下实测：两单落 `Failed`、整组凑不齐；同一份夹具单跑 6/6 全绿）。</para>
-        ///
-        /// <para><b>红检</b>：把第 ③ 条撤掉（调用时不喂"还在跑的链"那一份清单）⇒ 本次断言当场变红。</para>
-        /// </summary>
-        [Fact]
-        public void 别的还没收场那条链里的片_也只建链接()
-        {
-            string callerStage = Path.Combine(_root, "1112__", ".ArchiveFixer.work", "1112__.rLLLLar-abc", "stage");
-            string otherChainWork = Path.Combine(_root, "111__", ".ArchiveFixer.work");
+        // ① 那一层里全是这一组的成员（含坏名字的片）⇒ 放行。
+        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+            task,
+            "111_",
+            new[] { "111_.part2.rar", "111_.par删t3.rcar" }));
 
-            string piece = Path.Combine(
-                otherChainWork, "recursive", "111___20261011_075556_xyz", "layer-000", "output", "111_.part1.rar");
+        // ② 里混了别人的东西 ⇒ 判不出 ⇒ 不许删。
+        Assert.False(ExtractionCoordinator.AllRestFilesBelongToGroup(
+            task,
+            "111_",
+            new[] { "111_.part2.rar", "别的.zip" }));
 
-            // 不喂"还在跑的链"⇒ 老口径：它在过程物目录里 ⇒ 搬（既有行为，⛔ 一个字没改）。
-            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, callerStage));
+        // ③ 对照：数字族（X.7z.001）同样要放行 —— 修前写死 zip 时它跟 RAR 新式族一样放行不了。
+        string numeric = Path.Combine(_root, "set", "set.7z.001");
+        Directory.CreateDirectory(Path.GetDirectoryName(numeric)!);
+        File.WriteAllBytes(numeric, new byte[1024]);
 
-            // 喂上"那条链还没收场"⇒ 只建链接：搬走 = 把那条链唯一的产物拿走。
-            Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                piece,
-                callerStage,
-                new[] { otherChainWork }));
+        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+            new ArchiveFixer.Models.ArchiveTask(numeric, 2),
+            "set.7z",
+            new[] { "set.7z.002", "set.7z.003" }));
 
-            // 对照：别的链**已经收场**（不在清单里）⇒ 照旧按老口径搬。
-            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
-                piece,
-                callerStage,
-                new[] { Path.Combine(_root, "1113__", ".ArchiveFixer.work") }));
-        }
+        // ④ 对照：跨盘 ZIP 族（修前唯一能过的那一族）照旧放行 —— ⛔ 不许因为这次改动把它弄坏。
+        string tail = Path.Combine(_root, "111", "111.zip");
+        Directory.CreateDirectory(Path.GetDirectoryName(tail)!);
+        File.WriteAllBytes(tail, new byte[1024]);
+
+        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+            new ArchiveFixer.Models.ArchiveTask(tail, 3),
+            "111",
+            new[] { "111.z01", "111.z02" }));
+    }
+
+    /// <summary>
+    /// ⛔ **别的"还没收场"的那条链里的片：也只许建链接**（2026-10-11 定案到行）。
+    ///
+    /// <para><b>为什么</b>：收拢那一档（`TryGatherGroupPiecesInto` → `TryAdoptUnresolvedVolumePiece`）
+    /// 传进来的"暂存目录"是**消费方**的，而被收的那一片常常属于**另一条还在跑的链**
+    /// （躺在它自己的 `…\recursive\&lt;那一单&gt;_&lt;ts&gt;_&lt;hash&gt;\layer-000\output\` 里）。
+    /// 按老判据它是"过程物目录里的东西"、又不在**调用方**的暂存目录里 ⇒ 判成"搬"
+    /// ⇒ 那条链的定稿/校验读到空 ⇒ **假「解压失败」**
+    /// （全量并行负载下实测：两单落 `Failed`、整组凑不齐；同一份夹具单跑 6/6 全绿）。</para>
+    ///
+    /// <para><b>红检</b>：把第 ③ 条撤掉（调用时不喂"还在跑的链"那一份清单）⇒ 本次断言当场变红。</para>
+    /// </summary>
+    [Fact]
+    public void 别的还没收场那条链里的片_也只建链接()
+    {
+        string callerStage = Path.Combine(_root, "1112__", ".ArchiveFixer.work", "1112__.rLLLLar-abc", "stage");
+        string otherChainWork = Path.Combine(_root, "111__", ".ArchiveFixer.work");
+
+        string piece = Path.Combine(
+            otherChainWork, "recursive", "111___20261011_075556_xyz", "layer-000", "output", "111_.part1.rar");
+
+        // 不喂"还在跑的链"⇒ 老口径：它在过程物目录里 ⇒ 搬（既有行为，⛔ 一个字没改）。
+        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, callerStage));
+
+        // 喂上"那条链还没收场"⇒ 只建链接：搬走 = 把那条链唯一的产物拿走。
+        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            piece,
+            callerStage,
+            new[] { otherChainWork }));
+
+        // 对照：别的链**已经收场**（不在清单里）⇒ 照旧按老口径搬。
+        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+            piece,
+            callerStage,
+            new[] { Path.Combine(_root, "1113__", ".ArchiveFixer.work") }));
     }
 }

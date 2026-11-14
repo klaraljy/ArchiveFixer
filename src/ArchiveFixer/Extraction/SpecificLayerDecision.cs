@@ -1,14 +1,13 @@
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+public sealed class SpecificLayerDecision
 {
-    public sealed class SpecificLayerDecision
-    {
-        public SpecificLayerKind Kind { get; init; }
+    public SpecificLayerKind Kind { get; init; }
 
-        public string ArchivePath { get; init; } = string.Empty;
+    public string ArchivePath { get; init; } = string.Empty;
 
-        public IReadOnlyList<string> VolumePaths { get; init; } = Array.Empty<string>();
-    }
+    public IReadOnlyList<string> VolumePaths { get; init; } = Array.Empty<string>();
 }

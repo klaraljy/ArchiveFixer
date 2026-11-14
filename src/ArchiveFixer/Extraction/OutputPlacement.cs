@@ -3,736 +3,735 @@ using ArchiveFixer.Models;
 using System;
 using System.IO;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// 输出落点解析（规格 §1，**唯一实现处**；不变量 §6.6：禁止在别处再拼一遍输出路径）。
+///
+/// <para>
+/// 2026-09-27「落点模型 v2」之后是**三档 + 一个手动档**：
+/// 未指定位置（包旁边同名文件夹 / 选中的文件夹里面）、指定位置（<c>BBB\包名\</c>）、
+/// 指定位置 + 选文件夹（<c>BBB\选中文件夹名\相对子路径\包名\</c>），
+/// 外加①页那颗手动按钮的「解压到当前文件夹」（落点 = 源包所在那一层，⛔ 不建包名层）。
+/// **一律不塌缩**（旧场景 B 已退役）—— 全部由 <see cref="ResolveDestinationDirectory"/> 一处实现。
+/// </para>
+///
+/// <para>
+/// 三条设计约束：
+/// ① **纯函数**：输入输出都是字符串/枚举，不建目录、不写文件、不排除列目录；
+/// ② **失败要显式**：自定义根为空/相对路径/盘符不存在/是盘根本身时返回带原因的失败结果，
+///    不抛异常，也不"悄悄换一个目录"—— 静默落到别处会让用户的东西出现在他从没指定的地方；
+/// ③ **名字清洗只有一处**：一律走既有的 <see cref="FileNameHelper"/>（Windows 保留名、结尾空格/点、非法字符），
+///    不在这里另写一套。
+/// </para>
+/// </summary>
+public static class OutputPlacement
 {
+    /*
+     * ⛔ 2026-09-27 删掉了三个成员：`DefaultTerminalLayoutSetting` / `ParseTerminalLayoutMode` /
+     * `ToSettingValue`。
+     *
+     * 它们是"终端落法"还是一项**用户设置**时的解析出口（`AppSettings.TerminalLayoutMode`）。
+     * 用户把那一档整个删掉之后，落法在**生产路径上固定**，这三个成员一个调用方都不剩 ——
+     * 留着就是"看起来能改、其实没有任何行为差别"的假接口（本项目反复清理过这一类）。
+     * 枚举 <see cref="TerminalLayoutMode"/> 本身留着：它是 <c>ResultFinalizer.Plan</c> 的既有契约参数。
+     */
+
     /// <summary>
-    /// 输出落点解析（规格 §1，**唯一实现处**；不变量 §6.6：禁止在别处再拼一遍输出路径）。
+    /// 落点是不是**源包自己所在的那个目录**。
     ///
     /// <para>
-    /// 2026-09-27「落点模型 v2」之后是**三档 + 一个手动档**：
-    /// 未指定位置（包旁边同名文件夹 / 选中的文件夹里面）、指定位置（<c>BBB\包名\</c>）、
-    /// 指定位置 + 选文件夹（<c>BBB\选中文件夹名\相对子路径\包名\</c>），
-    /// 外加①页那颗手动按钮的「解压到当前文件夹」（落点 = 源包所在那一层，⛔ 不建包名层）。
-    /// **一律不塌缩**（旧场景 B 已退役）—— 全部由 <see cref="ResolveDestinationDirectory"/> 一处实现。
+    /// 现在只剩一种情形会成立：**手动档「解压到当前文件夹」**（用户 2026-09-27，
+    /// <c>111\222.rar</c> → 落点 <c>111\</c>）。旧版本还有两种会走到这里 ——
+    /// "解压到压缩包所在目录"那一档（2026-09-24 第 13 条删掉）与场景 B 塌缩（2026-09-27 退役）。
     /// </para>
-    ///
     /// <para>
-    /// 三条设计约束：
-    /// ① **纯函数**：输入输出都是字符串/枚举，不建目录、不写文件、不排除列目录；
-    /// ② **失败要显式**：自定义根为空/相对路径/盘符不存在/是盘根本身时返回带原因的失败结果，
-    ///    不抛异常，也不"悄悄换一个目录"—— 静默落到别处会让用户的东西出现在他从没指定的地方；
-    /// ③ **名字清洗只有一处**：一律走既有的 <see cref="FileNameHelper"/>（Windows 保留名、结尾空格/点、非法字符），
-    ///    不在这里另写一套。
+    /// 为什么需要这个判断：解压管线有一条"输出目录已存在且非空 → 自动改名成 <c>xxx(1)</c>"的规则
+    /// （避免把产物倒进一个已有内容的目录）。而源包所在目录**必然非空** —— 源包自己就躺在里面。
+    /// 不留这个例外，用户点的那次"解压到当前文件夹"会当场被抵消，产物落到旁边的 <c>名字(1)\</c>，
+    /// 正是要根治的"凭空多一层"。
     /// </para>
     /// </summary>
-    public static class OutputPlacement
+    public static bool LandsInSourceDirectory(string? sourceArchivePath, string? destinationDirectory)
     {
-        /*
-         * ⛔ 2026-09-27 删掉了三个成员：`DefaultTerminalLayoutSetting` / `ParseTerminalLayoutMode` /
-         * `ToSettingValue`。
-         *
-         * 它们是"终端落法"还是一项**用户设置**时的解析出口（`AppSettings.TerminalLayoutMode`）。
-         * 用户把那一档整个删掉之后，落法在**生产路径上固定**，这三个成员一个调用方都不剩 ——
-         * 留着就是"看起来能改、其实没有任何行为差别"的假接口（本项目反复清理过这一类）。
-         * 枚举 <see cref="TerminalLayoutMode"/> 本身留着：它是 <c>ResultFinalizer.Plan</c> 的既有契约参数。
-         */
-
-        /// <summary>
-        /// 落点是不是**源包自己所在的那个目录**。
-        ///
-        /// <para>
-        /// 现在只剩一种情形会成立：**手动档「解压到当前文件夹」**（用户 2026-09-27，
-        /// <c>111\222.rar</c> → 落点 <c>111\</c>）。旧版本还有两种会走到这里 ——
-        /// "解压到压缩包所在目录"那一档（2026-09-24 第 13 条删掉）与场景 B 塌缩（2026-09-27 退役）。
-        /// </para>
-        /// <para>
-        /// 为什么需要这个判断：解压管线有一条"输出目录已存在且非空 → 自动改名成 <c>xxx(1)</c>"的规则
-        /// （避免把产物倒进一个已有内容的目录）。而源包所在目录**必然非空** —— 源包自己就躺在里面。
-        /// 不留这个例外，用户点的那次"解压到当前文件夹"会当场被抵消，产物落到旁边的 <c>名字(1)\</c>，
-        /// 正是要根治的"凭空多一层"。
-        /// </para>
-        /// </summary>
-        public static bool LandsInSourceDirectory(string? sourceArchivePath, string? destinationDirectory)
+        if (string.IsNullOrWhiteSpace(sourceArchivePath) || string.IsNullOrWhiteSpace(destinationDirectory))
         {
-            if (string.IsNullOrWhiteSpace(sourceArchivePath) || string.IsNullOrWhiteSpace(destinationDirectory))
+            return false;
+        }
+
+        string sourceDirectory = FileNameHelper.GetDirectoryName(GetFullPathSafe(sourceArchivePath));
+
+        return !string.IsNullOrWhiteSpace(sourceDirectory)
+               && SafePathHelper.PathEquals(sourceDirectory, destinationDirectory);
+    }
+
+    /// <summary><c>Path.GetFullPath</c> 的安全版（取不到就返回空串，绝不抛）。</summary>
+    private static string GetFullPathSafe(string? path)
+    {
+        return SafePathHelper.GetFullPathSafe(path);
+    }
+
+    /// <summary>
+    /// 是不是"以自定义根为目标"的模式。
+    ///
+    /// ⚠ 先过一遍 <see cref="NormalizeLegacyMode"/>：被删掉的两档（旧编号 1/3）也可能被传进来，
+    /// 不能因为"读到的是旧值"就把它算成源目录那一档。
+    /// </summary>
+    public static bool UsesCustomRoot(OutputPlacementMode mode)
+    {
+        return OutputPlacementRules.UsesCustomRoot(mode);
+    }
+
+    /// <summary>
+    /// 旧枚举值 / 旧枚举名 → 现在这两档（**唯一迁移处**，用户 2026-09-24 第 13 条删掉两档之后）。
+    ///
+    /// <para>
+    /// 为什么要有它：删掉的两档在旧版本里是 1（摊平到当前目录）与 3（直接解到指定目录），
+    /// 枚举名是 <c>SourceDirectoryFlat</c> / <c>CustomRootFlat</c>。任何一个还留着旧值的配置、
+    /// 缓存体或手写的 json 读进来时**不许炸、也不许落到一个没人想过的目录**：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>SourceDirectoryFlat</c> / <c>1</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>
+    /// （摊平会让源目录乱掉，正是用户删它的理由）；</description></item>
+    /// <item><description><c>CustomRootFlat</c> / <c>3</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>
+    /// （指定位置保留，但必须建同名子文件夹）；</description></item>
+    /// <item><description>读不懂的值 → 默认档。</description></item>
+    /// </list>
+    /// </summary>
+    public static OutputPlacementMode NormalizeLegacyMode(OutputPlacementMode mode)
+    {
+        return OutputPlacementRules.NormalizeLegacyMode(mode);
+    }
+
+    /// <summary>
+    /// 旧枚举名（字符串）→ 现在这两档。空 / 非法 / 认不出的名字一律回落默认档，**不抛异常**。
+    /// </summary>
+    public static OutputPlacementMode ParsePlacementMode(string? value)
+    {
+        return OutputPlacementRules.ParsePlacementMode(value);
+    }
+
+    /// <summary>
+    /// 旧的两个布尔 + 自定义根 → 新枚举（**旧配置迁移的唯一实现处**，规格 §1.3）。
+    ///
+    /// <para>
+    /// 用户 2026-09-24 第 13 条删掉"摊平"两档之后，这里只剩一个判断题：
+    /// **"是不是指定了位置"**（旧代码里就是 <c>ExtractToOriginalDirectory == false</c> + 自定义根非空）。
+    /// </para>
+    /// <list type="table">
+    /// <item><description><c>(true, true)</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
+    /// <item><description><c>(true, false)</c>（旧的"摊平到当前目录"）→ <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
+    /// <item><description><c>(false, true, 根)</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
+    /// <item><description><c>(false, false, 根)</c>（旧的"直接解到指定目录"）→ <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
+    /// <item><description>空根 → 源目录家族（<see cref="OutputPlacementMode.PerArchiveSubfolder"/>）——
+    /// 旧代码在这种情形会落到**程序目录**（<c>PathService.BuildOutputPath</c> 的 <c>?? AppBaseDirectory</c>），
+    /// 那是"用户从来没指定过"的兜底，不是一种落点，绝不沿用。</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// <paramref name="keepArchiveNameFolder"/> 已经**不参与判断**（两档都没了），
+    /// 参数保留只为不改旧调用点的签名 —— 旧配置读进来照样得出新档，绝不抛异常。
+    /// </para>
+    /// </summary>
+    public static OutputPlacementMode FromLegacyFlags(
+        bool extractToOriginalDirectory,
+        bool keepArchiveNameFolder,
+        string? customRoot = null)
+    {
+        return OutputPlacementRules.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot);
+    }
+
+    /// <summary>
+    /// 解析目标根（规格 §1.2 的 <c>destRoot</c>）。
+    ///
+    /// 返回的结果里只填 <see cref="OutputPlacementResult.DestinationRoot"/>；
+    /// 失败原因同样有效（自定义根的四类非法写法都在这里拦下）。
+    /// </summary>
+    /// <param name="sourceArchivePath">源包路径（可以只是文件名，但那样推不出"当前目录"）。</param>
+    /// <param name="mode">落点模式。</param>
+    /// <param name="customRoot">自定义根（仅自定义模式用得上）。</param>
+    /// <param name="driveExists">
+    /// 盘符存在性探针，收到的是盘根（如 <c>D:\</c>）。
+    /// 默认走真实查询 —— 这是本类唯一一处碰环境的地方，抽成参数是为了让测试不依赖本机盘符。
+    /// </param>
+    public static OutputPlacementResult ResolveDestinationRoot(
+        string? sourceArchivePath,
+        OutputPlacementMode mode,
+        string? customRoot = null,
+        Func<string, bool>? driveExists = null)
+    {
+        if (string.IsNullOrWhiteSpace(sourceArchivePath))
+        {
+            return Failure(OutputPlacementError.EmptySourcePath, "源包路径为空，无法判断输出落点");
+        }
+
+        if (!UsesCustomRoot(mode))
+        {
+            string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
+
+            if (string.IsNullOrWhiteSpace(sourceDirectory))
             {
-                return false;
-            }
-
-            string sourceDirectory = FileNameHelper.GetDirectoryName(GetFullPathSafe(sourceArchivePath));
-
-            return !string.IsNullOrWhiteSpace(sourceDirectory)
-                   && SafePathHelper.PathEquals(sourceDirectory, destinationDirectory);
-        }
-
-        /// <summary><c>Path.GetFullPath</c> 的安全版（取不到就返回空串，绝不抛）。</summary>
-        private static string GetFullPathSafe(string? path)
-        {
-            return SafePathHelper.GetFullPathSafe(path);
-        }
-
-        /// <summary>
-        /// 是不是"以自定义根为目标"的模式。
-        ///
-        /// ⚠ 先过一遍 <see cref="NormalizeLegacyMode"/>：被删掉的两档（旧编号 1/3）也可能被传进来，
-        /// 不能因为"读到的是旧值"就把它算成源目录那一档。
-        /// </summary>
-        public static bool UsesCustomRoot(OutputPlacementMode mode)
-        {
-            return OutputPlacementRules.UsesCustomRoot(mode);
-        }
-
-        /// <summary>
-        /// 旧枚举值 / 旧枚举名 → 现在这两档（**唯一迁移处**，用户 2026-09-24 第 13 条删掉两档之后）。
-        ///
-        /// <para>
-        /// 为什么要有它：删掉的两档在旧版本里是 1（摊平到当前目录）与 3（直接解到指定目录），
-        /// 枚举名是 <c>SourceDirectoryFlat</c> / <c>CustomRootFlat</c>。任何一个还留着旧值的配置、
-        /// 缓存体或手写的 json 读进来时**不许炸、也不许落到一个没人想过的目录**：
-        /// </para>
-        /// <list type="bullet">
-        /// <item><description><c>SourceDirectoryFlat</c> / <c>1</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>
-        /// （摊平会让源目录乱掉，正是用户删它的理由）；</description></item>
-        /// <item><description><c>CustomRootFlat</c> / <c>3</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>
-        /// （指定位置保留，但必须建同名子文件夹）；</description></item>
-        /// <item><description>读不懂的值 → 默认档。</description></item>
-        /// </list>
-        /// </summary>
-        public static OutputPlacementMode NormalizeLegacyMode(OutputPlacementMode mode)
-        {
-            return OutputPlacementRules.NormalizeLegacyMode(mode);
-        }
-
-        /// <summary>
-        /// 旧枚举名（字符串）→ 现在这两档。空 / 非法 / 认不出的名字一律回落默认档，**不抛异常**。
-        /// </summary>
-        public static OutputPlacementMode ParsePlacementMode(string? value)
-        {
-            return OutputPlacementRules.ParsePlacementMode(value);
-        }
-
-        /// <summary>
-        /// 旧的两个布尔 + 自定义根 → 新枚举（**旧配置迁移的唯一实现处**，规格 §1.3）。
-        ///
-        /// <para>
-        /// 用户 2026-09-24 第 13 条删掉"摊平"两档之后，这里只剩一个判断题：
-        /// **"是不是指定了位置"**（旧代码里就是 <c>ExtractToOriginalDirectory == false</c> + 自定义根非空）。
-        /// </para>
-        /// <list type="table">
-        /// <item><description><c>(true, true)</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
-        /// <item><description><c>(true, false)</c>（旧的"摊平到当前目录"）→ <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
-        /// <item><description><c>(false, true, 根)</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
-        /// <item><description><c>(false, false, 根)</c>（旧的"直接解到指定目录"）→ <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
-        /// <item><description>空根 → 源目录家族（<see cref="OutputPlacementMode.PerArchiveSubfolder"/>）——
-        /// 旧代码在这种情形会落到**程序目录**（<c>PathService.BuildOutputPath</c> 的 <c>?? AppBaseDirectory</c>），
-        /// 那是"用户从来没指定过"的兜底，不是一种落点，绝不沿用。</description></item>
-        /// </list>
-        ///
-        /// <para>
-        /// <paramref name="keepArchiveNameFolder"/> 已经**不参与判断**（两档都没了），
-        /// 参数保留只为不改旧调用点的签名 —— 旧配置读进来照样得出新档，绝不抛异常。
-        /// </para>
-        /// </summary>
-        public static OutputPlacementMode FromLegacyFlags(
-            bool extractToOriginalDirectory,
-            bool keepArchiveNameFolder,
-            string? customRoot = null)
-        {
-            return OutputPlacementRules.FromLegacyFlags(extractToOriginalDirectory, keepArchiveNameFolder, customRoot);
-        }
-
-        /// <summary>
-        /// 解析目标根（规格 §1.2 的 <c>destRoot</c>）。
-        ///
-        /// 返回的结果里只填 <see cref="OutputPlacementResult.DestinationRoot"/>；
-        /// 失败原因同样有效（自定义根的四类非法写法都在这里拦下）。
-        /// </summary>
-        /// <param name="sourceArchivePath">源包路径（可以只是文件名，但那样推不出"当前目录"）。</param>
-        /// <param name="mode">落点模式。</param>
-        /// <param name="customRoot">自定义根（仅自定义模式用得上）。</param>
-        /// <param name="driveExists">
-        /// 盘符存在性探针，收到的是盘根（如 <c>D:\</c>）。
-        /// 默认走真实查询 —— 这是本类唯一一处碰环境的地方，抽成参数是为了让测试不依赖本机盘符。
-        /// </param>
-        public static OutputPlacementResult ResolveDestinationRoot(
-            string? sourceArchivePath,
-            OutputPlacementMode mode,
-            string? customRoot = null,
-            Func<string, bool>? driveExists = null)
-        {
-            if (string.IsNullOrWhiteSpace(sourceArchivePath))
-            {
-                return Failure(OutputPlacementError.EmptySourcePath, "源包路径为空，无法判断输出落点");
-            }
-
-            if (!UsesCustomRoot(mode))
-            {
-                string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
-
-                if (string.IsNullOrWhiteSpace(sourceDirectory))
-                {
-                    return Failure(
-                        OutputPlacementError.SourceDirectoryUnavailable,
-                        "源包路径里没有目录部分，无法判断\"当前目录\"");
-                }
-
-                /*
-                 * 用户可以从其余物/工作区里再次导入源包；那一层只是输入位置，
-                 * 产物不能再写回去（下一次清理会把那棵树当过程物删掉）。
-                 */
-                string visibleDirectory = ProcessArtifactLayout.LiftOutOfProcessArtifactDirectory(sourceDirectory);
-
-                if (!string.IsNullOrWhiteSpace(visibleDirectory))
-                {
-                    sourceDirectory = visibleDirectory;
-                }
-
-                return new OutputPlacementResult
-                {
-                    Success = true,
-                    DestinationRoot = sourceDirectory,
-                    Message = "目标根：" + sourceDirectory
-                };
-            }
-
-            return ResolveCustomRoot(customRoot, driveExists);
-        }
-
-        /// <summary>
-        /// 解析最终落点 <c>destDir</c>（规格 §1.1 落点模型 v2）。
-        ///
-        /// <code>
-        /// destRoot = 未指定位置 ? dir(源包) : 指定位置
-        /// 包名     = 指定位置 且 选中对象是文件夹 ? SafeName(选中的文件夹名)
-        ///            : SafeName(包基名)                 // 分卷组 = 整组基名；伪装后缀/内嵌归档都剥对
-        /// destDir  = 选中文件夹 + 指定位置 ? destRoot \ 选中文件夹名 \ 相对子路径 \ 包基名
-        ///            : destRoot \ 包名                  // 其余各档都只建这一层
-        /// 手动档   =「解压到当前文件夹」? dir(源包)       // 不建包名那一层；盘根直接判失败
-        /// </code>
-        ///
-        /// <para>
-        /// <b>未指定位置 + 选中文件夹</b>那一条要特别看：这时 <c>destRoot</c> 是**源包自己的目录**
-        /// （它在所选文件夹里面），包名是**各个包自己的基名** —— 于是产物落在 <c>111\222\a\</c>，
-        /// 既没有凭空多出一层 <c>111\222\222\</c>（"不新建"），也没有把内容摊进 <c>222\</c> 或扔到 <c>111\</c>
-        /// （用户原话："我们就在 222 文件夹里面操作，不将东西往外面扔"）。
-        /// ⚠ 包名与所在目录同名时（<c>111\222\222.7z.001</c>）**也照样多一层** ——
-        /// 旧那条"看情况塌掉重复一层"的规则（场景 B）已于 2026-09-27 退役。
-        /// </para>
-        /// </summary>
-        /// <param name="sourceArchivePath">源包路径。</param>
-        /// <param name="mode">落点模式（只剩两档）。</param>
-        /// <param name="customRoot">自定义根（仅 <see cref="OutputPlacementMode.CustomRootPerArchive"/> 用得上）。</param>
-        /// <param name="volumeGroupBaseName">
-        /// 分卷组基名（<see cref="Detection.VolumeGroupDetector"/> 的结果，如 <c>222.7z</c>）。
-        /// 给了就用它替代"从文件名剥分卷标记"这一步 —— 上游已经算过就别再算一遍。
-        /// </param>
-        /// <param name="selectionKind">
-        /// 这次导入用户选中的是文件还是文件夹（四条规则的第 1 个维度）。默认"文件"= 最保守的那一档。
-        /// </param>
-        /// <param name="selectionRoot">
-        /// 用户选中的那个根（文件夹选择时是文件夹全路径）。空的文件夹根**不参与运算**，
-        /// 免得把"某次没记全的导入"当成"用户选了一个叫空字符串的文件夹"。
-        /// </param>
-        /// <param name="flattenIntoSourceFolder">
-        /// 手动档「**解压到当前文件夹**」（2026-09-27 新增）：内容物直接落在**源包所在那一层**，
-        /// ⛔ 不建包名文件夹（<c>111\222.rar</c> → <c>111\内容物</c>）。
-        /// ⛔ 只有手动操作会传 true —— 一键处理/批量永远是"外面裹一层包名目录"。
-        /// </param>
-        /// <param name="driveExists">盘符存在性探针，见 <see cref="ResolveDestinationRoot"/>。</param>
-        /// <param name="entryArchivePath">
-        /// **入口包**（这一组里引擎要打开的那一份，见 <see cref="Detection.EntryPackage"/>）—— 只影响
-        /// 「未指定位置」那一档的目标根：用户 2026-10-05 的口径是"落在**入口包所在目录**"。
-        /// 留空 / 与 <paramref name="sourceArchivePath"/> 同一层 ⇒ 结果一个字不变（⛔ 不做任何猜测）。
-        /// </param>
-        public static OutputPlacementResult ResolveDestinationDirectory(
-            string? sourceArchivePath,
-            OutputPlacementMode mode,
-            string? customRoot = null,
-            string? volumeGroupBaseName = null,
-            Func<string, bool>? driveExists = null,
-            SourceSelectionKind selectionKind = SourceSelectionKind.File,
-            string? selectionRoot = null,
-            bool flattenIntoSourceFolder = false,
-            string? entryArchivePath = null)
-        {
-            mode = NormalizeLegacyMode(mode);
-
-            /*
-             * 「未指定位置」那一档的目标根 = **入口包**所在目录（用户 2026-10-05 落点口径）。
-             *
-             * 为什么只动这一档：指定位置那一档的根是用户自己选的（`customRoot`），与入口包无关；
-             * 而入口包**跟源包不在同一层**只有一种成因 —— 整组被收拢到了入口那一层（真机 `CCCC`：
-             * 末片 `111.zip` 被接进 `111(4)\`，而这一单自己的文件还散在 `111(3)\`）。
-             * ⛔ 传进来的入口包与源包同一层时不改任何东西（绝大多数调用点就是这一档）。
-             */
-            string? rootSourcePath = sourceArchivePath;
-
-            if (!string.IsNullOrWhiteSpace(entryArchivePath)
-                && !string.Equals(
-                    FileNameHelper.GetDirectoryName(entryArchivePath),
-                    FileNameHelper.GetDirectoryName(sourceArchivePath),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                rootSourcePath = entryArchivePath;
-            }
-
-            OutputPlacementResult root = ResolveDestinationRoot(rootSourcePath, mode, customRoot, driveExists);
-
-            if (!root.Success)
-            {
-                return root;
-            }
-
-            string rawBaseName = ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName);
-            string safeBaseName = FileNameHelper.SanitizeFileName(rawBaseName);
-
-            /*
-             * 手动档「解压到当前文件夹」（用户 2026-09-27）：内容物直接落进**压缩包所在的那一层**。
-             *
-             * 语义就是他说的 WinRAR"解压到当前文件夹"：<c>111\222.rar</c> → <c>111\内容物</c>。
-             * ⛔ 只有手动操作会走到这一支；一键处理/批量永远裹一层包名目录。
-             * 代价照实说：同一层里有多个包时，它们的内容物会混进同一层（同名文件走冲突档）——
-             * 这是用户自己点的，日志里会提醒。
-             */
-            if (flattenIntoSourceFolder)
-            {
-                string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
-
-                if (string.IsNullOrWhiteSpace(sourceDirectory))
-                {
-                    return Failure(
-                        OutputPlacementError.SourceDirectoryUnavailable,
-                        "源包路径里没有目录部分，无法判断\"当前文件夹\"");
-                }
-
-                if (IsPathRoot(sourceDirectory))
-                {
-                    return Failure(
-                        OutputPlacementError.InvalidDestinationPath,
-                        $"「解压到当前文件夹」不能直接摊在盘根上：{sourceDirectory}");
-                }
-
-                return new OutputPlacementResult
-                {
-                    Success = true,
-                    DestinationRoot = sourceDirectory,
-                    DestinationDirectory = sourceDirectory,
-                    ArchiveBaseName = safeBaseName,
-                    PackageFolderName = safeBaseName,
-                    Message = $"解压到当前文件夹（不套包名目录）：{sourceDirectory}"
-                };
+                return Failure(
+                    OutputPlacementError.SourceDirectoryUnavailable,
+                    "源包路径里没有目录部分，无法判断\"当前目录\"");
             }
 
             /*
-             * "指定位置 + 添加文件夹"：落点那一层用**选中的文件夹名**（用户原话：
-             * "我们就在 BBB 里面创建一个和我们选中文件夹名字相同的子文件夹，然后再里面操作"）。
-             *
-             * 文件夹名取不到（没记下根 / 根是空的）时回落到包基名 —— 宁可多一层"包名"目录，
-             * 也绝不把产物摊进指定位置的根上（那正是被删掉的那一档）。
+             * 用户可以从其余物/工作区里再次导入源包；那一层只是输入位置，
+             * 产物不能再写回去（下一次清理会把那棵树当过程物删掉）。
              */
-            string selectedFolderName = ResolveSelectedFolderName(selectionKind, selectionRoot);
-            bool useSelectedFolderName = UsesCustomRoot(mode) && selectedFolderName.Length > 0;
+            string visibleDirectory = ProcessArtifactLayout.LiftOutOfProcessArtifactDirectory(sourceDirectory);
 
-            /*
-             * ===== 「选文件夹 + 指定位置」的两条规则（2026-09-27 用户指示方案 A）=====
-             *
-             * ① **保留选中文件夹名那一层**（既有规则，一个字不动）：产物落在 BBB\AAA\ 下面；
-             * ② **把"这个包相对选中文件夹的那一段子路径"原样搬过去**，并且**每个包再占自己一层**
-             *    （包基名）。于是
-             *        AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132.apk
-             *      → BBB\AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132\
-             *
-             * 为什么必须改（真机现场）：源目录里 5 个子文件夹各有确切名字、每个子文件夹里若干包；
-             * 旧规则把 13 个包**全部倒进同一层** BBB\AAA\ —— 子文件夹名字与"哪个包属于哪个文件夹"
-             * 在产物里彻底消失，13 个包的第一层内容物（0 字节的 国考资料.txt）还互相撞名成了
-             * (1)…(6)。用户的原话就是"这不就导致了文件夹混乱了吗，你应该在各自的子文件夹里面操作"。
-             *
-             * ⛔ 这一档从此**不再"多个包共用一层"**：`SharesDestinationWithOtherPackages` 恒为 false，
-             * 管线里"共用根"那两条特例（让开已存在目录、其余物按包名分层）在这条路上自然不再生效。
-             */
-            bool folderImportIntoCustomRoot =
-                useSelectedFolderName && selectionKind == SourceSelectionKind.Folder && !string.IsNullOrWhiteSpace(selectionRoot);
-
-            string relativeSubPath = folderImportIntoCustomRoot
-                ? ResolveRelativeSubPath(selectionRoot!, sourceArchivePath)
-                : string.Empty;
-
-            string packageName = useSelectedFolderName ? selectedFolderName : safeBaseName;
-
-            if (packageName.Length == 0)
+            if (!string.IsNullOrWhiteSpace(visibleDirectory))
             {
-                return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
+                sourceDirectory = visibleDirectory;
             }
-
-            string perArchiveDirectory = folderImportIntoCustomRoot
-                ? SafeCombine(
-                    SafeCombine(root.DestinationRoot, selectedFolderName),
-                    JoinSubPath(relativeSubPath, safeBaseName))
-                : SafeCombine(root.DestinationRoot, packageName);
-
-            if (perArchiveDirectory.Length == 0)
-            {
-                return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
-            }
-
-            /*
-             * ⛔ 落点目录**不许等于源文件自己**（用户 2026-10-11 大测试实测：一整批因此不开工）。
-             *
-             * <para><b>现场</b>（run-8888，就地档）：源包是 `…\8888\bbb\bbb-L4.zip删除`，
-             * 包基名按名字尺子算出来**就是整个文件名** —— 那一档**刻意不归一**"粘在归档后缀上的垃圾"
-             * （`ArchiveBaseNameTests` 逐格钉着，且「半套分卷不许进可删的其余物」那道防数据丢失闸门
-             * 就靠"包基名不归一"这一格，⛔ 不许顺手统一）。于是落点 = `<源目录>\<文件名>` = **源文件自己** ⇒
-             * 工作区要建在"一个文件里面" ⇒ 批首逐字报
-             * `⛔ 目标位置不可用，工作区没法建，这一批没有开工（一个字节都没写）：目标目录建不出来（不可写）：…\bbb-L4.zip删除`。</para>
-             *
-             * <para><b>修法（只堵这一格，名字尺子一个字符都不改）</b>：算出来的目标目录与源包**同一条路径**时，
-             * 换用**归档基名**（既有唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>：
-             * `bbb-L4.zip删除` → `bbb-L4`）。判据只读事实（两条路径相等），⛔ 不看后缀、⛔ 不猜名字。</para>
-             */
-            if (IsSamePathAsSource(perArchiveDirectory, sourceArchivePath, out string resolvedSource))
-            {
-                /*
-                 * 第一步：换用**归档基名**（既有唯一出口 `FileNameHelper.GetArchiveBaseName`：
-                 * `bbb-L4.zip删除` → `bbb-L4`、`222-L5.rarzz` → `222-L5`）。
-                 */
-                string archiveBaseName = FileNameHelper.SanitizeFileName(
-                    FileNameHelper.GetArchiveBaseName(resolvedSource));
-
-                string replaced = archiveBaseName.Length > 0
-                    ? SafeCombine(root.DestinationRoot, archiveBaseName)
-                    : string.Empty;
-
-                if (replaced.Length > 0 && !IsSamePathAsSource(replaced, resolvedSource, out _))
-                {
-                    safeBaseName = archiveBaseName;
-                    packageName = archiveBaseName;
-                    perArchiveDirectory = replaced;
-                }
-                else
-                {
-                    /*
-                     * 第二步：源包**连后缀都没有**（run-13131313：顶层就叫 `111-L4`，是「删后缀」那一路伪装）——
-                     * 归档基名与原名逐字相同，怎么剥都还是源文件自己。这一档按本仓既有的
-                     * 「撞名绝不覆盖」规矩换名（唯一出口 `SafePathHelper.AutoRenameDirectoryPath`：
-                     * 目标名被占 ⇒ `111-L4` → `111-L4(1)`）。
-                     *
-                     * ⛔ 判据不是"随便挑一个没被占的名字"：能走到这里已经证明**那个位置上站着的就是源文件本身**
-                     * （上面那一句相等判据），所以 `(1)` 这个名字一定可用、也一定不动任何源文件。
-                     */
-                    string unique = SafePathHelper.AutoRenameDirectoryPath(perArchiveDirectory);
-
-                    if (string.IsNullOrWhiteSpace(unique) || IsSamePathAsSource(unique, resolvedSource, out _))
-                    {
-                        // 连自动改名都拿不到可用名 ⇒ 照旧如实失败，⛔ 不编一个目录名出来。
-                        return Failure(
-                            OutputPlacementError.InvalidDestinationPath,
-                            "目标目录与源包是同一条路径，拼不出可用的落点：" + perArchiveDirectory);
-                    }
-
-                    packageName = FileNameHelper.GetFileName(unique);
-                    safeBaseName = packageName;
-                    perArchiveDirectory = unique;
-                }
-            }
-
-            /*
-             * 场景 B「包名与所在目录同名就塌缩」**已退役**（用户 2026-09-27）：
-             *
-             * 他原话："不行，如果 111\222\ 这层文件夹里面还有很多的东西呢，这不就是将文件夹弄混乱了吗"。
-             * 旧规则只在"该目录里只有这一个**包**"时才塌缩，可那层目录里完全可能还有几十个小文件、
-             * 说明、别的素材 —— 一塌就全混在一起，而且"什么时候会塌"对用户不可预期。
-             * 现在**一律不塌缩**：<c>111\222\222.rar</c> → <c>111\222\222\内容物</c>，永远多这一层、永远不乱。
-             */
 
             return new OutputPlacementResult
             {
                 Success = true,
-                DestinationRoot = root.DestinationRoot,
-                DestinationDirectory = perArchiveDirectory,
+                DestinationRoot = sourceDirectory,
+                Message = "目标根：" + sourceDirectory
+            };
+        }
+
+        return ResolveCustomRoot(customRoot, driveExists);
+    }
+
+    /// <summary>
+    /// 解析最终落点 <c>destDir</c>（规格 §1.1 落点模型 v2）。
+    ///
+    /// <code>
+    /// destRoot = 未指定位置 ? dir(源包) : 指定位置
+    /// 包名     = 指定位置 且 选中对象是文件夹 ? SafeName(选中的文件夹名)
+    ///            : SafeName(包基名)                 // 分卷组 = 整组基名；伪装后缀/内嵌归档都剥对
+    /// destDir  = 选中文件夹 + 指定位置 ? destRoot \ 选中文件夹名 \ 相对子路径 \ 包基名
+    ///            : destRoot \ 包名                  // 其余各档都只建这一层
+    /// 手动档   =「解压到当前文件夹」? dir(源包)       // 不建包名那一层；盘根直接判失败
+    /// </code>
+    ///
+    /// <para>
+    /// <b>未指定位置 + 选中文件夹</b>那一条要特别看：这时 <c>destRoot</c> 是**源包自己的目录**
+    /// （它在所选文件夹里面），包名是**各个包自己的基名** —— 于是产物落在 <c>111\222\a\</c>，
+    /// 既没有凭空多出一层 <c>111\222\222\</c>（"不新建"），也没有把内容摊进 <c>222\</c> 或扔到 <c>111\</c>
+    /// （用户原话："我们就在 222 文件夹里面操作，不将东西往外面扔"）。
+    /// ⚠ 包名与所在目录同名时（<c>111\222\222.7z.001</c>）**也照样多一层** ——
+    /// 旧那条"看情况塌掉重复一层"的规则（场景 B）已于 2026-09-27 退役。
+    /// </para>
+    /// </summary>
+    /// <param name="sourceArchivePath">源包路径。</param>
+    /// <param name="mode">落点模式（只剩两档）。</param>
+    /// <param name="customRoot">自定义根（仅 <see cref="OutputPlacementMode.CustomRootPerArchive"/> 用得上）。</param>
+    /// <param name="volumeGroupBaseName">
+    /// 分卷组基名（<see cref="Detection.VolumeGroupDetector"/> 的结果，如 <c>222.7z</c>）。
+    /// 给了就用它替代"从文件名剥分卷标记"这一步 —— 上游已经算过就别再算一遍。
+    /// </param>
+    /// <param name="selectionKind">
+    /// 这次导入用户选中的是文件还是文件夹（四条规则的第 1 个维度）。默认"文件"= 最保守的那一档。
+    /// </param>
+    /// <param name="selectionRoot">
+    /// 用户选中的那个根（文件夹选择时是文件夹全路径）。空的文件夹根**不参与运算**，
+    /// 免得把"某次没记全的导入"当成"用户选了一个叫空字符串的文件夹"。
+    /// </param>
+    /// <param name="flattenIntoSourceFolder">
+    /// 手动档「**解压到当前文件夹**」（2026-09-27 新增）：内容物直接落在**源包所在那一层**，
+    /// ⛔ 不建包名文件夹（<c>111\222.rar</c> → <c>111\内容物</c>）。
+    /// ⛔ 只有手动操作会传 true —— 一键处理/批量永远是"外面裹一层包名目录"。
+    /// </param>
+    /// <param name="driveExists">盘符存在性探针，见 <see cref="ResolveDestinationRoot"/>。</param>
+    /// <param name="entryArchivePath">
+    /// **入口包**（这一组里引擎要打开的那一份，见 <see cref="Detection.EntryPackage"/>）—— 只影响
+    /// 「未指定位置」那一档的目标根：用户 2026-10-05 的口径是"落在**入口包所在目录**"。
+    /// 留空 / 与 <paramref name="sourceArchivePath"/> 同一层 ⇒ 结果一个字不变（⛔ 不做任何猜测）。
+    /// </param>
+    public static OutputPlacementResult ResolveDestinationDirectory(
+        string? sourceArchivePath,
+        OutputPlacementMode mode,
+        string? customRoot = null,
+        string? volumeGroupBaseName = null,
+        Func<string, bool>? driveExists = null,
+        SourceSelectionKind selectionKind = SourceSelectionKind.File,
+        string? selectionRoot = null,
+        bool flattenIntoSourceFolder = false,
+        string? entryArchivePath = null)
+    {
+        mode = NormalizeLegacyMode(mode);
+
+        /*
+         * 「未指定位置」那一档的目标根 = **入口包**所在目录（用户 2026-10-05 落点口径）。
+         *
+         * 为什么只动这一档：指定位置那一档的根是用户自己选的（`customRoot`），与入口包无关；
+         * 而入口包**跟源包不在同一层**只有一种成因 —— 整组被收拢到了入口那一层（真机 `CCCC`：
+         * 末片 `111.zip` 被接进 `111(4)\`，而这一单自己的文件还散在 `111(3)\`）。
+         * ⛔ 传进来的入口包与源包同一层时不改任何东西（绝大多数调用点就是这一档）。
+         */
+        string? rootSourcePath = sourceArchivePath;
+
+        if (!string.IsNullOrWhiteSpace(entryArchivePath)
+            && !string.Equals(
+                FileNameHelper.GetDirectoryName(entryArchivePath),
+                FileNameHelper.GetDirectoryName(sourceArchivePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            rootSourcePath = entryArchivePath;
+        }
+
+        OutputPlacementResult root = ResolveDestinationRoot(rootSourcePath, mode, customRoot, driveExists);
+
+        if (!root.Success)
+        {
+            return root;
+        }
+
+        string rawBaseName = ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName);
+        string safeBaseName = FileNameHelper.SanitizeFileName(rawBaseName);
+
+        /*
+         * 手动档「解压到当前文件夹」（用户 2026-09-27）：内容物直接落进**压缩包所在的那一层**。
+         *
+         * 语义就是他说的 WinRAR"解压到当前文件夹"：<c>111\222.rar</c> → <c>111\内容物</c>。
+         * ⛔ 只有手动操作会走到这一支；一键处理/批量永远裹一层包名目录。
+         * 代价照实说：同一层里有多个包时，它们的内容物会混进同一层（同名文件走冲突档）——
+         * 这是用户自己点的，日志里会提醒。
+         */
+        if (flattenIntoSourceFolder)
+        {
+            string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
+
+            if (string.IsNullOrWhiteSpace(sourceDirectory))
+            {
+                return Failure(
+                    OutputPlacementError.SourceDirectoryUnavailable,
+                    "源包路径里没有目录部分，无法判断\"当前文件夹\"");
+            }
+
+            if (IsPathRoot(sourceDirectory))
+            {
+                return Failure(
+                    OutputPlacementError.InvalidDestinationPath,
+                    $"「解压到当前文件夹」不能直接摊在盘根上：{sourceDirectory}");
+            }
+
+            return new OutputPlacementResult
+            {
+                Success = true,
+                DestinationRoot = sourceDirectory,
+                DestinationDirectory = sourceDirectory,
                 ArchiveBaseName = safeBaseName,
                 PackageFolderName = safeBaseName,
-                RelativeSubPath = relativeSubPath,
-                UsesSelectedFolderName = useSelectedFolderName,
-
-                /*
-                 * ⚠ 2026-09-27 起**恒为 false**：以前"指定位置 + 添加文件夹"是文件夹里每个包都落进
-                 * 同一个 BBB\222\（那时这里给 true）；现在每包一层（BBB\222\<子路径>\<包基名>），
-                 * 就没有"共用根"这回事了。字段保留是为了让管线那两处判据继续只读一个出口。
-                 */
-                SharesDestinationWithOtherPackages = false,
-
-                Message = "落点：" + perArchiveDirectory
+                Message = $"解压到当前文件夹（不套包名目录）：{sourceDirectory}"
             };
         }
 
-        /// <summary>
-        /// 两条路径是不是同一个东西（都取全路径后按大小写不敏感比）。
-        ///
-        /// <para>判据只读事实：<see cref="SafePathHelper.GetFullPathSafe"/> 规范化之后逐字相同。
-        /// 任一侧取不到全路径 ⇒ 判"不是同一个"（⛔ 判不出就什么都不做，绝不据此改落点）。</para>
-        /// </summary>
-        private static bool IsSamePathAsSource(string candidate, string? sourcePath, out string resolvedSource)
+        /*
+         * "指定位置 + 添加文件夹"：落点那一层用**选中的文件夹名**（用户原话：
+         * "我们就在 BBB 里面创建一个和我们选中文件夹名字相同的子文件夹，然后再里面操作"）。
+         *
+         * 文件夹名取不到（没记下根 / 根是空的）时回落到包基名 —— 宁可多一层"包名"目录，
+         * 也绝不把产物摊进指定位置的根上（那正是被删掉的那一档）。
+         */
+        string selectedFolderName = ResolveSelectedFolderName(selectionKind, selectionRoot);
+        bool useSelectedFolderName = UsesCustomRoot(mode) && selectedFolderName.Length > 0;
+
+        /*
+         * ===== 「选文件夹 + 指定位置」的两条规则（2026-09-27 用户指示方案 A）=====
+         *
+         * ① **保留选中文件夹名那一层**（既有规则，一个字不动）：产物落在 BBB\AAA\ 下面；
+         * ② **把"这个包相对选中文件夹的那一段子路径"原样搬过去**，并且**每个包再占自己一层**
+         *    （包基名）。于是
+         *        AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132.apk
+         *      → BBB\AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132\
+         *
+         * 为什么必须改（真机现场）：源目录里 5 个子文件夹各有确切名字、每个子文件夹里若干包；
+         * 旧规则把 13 个包**全部倒进同一层** BBB\AAA\ —— 子文件夹名字与"哪个包属于哪个文件夹"
+         * 在产物里彻底消失，13 个包的第一层内容物（0 字节的 国考资料.txt）还互相撞名成了
+         * (1)…(6)。用户的原话就是"这不就导致了文件夹混乱了吗，你应该在各自的子文件夹里面操作"。
+         *
+         * ⛔ 这一档从此**不再"多个包共用一层"**：`SharesDestinationWithOtherPackages` 恒为 false，
+         * 管线里"共用根"那两条特例（让开已存在目录、其余物按包名分层）在这条路上自然不再生效。
+         */
+        bool folderImportIntoCustomRoot =
+            useSelectedFolderName && selectionKind == SourceSelectionKind.Folder && !string.IsNullOrWhiteSpace(selectionRoot);
+
+        string relativeSubPath = folderImportIntoCustomRoot
+            ? ResolveRelativeSubPath(selectionRoot!, sourceArchivePath)
+            : string.Empty;
+
+        string packageName = useSelectedFolderName ? selectedFolderName : safeBaseName;
+
+        if (packageName.Length == 0)
         {
-            resolvedSource = string.IsNullOrWhiteSpace(sourcePath)
-                ? string.Empty
-                : SafePathHelper.GetFullPathSafe(sourcePath) ?? string.Empty;
-
-            string resolvedCandidate = SafePathHelper.GetFullPathSafe(candidate) ?? string.Empty;
-
-            return resolvedSource.Length > 0
-                   && resolvedCandidate.Length > 0
-                   && string.Equals(resolvedCandidate, resolvedSource, StringComparison.OrdinalIgnoreCase);
+            return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
         }
 
-        /// <summary>
-        /// 包基名：<c>222.rar</c> / <c>222.7z.001</c> / <c>222.part1.rar</c> / <c>222.z01</c> / <c>222.ra删除r</c>
-        /// 一律 → <c>222</c>。
-        ///
-        /// <para><b>两步各用自己那一份基名</b>（用户 2026-10-23 口径：两份基名判据要彻底分开）：
-        /// 给了整组基名（分卷组）⇒ 走**第二大步**那份 <see cref="FileNameHelper.SecondStepBaseName"/>；
-        /// 没有组名（单一压缩包）⇒ 走**第一大步**那份 <see cref="FileNameHelper.FirstStepBaseName"/>。
-        /// 两份的文本规则同为"第一个点之前"，但前提不同：前者不要求内容能给出身份，
-        /// 后者建立在"内容已证成单一完整包"之上。⛔ 别再按"剥标记档 / 包名档"那种旧档位分叉。</para>
-        /// <para>返回值已经清洗过，可以直接当文件夹名。</para>
-        /// </summary>
-        public static string ResolveArchiveBaseName(string? sourceArchivePath, string? volumeGroupBaseName = null)
+        string perArchiveDirectory = folderImportIntoCustomRoot
+            ? SafeCombine(
+                SafeCombine(root.DestinationRoot, selectedFolderName),
+                JoinSubPath(relativeSubPath, safeBaseName))
+            : SafeCombine(root.DestinationRoot, packageName);
+
+        if (perArchiveDirectory.Length == 0)
         {
-            return FileNameHelper.SanitizeFileName(ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName));
+            return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
         }
 
-        /// <summary>
-        /// "指定位置 + 添加文件夹"那一档落点那一层的名字：**用户选中的那个文件夹的名字**（已清洗）。
-        ///
-        /// <para>
-        /// 拿不到就返回空串（调用方回落到包基名）：这是"没记下这次导入的根"这种缺信息的情形，
-        /// 空串绝不能变成"一个叫空字符串的文件夹"或者"直接摊在根上"。
-        /// 名字清洗照样走既有的 <see cref="FileNameHelper.SanitizeFileName"/>（唯一实现，不新写一套）。
-        /// </para>
-        /// </summary>
-        public static string ResolveSelectedFolderName(SourceSelectionKind selectionKind, string? selectionRoot)
+        /*
+         * ⛔ 落点目录**不许等于源文件自己**（用户 2026-10-11 大测试实测：一整批因此不开工）。
+         *
+         * <para><b>现场</b>（run-8888，就地档）：源包是 `…\8888\bbb\bbb-L4.zip删除`，
+         * 包基名按名字尺子算出来**就是整个文件名** —— 那一档**刻意不归一**"粘在归档后缀上的垃圾"
+         * （`ArchiveBaseNameTests` 逐格钉着，且「半套分卷不许进可删的其余物」那道防数据丢失闸门
+         * 就靠"包基名不归一"这一格，⛔ 不许顺手统一）。于是落点 = `<源目录>\<文件名>` = **源文件自己** ⇒
+         * 工作区要建在"一个文件里面" ⇒ 批首逐字报
+         * `⛔ 目标位置不可用，工作区没法建，这一批没有开工（一个字节都没写）：目标目录建不出来（不可写）：…\bbb-L4.zip删除`。</para>
+         *
+         * <para><b>修法（只堵这一格，名字尺子一个字符都不改）</b>：算出来的目标目录与源包**同一条路径**时，
+         * 换用**归档基名**（既有唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>：
+         * `bbb-L4.zip删除` → `bbb-L4`）。判据只读事实（两条路径相等），⛔ 不看后缀、⛔ 不猜名字。</para>
+         */
+        if (IsSamePathAsSource(perArchiveDirectory, sourceArchivePath, out string resolvedSource))
         {
-            if (selectionKind != SourceSelectionKind.Folder || string.IsNullOrWhiteSpace(selectionRoot))
+            /*
+             * 第一步：换用**归档基名**（既有唯一出口 `FileNameHelper.GetArchiveBaseName`：
+             * `bbb-L4.zip删除` → `bbb-L4`、`222-L5.rarzz` → `222-L5`）。
+             */
+            string archiveBaseName = FileNameHelper.SanitizeFileName(
+                FileNameHelper.GetArchiveBaseName(resolvedSource));
+
+            string replaced = archiveBaseName.Length > 0
+                ? SafeCombine(root.DestinationRoot, archiveBaseName)
+                : string.Empty;
+
+            if (replaced.Length > 0 && !IsSamePathAsSource(replaced, resolvedSource, out _))
             {
-                return string.Empty;
+                safeBaseName = archiveBaseName;
+                packageName = archiveBaseName;
+                perArchiveDirectory = replaced;
             }
-
-            string full = SafePathHelper.GetFullPathSafe(selectionRoot);
-
-            if (string.IsNullOrWhiteSpace(full))
+            else
             {
-                return string.Empty;
-            }
+                /*
+                 * 第二步：源包**连后缀都没有**（run-13131313：顶层就叫 `111-L4`，是「删后缀」那一路伪装）——
+                 * 归档基名与原名逐字相同，怎么剥都还是源文件自己。这一档按本仓既有的
+                 * 「撞名绝不覆盖」规矩换名（唯一出口 `SafePathHelper.AutoRenameDirectoryPath`：
+                 * 目标名被占 ⇒ `111-L4` → `111-L4(1)`）。
+                 *
+                 * ⛔ 判据不是"随便挑一个没被占的名字"：能走到这里已经证明**那个位置上站着的就是源文件本身**
+                 * （上面那一句相等判据），所以 `(1)` 这个名字一定可用、也一定不动任何源文件。
+                 */
+                string unique = SafePathHelper.AutoRenameDirectoryPath(perArchiveDirectory);
 
-            // 用户可能选了 D:\ 这种盘根："末段名"取不到，这时同样回落到包基名。
-            return FileNameHelper.SanitizeFileName(FileNameHelper.GetFileName(full));
+                if (string.IsNullOrWhiteSpace(unique) || IsSamePathAsSource(unique, resolvedSource, out _))
+                {
+                    // 连自动改名都拿不到可用名 ⇒ 照旧如实失败，⛔ 不编一个目录名出来。
+                    return Failure(
+                        OutputPlacementError.InvalidDestinationPath,
+                        "目标目录与源包是同一条路径，拼不出可用的落点：" + perArchiveDirectory);
+                }
+
+                packageName = FileNameHelper.GetFileName(unique);
+                safeBaseName = packageName;
+                perArchiveDirectory = unique;
+            }
         }
 
-        /// <summary>清洗前的包基名（场景 B 的"包基名 == 目录名"要用原样名字比，不能拿清洗后的比）。</summary>
-        private static string ComputeRawBaseName(string? sourceArchivePath, string? volumeGroupBaseName)
-        {
-            string fileName = !string.IsNullOrWhiteSpace(volumeGroupBaseName)
-                ? FileNameHelper.GetFileName(volumeGroupBaseName)
-                : FileNameHelper.GetFileName(sourceArchivePath);
+        /*
+         * 场景 B「包名与所在目录同名就塌缩」**已退役**（用户 2026-09-27）：
+         *
+         * 他原话："不行，如果 111\222\ 这层文件夹里面还有很多的东西呢，这不就是将文件夹弄混乱了吗"。
+         * 旧规则只在"该目录里只有这一个**包**"时才塌缩，可那层目录里完全可能还有几十个小文件、
+         * 说明、别的素材 —— 一塌就全混在一起，而且"什么时候会塌"对用户不可预期。
+         * 现在**一律不塌缩**：<c>111\222\222.rar</c> → <c>111\222\222\内容物</c>，永远多这一层、永远不乱。
+         */
 
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                return string.Empty;
-            }
+        return new OutputPlacementResult
+        {
+            Success = true,
+            DestinationRoot = root.DestinationRoot,
+            DestinationDirectory = perArchiveDirectory,
+            ArchiveBaseName = safeBaseName,
+            PackageFolderName = safeBaseName,
+            RelativeSubPath = relativeSubPath,
+            UsesSelectedFolderName = useSelectedFolderName,
 
             /*
-             * 基名只有两份，按"这一步在做什么"选，⛔ 不按调用方各挑一档：
-             * 有整组基名 ⇒ **第二大步**（分卷）；没有 ⇒ **第一大步**（单一压缩包）。
+             * ⚠ 2026-09-27 起**恒为 false**：以前"指定位置 + 添加文件夹"是文件夹里每个包都落进
+             * 同一个 BBB\222\（那时这里给 true）；现在每包一层（BBB\222\<子路径>\<包基名>），
+             * 就没有"共用根"这回事了。字段保留是为了让管线那两处判据继续只读一个出口。
              */
-            return !string.IsNullOrWhiteSpace(volumeGroupBaseName)
-                ? FileNameHelper.SecondStepBaseName(fileName)
-                : FileNameHelper.FirstStepBaseName(fileName);
+            SharesDestinationWithOtherPackages = false,
+
+            Message = "落点：" + perArchiveDirectory
+        };
+    }
+
+    /// <summary>
+    /// 两条路径是不是同一个东西（都取全路径后按大小写不敏感比）。
+    ///
+    /// <para>判据只读事实：<see cref="SafePathHelper.GetFullPathSafe"/> 规范化之后逐字相同。
+    /// 任一侧取不到全路径 ⇒ 判"不是同一个"（⛔ 判不出就什么都不做，绝不据此改落点）。</para>
+    /// </summary>
+    private static bool IsSamePathAsSource(string candidate, string? sourcePath, out string resolvedSource)
+    {
+        resolvedSource = string.IsNullOrWhiteSpace(sourcePath)
+            ? string.Empty
+            : SafePathHelper.GetFullPathSafe(sourcePath) ?? string.Empty;
+
+        string resolvedCandidate = SafePathHelper.GetFullPathSafe(candidate) ?? string.Empty;
+
+        return resolvedSource.Length > 0
+               && resolvedCandidate.Length > 0
+               && string.Equals(resolvedCandidate, resolvedSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 包基名：<c>222.rar</c> / <c>222.7z.001</c> / <c>222.part1.rar</c> / <c>222.z01</c> / <c>222.ra删除r</c>
+    /// 一律 → <c>222</c>。
+    ///
+    /// <para><b>两步各用自己那一份基名</b>（用户 2026-10-23 口径：两份基名判据要彻底分开）：
+    /// 给了整组基名（分卷组）⇒ 走**第二大步**那份 <see cref="FileNameHelper.SecondStepBaseName"/>；
+    /// 没有组名（单一压缩包）⇒ 走**第一大步**那份 <see cref="FileNameHelper.FirstStepBaseName"/>。
+    /// 两份的文本规则同为"第一个点之前"，但前提不同：前者不要求内容能给出身份，
+    /// 后者建立在"内容已证成单一完整包"之上。⛔ 别再按"剥标记档 / 包名档"那种旧档位分叉。</para>
+    /// <para>返回值已经清洗过，可以直接当文件夹名。</para>
+    /// </summary>
+    public static string ResolveArchiveBaseName(string? sourceArchivePath, string? volumeGroupBaseName = null)
+    {
+        return FileNameHelper.SanitizeFileName(ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName));
+    }
+
+    /// <summary>
+    /// "指定位置 + 添加文件夹"那一档落点那一层的名字：**用户选中的那个文件夹的名字**（已清洗）。
+    ///
+    /// <para>
+    /// 拿不到就返回空串（调用方回落到包基名）：这是"没记下这次导入的根"这种缺信息的情形，
+    /// 空串绝不能变成"一个叫空字符串的文件夹"或者"直接摊在根上"。
+    /// 名字清洗照样走既有的 <see cref="FileNameHelper.SanitizeFileName"/>（唯一实现，不新写一套）。
+    /// </para>
+    /// </summary>
+    public static string ResolveSelectedFolderName(SourceSelectionKind selectionKind, string? selectionRoot)
+    {
+        if (selectionKind != SourceSelectionKind.Folder || string.IsNullOrWhiteSpace(selectionRoot))
+        {
+            return string.Empty;
         }
 
-        /// <summary>校验自定义根：空 / 相对路径 / 盘根本身 / 盘符不存在，四类都返回明确原因。</summary>
-        private static OutputPlacementResult ResolveCustomRoot(string? customRoot, Func<string, bool>? driveExists)
+        string full = SafePathHelper.GetFullPathSafe(selectionRoot);
+
+        if (string.IsNullOrWhiteSpace(full))
         {
-            if (string.IsNullOrWhiteSpace(customRoot))
-            {
-                return Failure(OutputPlacementError.EmptyCustomRoot, "自定义输出位置为空");
-            }
-
-            string trimmed = customRoot.Trim();
-
-            if (!Path.IsPathRooted(trimmed))
-            {
-                return Failure(
-                    OutputPlacementError.CustomRootNotAbsolute,
-                    $"自定义输出位置必须是绝对路径：{trimmed}");
-            }
-
-            string full = SafePathHelper.GetFullPathSafe(trimmed);
-            string pathRoot = SafeGetPathRoot(full);
-
-            if (pathRoot.Length == 0)
-            {
-                return Failure(
-                    OutputPlacementError.CustomRootNotAbsolute,
-                    $"自定义输出位置认不出盘符：{trimmed}");
-            }
-
-            // 顺序要紧：盘根本身的判据先于盘符存在性 —— 否则 "Z:\" 会被报成"盘符不存在"，
-            // 用户照着改还是错（真正的问题是"不许直接摊在盘根上"）。
-            if (IsPathRoot(full) || IsBareDriveSpec(trimmed, pathRoot))
-            {
-                return Failure(
-                    OutputPlacementError.CustomRootIsRootDirectory,
-                    $"自定义输出位置不能是盘根本身：{trimmed}");
-            }
-
-            Func<string, bool> probe = driveExists ?? DefaultDriveExists;
-
-            if (!probe(pathRoot))
-            {
-                return Failure(
-                    OutputPlacementError.CustomRootDriveMissing,
-                    $"自定义输出位置的盘符不存在：{pathRoot}");
-            }
-
-            return new OutputPlacementResult
-            {
-                Success = true,
-                DestinationRoot = full,
-                Message = "目标根：" + full
-            };
+            return string.Empty;
         }
 
-        /// <summary>默认探针：盘根目录在不在。只在这里碰一次环境，且失败一律当"不存在"。</summary>
-        private static bool DefaultDriveExists(string pathRoot)
+        // 用户可能选了 D:\ 这种盘根："末段名"取不到，这时同样回落到包基名。
+        return FileNameHelper.SanitizeFileName(FileNameHelper.GetFileName(full));
+    }
+
+    /// <summary>清洗前的包基名（场景 B 的"包基名 == 目录名"要用原样名字比，不能拿清洗后的比）。</summary>
+    private static string ComputeRawBaseName(string? sourceArchivePath, string? volumeGroupBaseName)
+    {
+        string fileName = !string.IsNullOrWhiteSpace(volumeGroupBaseName)
+            ? FileNameHelper.GetFileName(volumeGroupBaseName)
+            : FileNameHelper.GetFileName(sourceArchivePath);
+
+        if (string.IsNullOrWhiteSpace(fileName))
         {
-            try
-            {
-                return !string.IsNullOrWhiteSpace(pathRoot) && Directory.Exists(pathRoot);
-            }
-            catch
-            {
-                return false;
-            }
+            return string.Empty;
         }
 
-        /// <summary>路径是不是盘根 / UNC 根的本身（<c>D:\</c>、<c>\\server\share</c>）。</summary>
-        private static bool IsPathRoot(string path)
+        /*
+         * 基名只有两份，按"这一步在做什么"选，⛔ 不按调用方各挑一档：
+         * 有整组基名 ⇒ **第二大步**（分卷）；没有 ⇒ **第一大步**（单一压缩包）。
+         */
+        return !string.IsNullOrWhiteSpace(volumeGroupBaseName)
+            ? FileNameHelper.SecondStepBaseName(fileName)
+            : FileNameHelper.FirstStepBaseName(fileName);
+    }
+
+    /// <summary>校验自定义根：空 / 相对路径 / 盘根本身 / 盘符不存在，四类都返回明确原因。</summary>
+    private static OutputPlacementResult ResolveCustomRoot(string? customRoot, Func<string, bool>? driveExists)
+    {
+        if (string.IsNullOrWhiteSpace(customRoot))
         {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return false;
-            }
-
-            string normalized = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string root = SafeGetPathRoot(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            return root.Length > 0 && string.Equals(normalized, root, StringComparison.OrdinalIgnoreCase);
+            return Failure(OutputPlacementError.EmptyCustomRoot, "自定义输出位置为空");
         }
 
-        /// <summary>
-        /// <c>D:</c> 这种"只有盘符"的写法：<see cref="Path.IsPathRooted"/> 认它，但它是**盘当前目录**，
-        /// 会随进程当前目录漂移 —— 当成"盘根本身"一样拒掉最安全。
-        /// </summary>
-        private static bool IsBareDriveSpec(string trimmed, string pathRoot)
+        string trimmed = customRoot.Trim();
+
+        if (!Path.IsPathRooted(trimmed))
         {
-            return trimmed.Length == 2
-                   && trimmed[1] == ':'
-                   && pathRoot.Length >= 2
-                   && char.ToUpperInvariant(trimmed[0]) == char.ToUpperInvariant(pathRoot[0]);
+            return Failure(
+                OutputPlacementError.CustomRootNotAbsolute,
+                $"自定义输出位置必须是绝对路径：{trimmed}");
         }
 
-        private static string SafeGetPathRoot(string path)
+        string full = SafePathHelper.GetFullPathSafe(trimmed);
+        string pathRoot = SafeGetPathRoot(full);
+
+        if (pathRoot.Length == 0)
         {
-            try
-            {
-                return Path.GetPathRoot(path) ?? string.Empty;
-            }
-            catch
+            return Failure(
+                OutputPlacementError.CustomRootNotAbsolute,
+                $"自定义输出位置认不出盘符：{trimmed}");
+        }
+
+        // 顺序要紧：盘根本身的判据先于盘符存在性 —— 否则 "Z:\" 会被报成"盘符不存在"，
+        // 用户照着改还是错（真正的问题是"不许直接摊在盘根上"）。
+        if (IsPathRoot(full) || IsBareDriveSpec(trimmed, pathRoot))
+        {
+            return Failure(
+                OutputPlacementError.CustomRootIsRootDirectory,
+                $"自定义输出位置不能是盘根本身：{trimmed}");
+        }
+
+        Func<string, bool> probe = driveExists ?? DefaultDriveExists;
+
+        if (!probe(pathRoot))
+        {
+            return Failure(
+                OutputPlacementError.CustomRootDriveMissing,
+                $"自定义输出位置的盘符不存在：{pathRoot}");
+        }
+
+        return new OutputPlacementResult
+        {
+            Success = true,
+            DestinationRoot = full,
+            Message = "目标根：" + full
+        };
+    }
+
+    /// <summary>默认探针：盘根目录在不在。只在这里碰一次环境，且失败一律当"不存在"。</summary>
+    private static bool DefaultDriveExists(string pathRoot)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(pathRoot) && Directory.Exists(pathRoot);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>路径是不是盘根 / UNC 根的本身（<c>D:\</c>、<c>\\server\share</c>）。</summary>
+    private static bool IsPathRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string normalized = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string root = SafeGetPathRoot(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return root.Length > 0 && string.Equals(normalized, root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// <c>D:</c> 这种"只有盘符"的写法：<see cref="Path.IsPathRooted"/> 认它，但它是**盘当前目录**，
+    /// 会随进程当前目录漂移 —— 当成"盘根本身"一样拒掉最安全。
+    /// </summary>
+    private static bool IsBareDriveSpec(string trimmed, string pathRoot)
+    {
+        return trimmed.Length == 2
+               && trimmed[1] == ':'
+               && pathRoot.Length >= 2
+               && char.ToUpperInvariant(trimmed[0]) == char.ToUpperInvariant(pathRoot[0]);
+    }
+
+    private static string SafeGetPathRoot(string path)
+    {
+        try
+        {
+            return Path.GetPathRoot(path) ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string SafeCombine(string directory, string name)
+    {
+        return SafePathHelper.Combine(directory, name);
+    }
+
+    /// <summary>
+    /// 从**选中的文件夹**到"这个包所在目录"的那一段相对子路径，逐段清洗后原样保留
+    /// （2026-09-27 用户指示方案 A，见 <see cref="OutputPlacementResult.RelativeSubPath"/>）。
+    ///
+    /// <para>拿不到 / 不在选中文件夹之下（相对路径以 <c>..</c> 开头）/ 是绝对路径时一律返回空串：
+    /// ⛔ 宁可少一层，也不拼出一个跑到用户没指定的地方的路径（不变量 4）。</para>
+    ///
+    /// <para>纯字符串运算，**不碰磁盘** —— 落点解析是纯函数（类注释里的设计约束①）。</para>
+    ///
+    /// <para>⚠ 形参刻意收 <c>string?</c>：调用点上的源包路径本来就是可空的（"还没指定文件"那一档），
+    /// 它在这一层内部已经按空串处理 —— 让调用方写 <c>!</c> 只是把警告挪个地方，不是真的安全。</para>
+    /// </summary>
+    private static string ResolveRelativeSubPath(string selectionRoot, string? sourceArchivePath)
+    {
+        try
+        {
+            string? packageDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
+
+            if (string.IsNullOrWhiteSpace(packageDirectory))
             {
                 return string.Empty;
             }
-        }
 
-        private static string SafeCombine(string directory, string name)
-        {
-            return SafePathHelper.Combine(directory, name);
-        }
+            string root = selectionRoot.Trim().TrimEnd('\\', '/');
+            string directory = packageDirectory.Trim().TrimEnd('\\', '/');
 
-        /// <summary>
-        /// 从**选中的文件夹**到"这个包所在目录"的那一段相对子路径，逐段清洗后原样保留
-        /// （2026-09-27 用户指示方案 A，见 <see cref="OutputPlacementResult.RelativeSubPath"/>）。
-        ///
-        /// <para>拿不到 / 不在选中文件夹之下（相对路径以 <c>..</c> 开头）/ 是绝对路径时一律返回空串：
-        /// ⛔ 宁可少一层，也不拼出一个跑到用户没指定的地方的路径（不变量 4）。</para>
-        ///
-        /// <para>纯字符串运算，**不碰磁盘** —— 落点解析是纯函数（类注释里的设计约束①）。</para>
-        ///
-        /// <para>⚠ 形参刻意收 <c>string?</c>：调用点上的源包路径本来就是可空的（"还没指定文件"那一档），
-        /// 它在这一层内部已经按空串处理 —— 让调用方写 <c>!</c> 只是把警告挪个地方，不是真的安全。</para>
-        /// </summary>
-        private static string ResolveRelativeSubPath(string selectionRoot, string? sourceArchivePath)
-        {
-            try
+            if (root.Length == 0 || directory.Length == 0)
             {
-                string? packageDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
-
-                if (string.IsNullOrWhiteSpace(packageDirectory))
-                {
-                    return string.Empty;
-                }
-
-                string root = selectionRoot.Trim().TrimEnd('\\', '/');
-                string directory = packageDirectory.Trim().TrimEnd('\\', '/');
-
-                if (root.Length == 0 || directory.Length == 0)
-                {
-                    return string.Empty;
-                }
-
-                string relative = Path.GetRelativePath(root, directory);
-
-                if (string.IsNullOrWhiteSpace(relative)
-                    || string.Equals(relative, ".", StringComparison.Ordinal)
-                    || Path.IsPathRooted(relative)
-                    || relative.StartsWith("..", StringComparison.Ordinal))
-                {
-                    return string.Empty;
-                }
-
-                var segments = new List<string>();
-
-                foreach (string segment in relative.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    string safe = FileNameHelper.SanitizeFileName(segment);
-
-                    if (safe.Length > 0)
-                    {
-                        segments.Add(safe);
-                    }
-                }
-
-                return string.Join("\\", segments);
-            }
-            catch
-            {
-                // 路径形状怪异（非法字符 / 太长）时按"包直接在选中文件夹里"处理。
                 return string.Empty;
             }
-        }
 
-        /// <summary>把"相对子路径"和最后一层（包基名）拼起来；子路径为空时就只有包基名。</summary>
-        private static string JoinSubPath(string relativeSubPath, string leaf)
-        {
-            return string.IsNullOrWhiteSpace(relativeSubPath) ? leaf : relativeSubPath + "\\" + leaf;
-        }
+            string relative = Path.GetRelativePath(root, directory);
 
-        private static OutputPlacementResult Failure(OutputPlacementError error, string message)
-        {
-            return new OutputPlacementResult
+            if (string.IsNullOrWhiteSpace(relative)
+                || string.Equals(relative, ".", StringComparison.Ordinal)
+                || Path.IsPathRooted(relative)
+                || relative.StartsWith("..", StringComparison.Ordinal))
             {
-                Success = false,
-                Error = error,
-                Message = message
-            };
+                return string.Empty;
+            }
+
+            var segments = new List<string>();
+
+            foreach (string segment in relative.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string safe = FileNameHelper.SanitizeFileName(segment);
+
+                if (safe.Length > 0)
+                {
+                    segments.Add(safe);
+                }
+            }
+
+            return string.Join("\\", segments);
         }
+        catch
+        {
+            // 路径形状怪异（非法字符 / 太长）时按"包直接在选中文件夹里"处理。
+            return string.Empty;
+        }
+    }
+
+    /// <summary>把"相对子路径"和最后一层（包基名）拼起来；子路径为空时就只有包基名。</summary>
+    private static string JoinSubPath(string relativeSubPath, string leaf)
+    {
+        return string.IsNullOrWhiteSpace(relativeSubPath) ? leaf : relativeSubPath + "\\" + leaf;
+    }
+
+    private static OutputPlacementResult Failure(OutputPlacementError error, string message)
+    {
+        return new OutputPlacementResult
+        {
+            Success = false,
+            Error = error,
+            Message = message
+        };
     }
 }

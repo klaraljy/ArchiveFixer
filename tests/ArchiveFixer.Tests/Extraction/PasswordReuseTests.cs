@@ -13,965 +13,964 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// 密码"成功一次就复用" + "按使用频率排序"的回归（用户 2026-09-24 第 14 条）。
+///
+/// <para>用户原话："如果测密码，<b>只要测到一个成功了就不要去再尝试了</b>，你现在每次都尝试，
+/// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍……
+/// 而且密码本里面的优先级差不多就是<b>使用次数的频繁程度</b>"。</para>
+///
+/// <para>五组判据：① 第 1 个包在第 5 个候选成功 → 第 2 个包**除空密码外只被问一次**（就是那条密码），
+/// 且日志写明"复用本批已成功的密码"；② 20 个同源包的总尝试次数从 O(N×5) 降到 O(N)；
+/// ③ 两个包密码不同时，第二个包仍然能试到它自己那条（复用只是提前，不是替换）；
+/// ④ 同层级按成功次数从多到少排（次数相同保持原顺序）；
+/// ⑤ 成功次数落盘 / 读回往返正确，且**旧版本文件（v1）读得进来**。</para>
+/// </summary>
+// 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+// 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+[Collection("ArchiveFixerGlobalState")]
+public sealed class PasswordReuseTests : IDisposable
 {
-    /// <summary>
-    /// 密码"成功一次就复用" + "按使用频率排序"的回归（用户 2026-09-24 第 14 条）。
-    ///
-    /// <para>用户原话："如果测密码，<b>只要测到一个成功了就不要去再尝试了</b>，你现在每次都尝试，
-    /// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍……
-    /// 而且密码本里面的优先级差不多就是<b>使用次数的频繁程度</b>"。</para>
-    ///
-    /// <para>五组判据：① 第 1 个包在第 5 个候选成功 → 第 2 个包**除空密码外只被问一次**（就是那条密码），
-    /// 且日志写明"复用本批已成功的密码"；② 20 个同源包的总尝试次数从 O(N×5) 降到 O(N)；
-    /// ③ 两个包密码不同时，第二个包仍然能试到它自己那条（复用只是提前，不是替换）；
-    /// ④ 同层级按成功次数从多到少排（次数相同保持原顺序）；
-    /// ⑤ 成功次数落盘 / 读回往返正确，且**旧版本文件（v1）读得进来**。</para>
-    /// </summary>
-    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
-    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
-    [Collection("ArchiveFixerGlobalState")]
-    public sealed class PasswordReuseTests : IDisposable
+    private readonly string _root;
+
+    public PasswordReuseTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerPasswordReuse", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public PasswordReuseTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerPasswordReuse", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
-        }
-
-        public void Dispose()
-        {
-            try
+            if (Directory.Exists(_root))
             {
-                if (Directory.Exists(_root))
-                {
-                    Directory.Delete(_root, recursive: true);
-                }
-            }
-            catch
-            {
-                // 临时目录清不掉不影响结论。
+                Directory.Delete(_root, recursive: true);
             }
         }
-
-        // ================================================================ ① 假引擎计数：第二个包只被问一次
-
-        /// <summary>
-        /// 第 1 个包在第 5 个候选上才成功；第 2 个包的**第一次尝试**就必须是那条密码（连空密码都不再有）。
-        ///
-        /// <para>⚠ 2026-09-26 第 45 条改了口径（原来钉的是"除空密码外只被问一次"）：本批已经有成功的密码时，
-        /// 空密码**根本不再进候选表** —— 加密包的空密码永远不可能对，先试它只是白跑一轮。
-        /// 用户真机上每个包都是"先空密码、再复用"，他原话："不就是在放屁吗，每次都是重新一轮密码检测"。</para>
-        /// </summary>
-        [Fact]
-        public async Task 第一包第五候选成功_第二包第一次尝试就是复用来的密码()
+        catch
         {
-            string password = "<示例密码5>";
-
-            Harness harness = CreateHarness("reuse-log", settings =>
-            {
-                settings.MaxPasswordAttemptsPerLayer = 10;
-                settings.TryEmptyPasswordFirst = true;
-            });
-
-            harness.Book.AddPassword("<示例密码1>");
-            harness.Book.AddPassword("<示例密码2>");
-            harness.Book.AddPassword("<示例密码3>");
-            harness.Book.AddPassword("<示例密码4>");
-            harness.Book.AddPassword(password);
-
-            ArchiveTask first = harness.AddTask("first.7z", password);
-            ArchiveTask second = harness.AddTask("second.7z", password);
-
-            await harness.RunAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, first.Status);
-            Assert.Equal(StatusText.ExtractSuccess, second.Status);
-
-            // 第 1 个包：空密码 + 4 条错密码 + 第 5 条 = 6 次（证明它确实在第 5 个候选上成功）。
-            Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
-
-            // 第 2 个包：**一次**，而且就是那条密码（空密码不再进来）。
-            List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
-
-            Assert.Single(secondAttempts);
-            Assert.Equal(password, secondAttempts[0]);
-
-            /*
-             * ⚠ 第 45 条起，"复用本批已成功的密码"这一行**在默认档里看不到**了 —— 它是任务细节，
-             * 而这个包**成功**了（"成功就丢"）。顺序本身由上面那个假引擎的尝试记录钉着（只有一次、就是那条密码）；
-             * "日志里看得见复用"这件事由**详细档**那条用例钉（Item45LogAndPasswordTests.真7z_密码复用…）。
-             * 这里只保留"绝不出现密码明文"这一条。
-             */
-            string[] secondLines = harness.LogTexts
-                .Where(line => line.Contains("second.7z", StringComparison.Ordinal))
-                .ToArray();
-
-            Assert.DoesNotContain(secondLines, line => line.Contains(password, StringComparison.Ordinal));
+            // 临时目录清不掉不影响结论。
         }
+    }
 
-        // ================================================================ ② 20 个同源包：O(N×5) → O(N)
+    // ================================================================ ① 假引擎计数：第二个包只被问一次
 
-        /// <summary>
-        /// 20 个同源包（都只认密码本里第 5 条密码）：**没有复用**时是 20×5 = 100 次候选尝试，
-        /// 复用之后是 20 次（每个包一次；空密码在 <c>TryEmptyPasswordFirst=false</c> 下不出现）。
-        ///
-        /// <para>这里数的是"候选尝试次数"（= 引擎被问到第几个候选），用真管线跑 20 个包太慢，
-        /// 所以用同一个候选组装实现 + 一个"只认那条密码"的判定器来数 —— 判据是**比例**，
-        /// 与用户那句"200 个包岂不是要尝试 1000 遍"是同一件事。</para>
-        /// </summary>
-        [Fact]
-        public void 二十个同源包_总尝试次数从乘k降到线性()
+    /// <summary>
+    /// 第 1 个包在第 5 个候选上才成功；第 2 个包的**第一次尝试**就必须是那条密码（连空密码都不再有）。
+    ///
+    /// <para>⚠ 2026-09-26 第 45 条改了口径（原来钉的是"除空密码外只被问一次"）：本批已经有成功的密码时，
+    /// 空密码**根本不再进候选表** —— 加密包的空密码永远不可能对，先试它只是白跑一轮。
+    /// 用户真机上每个包都是"先空密码、再复用"，他原话："不就是在放屁吗，每次都是重新一轮密码检测"。</para>
+    /// </summary>
+    [Fact]
+    public async Task 第一包第五候选成功_第二包第一次尝试就是复用来的密码()
+    {
+        string password = "<示例密码5>";
+
+        Harness harness = CreateHarness("reuse-log", settings =>
         {
-            const int packageCount = 20;
-            const int winningIndex = 4;      // 密码本里第 5 条（0 基的 4）
+            settings.MaxPasswordAttemptsPerLayer = 10;
+            settings.TryEmptyPasswordFirst = true;
+        });
 
-            string password = "<示例密码5>";
-            string[] book = { "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>", password };
+        harness.Book.AddPassword("<示例密码1>");
+        harness.Book.AddPassword("<示例密码2>");
+        harness.Book.AddPassword("<示例密码3>");
+        harness.Book.AddPassword("<示例密码4>");
+        harness.Book.AddPassword(password);
 
-            static PasswordService NewService(string[] passwords)
-            {
-                var service = new PasswordService();
+        ArchiveTask first = harness.AddTask("first.7z", password);
+        ArchiveTask second = harness.AddTask("second.7z", password);
 
-                foreach (string value in passwords)
-                {
-                    service.AddPassword(value);
-                }
+        await harness.RunAsync();
 
-                return service;
-            }
+        Assert.Equal(StatusText.ExtractSuccess, first.Status);
+        Assert.Equal(StatusText.ExtractSuccess, second.Status);
 
-            static int CountAttempts(PasswordService passwordService, string archiveName, string required)
-            {
-                var task = new ArchiveTask(Path.Combine(Path.GetTempPath(), archiveName));
+        // 第 1 个包：空密码 + 4 条错密码 + 第 5 条 = 6 次（证明它确实在第 5 个候选上成功）。
+        Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
 
-                List<PasswordItem> candidates = passwordService.GetPasswordCandidates(
-                    task,
-                    globalPassword: string.Empty,
-                    passwordList: passwordService.Passwords,
-                    tryEmptyFirst: false);
+        // 第 2 个包：**一次**，而且就是那条密码（空密码不再进来）。
+        List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
 
-                int attempts = 0;
+        Assert.Single(secondAttempts);
+        Assert.Equal(password, secondAttempts[0]);
 
-                foreach (PasswordItem candidate in candidates)
-                {
-                    attempts++;
+        /*
+         * ⚠ 第 45 条起，"复用本批已成功的密码"这一行**在默认档里看不到**了 —— 它是任务细节，
+         * 而这个包**成功**了（"成功就丢"）。顺序本身由上面那个假引擎的尝试记录钉着（只有一次、就是那条密码）；
+         * "日志里看得见复用"这件事由**详细档**那条用例钉（Item45LogAndPasswordTests.真7z_密码复用…）。
+         * 这里只保留"绝不出现密码明文"这一条。
+         */
+        string[] secondLines = harness.LogTexts
+            .Where(line => line.Contains("second.7z", StringComparison.Ordinal))
+            .ToArray();
 
-                    if (string.Equals(candidate.Value, required, StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-                }
+        Assert.DoesNotContain(secondLines, line => line.Contains(password, StringComparison.Ordinal));
+    }
 
-                return attempts;
-            }
+    // ================================================================ ② 20 个同源包：O(N×5) → O(N)
 
-            // 没有复用（一条都没成功过）：每个包都要从头数到第 5 条 → N × k。
-            var withoutReuseService = NewService(book);
-            int withoutReuse = 0;
+    /// <summary>
+    /// 20 个同源包（都只认密码本里第 5 条密码）：**没有复用**时是 20×5 = 100 次候选尝试，
+    /// 复用之后是 20 次（每个包一次；空密码在 <c>TryEmptyPasswordFirst=false</c> 下不出现）。
+    ///
+    /// <para>这里数的是"候选尝试次数"（= 引擎被问到第几个候选），用真管线跑 20 个包太慢，
+    /// 所以用同一个候选组装实现 + 一个"只认那条密码"的判定器来数 —— 判据是**比例**，
+    /// 与用户那句"200 个包岂不是要尝试 1000 遍"是同一件事。</para>
+    /// </summary>
+    [Fact]
+    public void 二十个同源包_总尝试次数从乘k降到线性()
+    {
+        const int packageCount = 20;
+        const int winningIndex = 4;      // 密码本里第 5 条（0 基的 4）
 
-            for (int i = 0; i < packageCount; i++)
-            {
-                withoutReuse += CountAttempts(withoutReuseService, $"p{i}.7z", password);
-            }
+        string password = "<示例密码5>";
+        string[] book = { "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>", password };
 
-            /*
-             * 有复用：第 1 个包照旧要数到第 5 条，从第 2 个包开始第一次就命中
-             * （真管线里"成功即记账"发生在每个包成功的那一刻，这里用同样的顺序模拟）。
-             */
-            var withReuseService = NewService(book);
-            int withReuse = 0;
-
-            for (int i = 0; i < packageCount; i++)
-            {
-                withReuse += CountAttempts(withReuseService, $"p{i}.7z", password);
-
-                withReuseService.RecordPasswordSuccess(
-                    Path.Combine(Path.GetTempPath(), $"p{i}.7z"),
-                    password);
-            }
-
-            Assert.Equal(packageCount * (winningIndex + 1), withoutReuse);     // 20 × 5 = 100
-            Assert.Equal(winningIndex + 1 + (packageCount - 1), withReuse);    // 5 + 19 = 24
-
-            // 判据是**比例**：从 O(N×k) 降到 O(N+k-1)，也就是 k=5 时不足原来的四分之一。
-            Assert.True(
-                withReuse * (winningIndex + 1) < withoutReuse * 2,
-                $"复用后总次数应当是线性的：实测 {withReuse} 次 vs 未复用 {withoutReuse} 次");
-        }
-
-        // ================================================================ ③ 不同密码的包仍然能试到自己的那条
-
-        /// <summary>
-        /// 第 1 个包用 A 成功、第 2 个包需要 B：复用只是把 A 排到前面，
-        /// ⛔ 绝不允许"因为复用过了就只试 A" —— B 必须还在候选链里，而且真的能试到。
-        /// </summary>
-        [Fact]
-        public void 不同密码的包_复用之后仍然能试到它自己那条()
+        static PasswordService NewService(string[] passwords)
         {
             var service = new PasswordService();
-            service.AddPassword("<示例密码A>");
-            service.AddPassword("<示例密码B>");
 
-            var winning = new ArchiveTask(Path.Combine(Path.GetTempPath(), "first.7z"));
-            service.RecordPasswordSuccess(winning.CurrentPath, "<示例密码A>");
+            foreach (string value in passwords)
+            {
+                service.AddPassword(value);
+            }
 
-            var other = new ArchiveTask(Path.Combine(Path.GetTempPath(), "second.7z"));
+            return service;
+        }
 
-            List<PasswordItem> candidates = service.GetPasswordCandidates(
-                other,
+        static int CountAttempts(PasswordService passwordService, string archiveName, string required)
+        {
+            var task = new ArchiveTask(Path.Combine(Path.GetTempPath(), archiveName));
+
+            List<PasswordItem> candidates = passwordService.GetPasswordCandidates(
+                task,
                 globalPassword: string.Empty,
-                passwordList: service.Passwords,
+                passwordList: passwordService.Passwords,
                 tryEmptyFirst: false);
 
-            // 复用项在最前（A），但 B 一条都没少。
-            Assert.Equal("<示例密码A>", candidates[0].Value);
-            Assert.Contains(candidates, candidate => candidate.Value == "<示例密码B>");
+            int attempts = 0;
 
-            // 模拟"第二个包要 B"：按顺序试，必须在候选链里找到 B。
-            int index = candidates.FindIndex(candidate => candidate.Value == "<示例密码B>");
+            foreach (PasswordItem candidate in candidates)
+            {
+                attempts++;
 
-            Assert.True(index >= 0, "复用的密码链里丢了 B：那就变成'只试 A'了");
+                if (string.Equals(candidate.Value, required, StringComparison.Ordinal))
+                {
+                    break;
+                }
+            }
+
+            return attempts;
         }
 
-        [Fact]
-        public async Task 端到端_两个包密码不同_第二个包仍然解开()
+        // 没有复用（一条都没成功过）：每个包都要从头数到第 5 条 → N × k。
+        var withoutReuseService = NewService(book);
+        int withoutReuse = 0;
+
+        for (int i = 0; i < packageCount; i++)
         {
-            Harness harness = CreateHarness("reuse-different");
-
-            harness.Book.AddPassword("<示例密码A>");
-            harness.Book.AddPassword("<示例密码B>");
-
-            ArchiveTask first = harness.AddTask("first.7z", "<示例密码A>");
-            ArchiveTask second = harness.AddTask("second.7z", "<示例密码B>");
-
-            await harness.RunAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, first.Status);
-            Assert.Equal(StatusText.ExtractSuccess, second.Status);
-
-            // 第二个包先被问 A（复用），失败之后照旧试到 B —— 一次都不能少。
-            List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
-
-            Assert.Contains("<示例密码A>", secondAttempts);
-            Assert.Contains("<示例密码B>", secondAttempts);
+            withoutReuse += CountAttempts(withoutReuseService, $"p{i}.7z", password);
         }
 
-        // ================================================================ ④ 顺序：严格按④页列表
+        /*
+         * 有复用：第 1 个包照旧要数到第 5 条，从第 2 个包开始第一次就命中
+         * （真管线里"成功即记账"发生在每个包成功的那一刻，这里用同样的顺序模拟）。
+         */
+        var withReuseService = NewService(book);
+        int withReuse = 0;
 
-        /// <summary>
-        /// 特定解压的候选：**本次导入内**按本批成功次数排；下一批（<see cref="PasswordService.BeginBatch"/>）
-        /// 立即回到④页列表顺序，历史次数（<see cref="PasswordService.GetSuccessCount"/>）不许跨批重排。
-        /// </summary>
-        [Fact]
-        public void 特定解压_同一次导入内按本批次数排_下一批回列表()
+        for (int i = 0; i < packageCount; i++)
         {
-            Harness harness = CreateHarness("specific-password-order");
+            withReuse += CountAttempts(withReuseService, $"p{i}.7z", password);
 
-            harness.Book.AddPassword("<示例密码1>");
-            harness.Book.AddPassword("<示例密码2>");
-            harness.Book.AddPassword("<示例密码3>");
-
-            /*
-             * 先制造**跨批次历史次数**：p1 历史最多，但本批一次都没成功。
-             * 本批内 p2 成功 2 次、p3 成功 1 次 ⇒ 本批顺序必须是 p2、p3、p1；
-             * 若误用历史次数，会排成 p1、p2、p3（红检就靠这一点）。
-             */
-            harness.Book.RecordPasswordSuccess("old-a.7z", "<示例密码1>");
-            harness.Book.RecordPasswordSuccess("old-b.7z", "<示例密码1>");
-            harness.Book.RecordPasswordSuccess("old-c.7z", "<示例密码1>");
-
-            harness.Coordinator.BeginSpecificPasswordBatch();
-
-            harness.Book.RecordPasswordSuccess("a.7z", "<示例密码3>");
-            harness.Book.RecordPasswordSuccess("b.7z", "<示例密码2>");
-            harness.Book.RecordPasswordSuccess("c.7z", "<示例密码2>");
-            // p1 在本批也成功一次（本批次数 1，但历史次数 4）；按历史排会把它顶到最前。
-            harness.Book.RecordPasswordSuccess("d.7z", "<示例密码1>");
-
-            string?[] first = harness.Coordinator.SpecificExtractionPasswords.ToArray();
-
-            Assert.Equal(
-                new string?[] { null, string.Empty, "<示例密码2>", "<示例密码3>", "<示例密码1>" },
-                first);
-
-            harness.Coordinator.BeginSpecificPasswordBatch();
-
-            string?[] second = harness.Coordinator.SpecificExtractionPasswords.ToArray();
-
-            Assert.Equal(
-                new string?[] { null, string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" },
-                second);
+            withReuseService.RecordPasswordSuccess(
+                Path.Combine(Path.GetTempPath(), $"p{i}.7z"),
+                password);
         }
 
-        /// <summary>
-        /// **跨任务一律严格按④页列表顺序**（用户 2026-10-04 口述，推翻了 2026-09-24 第 14 条那一半）：
-        ///
-        /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
-        /// 不同次文件一律严格按我列表顺序**」。</para>
-        ///
-        /// <para>造法：**从落盘的记忆里恢复成功次数**（新服务 + <c>LoadRememberedList</c>），
-        /// 再收一批（<c>BeginBatch</c>）—— 于是"本批已成功"那一档为空，
-        /// 验的就是纯粹的**跨任务顺序**：历史成功次数再高，也不许把列表里的位置换掉。</para>
-        ///
-        /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里列表那一层改回
-        /// <c>OrderBySuccessCount</c> ⇒ 本用例当场红（顺序会变成 7 次→3 次→1 次→0 次）。</para>
-        /// </summary>
-        [Fact]
-        public void 候选排序_严格按列表顺序_历史成功次数不许改顺序()
-        {
-            string dataRoot = Path.Combine(_root, "ordering");
-            Directory.CreateDirectory(dataRoot);
+        Assert.Equal(packageCount * (winningIndex + 1), withoutReuse);     // 20 × 5 = 100
+        Assert.Equal(winningIndex + 1 + (packageCount - 1), withReuse);    // 5 + 19 = 24
 
-            var snapshot = new PasswordListSnapshot();
+        // 判据是**比例**：从 O(N×k) 降到 O(N+k-1)，也就是 k=5 时不足原来的四分之一。
+        Assert.True(
+            withReuse * (winningIndex + 1) < withoutReuse * 2,
+            $"复用后总次数应当是线性的：实测 {withReuse} 次 vs 未复用 {withoutReuse} 次");
+    }
 
-            snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码1>", Source = "ManualList" });
-            snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码2>", Source = "ManualList" });
-            snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码3>", Source = "ManualList" });
-            snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码4>", Source = "ManualList" });
+    // ================================================================ ③ 不同密码的包仍然能试到自己的那条
 
-            snapshot.SuccessCounts["<示例密码3>"] = 3;
-            snapshot.SuccessCounts["<示例密码2>"] = 1;
-            snapshot.SuccessCounts["<示例密码1>"] = 7;
-            // <示例密码4> 一次都没成功过 → 0。
+    /// <summary>
+    /// 第 1 个包用 A 成功、第 2 个包需要 B：复用只是把 A 排到前面，
+    /// ⛔ 绝不允许"因为复用过了就只试 A" —— B 必须还在候选链里，而且真的能试到。
+    /// </summary>
+    [Fact]
+    public void 不同密码的包_复用之后仍然能试到它自己那条()
+    {
+        var service = new PasswordService();
+        service.AddPassword("<示例密码A>");
+        service.AddPassword("<示例密码B>");
 
-            Assert.True(new PasswordListStore { DataRootDirectory = dataRoot }.Save(snapshot).Success);
+        var winning = new ArchiveTask(Path.Combine(Path.GetTempPath(), "first.7z"));
+        service.RecordPasswordSuccess(winning.CurrentPath, "<示例密码A>");
 
-            var service = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
+        var other = new ArchiveTask(Path.Combine(Path.GetTempPath(), "second.7z"));
 
-            Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
-            Assert.Empty(service.BatchVerifiedPasswords);
+        List<PasswordItem> candidates = service.GetPasswordCandidates(
+            other,
+            globalPassword: string.Empty,
+            passwordList: service.Passwords,
+            tryEmptyFirst: false);
 
-            // 本批开工（与协调器批首同一个出口）。
-            service.BeginBatch();
+        // 复用项在最前（A），但 B 一条都没少。
+        Assert.Equal("<示例密码A>", candidates[0].Value);
+        Assert.Contains(candidates, candidate => candidate.Value == "<示例密码B>");
 
-            List<PasswordItem> candidates = service.GetPasswordCandidates(
-                new ArchiveTask(@"C:\whatever.7z"),
+        // 模拟"第二个包要 B"：按顺序试，必须在候选链里找到 B。
+        int index = candidates.FindIndex(candidate => candidate.Value == "<示例密码B>");
+
+        Assert.True(index >= 0, "复用的密码链里丢了 B：那就变成'只试 A'了");
+    }
+
+    [Fact]
+    public async Task 端到端_两个包密码不同_第二个包仍然解开()
+    {
+        Harness harness = CreateHarness("reuse-different");
+
+        harness.Book.AddPassword("<示例密码A>");
+        harness.Book.AddPassword("<示例密码B>");
+
+        ArchiveTask first = harness.AddTask("first.7z", "<示例密码A>");
+        ArchiveTask second = harness.AddTask("second.7z", "<示例密码B>");
+
+        await harness.RunAsync();
+
+        Assert.Equal(StatusText.ExtractSuccess, first.Status);
+        Assert.Equal(StatusText.ExtractSuccess, second.Status);
+
+        // 第二个包先被问 A（复用），失败之后照旧试到 B —— 一次都不能少。
+        List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
+
+        Assert.Contains("<示例密码A>", secondAttempts);
+        Assert.Contains("<示例密码B>", secondAttempts);
+    }
+
+    // ================================================================ ④ 顺序：严格按④页列表
+
+    /// <summary>
+    /// 特定解压的候选：**本次导入内**按本批成功次数排；下一批（<see cref="PasswordService.BeginBatch"/>）
+    /// 立即回到④页列表顺序，历史次数（<see cref="PasswordService.GetSuccessCount"/>）不许跨批重排。
+    /// </summary>
+    [Fact]
+    public void 特定解压_同一次导入内按本批次数排_下一批回列表()
+    {
+        Harness harness = CreateHarness("specific-password-order");
+
+        harness.Book.AddPassword("<示例密码1>");
+        harness.Book.AddPassword("<示例密码2>");
+        harness.Book.AddPassword("<示例密码3>");
+
+        /*
+         * 先制造**跨批次历史次数**：p1 历史最多，但本批一次都没成功。
+         * 本批内 p2 成功 2 次、p3 成功 1 次 ⇒ 本批顺序必须是 p2、p3、p1；
+         * 若误用历史次数，会排成 p1、p2、p3（红检就靠这一点）。
+         */
+        harness.Book.RecordPasswordSuccess("old-a.7z", "<示例密码1>");
+        harness.Book.RecordPasswordSuccess("old-b.7z", "<示例密码1>");
+        harness.Book.RecordPasswordSuccess("old-c.7z", "<示例密码1>");
+
+        harness.Coordinator.BeginSpecificPasswordBatch();
+
+        harness.Book.RecordPasswordSuccess("a.7z", "<示例密码3>");
+        harness.Book.RecordPasswordSuccess("b.7z", "<示例密码2>");
+        harness.Book.RecordPasswordSuccess("c.7z", "<示例密码2>");
+        // p1 在本批也成功一次（本批次数 1，但历史次数 4）；按历史排会把它顶到最前。
+        harness.Book.RecordPasswordSuccess("d.7z", "<示例密码1>");
+
+        string?[] first = harness.Coordinator.SpecificExtractionPasswords.ToArray();
+
+        Assert.Equal(
+            new string?[] { null, string.Empty, "<示例密码2>", "<示例密码3>", "<示例密码1>" },
+            first);
+
+        harness.Coordinator.BeginSpecificPasswordBatch();
+
+        string?[] second = harness.Coordinator.SpecificExtractionPasswords.ToArray();
+
+        Assert.Equal(
+            new string?[] { null, string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" },
+            second);
+    }
+
+    /// <summary>
+    /// **跨任务一律严格按④页列表顺序**（用户 2026-10-04 口述，推翻了 2026-09-24 第 14 条那一半）：
+    ///
+    /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+    /// 不同次文件一律严格按我列表顺序**」。</para>
+    ///
+    /// <para>造法：**从落盘的记忆里恢复成功次数**（新服务 + <c>LoadRememberedList</c>），
+    /// 再收一批（<c>BeginBatch</c>）—— 于是"本批已成功"那一档为空，
+    /// 验的就是纯粹的**跨任务顺序**：历史成功次数再高，也不许把列表里的位置换掉。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里列表那一层改回
+    /// <c>OrderBySuccessCount</c> ⇒ 本用例当场红（顺序会变成 7 次→3 次→1 次→0 次）。</para>
+    /// </summary>
+    [Fact]
+    public void 候选排序_严格按列表顺序_历史成功次数不许改顺序()
+    {
+        string dataRoot = Path.Combine(_root, "ordering");
+        Directory.CreateDirectory(dataRoot);
+
+        var snapshot = new PasswordListSnapshot();
+
+        snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码1>", Source = "ManualList" });
+        snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码2>", Source = "ManualList" });
+        snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码3>", Source = "ManualList" });
+        snapshot.Entries.Add(new PasswordListEntry { Value = "<示例密码4>", Source = "ManualList" });
+
+        snapshot.SuccessCounts["<示例密码3>"] = 3;
+        snapshot.SuccessCounts["<示例密码2>"] = 1;
+        snapshot.SuccessCounts["<示例密码1>"] = 7;
+        // <示例密码4> 一次都没成功过 → 0。
+
+        Assert.True(new PasswordListStore { DataRootDirectory = dataRoot }.Save(snapshot).Success);
+
+        var service = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
+        Assert.Empty(service.BatchVerifiedPasswords);
+
+        // 本批开工（与协调器批首同一个出口）。
+        service.BeginBatch();
+
+        List<PasswordItem> candidates = service.GetPasswordCandidates(
+            new ArchiveTask(@"C:\whatever.7z"),
+            globalPassword: string.Empty,
+            passwordList: service.Passwords,
+            tryEmptyFirst: true);
+
+        // 空密码仍在最前（这一档没被动过 —— 用户没点名反对"空密码先试一次"）。
+        Assert.Equal(string.Empty, candidates[0].Value);
+
+        // 列表那一层：**严格按列表顺序**（不是 7 次→3 次→1 次→0 次）。
+        List<string> listLevel = candidates
+            .Where(candidate => candidate.Source == "ImportedList")
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(
+            new[] { "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>" },
+            listLevel);
+
+        // 备注里的序号仍是用户在**列表里**看到的位置（现在它同时就是尝试顺序）。
+        Assert.Equal(
+            "密码列表第 3 项",
+            candidates.Single(candidate => candidate.Value == "<示例密码3>").Remark);
+
+        // 次数相同 → 保持原顺序。
+        var ties = new PasswordService();
+        ties.AddPassword("<示例密码甲>");
+        ties.AddPassword("<示例密码乙>");
+
+        List<string> tieOrder = ties
+            .GetPasswordCandidates(
+                new ArchiveTask(@"C:\z.7z"),
+                globalPassword: string.Empty,
+                passwordList: ties.Passwords,
+                tryEmptyFirst: false)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(new[] { "<示例密码甲>", "<示例密码乙>" }, tieOrder);
+    }
+
+    /// <summary>
+    /// **「同一次」= 同一次导入**（用户 2026-10-16 当面澄清逐字：「我说过同一次的解压可以按照频率次序
+    /// 来弄，但是不同批次的就是密码本里面的，**同一次就是指同一次导入的**」）。
+    ///
+    /// <para>本用例钉这一档的**顺序**：同一次导入内，复用项按成功频率从多到少排；
+    /// 次数相同 ⇒ 稳定排序保持"首次成功的先后"。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里那个 <c>OrderByDescending</c> 撤掉 ⇒
+    /// 本条当场红（顺序退回"首次成功的先后"）。</para>
+    /// </summary>
+    [Fact]
+    public void 同一次导入内_复用项按成功频率从多到少排_次数相同保持先后()
+    {
+        var service = new PasswordService();
+
+        /*
+         * ⚠ 顺序刻意做成"**先**成功的那条**不**常见"：
+         * 这样"首次成功的先后"（少见密码 → 常见密码）与"按频率"（常见密码 2 次 → 少见密码 1 次）
+         * 给出**不同**答案 —— 否则两条口径重合，用例对排序**恒真**（第一版正是这么写的，
+         * 红检时照旧绿 ⇒ 当场逮住、改数据重来）。
+         */
+        service.RecordPasswordSuccess(@"C:\a.7z", "少见密码");
+        service.RecordPasswordSuccess(@"C:\b.7z", "常见密码");
+        service.RecordPasswordSuccess(@"C:\c.7z", "常见密码");
+
+        List<string> batchBlock = service
+            .GetPasswordCandidates(
+                new ArchiveTask(@"C:\next.7z"),
                 globalPassword: string.Empty,
                 passwordList: service.Passwords,
-                tryEmptyFirst: true);
+                tryEmptyFirst: false)
+            .Take(2)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
 
-            // 空密码仍在最前（这一档没被动过 —— 用户没点名反对"空密码先试一次"）。
-            Assert.Equal(string.Empty, candidates[0].Value);
+        Assert.Equal(new[] { "常见密码", "少见密码" }, batchBlock);
 
-            // 列表那一层：**严格按列表顺序**（不是 7 次→3 次→1 次→0 次）。
-            List<string> listLevel = candidates
-                .Where(candidate => candidate.Source == "ImportedList")
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
+        // 次数相同 ⇒ 稳定排序保持"首次成功的先后"。
+        var tieService = new PasswordService();
+        tieService.RecordPasswordSuccess(@"C:\x.7z", "先成功的");
+        tieService.RecordPasswordSuccess(@"C:\y.7z", "后成功的");
 
-            Assert.Equal(
-                new[] { "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>" },
-                listLevel);
+        List<string> tieOrder = tieService
+            .GetPasswordCandidates(
+                new ArchiveTask(@"C:\next2.7z"),
+                globalPassword: string.Empty,
+                passwordList: tieService.Passwords,
+                tryEmptyFirst: false)
+            .Take(2)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
 
-            // 备注里的序号仍是用户在**列表里**看到的位置（现在它同时就是尝试顺序）。
-            Assert.Equal(
-                "密码列表第 3 项",
-                candidates.Single(candidate => candidate.Value == "<示例密码3>").Remark);
+        Assert.Equal(new[] { "先成功的", "后成功的" }, tieOrder);
+    }
 
-            // 次数相同 → 保持原顺序。
-            var ties = new PasswordService();
-            ties.AddPassword("<示例密码甲>");
-            ties.AddPassword("<示例密码乙>");
+    /// <summary>
+    /// **后续轮次不许清"本次导入已成功的密码"**（用户 2026-10-16：「同一次就是指同一次导入的」）。
+    ///
+    /// <para>现场形状：一键处理一条导入跑好几轮（OneClickCoordinator 每轮都调
+    /// <c>StartExtractForOneClickAsync(..., continuationRound: round &gt; 1)</c>），
+    /// 而清空那一句原来**无条件**执行 ⇒ 第 1 轮学到的密码在第 2 轮被忘掉、
+    /// 后面每一个包又从头把整张表试一遍（正是用户第 45 条骂的那件事）。</para>
+    ///
+    /// <para><b>红检</b>：把那一句的 <c>if (!continueDeferredVolumeDeficits)</c> 撤掉 ⇒
+    /// 本条当场红（第二个包会把 6 个候选全试一遍）。</para>
+    /// </summary>
+    [Fact]
+    public async Task 一键处理的后续轮次不清复用清单_同一次导入跨轮照样复用()
+    {
+        string password = "<示例密码5>";
 
-            List<string> tieOrder = ties
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\z.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: ties.Passwords,
-                    tryEmptyFirst: false)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
-
-            Assert.Equal(new[] { "<示例密码甲>", "<示例密码乙>" }, tieOrder);
-        }
-
-        /// <summary>
-        /// **「同一次」= 同一次导入**（用户 2026-10-16 当面澄清逐字：「我说过同一次的解压可以按照频率次序
-        /// 来弄，但是不同批次的就是密码本里面的，**同一次就是指同一次导入的**」）。
-        ///
-        /// <para>本用例钉这一档的**顺序**：同一次导入内，复用项按成功频率从多到少排；
-        /// 次数相同 ⇒ 稳定排序保持"首次成功的先后"。</para>
-        ///
-        /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里那个 <c>OrderByDescending</c> 撤掉 ⇒
-        /// 本条当场红（顺序退回"首次成功的先后"）。</para>
-        /// </summary>
-        [Fact]
-        public void 同一次导入内_复用项按成功频率从多到少排_次数相同保持先后()
+        Harness harness = CreateHarness("reuse-across-rounds", settings =>
         {
-            var service = new PasswordService();
+            settings.MaxPasswordAttemptsPerLayer = 10;
+            settings.TryEmptyPasswordFirst = true;
+        });
 
-            /*
-             * ⚠ 顺序刻意做成"**先**成功的那条**不**常见"：
-             * 这样"首次成功的先后"（少见密码 → 常见密码）与"按频率"（常见密码 2 次 → 少见密码 1 次）
-             * 给出**不同**答案 —— 否则两条口径重合，用例对排序**恒真**（第一版正是这么写的，
-             * 红检时照旧绿 ⇒ 当场逮住、改数据重来）。
-             */
-            service.RecordPasswordSuccess(@"C:\a.7z", "少见密码");
-            service.RecordPasswordSuccess(@"C:\b.7z", "常见密码");
-            service.RecordPasswordSuccess(@"C:\c.7z", "常见密码");
+        harness.Book.AddPassword("<示例密码1>");
+        harness.Book.AddPassword("<示例密码2>");
+        harness.Book.AddPassword("<示例密码3>");
+        harness.Book.AddPassword("<示例密码4>");
+        harness.Book.AddPassword(password);
 
-            List<string> batchBlock = service
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\next.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: service.Passwords,
-                    tryEmptyFirst: false)
-                .Take(2)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
+        ArchiveTask first = harness.AddTask("first.7z", password);
 
-            Assert.Equal(new[] { "常见密码", "少见密码" }, batchBlock);
+        // 第 1 轮 = 这一次导入的开头。
+        await harness.Coordinator.StartExtractForOneClickAsync();
+        await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
 
-            // 次数相同 ⇒ 稳定排序保持"首次成功的先后"。
-            var tieService = new PasswordService();
-            tieService.RecordPasswordSuccess(@"C:\x.7z", "先成功的");
-            tieService.RecordPasswordSuccess(@"C:\y.7z", "后成功的");
+        Assert.Equal(StatusText.ExtractSuccess, first.Status);
+        Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
 
-            List<string> tieOrder = tieService
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\next2.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: tieService.Passwords,
-                    tryEmptyFirst: false)
-                .Take(2)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
+        // 后续轮次 = **同一次导入**：上一轮学到的密码必须还在。
+        first.IsSelected = false;
+        ArchiveTask second = harness.AddTask("second.7z", password);
 
-            Assert.Equal(new[] { "先成功的", "后成功的" }, tieOrder);
-        }
+        await harness.Coordinator.StartExtractForOneClickAsync(continuationRound: true);
+        await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
 
-        /// <summary>
-        /// **后续轮次不许清"本次导入已成功的密码"**（用户 2026-10-16：「同一次就是指同一次导入的」）。
-        ///
-        /// <para>现场形状：一键处理一条导入跑好几轮（OneClickCoordinator 每轮都调
-        /// <c>StartExtractForOneClickAsync(..., continuationRound: round &gt; 1)</c>），
-        /// 而清空那一句原来**无条件**执行 ⇒ 第 1 轮学到的密码在第 2 轮被忘掉、
-        /// 后面每一个包又从头把整张表试一遍（正是用户第 45 条骂的那件事）。</para>
-        ///
-        /// <para><b>红检</b>：把那一句的 <c>if (!continueDeferredVolumeDeficits)</c> 撤掉 ⇒
-        /// 本条当场红（第二个包会把 6 个候选全试一遍）。</para>
-        /// </summary>
-        [Fact]
-        public async Task 一键处理的后续轮次不清复用清单_同一次导入跨轮照样复用()
-        {
-            string password = "<示例密码5>";
+        Assert.Equal(StatusText.ExtractSuccess, second.Status);
 
-            Harness harness = CreateHarness("reuse-across-rounds", settings =>
-            {
-                settings.MaxPasswordAttemptsPerLayer = 10;
-                settings.TryEmptyPasswordFirst = true;
-            });
+        List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
 
-            harness.Book.AddPassword("<示例密码1>");
-            harness.Book.AddPassword("<示例密码2>");
-            harness.Book.AddPassword("<示例密码3>");
-            harness.Book.AddPassword("<示例密码4>");
-            harness.Book.AddPassword(password);
+        Assert.Single(secondAttempts);
+        Assert.Equal(password, secondAttempts[0]);
+    }
 
-            ArchiveTask first = harness.AddTask("first.7z", password);
+    /// <summary>
+    /// **"复用本批已成功的密码"只在本批内生效**（用户 2026-10-04）：
+    /// 同一批里第二个包能看到它（<c>BatchSuccess</c> 排在最前，省掉一轮轮询）；
+    /// 而 <c>BeginBatch</c>（下一批开工）之后**它就不见了**，顺序回到④页列表顺序。
+    ///
+    /// <para><b>红检</b>：把 <c>BeginBatch</c> 里那次 <c>Clear</c> 撤掉 ⇒ 本用例当场红
+    /// （下一批的候选里仍然带着上一批那条）。</para>
+    /// </summary>
+    [Fact]
+    public void 本批复用只在本批内_下一批回到列表顺序()
+    {
+        var service = new PasswordService();
 
-            // 第 1 轮 = 这一次导入的开头。
-            await harness.Coordinator.StartExtractForOneClickAsync();
-            await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
+        service.AddPassword("<示例密码1>");
+        service.AddPassword("<示例密码2>");
+        service.AddPassword("<示例密码3>");
 
-            Assert.Equal(StatusText.ExtractSuccess, first.Status);
-            Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
+        // 第一个包用第 3 条解开 ⇒ 记进"本批已成功"。
+        service.RecordPasswordSuccess(@"C:\a.7z", "<示例密码3>");
 
-            // 后续轮次 = **同一次导入**：上一轮学到的密码必须还在。
-            first.IsSelected = false;
-            ArchiveTask second = harness.AddTask("second.7z", password);
-
-            await harness.Coordinator.StartExtractForOneClickAsync(continuationRound: true);
-            await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
-
-            Assert.Equal(StatusText.ExtractSuccess, second.Status);
-
-            List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
-
-            Assert.Single(secondAttempts);
-            Assert.Equal(password, secondAttempts[0]);
-        }
-
-        /// <summary>
-        /// **"复用本批已成功的密码"只在本批内生效**（用户 2026-10-04）：
-        /// 同一批里第二个包能看到它（<c>BatchSuccess</c> 排在最前，省掉一轮轮询）；
-        /// 而 <c>BeginBatch</c>（下一批开工）之后**它就不见了**，顺序回到④页列表顺序。
-        ///
-        /// <para><b>红检</b>：把 <c>BeginBatch</c> 里那次 <c>Clear</c> 撤掉 ⇒ 本用例当场红
-        /// （下一批的候选里仍然带着上一批那条）。</para>
-        /// </summary>
-        [Fact]
-        public void 本批复用只在本批内_下一批回到列表顺序()
-        {
-            var service = new PasswordService();
-
-            service.AddPassword("<示例密码1>");
-            service.AddPassword("<示例密码2>");
-            service.AddPassword("<示例密码3>");
-
-            // 第一个包用第 3 条解开 ⇒ 记进"本批已成功"。
-            service.RecordPasswordSuccess(@"C:\a.7z", "<示例密码3>");
-
-            List<string> sameBatch = service
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\b.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: service.Passwords,
-                    tryEmptyFirst: true)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
-
-            // 同一批：复用那条排在最前（空密码不再进候选）。
-            Assert.Equal("<示例密码3>", sameBatch[0]);
-
-            // 下一批开工：复用清单清空 ⇒ 回到④页列表顺序。
-            service.BeginBatch();
-
-            Assert.Empty(service.BatchVerifiedPasswords);
-
-            List<string> nextBatch = service
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\c.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: service.Passwords,
-                    tryEmptyFirst: true)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
-
-            Assert.Equal(new[] { string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" }, nextBatch);
-        }
-
-        /// <summary>
-        /// 复用项的位置：**候选表第一条**，而且那时**空密码根本不在表里**。
-        ///
-        /// <para>⚠ 2026-09-26 第 45 条改了位置（原来钉的是"紧跟空密码之后"，那是在**还没有已知密码**的
-        /// 前提下定的）：用户原话"我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次
-        /// 已成功的密码，不就是在放屁吗，每次都是重新一轮密码检测" —— 有已知密码时，加密包的空密码
-        /// 永远不可能对，先试它纯粹白跑一轮。</para>
-        /// </summary>
-        [Fact]
-        public void 复用项位置_排在候选表第一条_且空密码不再进表()
-        {
-            var service = new PasswordService();
-            service.AddPassword("<示例密码X>");
-            service.AddPassword("<示例密码复用>");
-
-            service.RecordPasswordSuccess(@"C:\done.7z", "<示例密码复用>");
-
-            List<PasswordItem> candidates = service.GetPasswordCandidates(
-                new ArchiveTask(@"C:\next.7z"),
-                globalPassword: "<示例密码统一>",
-                passwordList: service.Passwords,
-                tryEmptyFirst: true);
-
-            Assert.Equal("BatchSuccess", candidates[0].Source);
-            Assert.Equal("<示例密码复用>", candidates[0].Value);
-
-            // ⛔ 空密码不在表里（这一条正是第 45 条要的）。
-            Assert.DoesNotContain(candidates, candidate => candidate.Source == "Empty");
-
-            // ⛔ 其余候选一条都不许少（复用只是提前）。
-            Assert.Contains(candidates, candidate => candidate.Value == "<示例密码X>");
-            Assert.Contains(candidates, candidate => candidate.Value == "<示例密码统一>");
-        }
-
-        // ================================================================ ⑤ 落盘 / 读回 / 旧版本兼容
-
-        [Fact]
-        public void 成功次数随列表加密落盘_读回往返一致()
-        {
-            string dataRoot = Path.Combine(_root, "roundtrip");
-            Directory.CreateDirectory(dataRoot);
-
-            var first = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
-            first.AddPassword("<示例密码1>");
-            first.AddPassword("<示例密码2>");
-
-            first.RecordPasswordSuccess(@"C:\a.7z", "<示例密码1>");
-            first.RecordPasswordSuccess(@"C:\b.7z", "<示例密码1>");
-            first.RecordPasswordSuccess(@"C:\c.7z", "<示例密码2>");
-
-            Assert.True(File.Exists(first.ListStore.FilePath), "记忆文件应当已经写出来");
-
-            var reloaded = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, reloaded.LoadRememberedList());
-
-            Assert.Equal(2, reloaded.GetSuccessCount("<示例密码1>"));
-            Assert.Equal(1, reloaded.GetSuccessCount("<示例密码2>"));
-            Assert.Equal(0, reloaded.GetSuccessCount("<示例密码3>"));
-
-            // 重启后"按使用频率排序"照样成立。
-            List<string> order = reloaded
-                .GetPasswordCandidates(
-                    new ArchiveTask(@"C:\new.7z"),
-                    globalPassword: string.Empty,
-                    passwordList: reloaded.Passwords,
-                    tryEmptyFirst: false)
-                .Select(candidate => candidate.Value ?? string.Empty)
-                .ToList();
-
-            Assert.Equal(new[] { "<示例密码1>", "<示例密码2>" }, order);
-        }
-
-        /// <summary>
-        /// 旧版本写下的记忆文件（版本 1，**没有**成功次数这一项）必须照样读得进来：
-        /// 不报"格式不认识"、不丢条目，成功次数一律当 0（不猜）。
-        /// </summary>
-        [Fact]
-        public void 旧版本记忆文件_读得进来且次数为空()
-        {
-            string dataRoot = Path.Combine(_root, "legacy");
-            Directory.CreateDirectory(dataRoot);
-
-            var store = new PasswordListStore { DataRootDirectory = dataRoot };
-
-            // 先写一份"当前版本"的文件，证明这条路径本身是通的（否则下面的断言可能只是碰巧）。
-            var current = new PasswordListSnapshot();
-            current.Entries.Add(new PasswordListEntry { Value = "<示例密码1>", Source = "ManualList" });
-            current.SuccessCounts["<示例密码1>"] = 7;
-
-            Assert.True(store.Save(current).Success);
-
-            PasswordListLoadResult loaded = store.Load();
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, loaded.Status);
-            Assert.Equal(7, loaded.Snapshot.SuccessCounts["<示例密码1>"]);
-
-            // 版本号认的范围：1（旧）到 2（当前）；再老/再新一律"不是我们的格式"。
-            Assert.Equal(1, PasswordListStore.OldestSupportedVersion);
-            Assert.Equal(2, PasswordListStore.CurrentVersion);
-
-            /*
-             * 真的造一份 **v1 载荷**（旧版本写下的形状：没有 SuccessCounts 这一项）走一遍解析：
-             * 条目一个都不能丢，次数当 0（不猜）。载荷本身是加密落盘的，所以只能在这一层验。
-             */
-            byte[] versionOne = Encoding.UTF8.GetBytes(
-                "{\"Version\":1,\"Entries\":[{\"Value\":\"<示例密码2>\",\"Source\":\"ManualList\"," +
-                "\"Enabled\":true,\"Remark\":\"\"}],\"BookPaths\":[\"C:\\\\books\\\\a.txt\"],\"Tombstones\":[]}");
-
-            PasswordListSnapshot? legacy = PasswordListStore.TryParsePayload(versionOne, out string reason);
-
-            Assert.NotNull(legacy);
-            Assert.Equal(string.Empty, reason);
-            Assert.Single(legacy!.Entries);
-            Assert.Equal("<示例密码2>", legacy.Entries[0].Value);
-            Assert.Single(legacy.BookPaths);
-            Assert.Empty(legacy.SuccessCounts);
-
-            // 空表也要能往返（没有成功记录 = 一切按原顺序）。
-            var empty = new PasswordListSnapshot();
-            empty.Entries.Add(new PasswordListEntry { Value = "<示例密码2>", Source = "ManualList" });
-
-            Assert.True(store.Save(empty).Success);
-
-            PasswordListLoadResult reloaded = store.Load();
-
-            Assert.Equal(PasswordListLoadStatus.Loaded, reloaded.Status);
-            Assert.Single(reloaded.Snapshot.Entries);
-            Assert.Empty(reloaded.Snapshot.SuccessCounts);
-        }
-
-        [Fact]
-        public async Task 关掉记住密码列表_成功次数只留内存_一个字节都不写()
-        {
-            string dataRoot = Path.Combine(_root, "disabled");
-            Directory.CreateDirectory(dataRoot);
-
-            var service = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = false };
-
-            service.AddPassword("<示例密码1>");
-            service.RecordPasswordSuccess(@"C:\a.7z", "<示例密码1>");
-
-            Assert.Equal(1, service.GetSuccessCount("<示例密码1>"));
-            Assert.False(File.Exists(service.ListStore.FilePath), "关掉开关时记忆文件一个字节都不该有");
-
-            // 本次运行内复用照样生效（内存计数与开关无关）—— 第 45 条起它是**第一条**（空密码不再进表）。
-            List<PasswordItem> candidates = service.GetPasswordCandidates(
+        List<string> sameBatch = service
+            .GetPasswordCandidates(
                 new ArchiveTask(@"C:\b.7z"),
                 globalPassword: string.Empty,
                 passwordList: service.Passwords,
-                tryEmptyFirst: true);
+                tryEmptyFirst: true)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
 
-            Assert.Equal("<示例密码1>", candidates[0].Value);
-            Assert.Equal("BatchSuccess", candidates[0].Source);
+        // 同一批：复用那条排在最前（空密码不再进候选）。
+        Assert.Equal("<示例密码3>", sameBatch[0]);
 
-            await Task.CompletedTask;
+        // 下一批开工：复用清单清空 ⇒ 回到④页列表顺序。
+        service.BeginBatch();
+
+        Assert.Empty(service.BatchVerifiedPasswords);
+
+        List<string> nextBatch = service
+            .GetPasswordCandidates(
+                new ArchiveTask(@"C:\c.7z"),
+                globalPassword: string.Empty,
+                passwordList: service.Passwords,
+                tryEmptyFirst: true)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(new[] { string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" }, nextBatch);
+    }
+
+    /// <summary>
+    /// 复用项的位置：**候选表第一条**，而且那时**空密码根本不在表里**。
+    ///
+    /// <para>⚠ 2026-09-26 第 45 条改了位置（原来钉的是"紧跟空密码之后"，那是在**还没有已知密码**的
+    /// 前提下定的）：用户原话"我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次
+    /// 已成功的密码，不就是在放屁吗，每次都是重新一轮密码检测" —— 有已知密码时，加密包的空密码
+    /// 永远不可能对，先试它纯粹白跑一轮。</para>
+    /// </summary>
+    [Fact]
+    public void 复用项位置_排在候选表第一条_且空密码不再进表()
+    {
+        var service = new PasswordService();
+        service.AddPassword("<示例密码X>");
+        service.AddPassword("<示例密码复用>");
+
+        service.RecordPasswordSuccess(@"C:\done.7z", "<示例密码复用>");
+
+        List<PasswordItem> candidates = service.GetPasswordCandidates(
+            new ArchiveTask(@"C:\next.7z"),
+            globalPassword: "<示例密码统一>",
+            passwordList: service.Passwords,
+            tryEmptyFirst: true);
+
+        Assert.Equal("BatchSuccess", candidates[0].Source);
+        Assert.Equal("<示例密码复用>", candidates[0].Value);
+
+        // ⛔ 空密码不在表里（这一条正是第 45 条要的）。
+        Assert.DoesNotContain(candidates, candidate => candidate.Source == "Empty");
+
+        // ⛔ 其余候选一条都不许少（复用只是提前）。
+        Assert.Contains(candidates, candidate => candidate.Value == "<示例密码X>");
+        Assert.Contains(candidates, candidate => candidate.Value == "<示例密码统一>");
+    }
+
+    // ================================================================ ⑤ 落盘 / 读回 / 旧版本兼容
+
+    [Fact]
+    public void 成功次数随列表加密落盘_读回往返一致()
+    {
+        string dataRoot = Path.Combine(_root, "roundtrip");
+        Directory.CreateDirectory(dataRoot);
+
+        var first = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
+        first.AddPassword("<示例密码1>");
+        first.AddPassword("<示例密码2>");
+
+        first.RecordPasswordSuccess(@"C:\a.7z", "<示例密码1>");
+        first.RecordPasswordSuccess(@"C:\b.7z", "<示例密码1>");
+        first.RecordPasswordSuccess(@"C:\c.7z", "<示例密码2>");
+
+        Assert.True(File.Exists(first.ListStore.FilePath), "记忆文件应当已经写出来");
+
+        var reloaded = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = true };
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, reloaded.LoadRememberedList());
+
+        Assert.Equal(2, reloaded.GetSuccessCount("<示例密码1>"));
+        Assert.Equal(1, reloaded.GetSuccessCount("<示例密码2>"));
+        Assert.Equal(0, reloaded.GetSuccessCount("<示例密码3>"));
+
+        // 重启后"按使用频率排序"照样成立。
+        List<string> order = reloaded
+            .GetPasswordCandidates(
+                new ArchiveTask(@"C:\new.7z"),
+                globalPassword: string.Empty,
+                passwordList: reloaded.Passwords,
+                tryEmptyFirst: false)
+            .Select(candidate => candidate.Value ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(new[] { "<示例密码1>", "<示例密码2>" }, order);
+    }
+
+    /// <summary>
+    /// 旧版本写下的记忆文件（版本 1，**没有**成功次数这一项）必须照样读得进来：
+    /// 不报"格式不认识"、不丢条目，成功次数一律当 0（不猜）。
+    /// </summary>
+    [Fact]
+    public void 旧版本记忆文件_读得进来且次数为空()
+    {
+        string dataRoot = Path.Combine(_root, "legacy");
+        Directory.CreateDirectory(dataRoot);
+
+        var store = new PasswordListStore { DataRootDirectory = dataRoot };
+
+        // 先写一份"当前版本"的文件，证明这条路径本身是通的（否则下面的断言可能只是碰巧）。
+        var current = new PasswordListSnapshot();
+        current.Entries.Add(new PasswordListEntry { Value = "<示例密码1>", Source = "ManualList" });
+        current.SuccessCounts["<示例密码1>"] = 7;
+
+        Assert.True(store.Save(current).Success);
+
+        PasswordListLoadResult loaded = store.Load();
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, loaded.Status);
+        Assert.Equal(7, loaded.Snapshot.SuccessCounts["<示例密码1>"]);
+
+        // 版本号认的范围：1（旧）到 2（当前）；再老/再新一律"不是我们的格式"。
+        Assert.Equal(1, PasswordListStore.OldestSupportedVersion);
+        Assert.Equal(2, PasswordListStore.CurrentVersion);
+
+        /*
+         * 真的造一份 **v1 载荷**（旧版本写下的形状：没有 SuccessCounts 这一项）走一遍解析：
+         * 条目一个都不能丢，次数当 0（不猜）。载荷本身是加密落盘的，所以只能在这一层验。
+         */
+        byte[] versionOne = Encoding.UTF8.GetBytes(
+            "{\"Version\":1,\"Entries\":[{\"Value\":\"<示例密码2>\",\"Source\":\"ManualList\"," +
+            "\"Enabled\":true,\"Remark\":\"\"}],\"BookPaths\":[\"C:\\\\books\\\\a.txt\"],\"Tombstones\":[]}");
+
+        PasswordListSnapshot? legacy = PasswordListStore.TryParsePayload(versionOne, out string reason);
+
+        Assert.NotNull(legacy);
+        Assert.Equal(string.Empty, reason);
+        Assert.Single(legacy!.Entries);
+        Assert.Equal("<示例密码2>", legacy.Entries[0].Value);
+        Assert.Single(legacy.BookPaths);
+        Assert.Empty(legacy.SuccessCounts);
+
+        // 空表也要能往返（没有成功记录 = 一切按原顺序）。
+        var empty = new PasswordListSnapshot();
+        empty.Entries.Add(new PasswordListEntry { Value = "<示例密码2>", Source = "ManualList" });
+
+        Assert.True(store.Save(empty).Success);
+
+        PasswordListLoadResult reloaded = store.Load();
+
+        Assert.Equal(PasswordListLoadStatus.Loaded, reloaded.Status);
+        Assert.Single(reloaded.Snapshot.Entries);
+        Assert.Empty(reloaded.Snapshot.SuccessCounts);
+    }
+
+    [Fact]
+    public async Task 关掉记住密码列表_成功次数只留内存_一个字节都不写()
+    {
+        string dataRoot = Path.Combine(_root, "disabled");
+        Directory.CreateDirectory(dataRoot);
+
+        var service = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = false };
+
+        service.AddPassword("<示例密码1>");
+        service.RecordPasswordSuccess(@"C:\a.7z", "<示例密码1>");
+
+        Assert.Equal(1, service.GetSuccessCount("<示例密码1>"));
+        Assert.False(File.Exists(service.ListStore.FilePath), "关掉开关时记忆文件一个字节都不该有");
+
+        // 本次运行内复用照样生效（内存计数与开关无关）—— 第 45 条起它是**第一条**（空密码不再进表）。
+        List<PasswordItem> candidates = service.GetPasswordCandidates(
+            new ArchiveTask(@"C:\b.7z"),
+            globalPassword: string.Empty,
+            passwordList: service.Passwords,
+            tryEmptyFirst: true);
+
+        Assert.Equal("<示例密码1>", candidates[0].Value);
+        Assert.Equal("BatchSuccess", candidates[0].Source);
+
+        await Task.CompletedTask;
+    }
+
+    // ================================================================ 装配
+
+    private sealed class Harness
+    {
+        public Harness(
+            MainViewModel vm,
+            ReuseFakeEngine engine,
+            ExtractionCoordinator coordinator,
+            PasswordService book,
+            LogService log,
+            string sourceRoot)
+        {
+            Vm = vm;
+            Engine = engine;
+            Coordinator = coordinator;
+            Book = book;
+            Log = log;
+            SourceRoot = sourceRoot;
         }
 
-        // ================================================================ 装配
+        public MainViewModel Vm { get; }
 
-        private sealed class Harness
+        public ReuseFakeEngine Engine { get; }
+
+        public ExtractionCoordinator Coordinator { get; }
+
+        public PasswordService Book { get; }
+
+        public LogService Log { get; }
+
+        public string SourceRoot { get; }
+
+        public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.DisplayText);
+
+        public ArchiveTask AddTask(string fileName, string requiredPassword)
         {
-            public Harness(
-                MainViewModel vm,
-                ReuseFakeEngine engine,
-                ExtractionCoordinator coordinator,
-                PasswordService book,
-                LogService log,
-                string sourceRoot)
+            Directory.CreateDirectory(SourceRoot);
+
+            string path = Path.Combine(SourceRoot, fileName);
+
+            File.WriteAllText(path, "not a real archive - the engine is faked in these tests", new UTF8Encoding(false));
+
+            Engine.RequiredPasswords[fileName] = requiredPassword;
+
+            var task = new ArchiveTask(path, Vm.Tasks.Count + 1)
             {
-                Vm = vm;
-                Engine = engine;
-                Coordinator = coordinator;
-                Book = book;
-                Log = log;
-                SourceRoot = sourceRoot;
-            }
-
-            public MainViewModel Vm { get; }
-
-            public ReuseFakeEngine Engine { get; }
-
-            public ExtractionCoordinator Coordinator { get; }
-
-            public PasswordService Book { get; }
-
-            public LogService Log { get; }
-
-            public string SourceRoot { get; }
-
-            public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.DisplayText);
-
-            public ArchiveTask AddTask(string fileName, string requiredPassword)
-            {
-                Directory.CreateDirectory(SourceRoot);
-
-                string path = Path.Combine(SourceRoot, fileName);
-
-                File.WriteAllText(path, "not a real archive - the engine is faked in these tests", new UTF8Encoding(false));
-
-                Engine.RequiredPasswords[fileName] = requiredPassword;
-
-                var task = new ArchiveTask(path, Vm.Tasks.Count + 1)
-                {
-                    IsArchive = true,
-                    DetectedFormat = "7Z",
-                    ExtensionStatus = StatusText.ExtensionNormal,
-                    Status = StatusText.Recognized,
-                    IsSelected = true
-                };
-
-                Vm.Tasks.Add(task);
-                return task;
-            }
-
-            public async Task RunAsync()
-            {
-                await Coordinator.StartExtractAsync();
-
-                await WaitUntilAsync(() => !Vm.IsBusy, TimeSpan.FromSeconds(120));
-            }
-        }
-
-        private Harness CreateHarness(string runName, Action<AppSettings>? configure = null)
-        {
-            string runRoot = Path.Combine(_root, runName);
-            string dataRoot = Path.Combine(runRoot, "data");
-            string outputRoot = Path.Combine(runRoot, "out");
-            string sourceRoot = Path.Combine(runRoot, "src");
-
-            Directory.CreateDirectory(dataRoot);
-            Directory.CreateDirectory(outputRoot);
-            Directory.CreateDirectory(sourceRoot);
-
-            var pathService = new PathService { DataRootDirectory = dataRoot };
-            var settingsService = new SettingsService(pathService);
-
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.CustomOutputDirectory = outputRoot;
-            settings.ExtractToOriginalDirectory = false;
-            settings.KeepArchiveNameFolder = true;
-            settings.AutoScanAfterDrop = false;
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.ConcurrencyOverride = 1;
-            settings.MaxPasswordAttemptsPerLayer = 10;
-
-            configure?.Invoke(settings);
-            settingsService.Save(settings);
-
-            var engine = new ReuseFakeEngine();
-            var passwordService = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = false };
-            var logService = new LogService(pathService);
-
-            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
-            string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
-
-            var vm = new MainViewModel(
-                new FileScanService(),
-                new ArchiveDetectService(),
-                new RenameService(),
-                engine,
-                passwordService,
-                logService,
-                settingsService,
-                pathService,
-                new TaskSummaryService(),
-                new ClipboardService(),
-                new DialogService());
-
-            RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
-            ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
-
-            var coordinator = new ExtractionCoordinator(
-                vm,
-                engine,
-                passwordService,
-                pathService,
-                new DialogService());
-
-            return new Harness(vm, engine, coordinator, passwordService, logService, sourceRoot);
-        }
-
-        private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
-        {
-            DateTime deadline = DateTime.UtcNow + timeout;
-
-            while (DateTime.UtcNow < deadline)
-            {
-                if (condition())
-                {
-                    return;
-                }
-
-                await Task.Delay(20);
-            }
-
-            Assert.Fail($"等待条件超时（{timeout.TotalSeconds:F0} 秒）");
-        }
-
-        /// <summary>
-        /// 假引擎：每个包只认自己那条密码，密码不对就报 <c>WrongPassword</c>（驱动候选循环往下试），
-        /// 对了一次就把内容写进引擎输出目录。每一次尝试都记下来（"被问了几次"的判据）。
-        /// </summary>
-        private sealed class ReuseFakeEngine : IArchiveEngine
-        {
-            private readonly List<(string Archive, string Password)> _attempts = new();
-
-            /// <summary>包名 → 它能解开的密码。</summary>
-            public Dictionary<string, string> RequiredPasswords { get; } = new(StringComparer.OrdinalIgnoreCase);
-
-            public string Id => "reuse-fake";
-
-            public string DisplayName => "密码复用用例假引擎";
-
-            public string Version => "1.0";
-
-            public bool IsAvailable => true;
-
-            public EngineCapabilities Capabilities { get; } = new()
-            {
-                CanProbe = true,
-                CanList = true,
-                CanTest = true,
-                CanExtract = true,
-                SupportsPassword = true
+                IsArchive = true,
+                DetectedFormat = "7Z",
+                ExtensionStatus = StatusText.ExtensionNormal,
+                Status = StatusText.Recognized,
+                IsSelected = true
             };
 
-            /// <summary>某个包被问过的密码序列（按先后）。</summary>
-            public List<string> AttemptsFor(string fileName)
+            Vm.Tasks.Add(task);
+            return task;
+        }
+
+        public async Task RunAsync()
+        {
+            await Coordinator.StartExtractAsync();
+
+            await WaitUntilAsync(() => !Vm.IsBusy, TimeSpan.FromSeconds(120));
+        }
+    }
+
+    private Harness CreateHarness(string runName, Action<AppSettings>? configure = null)
+    {
+        string runRoot = Path.Combine(_root, runName);
+        string dataRoot = Path.Combine(runRoot, "data");
+        string outputRoot = Path.Combine(runRoot, "out");
+        string sourceRoot = Path.Combine(runRoot, "src");
+
+        Directory.CreateDirectory(dataRoot);
+        Directory.CreateDirectory(outputRoot);
+        Directory.CreateDirectory(sourceRoot);
+
+        var pathService = new PathService { DataRootDirectory = dataRoot };
+        var settingsService = new SettingsService(pathService);
+
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.CustomOutputDirectory = outputRoot;
+        settings.ExtractToOriginalDirectory = false;
+        settings.KeepArchiveNameFolder = true;
+        settings.AutoScanAfterDrop = false;
+        settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+        settings.ConcurrencyOverride = 1;
+        settings.MaxPasswordAttemptsPerLayer = 10;
+
+        configure?.Invoke(settings);
+        settingsService.Save(settings);
+
+        var engine = new ReuseFakeEngine();
+        var passwordService = new PasswordService { DataRootDirectory = dataRoot, RememberPasswordList = false };
+        var logService = new LogService(pathService);
+
+        string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+        string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
+
+        var vm = new MainViewModel(
+            new FileScanService(),
+            new ArchiveDetectService(),
+            new RenameService(),
+            engine,
+            passwordService,
+            logService,
+            settingsService,
+            pathService,
+            new TaskSummaryService(),
+            new ClipboardService(),
+            new DialogService());
+
+        RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+        ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
+
+        var coordinator = new ExtractionCoordinator(
+            vm,
+            engine,
+            passwordService,
+            pathService,
+            new DialogService());
+
+        return new Harness(vm, engine, coordinator, passwordService, logService, sourceRoot);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
             {
-                lock (_attempts)
-                {
-                    return _attempts
-                        .Where(item => string.Equals(item.Archive, fileName, StringComparison.OrdinalIgnoreCase))
-                        .Select(item => item.Password)
-                        .ToList();
-                }
+                return;
             }
 
-            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            await Task.Delay(20);
+        }
+
+        Assert.Fail($"等待条件超时（{timeout.TotalSeconds:F0} 秒）");
+    }
+
+    /// <summary>
+    /// 假引擎：每个包只认自己那条密码，密码不对就报 <c>WrongPassword</c>（驱动候选循环往下试），
+    /// 对了一次就把内容写进引擎输出目录。每一次尝试都记下来（"被问了几次"的判据）。
+    /// </summary>
+    private sealed class ReuseFakeEngine : IArchiveEngine
+    {
+        private readonly List<(string Archive, string Password)> _attempts = new();
+
+        /// <summary>包名 → 它能解开的密码。</summary>
+        public Dictionary<string, string> RequiredPasswords { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public string Id => "reuse-fake";
+
+        public string DisplayName => "密码复用用例假引擎";
+
+        public string Version => "1.0";
+
+        public bool IsAvailable => true;
+
+        public EngineCapabilities Capabilities { get; } = new()
+        {
+            CanProbe = true,
+            CanList = true,
+            CanTest = true,
+            CanExtract = true,
+            SupportsPassword = true
+        };
+
+        /// <summary>某个包被问过的密码序列（按先后）。</summary>
+        public List<string> AttemptsFor(string fileName)
+        {
+            lock (_attempts)
             {
-                return Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+                return _attempts
+                    .Where(item => string.Equals(item.Archive, fileName, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => item.Password)
+                    .ToList();
             }
+        }
 
-            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+        public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+        }
+
+        public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+        {
+            string fileName = Path.GetFileName(request.ArchivePath ?? string.Empty);
+
+            // 列目录也认密码（真 7z 对 -mhe 的包就是这样）：密码不对时列出不来，
+            // 预检那一步会照旧失败，不影响候选循环。
+            if (!IsCorrect(fileName, request.Password))
             {
-                string fileName = Path.GetFileName(request.ArchivePath ?? string.Empty);
-
-                // 列目录也认密码（真 7z 对 -mhe 的包就是这样）：密码不对时列出不来，
-                // 预检那一步会照旧失败，不影响候选循环。
-                if (!IsCorrect(fileName, request.Password))
-                {
-                    return Task.FromResult(new ArchiveListResult
-                    {
-                        Success = false,
-                        Message = "密码错误",
-                        ErrorType = "WrongPassword"
-                    });
-                }
-
                 return Task.FromResult(new ArchiveListResult
                 {
-                    Success = true,
-                    FileCount = 1,
-                    TotalUncompressedSize = 1,
-                    Entries = new List<ArchiveEntry> { new() { Path = fileName + ".txt", Size = 1 } },
-                    EngineId = Id,
-                    EngineVersion = Version
+                    Success = false,
+                    Message = "密码错误",
+                    ErrorType = "WrongPassword"
                 });
             }
 
-            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            return Task.FromResult(new ArchiveListResult
             {
-                return Task.FromResult(Succeeded());
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = 1,
+                Entries = new List<ArchiveEntry> { new() { Path = fileName + ".txt", Size = 1 } },
+                EngineId = Id,
+                EngineVersion = Version
+            });
+        }
+
+        public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Succeeded());
+        }
+
+        public Task<ArchiveOperationResult> ExtractAsync(
+            ArchiveRequest request,
+            ExtractOptions options,
+            CancellationToken cancellationToken = default)
+        {
+            string fileName = Path.GetFileName(request.ArchivePath ?? string.Empty);
+            string password = request.Password ?? string.Empty;
+
+            lock (_attempts)
+            {
+                _attempts.Add((fileName, password));
             }
 
-            public Task<ArchiveOperationResult> ExtractAsync(
-                ArchiveRequest request,
-                ExtractOptions options,
-                CancellationToken cancellationToken = default)
+            if (!IsCorrect(fileName, password))
             {
-                string fileName = Path.GetFileName(request.ArchivePath ?? string.Empty);
-                string password = request.Password ?? string.Empty;
-
-                lock (_attempts)
+                return Task.FromResult(new ArchiveOperationResult
                 {
-                    _attempts.Add((fileName, password));
-                }
-
-                if (!IsCorrect(fileName, password))
-                {
-                    return Task.FromResult(new ArchiveOperationResult
-                    {
-                        Success = false,
-                        ExitCode = 2,
-                        Status = StatusText.WrongPassword,
-                        Message = "密码错误",
-                        DetectedErrorType = "WrongPassword"
-                    });
-                }
-
-                string output = request.OutputPath ?? string.Empty;
-
-                if (!string.IsNullOrWhiteSpace(output))
-                {
-                    Directory.CreateDirectory(output);
-                    File.WriteAllText(Path.Combine(output, fileName + ".txt"), "x");
-                }
-
-                return Task.FromResult(Succeeded());
+                    Success = false,
+                    ExitCode = 2,
+                    Status = StatusText.WrongPassword,
+                    Message = "密码错误",
+                    DetectedErrorType = "WrongPassword"
+                });
             }
 
-            private bool IsCorrect(string fileName, string? password)
+            string output = request.OutputPath ?? string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(output))
             {
-                return RequiredPasswords.TryGetValue(fileName, out string? required)
-                       && string.Equals(required, password ?? string.Empty, StringComparison.Ordinal);
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, fileName + ".txt"), "x");
             }
 
-            private static ArchiveOperationResult Succeeded()
+            return Task.FromResult(Succeeded());
+        }
+
+        private bool IsCorrect(string fileName, string? password)
+        {
+            return RequiredPasswords.TryGetValue(fileName, out string? required)
+                   && string.Equals(required, password ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        private static ArchiveOperationResult Succeeded()
+        {
+            return new ArchiveOperationResult
             {
-                return new ArchiveOperationResult
-                {
-                    Success = true,
-                    Status = StatusText.ExtractSuccess,
-                    Message = "解压成功",
-                    DetectedErrorType = "None"
-                };
-            }
+                Success = true,
+                Status = StatusText.ExtractSuccess,
+                Message = "解压成功",
+                DetectedErrorType = "None"
+            };
         }
     }
 }

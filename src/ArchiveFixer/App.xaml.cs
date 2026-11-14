@@ -6,458 +6,457 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 
-namespace ArchiveFixer
+namespace ArchiveFixer;
+
+
+public partial class App : Application
 {
+    private const string SingleInstanceMutexName = @"Local\ArchiveFixer.SingleInstance.v1";
+    private const string ShowWindowEventName = @"Local\ArchiveFixer.ShowWindow.v1";
 
-    public partial class App : Application
+    private Mutex? _singleInstanceMutex;
+    private EventWaitHandle? _showWindowEvent;
+    private RegisteredWaitHandle? _showWindowWait;
+
+    public static string AppBaseDirectory { get; private set; } = AppContext.BaseDirectory;
+
+    /// <summary>
+    /// 用户数据目录：固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>。
+    ///
+    /// <para>⛔ 不再跟程序安装目录走：升级、换安装位置、卸载都从同一个地方读设置与密码。
+    /// 旧位置不再迁移。</para>
+    /// </summary>
+    public static string DataRootDirectory => PathService.DefaultDataRootDirectory;
+
+    public static string SettingsFilePath =>
+        Path.Combine(DataRootDirectory, "appsettings.json");
+
+    /// <summary>
+    /// 正式日志目录：唯一来源是 <see cref="PathService.LogsDirectory"/>。
+    /// 生产环境跟程序目录走；程序目录不可写时才由它退回数据根，⛔ 这里不再另拼一套。
+    /// </summary>
+    public static string LogsDirectory => new PathService().LogsDirectory;
+
+    /// <summary>
+    /// 临时目录：唯一来源是 <see cref="PathService.TempDirectory"/>，理由同上。
+    /// </summary>
+    public static string TempDirectory => new PathService().TempDirectory;
+
+    /// <summary>
+    /// 老位置的工作区目录（<c>&lt;程序目录&gt;\data\work</c>）。
+    ///
+    /// <para>⚠ 2026-09-30 起**工作区默认更不在这儿**：它落在**这一单的目标目录里面**
+    /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，见 <c>Storage/WorkspaceRootResolver</c>）。
+    /// 这个属性现在只是一个**历史遗留的位置名字**（升级前那批残留可能还在那儿，
+    /// ③ 页的残留扫描仍然会扫它），**不在启动时创建**，
+    /// 也**不再是"拿不到位置时的回落点"** —— 拿不到目标目录一律报错停手。</para>
+    /// </summary>
+    public static string WorkDirectory =>
+        Path.Combine(DataRootDirectory, "work");
+
+    public static string ToolsDirectory =>
+        Path.Combine(AppBaseDirectory, "tools");
+
+    /// <summary>
+    /// 内置 7-Zip 目录。**只用来在启动时把目录建出来**，路径本身由
+    /// <see cref="ArchiveFixer.Engines.ToolLocator.BundledDirectory"/> 提供 —— 7z 路径只允许有一个来源。
+    ///
+    /// 历史：这里曾经还有 SevenZipExePath / SevenZipDllPath 两个属性，与 ToolLocator 里那份拼装重复
+    /// （当时都没有调用方）。一旦被谁顺手用起来，"到底用的哪个 7z"就再也说不清了，故删除。
+    /// </summary>
+    public static string SevenZipDirectory =>
+        ArchiveFixer.Engines.ToolLocator.Default.BundledDirectory;
+
+    /// <summary>
+    /// 启动参数里带的路径（用户 2026-09-28 第 3 条）。
+    ///
+    /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都会把文件路径当命令行参数传进来
+    /// （<c>ArchiveFixer.exe "H:\x\y.7z"</c>）。这里只做一件事：**原样收下**，
+    /// 由 <c>MainWindow</c> 在主界面加载后交给 <c>AddPathsAsync</c> 导入
+    /// （导入实现只有一份，与①页「添加文件」、拖进窗口完全同一条路）。</para>
+    ///
+    /// <para>启动时不在 WPF 生命周期里碰界面，所以这里不解析、不弹窗、不报错。</para>
+    /// </summary>
+    public static IReadOnlyList<string> StartupPaths { get; private set; } = Array.Empty<string>();
+
+    protected override void OnStartup(StartupEventArgs e)
     {
-        private const string SingleInstanceMutexName = @"Local\ArchiveFixer.SingleInstance.v1";
-        private const string ShowWindowEventName = @"Local\ArchiveFixer.ShowWindow.v1";
+        base.OnStartup(e);
 
-        private Mutex? _singleInstanceMutex;
-        private EventWaitHandle? _showWindowEvent;
-        private RegisteredWaitHandle? _showWindowWait;
-
-        public static string AppBaseDirectory { get; private set; } = AppContext.BaseDirectory;
-
-        /// <summary>
-        /// 用户数据目录：固定为 <c>%LOCALAPPDATA%\ArchiveFixer</c>。
-        ///
-        /// <para>⛔ 不再跟程序安装目录走：升级、换安装位置、卸载都从同一个地方读设置与密码。
-        /// 旧位置不再迁移。</para>
-        /// </summary>
-        public static string DataRootDirectory => PathService.DefaultDataRootDirectory;
-
-        public static string SettingsFilePath =>
-            Path.Combine(DataRootDirectory, "appsettings.json");
-
-        /// <summary>
-        /// 正式日志目录：唯一来源是 <see cref="PathService.LogsDirectory"/>。
-        /// 生产环境跟程序目录走；程序目录不可写时才由它退回数据根，⛔ 这里不再另拼一套。
-        /// </summary>
-        public static string LogsDirectory => new PathService().LogsDirectory;
-
-        /// <summary>
-        /// 临时目录：唯一来源是 <see cref="PathService.TempDirectory"/>，理由同上。
-        /// </summary>
-        public static string TempDirectory => new PathService().TempDirectory;
-
-        /// <summary>
-        /// 老位置的工作区目录（<c>&lt;程序目录&gt;\data\work</c>）。
-        ///
-        /// <para>⚠ 2026-09-30 起**工作区默认更不在这儿**：它落在**这一单的目标目录里面**
-        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，见 <c>Storage/WorkspaceRootResolver</c>）。
-        /// 这个属性现在只是一个**历史遗留的位置名字**（升级前那批残留可能还在那儿，
-        /// ③ 页的残留扫描仍然会扫它），**不在启动时创建**，
-        /// 也**不再是"拿不到位置时的回落点"** —— 拿不到目标目录一律报错停手。</para>
-        /// </summary>
-        public static string WorkDirectory =>
-            Path.Combine(DataRootDirectory, "work");
-
-        public static string ToolsDirectory =>
-            Path.Combine(AppBaseDirectory, "tools");
-
-        /// <summary>
-        /// 内置 7-Zip 目录。**只用来在启动时把目录建出来**，路径本身由
-        /// <see cref="ArchiveFixer.Engines.ToolLocator.BundledDirectory"/> 提供 —— 7z 路径只允许有一个来源。
-        ///
-        /// 历史：这里曾经还有 SevenZipExePath / SevenZipDllPath 两个属性，与 ToolLocator 里那份拼装重复
-        /// （当时都没有调用方）。一旦被谁顺手用起来，"到底用的哪个 7z"就再也说不清了，故删除。
-        /// </summary>
-        public static string SevenZipDirectory =>
-            ArchiveFixer.Engines.ToolLocator.Default.BundledDirectory;
-
-        /// <summary>
-        /// 启动参数里带的路径（用户 2026-09-28 第 3 条）。
-        ///
-        /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都会把文件路径当命令行参数传进来
-        /// （<c>ArchiveFixer.exe "H:\x\y.7z"</c>）。这里只做一件事：**原样收下**，
-        /// 由 <c>MainWindow</c> 在主界面加载后交给 <c>AddPathsAsync</c> 导入
-        /// （导入实现只有一份，与①页「添加文件」、拖进窗口完全同一条路）。</para>
-        ///
-        /// <para>启动时不在 WPF 生命周期里碰界面，所以这里不解析、不弹窗、不报错。</para>
-        /// </summary>
-        public static IReadOnlyList<string> StartupPaths { get; private set; } = Array.Empty<string>();
-
-        protected override void OnStartup(StartupEventArgs e)
+        DialogWindowFactories.AppDialog = request => new AppDialogWindow(request);
+        DialogWindowFactories.PackingConfirm = request => new PackingConfirmWindow(request)
         {
-            base.OnStartup(e);
+            Owner = Application.Current?.MainWindow
+        };
+        DialogWindowFactories.PasswordPicker = (title, passwords) => new PasswordPickerWindow(title, passwords)
+        {
+            Owner = Application.Current?.MainWindow
+        };
 
-            DialogWindowFactories.AppDialog = request => new AppDialogWindow(request);
-            DialogWindowFactories.PackingConfirm = request => new PackingConfirmWindow(request)
-            {
-                Owner = Application.Current?.MainWindow
-            };
-            DialogWindowFactories.PasswordPicker = (title, passwords) => new PasswordPickerWindow(title, passwords)
-            {
-                Owner = Application.Current?.MainWindow
-            };
+        // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-            // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
-            ShutdownMode = ShutdownMode.OnExplicitShutdown;
-
-            if (!TryAcquireSingleInstance())
-            {
-                // 第二次启动：事件已经在 TryAcquireSingleInstance 里发过了。
-                // 这里立刻结束进程，不再让 WPF 启动窗口 / 托盘 —— “最终只剩一个”不够，
-                // 启动过程中也不许短暂冒出第二个图标。
-                Environment.Exit(0);
-                return;
-            }
-
-            AppBaseDirectory = AppContext.BaseDirectory;
-
-            StartupPaths = (e?.Args ?? Array.Empty<string>())
-                .Where(a => !string.IsNullOrWhiteSpace(a))
-                .ToList();
-
-            /*
-             * 代码页编码（GBK / GB18030）在 .NET Core 上要先注册才拿得到 ——
-             * 不注册的话密码本那条"不是 UTF-8 就按 GB18030 重读"的回退会**静默降级**成 UTF-8，
-             * 中文 Windows 下记事本存的 GBK 密码本会读成乱码（用户只会看到"密码全都不对"）。
-             * 放在这里（进程启动的第一步、任何解析之前）只做一次，幂等。
-             */
-            Helpers.CodePageEncodingBootstrap.EnsureRegistered();
-
-            EnsureApplicationDirectories();
-            LegacyUserDataMigration.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
-
-            if (SystemParameters.HighContrast)
-            {
-                ArchiveFixer.Helpers.HighContrastPalette.Apply(Resources);
-            }
-            UserDataMaintenance.CleanupLegacyLocalLogs(DataRootDirectory, LogsDirectory);
-            UserDataMaintenance.CleanupEmptyLegacyLocalTemp(DataRootDirectory, TempDirectory);
-
-            /*
-             * 整机被拖死的问题：批量解压会连着读几百 MB、写几百 MB，再交给 7-Zip 解一层，
-             * 期间磁盘与 Defender 实时扫描同时被打满，桌面会卡到连任务栏都点不动。
-             *
-             * 降到 BelowNormal：本程序让出优先级给前台程序，用户还能正常操作电脑。
-             * 子进程（7z.exe）继承这个优先级，所以解压也不再和桌面抢资源。
-             * 代价是纯后台跑时慢一点，这个取舍对"批量工具"是对的 —— 而"觉得慢"的用户
-             * 现在有出口了：设置 → 常规与性能 → 低运行优先级（默认开），关掉就是常规优先级。
-             *
-             * ⚠ 触发时机：必须在读完配置之后。以前这里是硬编码（用户觉得慢时无从下手），
-             * 现在读 AppSettings.LowProcessPriority —— 所以这一段的**唯一来源是配置**，
-             * 不在这里再写一个"默认降级"的分支（两处都决定优先级就是 WinRAR `-ri` 被 `-ibck`
-             * 覆盖那个坑的翻版，见 Models/AppSettings.cs 的注释）。
-             */
-            ApplyConfiguredProcessPriority();
-
-            DispatcherUnhandledException += OnDispatcherUnhandledException;
-            AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
-            TaskSchedulerUnobservedExceptionHelper.Register();
+        if (!TryAcquireSingleInstance())
+        {
+            // 第二次启动：事件已经在 TryAcquireSingleInstance 里发过了。
+            // 这里立刻结束进程，不再让 WPF 启动窗口 / 托盘 —— “最终只剩一个”不够，
+            // 启动过程中也不许短暂冒出第二个图标。
+            Environment.Exit(0);
+            return;
         }
 
-        /// <summary>
-        /// 按设置里的"低运行优先级"决定本进程的优先级。
-        ///
-        /// <para>
-        /// 读配置失败时**按默认（低优先级）**办：读不到配置的场合（首次启动、配置文件损坏）
-        /// 正是"什么都还没设好"的时候，此时去和桌面抢资源只会让用户以为程序卡死了。
-        /// </para>
-        /// </summary>
-        private static void ApplyConfiguredProcessPriority()
+        AppBaseDirectory = AppContext.BaseDirectory;
+
+        StartupPaths = (e?.Args ?? Array.Empty<string>())
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .ToList();
+
+        /*
+         * 代码页编码（GBK / GB18030）在 .NET Core 上要先注册才拿得到 ——
+         * 不注册的话密码本那条"不是 UTF-8 就按 GB18030 重读"的回退会**静默降级**成 UTF-8，
+         * 中文 Windows 下记事本存的 GBK 密码本会读成乱码（用户只会看到"密码全都不对"）。
+         * 放在这里（进程启动的第一步、任何解析之前）只做一次，幂等。
+         */
+        Helpers.CodePageEncodingBootstrap.EnsureRegistered();
+
+        EnsureApplicationDirectories();
+        LegacyUserDataMigration.MigrateIfNeeded(AppBaseDirectory, DataRootDirectory);
+
+        if (SystemParameters.HighContrast)
         {
-            bool lowProcessPriority = true;
+            ArchiveFixer.Helpers.HighContrastPalette.Apply(Resources);
+        }
+        UserDataMaintenance.CleanupLegacyLocalLogs(DataRootDirectory, LogsDirectory);
+        UserDataMaintenance.CleanupEmptyLegacyLocalTemp(DataRootDirectory, TempDirectory);
 
-            try
-            {
-                // 同样不在 UI 线程上直接读盘：读不到/超时就用默认的低优先级（保守那一侧）。
-                lowProcessPriority = Helpers.SafeIo.Run(
-                    () => new ArchiveFixer.Services.SettingsService().Load().LowProcessPriority,
-                    true,
-                    Helpers.SafeIo.DefaultTimeout);
-            }
-            catch
-            {
-                // 读不到就用默认值：低优先级这个默认本身是保守的那一侧。
-            }
+        /*
+         * 整机被拖死的问题：批量解压会连着读几百 MB、写几百 MB，再交给 7-Zip 解一层，
+         * 期间磁盘与 Defender 实时扫描同时被打满，桌面会卡到连任务栏都点不动。
+         *
+         * 降到 BelowNormal：本程序让出优先级给前台程序，用户还能正常操作电脑。
+         * 子进程（7z.exe）继承这个优先级，所以解压也不再和桌面抢资源。
+         * 代价是纯后台跑时慢一点，这个取舍对"批量工具"是对的 —— 而"觉得慢"的用户
+         * 现在有出口了：设置 → 常规与性能 → 低运行优先级（默认开），关掉就是常规优先级。
+         *
+         * ⚠ 触发时机：必须在读完配置之后。以前这里是硬编码（用户觉得慢时无从下手），
+         * 现在读 AppSettings.LowProcessPriority —— 所以这一段的**唯一来源是配置**，
+         * 不在这里再写一个"默认降级"的分支（两处都决定优先级就是 WinRAR `-ri` 被 `-ibck`
+         * 覆盖那个坑的翻版，见 Models/AppSettings.cs 的注释）。
+         */
+        ApplyConfiguredProcessPriority();
 
-            ApplyProcessPriority(lowProcessPriority);
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
+        TaskSchedulerUnobservedExceptionHelper.Register();
+    }
+
+    /// <summary>
+    /// 按设置里的"低运行优先级"决定本进程的优先级。
+    ///
+    /// <para>
+    /// 读配置失败时**按默认（低优先级）**办：读不到配置的场合（首次启动、配置文件损坏）
+    /// 正是"什么都还没设好"的时候，此时去和桌面抢资源只会让用户以为程序卡死了。
+    /// </para>
+    /// </summary>
+    private static void ApplyConfiguredProcessPriority()
+    {
+        bool lowProcessPriority = true;
+
+        try
+        {
+            // 同样不在 UI 线程上直接读盘：读不到/超时就用默认的低优先级（保守那一侧）。
+            lowProcessPriority = Helpers.SafeIo.Run(
+                () => new ArchiveFixer.Services.SettingsService().Load().LowProcessPriority,
+                true,
+                Helpers.SafeIo.DefaultTimeout);
+        }
+        catch
+        {
+            // 读不到就用默认值：低优先级这个默认本身是保守的那一侧。
         }
 
-        /// <summary>
-        /// 设置项 → 进程优先级类的**唯一映射处**（纯函数，便于测试）。
-        /// </summary>
-        public static System.Diagnostics.ProcessPriorityClass ResolveProcessPriorityClass(bool lowProcessPriority) =>
-            lowProcessPriority
-                ? System.Diagnostics.ProcessPriorityClass.BelowNormal
-                : System.Diagnostics.ProcessPriorityClass.Normal;
+        ApplyProcessPriority(lowProcessPriority);
+    }
 
-        /// <summary>
-        /// 真正设置本进程优先级。"关掉低优先级"= 显式恢复 <c>Normal</c>（系统给新进程的默认值），
-        /// 而不是"什么都不做" —— 否则从低优先级启动器里拉起来的进程会继续低着，
-        /// 用户关掉开关却看不到任何变化。
-        ///
-        /// 失败不影响功能（最多是抢资源），返回 false 只用于日志与排障。
-        /// </summary>
-        public static bool ApplyProcessPriority(bool lowProcessPriority)
+    /// <summary>
+    /// 设置项 → 进程优先级类的**唯一映射处**（纯函数，便于测试）。
+    /// </summary>
+    public static System.Diagnostics.ProcessPriorityClass ResolveProcessPriorityClass(bool lowProcessPriority) =>
+        lowProcessPriority
+            ? System.Diagnostics.ProcessPriorityClass.BelowNormal
+            : System.Diagnostics.ProcessPriorityClass.Normal;
+
+    /// <summary>
+    /// 真正设置本进程优先级。"关掉低优先级"= 显式恢复 <c>Normal</c>（系统给新进程的默认值），
+    /// 而不是"什么都不做" —— 否则从低优先级启动器里拉起来的进程会继续低着，
+    /// 用户关掉开关却看不到任何变化。
+    ///
+    /// 失败不影响功能（最多是抢资源），返回 false 只用于日志与排障。
+    /// </summary>
+    public static bool ApplyProcessPriority(bool lowProcessPriority)
+    {
+        try
         {
-            try
-            {
-                System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
-                    ResolveProcessPriorityClass(lowProcessPriority);
+            System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                ResolveProcessPriorityClass(lowProcessPriority);
 
-                return true;
-            }
-            catch
+            return true;
+        }
+        catch
+        {
+            // 改优先级失败不影响功能，最多是抢资源。
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 只允许一个实例；第二次启动只发一个“把已有窗口叫出来”的信号。
+    /// 这样右下角永远最多一个托盘图标，也不会出现两个窗口各跑一份任务。
+    /// </summary>
+    private bool TryAcquireSingleInstance()
+    {
+        try
+        {
+            _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+
+            if (!createdNew)
             {
-                // 改优先级失败不影响功能，最多是抢资源。
+                try
+                {
+                    using EventWaitHandle existing = EventWaitHandle.OpenExisting(ShowWindowEventName);
+                    existing.Set();
+                }
+                catch
+                {
+                }
+
+                _singleInstanceMutex.Dispose();
+                _singleInstanceMutex = null;
                 return false;
             }
+
+            _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+            _showWindowWait = ThreadPool.RegisterWaitForSingleObject(
+                _showWindowEvent,
+                (_, timedOut) =>
+                {
+                    if (!timedOut)
+                    {
+                        BringExistingWindowToFront();
+                    }
+                },
+                state: null,
+                Timeout.Infinite,
+                executeOnlyOnce: false);
+
+            return true;
+        }
+        catch
+        {
+            // 命名内核对象被系统策略禁用时，宁可只开一个实例也不要崩；
+            // 这里返回 true 会让程序照常启动（只是失去单实例保护）。
+            return true;
+        }
+    }
+
+    private static void BringExistingWindowToFront()
+    {
+        System.Windows.Application? application = Current;
+        if (application == null)
+        {
+            return;
         }
 
-        /// <summary>
-        /// 只允许一个实例；第二次启动只发一个“把已有窗口叫出来”的信号。
-        /// 这样右下角永远最多一个托盘图标，也不会出现两个窗口各跑一份任务。
-        /// </summary>
-        private bool TryAcquireSingleInstance()
+        application.Dispatcher.BeginInvoke(() =>
         {
-            try
+            Window? window = application.MainWindow;
+
+            if (window is MainWindow mainWindow)
             {
-                _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+                mainWindow.RestoreFromTray();
+            }
+            else if (window != null)
+            {
+                window.Show();
+                window.Activate();
+            }
+        });
+    }
 
-                if (!createdNew)
+    protected override void OnExit(ExitEventArgs e)
+    {
+        try
+        {
+            _showWindowWait?.Unregister(null);
+            _showWindowWait = null;
+            _showWindowEvent?.Dispose();
+            _showWindowEvent = null;
+
+            if (_singleInstanceMutex != null)
+            {
+                try
                 {
-                    try
-                    {
-                        using EventWaitHandle existing = EventWaitHandle.OpenExisting(ShowWindowEventName);
-                        existing.Set();
-                    }
-                    catch
-                    {
-                    }
-
-                    _singleInstanceMutex.Dispose();
-                    _singleInstanceMutex = null;
-                    return false;
+                    _singleInstanceMutex.ReleaseMutex();
+                }
+                catch
+                {
                 }
 
-                _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
-                _showWindowWait = ThreadPool.RegisterWaitForSingleObject(
-                    _showWindowEvent,
-                    (_, timedOut) =>
-                    {
-                        if (!timedOut)
-                        {
-                            BringExistingWindowToFront();
-                        }
-                    },
-                    state: null,
-                    Timeout.Infinite,
-                    executeOnlyOnce: false);
-
-                return true;
-            }
-            catch
-            {
-                // 命名内核对象被系统策略禁用时，宁可只开一个实例也不要崩；
-                // 这里返回 true 会让程序照常启动（只是失去单实例保护）。
-                return true;
+                _singleInstanceMutex.Dispose();
+                _singleInstanceMutex = null;
             }
         }
-
-        private static void BringExistingWindowToFront()
+        catch
         {
-            System.Windows.Application? application = Current;
-            if (application == null)
+        }
+
+        base.OnExit(e);
+    }
+
+    private static void EnsureApplicationDirectories()
+    {
+        SafeCreateDirectory(DataRootDirectory);
+        SafeCreateDirectory(string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? LogsDirectory : LogService.Current.CurrentOperationDirectory);
+        SafeCreateDirectory(TempDirectory);
+        SafeCreateDirectory(ToolsDirectory);
+        SafeCreateDirectory(SevenZipDirectory);
+    }
+
+    private static void SafeCreateDirectory(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
             {
+                Directory.CreateDirectory(path);
+            }
+        }
+        catch
+        {
+            // 这里不弹窗，避免程序启动阶段因为目录权限问题直接崩溃。
+            // 后续 LogService / 归档引擎会给出更明确的错误。
+        }
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        try
+        {
+            WriteFatalErrorLog(e.Exception);
+            ShowExceptionDialog(e.Exception);
+        }
+        catch
+        {
+            // 防止异常处理本身再次异常。
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 界面未处理异常的统一出口：走**自绘**对话框（<see cref="DialogService.ShowException"/>），
+    /// 不再用系统 <c>MessageBox</c>。
+    ///
+    /// <para>
+    /// 为什么换掉 MessageBox（用户点名批评过）：灰底、字挤、正文不能复制，
+    /// 用户想把异常文本发回来时只能手抄；自绘对话框能选中复制，观感也与程序其它提示一致。
+    /// </para>
+    /// <para>
+    /// 三条兜底（异常处理器本身**绝不允许**再抛，否则一次异常会变成崩溃循环）：
+    /// ① 启动早期（主窗口还没显示）与正在关闭时**只写日志、不弹窗** ——
+    ///    这两个时刻没有可用的消息泵，弹窗要么没人点得掉、要么把关闭流程卡住；
+    /// ② 没有 UI 宿主时不动弹窗（<see cref="ArchiveFixer.Services.DialogService"/> 内部本来就会降级，
+    ///    这里再挡一道，免得在无界面环境里创建窗口）；
+    /// ③ 整段包在 try 里，任何失败都吞掉 —— 日志里已经有 FATAL 记录，用户不会丢信息。
+    /// </para>
+    /// <para>
+    /// 脱敏：异常文本可能夹带命令行（7z 的 <c>-p&lt;密码&gt;</c> 就在其中），
+    /// 所以对话框与日志两条路都过 <c>PasswordMasker.Sanitize</c>（AGENTS.md §6 第 5 条）。
+    /// </para>
+    /// </summary>
+    private static void ShowExceptionDialog(Exception? ex)
+    {
+        try
+        {
+            Application? app = Application.Current;
+
+            if (app?.Dispatcher == null
+                || app.Dispatcher.HasShutdownStarted
+                || app.Dispatcher.HasShutdownFinished)
+            {
+                // 启动早期 / 正在关闭：没有可靠的消息泵，只留日志。
                 return;
             }
 
-            application.Dispatcher.BeginInvoke(() =>
+            Window? main = app.MainWindow;
+
+            if (main == null || !main.IsVisible)
             {
-                Window? window = application.MainWindow;
-
-                if (window is MainWindow mainWindow)
-                {
-                    mainWindow.RestoreFromTray();
-                }
-                else if (window != null)
-                {
-                    window.Show();
-                    window.Activate();
-                }
-            });
-        }
-
-        protected override void OnExit(ExitEventArgs e)
-        {
-            try
-            {
-                _showWindowWait?.Unregister(null);
-                _showWindowWait = null;
-                _showWindowEvent?.Dispose();
-                _showWindowEvent = null;
-
-                if (_singleInstanceMutex != null)
-                {
-                    try
-                    {
-                        _singleInstanceMutex.ReleaseMutex();
-                    }
-                    catch
-                    {
-                    }
-
-                    _singleInstanceMutex.Dispose();
-                    _singleInstanceMutex = null;
-                }
-            }
-            catch
-            {
+                // 主窗口还没显示出来：此刻弹模态框会盖在启动画面上，用户只会更慌。
+                return;
             }
 
-            base.OnExit(e);
+            new ArchiveFixer.Services.DialogService().ShowException(
+                ex ?? new Exception("未知异常"),
+                "程序发生未处理的界面异常（已记录日志）");
         }
-
-        private static void EnsureApplicationDirectories()
+        catch
         {
-            SafeCreateDirectory(DataRootDirectory);
-            SafeCreateDirectory(string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory) ? LogsDirectory : LogService.Current.CurrentOperationDirectory);
-            SafeCreateDirectory(TempDirectory);
-            SafeCreateDirectory(ToolsDirectory);
-            SafeCreateDirectory(SevenZipDirectory);
+            // 见方法注释第 ③ 条：兜底就是"日志里已经有 FATAL"。
         }
+    }
 
-        private static void SafeCreateDirectory(string path)
+    private static void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        try
         {
-            try
+            if (e.ExceptionObject is Exception ex)
             {
-                if (!Directory.Exists(path))
-                {
-                    Directory.CreateDirectory(path);
-                }
-            }
-            catch
-            {
-                // 这里不弹窗，避免程序启动阶段因为目录权限问题直接崩溃。
-                // 后续 LogService / 归档引擎会给出更明确的错误。
+                WriteFatalErrorLog(ex);
             }
         }
-
-        private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+        catch
         {
-            try
-            {
-                WriteFatalErrorLog(e.Exception);
-                ShowExceptionDialog(e.Exception);
-            }
-            catch
-            {
-                // 防止异常处理本身再次异常。
-            }
+            // 忽略异常处理过程中的异常。
+        }
+    }
 
-            e.Handled = true;
+    private static void WriteFatalErrorLog(Exception ex)
+    {
+        try
+        {
+            LogService.Current?.Exception(
+                "未处理异常",
+                ex,
+                errorCode: DiagnosticCodes.Unhandled,
+                component: "App");
+        }
+        catch
+        {
+            // 诊断写失败不能阻止 fatal 文件。
         }
 
-        /// <summary>
-        /// 界面未处理异常的统一出口：走**自绘**对话框（<see cref="DialogService.ShowException"/>），
-        /// 不再用系统 <c>MessageBox</c>。
-        ///
-        /// <para>
-        /// 为什么换掉 MessageBox（用户点名批评过）：灰底、字挤、正文不能复制，
-        /// 用户想把异常文本发回来时只能手抄；自绘对话框能选中复制，观感也与程序其它提示一致。
-        /// </para>
-        /// <para>
-        /// 三条兜底（异常处理器本身**绝不允许**再抛，否则一次异常会变成崩溃循环）：
-        /// ① 启动早期（主窗口还没显示）与正在关闭时**只写日志、不弹窗** ——
-        ///    这两个时刻没有可用的消息泵，弹窗要么没人点得掉、要么把关闭流程卡住；
-        /// ② 没有 UI 宿主时不动弹窗（<see cref="ArchiveFixer.Services.DialogService"/> 内部本来就会降级，
-        ///    这里再挡一道，免得在无界面环境里创建窗口）；
-        /// ③ 整段包在 try 里，任何失败都吞掉 —— 日志里已经有 FATAL 记录，用户不会丢信息。
-        /// </para>
-        /// <para>
-        /// 脱敏：异常文本可能夹带命令行（7z 的 <c>-p&lt;密码&gt;</c> 就在其中），
-        /// 所以对话框与日志两条路都过 <c>PasswordMasker.Sanitize</c>（AGENTS.md §6 第 5 条）。
-        /// </para>
-        /// </summary>
-        private static void ShowExceptionDialog(Exception? ex)
+        try
         {
-            try
-            {
-                Application? app = Application.Current;
+            string fatalDirectory = string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory)
+                ? LogsDirectory
+                : LogService.Current.CurrentOperationDirectory;
 
-                if (app?.Dispatcher == null
-                    || app.Dispatcher.HasShutdownStarted
-                    || app.Dispatcher.HasShutdownFinished)
-                {
-                    // 启动早期 / 正在关闭：没有可靠的消息泵，只留日志。
-                    return;
-                }
+            SafeCreateDirectory(fatalDirectory);
 
-                Window? main = app.MainWindow;
+            string logFile = Path.Combine(
+                fatalDirectory,
+                $"fatal_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd}.log");
 
-                if (main == null || !main.IsVisible)
-                {
-                    // 主窗口还没显示出来：此刻弹模态框会盖在启动画面上，用户只会更慌。
-                    return;
-                }
+            string text =
+                $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [FATAL]\r\n" +
+                ArchiveFixer.Password.PasswordMasker.Sanitize(ex.ToString()) + "\r\n\r\n";
 
-                new ArchiveFixer.Services.DialogService().ShowException(
-                    ex ?? new Exception("未知异常"),
-                    "程序发生未处理的界面异常（已记录日志）");
-            }
-            catch
-            {
-                // 见方法注释第 ③ 条：兜底就是"日志里已经有 FATAL"。
-            }
+            File.AppendAllText(logFile, text);
         }
-
-        private static void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        catch
         {
-            try
-            {
-                if (e.ExceptionObject is Exception ex)
-                {
-                    WriteFatalErrorLog(ex);
-                }
-            }
-            catch
-            {
-                // 忽略异常处理过程中的异常。
-            }
-        }
-
-        private static void WriteFatalErrorLog(Exception ex)
-        {
-            try
-            {
-                LogService.Current?.Exception(
-                    "未处理异常",
-                    ex,
-                    errorCode: DiagnosticCodes.Unhandled,
-                    component: "App");
-            }
-            catch
-            {
-                // 诊断写失败不能阻止 fatal 文件。
-            }
-
-            try
-            {
-                string fatalDirectory = string.IsNullOrWhiteSpace(LogService.Current?.CurrentOperationDirectory)
-                    ? LogsDirectory
-                    : LogService.Current.CurrentOperationDirectory;
-
-                SafeCreateDirectory(fatalDirectory);
-
-                string logFile = Path.Combine(
-                    fatalDirectory,
-                    $"fatal_{ArchiveFixer.Helpers.Clock.Now:yyyyMMdd}.log");
-
-                string text =
-                    $"[{ArchiveFixer.Helpers.Clock.Now:yyyy-MM-dd HH:mm:ss}] [FATAL]\r\n" +
-                    ArchiveFixer.Password.PasswordMasker.Sanitize(ex.ToString()) + "\r\n\r\n";
-
-                File.AppendAllText(logFile, text);
-            }
-            catch
-            {
-                // 不能因为写 fatal 日志失败导致程序再次崩溃。
-            }
+            // 不能因为写 fatal 日志失败导致程序再次崩溃。
         }
     }
 }

@@ -4,26 +4,25 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public class SettingsSnapshotTests
 {
-    public class SettingsSnapshotTests
+    [Fact]
+    public void SnapshotDoesNotFollowWorkingCopyMutation()
     {
-        [Fact]
-        public void SnapshotDoesNotFollowWorkingCopyMutation()
-        {
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.UseSpecificExtraction = false;
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+        settings.UseSpecificExtraction = false;
 
-            SettingsSnapshot snapshot = SettingsSnapshot.Capture(settings);
+        SettingsSnapshot snapshot = SettingsSnapshot.Capture(settings);
 
-            settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
-            settings.UseSpecificExtraction = true;
+        settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
+        settings.UseSpecificExtraction = true;
 
-            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), snapshot.SourceHandling);
-            Assert.False(snapshot.UseSpecificExtraction);
-            Assert.True(snapshot.DiffersFrom(settings));
-        }
-
+        Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), snapshot.SourceHandling);
+        Assert.False(snapshot.UseSpecificExtraction);
+        Assert.True(snapshot.DiffersFrom(settings));
     }
+
 }

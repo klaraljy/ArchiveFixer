@@ -1,96 +1,95 @@
 using ArchiveFixer.Storage;
 using System;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+/// <summary>
+/// 普通挡位/特定解压共用的不可拆调度单位。
+/// 分卷组和特定 unit 都只占一个单位，不允许把内部卷拆到不同槽位。
+/// </summary>
+public sealed class ScheduledWorkUnit
 {
-    /// <summary>
-    /// 普通挡位/特定解压共用的不可拆调度单位。
-    /// 分卷组和特定 unit 都只占一个单位，不允许把内部卷拆到不同槽位。
-    /// </summary>
-    public sealed class ScheduledWorkUnit
+    private ScheduledWorkUnit(
+        object payload,
+        long sourceBytes,
+        int volumeCount,
+        bool isVolumeGroup,
+        double estimatedSeconds,
+        string deviceRoot)
     {
-        private ScheduledWorkUnit(
-            object payload,
-            long sourceBytes,
-            int volumeCount,
-            bool isVolumeGroup,
-            double estimatedSeconds,
-            string deviceRoot)
+        Payload = payload;
+        SourceBytes = sourceBytes;
+        DeviceRoot = deviceRoot ?? string.Empty;
+        VolumeCount = Math.Max(1, volumeCount);
+        IsVolumeGroup = isVolumeGroup;
+        EstimatedSeconds = Math.Max(1, estimatedSeconds);
+    }
+
+    public object Payload { get; }
+    public long SourceBytes { get; }
+    public string DeviceRoot { get; }
+    public int VolumeCount { get; }
+    public bool IsVolumeGroup { get; }
+    public double EstimatedSeconds { get; }
+
+    /// <summary>按最新历史吞吐重新估算；只修改 pending，不碰正在跑的任务。</summary>
+    public double RefreshEstimatedSeconds()
+    {
+        if (Payload is ScheduledExtractionItem item)
         {
-            Payload = payload;
-            SourceBytes = sourceBytes;
-            DeviceRoot = deviceRoot ?? string.Empty;
-            VolumeCount = Math.Max(1, volumeCount);
-            IsVolumeGroup = isVolumeGroup;
-            EstimatedSeconds = Math.Max(1, estimatedSeconds);
+            return TaskDurationEstimator.EstimateSeconds(
+                SourceBytes,
+                item.Task,
+                VolumeCount,
+                IsVolumeGroup);
         }
 
-        public object Payload { get; }
-        public long SourceBytes { get; }
-        public string DeviceRoot { get; }
-        public int VolumeCount { get; }
-        public bool IsVolumeGroup { get; }
-        public double EstimatedSeconds { get; }
-
-        /// <summary>按最新历史吞吐重新估算；只修改 pending，不碰正在跑的任务。</summary>
-        public double RefreshEstimatedSeconds()
+        if (Payload is SpecificBatchUnit unit)
         {
-            if (Payload is ScheduledExtractionItem item)
-            {
-                return TaskDurationEstimator.EstimateSeconds(
-                    SourceBytes,
-                    item.Task,
-                    VolumeCount,
-                    IsVolumeGroup);
-            }
-
-            if (Payload is SpecificBatchUnit unit)
-            {
-                return TaskDurationEstimator.EstimateSeconds(
-                    SourceBytes,
-                    unit.Entry,
-                    VolumeCount,
-                    IsVolumeGroup);
-            }
-
-            return EstimatedSeconds;
+            return TaskDurationEstimator.EstimateSeconds(
+                SourceBytes,
+                unit.Entry,
+                VolumeCount,
+                IsVolumeGroup);
         }
 
-        public T PayloadAs<T>() where T : class
-        {
-            return Payload as T ?? throw new InvalidOperationException("调度单位载荷类型不匹配。");
-        }
+        return EstimatedSeconds;
+    }
 
-        public static ScheduledWorkUnit FromPlanItem(ScheduledExtractionItem item, string deviceRoot = "")
-        {
-            return new ScheduledWorkUnit(
-                item,
+    public T PayloadAs<T>() where T : class
+    {
+        return Payload as T ?? throw new InvalidOperationException("调度单位载荷类型不匹配。");
+    }
+
+    public static ScheduledWorkUnit FromPlanItem(ScheduledExtractionItem item, string deviceRoot = "")
+    {
+        return new ScheduledWorkUnit(
+            item,
+            item.Estimate.SourceBytes,
+            item.Task.VolumeCount,
+            item.Task.IsVolumeGroup || item.Task.VolumeCount > 1,
+            TaskDurationEstimator.EstimateSeconds(
                 item.Estimate.SourceBytes,
+                item.Task,
                 item.Task.VolumeCount,
-                item.Task.IsVolumeGroup || item.Task.VolumeCount > 1,
-                TaskDurationEstimator.EstimateSeconds(
-                    item.Estimate.SourceBytes,
-                    item.Task,
-                    item.Task.VolumeCount,
-                    item.Task.IsVolumeGroup || item.Task.VolumeCount > 1),
-                deviceRoot);
-        }
+                item.Task.IsVolumeGroup || item.Task.VolumeCount > 1),
+            deviceRoot);
+    }
 
-        public static ScheduledWorkUnit FromSpecificUnit(SpecificBatchUnit unit, string deviceRoot = "")
-        {
-            int volumeCount = unit.Followers.Count + 1;
-            bool isGroup = unit.Followers.Count > 0;
-            return new ScheduledWorkUnit(
-                unit,
+    public static ScheduledWorkUnit FromSpecificUnit(SpecificBatchUnit unit, string deviceRoot = "")
+    {
+        int volumeCount = unit.Followers.Count + 1;
+        bool isGroup = unit.Followers.Count > 0;
+        return new ScheduledWorkUnit(
+            unit,
+            unit.SourceBytes,
+            volumeCount,
+            isGroup,
+            TaskDurationEstimator.EstimateSeconds(
                 unit.SourceBytes,
+                unit.Entry,
                 volumeCount,
-                isGroup,
-                TaskDurationEstimator.EstimateSeconds(
-                    unit.SourceBytes,
-                    unit.Entry,
-                    volumeCount,
-                    isGroup),
-                deviceRoot);
-        }
+                isGroup),
+            deviceRoot);
     }
 }

@@ -8,403 +8,402 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// 「删除操作」两档必须**当场看得懂、说得准**（用户 2026-09-25 第 32 条；2026-10-15 回收站档下线）。
+///
+/// <para><b>用户原话（他亲自定的形态）</b>：「首先分 1.源包操作，1_原来的位置不动，2_放入其余物当中，
+/// 2.删除操作，1_不动其余物，2_动，而且是彻底删除，直接节约空间
+/// （这个就可以字体变红了，就不用再弄其他的没用的注释了）」＋「当用户点击了彻底删除那个选项时
+/// 就会在下面出现一个提示的选项，而且不能消掉，用户选择了就一直放在那」。</para>
+///
+/// <para>这一组钉四件事：①设置层的默认值与两档归一化；②ViewModel 那两档与"红字提示可见性"；
+/// ③删除裁决的五道门槛里最关键的两条（失败 / 取消 → 一个字节都不删）；
+/// ④界面形态（③页两组单选 + 常驻提示；②页危险模式红区整块消失）。</para>
+/// </summary>
+[Collection("ArchiveFixerGlobalState")]
+public class DeleteOptionsClarityTests : IDisposable
 {
-    /// <summary>
-    /// 「删除操作」两档必须**当场看得懂、说得准**（用户 2026-09-25 第 32 条；2026-10-15 回收站档下线）。
-    ///
-    /// <para><b>用户原话（他亲自定的形态）</b>：「首先分 1.源包操作，1_原来的位置不动，2_放入其余物当中，
-    /// 2.删除操作，1_不动其余物，2_动，而且是彻底删除，直接节约空间
-    /// （这个就可以字体变红了，就不用再弄其他的没用的注释了）」＋「当用户点击了彻底删除那个选项时
-    /// 就会在下面出现一个提示的选项，而且不能消掉，用户选择了就一直放在那」。</para>
-    ///
-    /// <para>这一组钉四件事：①设置层的默认值与两档归一化；②ViewModel 那两档与"红字提示可见性"；
-    /// ③删除裁决的五道门槛里最关键的两条（失败 / 取消 → 一个字节都不删）；
-    /// ④界面形态（③页两组单选 + 常驻提示；②页危险模式红区整块消失）。</para>
-    /// </summary>
-    [Collection("ArchiveFixerGlobalState")]
-    public class DeleteOptionsClarityTests : IDisposable
+    private readonly string _root;
+
+    public DeleteOptionsClarityTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerDeleteClarity", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public DeleteOptionsClarityTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerDeleteClarity", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
-        }
-
-        public void Dispose()
-        {
-            try
+            if (Directory.Exists(_root))
             {
-                if (Directory.Exists(_root))
-                {
-                    Directory.Delete(_root, recursive: true);
-                }
-            }
-            catch
-            {
-                // 临时目录清不掉不影响结论。
+                Directory.Delete(_root, recursive: true);
             }
         }
-
-        // ================================================================ ① 设置层
-
-        /// <summary>默认档：源包 = 原来的位置不动；删除操作 = 不动其余物（用户原话里的那两个默认）。</summary>
-        [Fact]
-        public void 两个默认档_都不动()
+        catch
         {
-            AppSettings settings = AppSettings.CreateDefault();
-
-            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
-            Assert.Equal(RestHandlingModes.Keep, settings.RestHandlingAfterVerify);
+            // 临时目录清不掉不影响结论。
         }
+    }
 
-        /// <summary>
-        /// 两档都能落盘读回；认不出的值一律回落 Keep（保守方向：宁可不动，绝不误删）。
-        ///
-        /// <para>⚠ 2026-10-15：原来是三档（含「移入回收站」），回收站整条下线后只剩两档
-        /// （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」）——
-        /// 下面顺便钉住"老配置里那个 RecycleBin 值读回来**不许变成 Delete**"。</para>
-        /// </summary>
-        [Fact]
-        public void 删除操作两档_落盘读回与非法值归一化()
+    // ================================================================ ① 设置层
+
+    /// <summary>默认档：源包 = 原来的位置不动；删除操作 = 不动其余物（用户原话里的那两个默认）。</summary>
+    [Fact]
+    public void 两个默认档_都不动()
+    {
+        AppSettings settings = AppSettings.CreateDefault();
+
+        Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
+        Assert.Equal(RestHandlingModes.Keep, settings.RestHandlingAfterVerify);
+    }
+
+    /// <summary>
+    /// 两档都能落盘读回；认不出的值一律回落 Keep（保守方向：宁可不动，绝不误删）。
+    ///
+    /// <para>⚠ 2026-10-15：原来是三档（含「移入回收站」），回收站整条下线后只剩两档
+    /// （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」）——
+    /// 下面顺便钉住"老配置里那个 RecycleBin 值读回来**不许变成 Delete**"。</para>
+    /// </summary>
+    [Fact]
+    public void 删除操作两档_落盘读回与非法值归一化()
+    {
+        foreach (string mode in new[] { RestHandlingModes.Keep, RestHandlingModes.Delete })
         {
-            foreach (string mode in new[] { RestHandlingModes.Keep, RestHandlingModes.Delete })
-            {
-                string dataRoot = Path.Combine(_root, "data-" + mode);
-                Directory.CreateDirectory(dataRoot);
-
-                var pathService = new PathService { DataRootDirectory = dataRoot };
-                new SettingsService(pathService).Save(new AppSettings { RestHandlingAfterVerify = mode });
-
-                AppSettings reloaded = new SettingsService(new PathService { DataRootDirectory = dataRoot }).Load();
-
-                Assert.Equal(mode, reloaded.RestHandlingAfterVerify);
-            }
-
-            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(null));
-            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("Nonsense"));
-            Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("delete"));
-
-            // ⛔ 老配置里存过的 RecycleBin：回落 **Keep**，绝不许升级成不可恢复的 Delete。
-            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("RecycleBin"));
-            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(" recyclebin "));
-        }
-
-        /// <summary>
-        /// <b>2026-09-25 第 34 条的真机故障：在③页点单选框，设置一个字节都没写。</b>
-        ///
-        /// <para>机制：③页「2 删除操作」绑的是 <c>SettingsEditor.RestHandling</c>（**字符串**），
-        /// 而 <c>EnumOptionConverter.ConvertBack</c> 老实现只认枚举 —— 目标类型是 string 时直接返回
-        /// <c>Binding.DoNothing</c>，于是"有黑点、没写值"。用户看到的是一整条链：
-        /// 选「彻底删除」→ 点保存 → 一键处理的弹窗里还是旧档位（"我之前的选项完全没有用"）；
-        /// 任何一次绑定重新求值又把黑点弹回旧值。</para>
-        ///
-        /// <para>这条测试走**与绑定完全同一条路**：转换器 ConvertBack → 把结果写进属性
-        /// （等价于 TwoWay 绑定写回源）。⛔ 撤掉 ConvertBack 里那段"字符串档位"的分支，这条立刻变红。</para>
-        /// </summary>
-        [Fact]
-        public void 单选框写回_字符串档位也必须落进设置()
-        {
-            MainViewModel vm = CreateViewModel();
-            var converter = new ArchiveFixer.Helpers.EnumOptionConverter();
-
-            // 用户点③页的「彻底删除」：RadioButton 的 IsChecked 变 true → 转换器往回写。
-            foreach (string mode in new[] { RestHandlingModes.Delete, RestHandlingModes.Keep })
-            {
-                object? written = converter.ConvertBack(true, typeof(string), mode, System.Globalization.CultureInfo.InvariantCulture);
-
-                Assert.False(
-                    ReferenceEquals(written, System.Windows.Data.Binding.DoNothing),
-                    $"「{mode}」这一档没有被写回（ConvertBack 返回了 DoNothing）—— 点了单选框等于没点");
-                Assert.Equal(mode, written);
-
-                vm.SettingsEditor.RestHandling = (string)written!;
-
-                Assert.Equal(mode, vm.Settings.RestHandlingAfterVerify);
-            }
-
-            // 取消勾选（被同组别的项顶掉）时**不许**写回，否则会把刚选中的那一项又改掉。
-            Assert.True(
-                ReferenceEquals(
-                    converter.ConvertBack(false, typeof(string), RestHandlingModes.Delete, System.Globalization.CultureInfo.InvariantCulture),
-                    System.Windows.Data.Binding.DoNothing));
-
-            // 枚举档位（源包操作那一组）照旧按枚举写回 —— 两种目标类型都要能用。
-            object? enumWritten = converter.ConvertBack(
-                true,
-                typeof(SourceHandlingMode),
-                nameof(SourceHandlingMode.KeepInPlace),
-                System.Globalization.CultureInfo.InvariantCulture);
-
-            Assert.Equal(SourceHandlingMode.KeepInPlace, enumWritten);
-        }
-
-        /// <summary>
-        /// 通知口径：**源包操作与删除操作都必须在那张"包在 Settings 外面"的通知清单里**。
-        ///
-        /// <para>真机现场：关掉一键处理的弹窗回到③页，「删除操作」那一组三个单选一个黑点都没有；
-        /// 切一次选项卡之后「源包操作」的黑点回来了、删除操作的还是不在 ——
-        /// 差别正是老实现的通知清单里**只有 SourceHandling、漏了 RestHandling**
-        /// （从 <c>RaiseOutputPlacementChanged</c> 漏掉的直接后果）。</para>
-        /// </summary>
-        [Fact]
-        public void 重新求值时_源包操作与删除操作都要发通知()
-        {
-            MainViewModel vm = CreateViewModel();
-
-            var raised = new List<string>();
-
-            vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
-
-            vm.SettingsEditor.NotifyProcessingOptionsChanged();
-
-            Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
-            Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
-            Assert.Contains(nameof(vm.SettingsEditor.IsRestDeleteSelected), raised);
-            Assert.Contains(nameof(vm.SettingsEditor.RestHandlingSummary), raised);
-
-            // 落点那条路（①页「选择…」/ ③页切页都走它）同样要把这两档带上。
-            raised.Clear();
-            vm.SettingsEditor.NotifyOutputPlacementChanged();
-
-            Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
-            Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
-        }
-
-        // ================================================================ ② ViewModel 那一层
-
-        /// <summary>选了「彻底删除」→ 那条约提示必须可见；换回别的档 → 收起来（没有"关掉"这条出口）。</summary>
-        [Fact]
-        public void 选彻底删除时_红字提示可见_换成别的档就收起()
-        {
-            MainViewModel vm = CreateViewModel();
-
-            Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
-
-            vm.SettingsEditor.RestHandling = RestHandlingModes.Delete;
-
-            Assert.True(vm.SettingsEditor.IsRestDeleteSelected);
-            Assert.Equal(RestHandlingModes.Delete, vm.Settings.RestHandlingAfterVerify);
-            Assert.Equal(StatusText.OneClickConfirmRestAutoDelete, vm.SettingsEditor.RestHandlingSummary);
-
-            // ⚠ 2026-10-15：原来这里还有一段切到「移入回收站」的断言 —— 那一档整条下线后，
-            // 唯一的"另一档"就是 Keep（留下）。
-            vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
-
-            Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
-            Assert.Equal(RestHandlingModes.Keep, vm.Settings.RestHandlingAfterVerify);
-            Assert.Equal(StatusText.OneClickConfirmRestKeep, vm.SettingsEditor.RestHandlingSummary);
-        }
-
-        /// <summary>「当前档位」那句话必须把源包与其余物两件事都说出来（界面与日志读同一份实现）。</summary>
-        [Fact]
-        public void 当前档位那句话_把两件事都说清()
-        {
-            MainViewModel vm = CreateViewModel();
-
-            // ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除（就地）」⇒ 这一格换成新的第二档来说
-            //（判据意图没变：那句话必须把"源包怎么处理"与"其余物怎么处理"两件事都说出来）。
-            vm.SettingsEditor.SourceHandling = SourceHandlingMode.DeleteInPlace;
-            vm.SettingsEditor.RestHandling = RestHandlingModes.Delete;
-            vm.RefreshSpaceModeText();
-
-            Assert.Contains("源包：彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
-            Assert.Contains("彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
-
-            vm.SettingsEditor.SourceHandling = SourceHandlingMode.KeepInPlace;
-            vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
-            vm.RefreshSpaceModeText();
-
-            Assert.Contains("源包：留下", vm.SpaceModeText, StringComparison.Ordinal);
-            Assert.Contains("保留", vm.SpaceModeText, StringComparison.Ordinal);
-        }
-
-        // ================================================================ ③ 删除裁决的红线（五道门槛的两条）
-
-        /// <summary>任务不是"完成"（失败 / 取消 / 跳过 / 部分完成）→ 其余物一个字节都不删。</summary>
-        [Theory]
-        [InlineData(TaskOutcome.Failed)]
-        [InlineData(TaskOutcome.Cancelled)]
-        [InlineData(TaskOutcome.Skipped)]
-        [InlineData(TaskOutcome.PartiallyCompleted)]
-        public void 不是完成态_其余物一个字节都不删(TaskOutcome outcome)
-        {
-            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
-            task.Outcome = outcome;
-
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
-
-            Assert.False(result.Attempted);
-            Assert.True(Directory.Exists(restDirectory), "失败 / 取消 / 跳过 / 部分完成 → 其余物必须原样留着");
-            Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z")));
-        }
-
-        /// <summary>被取消（用户按了停止）→ 同样一个字节都不删，哪怕机器终态是"完成"。</summary>
-        [Fact]
-        public void 已取消_其余物一个字节都不删()
-        {
-            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
-
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: true);
-
-            Assert.False(result.Attempted);
-            Assert.True(Directory.Exists(restDirectory));
-        }
-
-        /// <summary>成功 + 校验通过 → 「彻底删除」真的把其余物删掉，而且不进回收站。</summary>
-        [Fact]
-        public void 完成态加校验通过_彻底删除真的删掉()
-        {
-            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
-
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
-
-            Assert.True(result.Succeeded, result.Message);
-            Assert.False(Directory.Exists(restDirectory));
-            Assert.Contains("彻底删除", result.Message, StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// **第六道门槛**（用户 2026-09-30 真机，25 GB 被误删）：其余物里是**半套**分卷
-        /// （同组的另一片还在成品目录里）⇒ 整份删除必须被拦下、一个字节都不动。
-        ///
-        /// <para>现场：内层包是一组 6 片跨盘 ZIP，末片当时没被认出来（ZIP64 收尾那两条闸门）⇒
-        /// 末片被当**内容物**留在成品目录、同组 5 卷被当**过程物**收进其余物，
-        /// 于是上面五道门槛全都过得去、其余物被整份彻底删除 —— 一组包被拆开、谁都再也解不开。</para>
-        ///
-        /// <para><b>红检</b>：把 <c>RestItemPurger</c> 里那次调用撤掉 ⇒ 本用例立刻变红
-        /// （`Attempted` 收到 true、其余物目录已经不在）。</para>
-        /// </summary>
-        [Fact]
-        public void 其余物里是半套分卷_整份删除被拦下()
-        {
-            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
-
-            File.Delete(Path.Combine(restDirectory, "inner-222.7z.001"));
-
-            File.WriteAllText(Path.Combine(restDirectory, "一组素材.z01"), "内层分卷（过程物）");
-            File.WriteAllText(Path.Combine(task.OutputPath!, "一组素材.z删除ip"), "末片（名字被改坏，被当内容物留在这里）");
-
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
-
-            Assert.False(result.Attempted, result.Message);
-            Assert.True(Directory.Exists(restDirectory), "半套分卷绝不允许整份删除");
-            Assert.True(File.Exists(Path.Combine(restDirectory, "一组素材.z01")));
-            Assert.Contains("一组素材", result.Message, StringComparison.Ordinal);
-        }
-
-
-        // ================================================================ 装配
-
-        private MainViewModel CreateViewModel()
-        {
-            string dataRoot = Path.Combine(_root, "data");
-            string outputRoot = Path.Combine(_root, "out");
-
+            string dataRoot = Path.Combine(_root, "data-" + mode);
             Directory.CreateDirectory(dataRoot);
-            Directory.CreateDirectory(outputRoot);
 
             var pathService = new PathService { DataRootDirectory = dataRoot };
-            var settingsService = new SettingsService(pathService);
+            new SettingsService(pathService).Save(new AppSettings { RestHandlingAfterVerify = mode });
 
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.CustomOutputDirectory = outputRoot;
-            settings.ExtractToOriginalDirectory = false;
-            settings.AutoScanAfterDrop = false;
+            AppSettings reloaded = new SettingsService(new PathService { DataRootDirectory = dataRoot }).Load();
 
-            settingsService.Save(settings);
-
-            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
-            string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
-
-            try
-            {
-                return new MainViewModel(
-                    new FileScanService(),
-                    new ArchiveDetectService(),
-                    new RenameService(),
-                    new Engines.SevenZip.SevenZipEngine(),
-                    new PasswordService(),
-                    new LogService(pathService),
-                    settingsService,
-                    pathService,
-                    new TaskSummaryService(),
-                    new ClipboardService(),
-                    new DialogService());
-            }
-            finally
-            {
-                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
-                ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
-            }
+            Assert.Equal(mode, reloaded.RestHandlingAfterVerify);
         }
 
-        /// <summary>
-        /// 造一个"删除操作该动手"的现场：完成 + **可证完整** + 其余物里躺着源包与过程物。
-        ///
-        /// <para>⚠ 2026-09-30（检验等级 L4）：只有"拿清单逐条核对过"（<c>OutputManifestCrossChecked</c>）
-        /// 才算可证完整、才允许删源包；"判不出"那一档另有用例钉着。</para>
-        /// </summary>
-        private (ArchiveTask Task, string RestDirectory) CreatePurgeScenario()
+        Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(null));
+        Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("Nonsense"));
+        Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("delete"));
+
+        // ⛔ 老配置里存过的 RecycleBin：回落 **Keep**，绝不许升级成不可恢复的 Delete。
+        Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("RecycleBin"));
+        Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(" recyclebin "));
+    }
+
+    /// <summary>
+    /// <b>2026-09-25 第 34 条的真机故障：在③页点单选框，设置一个字节都没写。</b>
+    ///
+    /// <para>机制：③页「2 删除操作」绑的是 <c>SettingsEditor.RestHandling</c>（**字符串**），
+    /// 而 <c>EnumOptionConverter.ConvertBack</c> 老实现只认枚举 —— 目标类型是 string 时直接返回
+    /// <c>Binding.DoNothing</c>，于是"有黑点、没写值"。用户看到的是一整条链：
+    /// 选「彻底删除」→ 点保存 → 一键处理的弹窗里还是旧档位（"我之前的选项完全没有用"）；
+    /// 任何一次绑定重新求值又把黑点弹回旧值。</para>
+    ///
+    /// <para>这条测试走**与绑定完全同一条路**：转换器 ConvertBack → 把结果写进属性
+    /// （等价于 TwoWay 绑定写回源）。⛔ 撤掉 ConvertBack 里那段"字符串档位"的分支，这条立刻变红。</para>
+    /// </summary>
+    [Fact]
+    public void 单选框写回_字符串档位也必须落进设置()
+    {
+        MainViewModel vm = CreateViewModel();
+        var converter = new ArchiveFixer.Helpers.EnumOptionConverter();
+
+        // 用户点③页的「彻底删除」：RadioButton 的 IsChecked 变 true → 转换器往回写。
+        foreach (string mode in new[] { RestHandlingModes.Delete, RestHandlingModes.Keep })
         {
-            string outputPath = Path.Combine(_root, "out", "222");
-            string restDirectory = Path.Combine(outputPath, "其余物");
+            object? written = converter.ConvertBack(true, typeof(string), mode, System.Globalization.CultureInfo.InvariantCulture);
 
-            Directory.CreateDirectory(restDirectory);
+            Assert.False(
+                ReferenceEquals(written, System.Windows.Data.Binding.DoNothing),
+                $"「{mode}」这一档没有被写回（ConvertBack 返回了 DoNothing）—— 点了单选框等于没点");
+            Assert.Equal(mode, written);
 
-            File.WriteAllText(Path.Combine(restDirectory, "222.7z"), "源包（会被删）");
-            File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（过程物）");
-            File.WriteAllText(Path.Combine(outputPath, "payload.mp4"), "内容物");
+            vm.SettingsEditor.RestHandling = (string)written!;
 
-            var task = new ArchiveTask(Path.Combine(_root, "src", "222.7z"), 1)
-            {
-                FileName = "222.7z",
-                OutputPath = outputPath,
-                Status = StatusText.ExtractSuccess,
-                IsOutputVerified = true,
-                OutputManifestCrossChecked = true,
-                Outcome = TaskOutcome.Succeeded,
-                RestDirectoryPath = restDirectory,
-                VolumeGroupKey = "222"
-            };
-
-            return (task, restDirectory);
+            Assert.Equal(mode, vm.Settings.RestHandlingAfterVerify);
         }
 
-        /// <summary>
-        /// 假删除执行体（**测试绝不许碰用户真实的回收站**；形状与 `EmptyFolderCleanerTests` 里那个一致）：
-        /// 「移入回收站」那一档按 `SimulateRemovalOnRecycle` 决定要不要真把夹具目录删掉，
-        /// 两种调用都逐个记账，供用例断言"走的是哪一档、走了几次"。
-        /// </summary>
-        private sealed class FakeDeleteExecutor : IDeleteExecutor
+        // 取消勾选（被同组别的项顶掉）时**不许**写回，否则会把刚选中的那一项又改掉。
+        Assert.True(
+            ReferenceEquals(
+                converter.ConvertBack(false, typeof(string), RestHandlingModes.Delete, System.Globalization.CultureInfo.InvariantCulture),
+                System.Windows.Data.Binding.DoNothing));
+
+        // 枚举档位（源包操作那一组）照旧按枚举写回 —— 两种目标类型都要能用。
+        object? enumWritten = converter.ConvertBack(
+            true,
+            typeof(SourceHandlingMode),
+            nameof(SourceHandlingMode.KeepInPlace),
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.Equal(SourceHandlingMode.KeepInPlace, enumWritten);
+    }
+
+    /// <summary>
+    /// 通知口径：**源包操作与删除操作都必须在那张"包在 Settings 外面"的通知清单里**。
+    ///
+    /// <para>真机现场：关掉一键处理的弹窗回到③页，「删除操作」那一组三个单选一个黑点都没有；
+    /// 切一次选项卡之后「源包操作」的黑点回来了、删除操作的还是不在 ——
+    /// 差别正是老实现的通知清单里**只有 SourceHandling、漏了 RestHandling**
+    /// （从 <c>RaiseOutputPlacementChanged</c> 漏掉的直接后果）。</para>
+    /// </summary>
+    [Fact]
+    public void 重新求值时_源包操作与删除操作都要发通知()
+    {
+        MainViewModel vm = CreateViewModel();
+
+        var raised = new List<string>();
+
+        vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
+
+        vm.SettingsEditor.NotifyProcessingOptionsChanged();
+
+        Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
+        Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
+        Assert.Contains(nameof(vm.SettingsEditor.IsRestDeleteSelected), raised);
+        Assert.Contains(nameof(vm.SettingsEditor.RestHandlingSummary), raised);
+
+        // 落点那条路（①页「选择…」/ ③页切页都走它）同样要把这两档带上。
+        raised.Clear();
+        vm.SettingsEditor.NotifyOutputPlacementChanged();
+
+        Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
+        Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
+    }
+
+    // ================================================================ ② ViewModel 那一层
+
+    /// <summary>选了「彻底删除」→ 那条约提示必须可见；换回别的档 → 收起来（没有"关掉"这条出口）。</summary>
+    [Fact]
+    public void 选彻底删除时_红字提示可见_换成别的档就收起()
+    {
+        MainViewModel vm = CreateViewModel();
+
+        Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
+
+        vm.SettingsEditor.RestHandling = RestHandlingModes.Delete;
+
+        Assert.True(vm.SettingsEditor.IsRestDeleteSelected);
+        Assert.Equal(RestHandlingModes.Delete, vm.Settings.RestHandlingAfterVerify);
+        Assert.Equal(StatusText.OneClickConfirmRestAutoDelete, vm.SettingsEditor.RestHandlingSummary);
+
+        // ⚠ 2026-10-15：原来这里还有一段切到「移入回收站」的断言 —— 那一档整条下线后，
+        // 唯一的"另一档"就是 Keep（留下）。
+        vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
+
+        Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
+        Assert.Equal(RestHandlingModes.Keep, vm.Settings.RestHandlingAfterVerify);
+        Assert.Equal(StatusText.OneClickConfirmRestKeep, vm.SettingsEditor.RestHandlingSummary);
+    }
+
+    /// <summary>「当前档位」那句话必须把源包与其余物两件事都说出来（界面与日志读同一份实现）。</summary>
+    [Fact]
+    public void 当前档位那句话_把两件事都说清()
+    {
+        MainViewModel vm = CreateViewModel();
+
+        // ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除（就地）」⇒ 这一格换成新的第二档来说
+        //（判据意图没变：那句话必须把"源包怎么处理"与"其余物怎么处理"两件事都说出来）。
+        vm.SettingsEditor.SourceHandling = SourceHandlingMode.DeleteInPlace;
+        vm.SettingsEditor.RestHandling = RestHandlingModes.Delete;
+        vm.RefreshSpaceModeText();
+
+        Assert.Contains("源包：彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
+        Assert.Contains("彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
+
+        vm.SettingsEditor.SourceHandling = SourceHandlingMode.KeepInPlace;
+        vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
+        vm.RefreshSpaceModeText();
+
+        Assert.Contains("源包：留下", vm.SpaceModeText, StringComparison.Ordinal);
+        Assert.Contains("保留", vm.SpaceModeText, StringComparison.Ordinal);
+    }
+
+    // ================================================================ ③ 删除裁决的红线（五道门槛的两条）
+
+    /// <summary>任务不是"完成"（失败 / 取消 / 跳过 / 部分完成）→ 其余物一个字节都不删。</summary>
+    [Theory]
+    [InlineData(TaskOutcome.Failed)]
+    [InlineData(TaskOutcome.Cancelled)]
+    [InlineData(TaskOutcome.Skipped)]
+    [InlineData(TaskOutcome.PartiallyCompleted)]
+    public void 不是完成态_其余物一个字节都不删(TaskOutcome outcome)
+    {
+        (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+        task.Outcome = outcome;
+
+        RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
+
+        Assert.False(result.Attempted);
+        Assert.True(Directory.Exists(restDirectory), "失败 / 取消 / 跳过 / 部分完成 → 其余物必须原样留着");
+        Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z")));
+    }
+
+    /// <summary>被取消（用户按了停止）→ 同样一个字节都不删，哪怕机器终态是"完成"。</summary>
+    [Fact]
+    public void 已取消_其余物一个字节都不删()
+    {
+        (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+
+        RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: true);
+
+        Assert.False(result.Attempted);
+        Assert.True(Directory.Exists(restDirectory));
+    }
+
+    /// <summary>成功 + 校验通过 → 「彻底删除」真的把其余物删掉，而且不进回收站。</summary>
+    [Fact]
+    public void 完成态加校验通过_彻底删除真的删掉()
+    {
+        (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+
+        RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.False(Directory.Exists(restDirectory));
+        Assert.Contains("彻底删除", result.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// **第六道门槛**（用户 2026-09-30 真机，25 GB 被误删）：其余物里是**半套**分卷
+    /// （同组的另一片还在成品目录里）⇒ 整份删除必须被拦下、一个字节都不动。
+    ///
+    /// <para>现场：内层包是一组 6 片跨盘 ZIP，末片当时没被认出来（ZIP64 收尾那两条闸门）⇒
+    /// 末片被当**内容物**留在成品目录、同组 5 卷被当**过程物**收进其余物，
+    /// 于是上面五道门槛全都过得去、其余物被整份彻底删除 —— 一组包被拆开、谁都再也解不开。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>RestItemPurger</c> 里那次调用撤掉 ⇒ 本用例立刻变红
+    /// （`Attempted` 收到 true、其余物目录已经不在）。</para>
+    /// </summary>
+    [Fact]
+    public void 其余物里是半套分卷_整份删除被拦下()
+    {
+        (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+
+        File.Delete(Path.Combine(restDirectory, "inner-222.7z.001"));
+
+        File.WriteAllText(Path.Combine(restDirectory, "一组素材.z01"), "内层分卷（过程物）");
+        File.WriteAllText(Path.Combine(task.OutputPath!, "一组素材.z删除ip"), "末片（名字被改坏，被当内容物留在这里）");
+
+        RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false);
+
+        Assert.False(result.Attempted, result.Message);
+        Assert.True(Directory.Exists(restDirectory), "半套分卷绝不允许整份删除");
+        Assert.True(File.Exists(Path.Combine(restDirectory, "一组素材.z01")));
+        Assert.Contains("一组素材", result.Message, StringComparison.Ordinal);
+    }
+
+
+    // ================================================================ 装配
+
+    private MainViewModel CreateViewModel()
+    {
+        string dataRoot = Path.Combine(_root, "data");
+        string outputRoot = Path.Combine(_root, "out");
+
+        Directory.CreateDirectory(dataRoot);
+        Directory.CreateDirectory(outputRoot);
+
+        var pathService = new PathService { DataRootDirectory = dataRoot };
+        var settingsService = new SettingsService(pathService);
+
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.CustomOutputDirectory = outputRoot;
+        settings.ExtractToOriginalDirectory = false;
+        settings.AutoScanAfterDrop = false;
+
+        settingsService.Save(settings);
+
+        string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+        string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
+
+        try
         {
-            public List<string> RecycleCalls { get; } = new();
+            return new MainViewModel(
+                new FileScanService(),
+                new ArchiveDetectService(),
+                new RenameService(),
+                new Engines.SevenZip.SevenZipEngine(),
+                new PasswordService(),
+                new LogService(pathService),
+                settingsService,
+                pathService,
+                new TaskSummaryService(),
+                new ClipboardService(),
+                new DialogService());
+        }
+        finally
+        {
+            RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
+        }
+    }
 
-            public List<string> PermanentCalls { get; } = new();
+    /// <summary>
+    /// 造一个"删除操作该动手"的现场：完成 + **可证完整** + 其余物里躺着源包与过程物。
+    ///
+    /// <para>⚠ 2026-09-30（检验等级 L4）：只有"拿清单逐条核对过"（<c>OutputManifestCrossChecked</c>）
+    /// 才算可证完整、才允许删源包；"判不出"那一档另有用例钉着。</para>
+    /// </summary>
+    private (ArchiveTask Task, string RestDirectory) CreatePurgeScenario()
+    {
+        string outputPath = Path.Combine(_root, "out", "222");
+        string restDirectory = Path.Combine(outputPath, "其余物");
 
-            public RecycleAttemptResult TryMoveToRecycleBin(string path, bool isDirectory, out string message)
+        Directory.CreateDirectory(restDirectory);
+
+        File.WriteAllText(Path.Combine(restDirectory, "222.7z"), "源包（会被删）");
+        File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（过程物）");
+        File.WriteAllText(Path.Combine(outputPath, "payload.mp4"), "内容物");
+
+        var task = new ArchiveTask(Path.Combine(_root, "src", "222.7z"), 1)
+        {
+            FileName = "222.7z",
+            OutputPath = outputPath,
+            Status = StatusText.ExtractSuccess,
+            IsOutputVerified = true,
+            OutputManifestCrossChecked = true,
+            Outcome = TaskOutcome.Succeeded,
+            RestDirectoryPath = restDirectory,
+            VolumeGroupKey = "222"
+        };
+
+        return (task, restDirectory);
+    }
+
+    /// <summary>
+    /// 假删除执行体（**测试绝不许碰用户真实的回收站**；形状与 `EmptyFolderCleanerTests` 里那个一致）：
+    /// 「移入回收站」那一档按 `SimulateRemovalOnRecycle` 决定要不要真把夹具目录删掉，
+    /// 两种调用都逐个记账，供用例断言"走的是哪一档、走了几次"。
+    /// </summary>
+    private sealed class FakeDeleteExecutor : IDeleteExecutor
+    {
+        public List<string> RecycleCalls { get; } = new();
+
+        public List<string> PermanentCalls { get; } = new();
+
+        public RecycleAttemptResult TryMoveToRecycleBin(string path, bool isDirectory, out string message)
+        {
+            RecycleCalls.Add(path);
+            message = "已移入回收站（假执行器）";
+
+            if (Directory.Exists(path))
             {
-                RecycleCalls.Add(path);
-                message = "已移入回收站（假执行器）";
-
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-
-                return RecycleAttemptResult.Recycled;
+                Directory.Delete(path, recursive: true);
             }
 
-            public void DeletePermanently(string path, bool isDirectory)
-            {
-                PermanentCalls.Add(path);
+            return RecycleAttemptResult.Recycled;
+        }
 
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
+        public void DeletePermanently(string path, bool isDirectory)
+        {
+            PermanentCalls.Add(path);
+
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
             }
         }
     }

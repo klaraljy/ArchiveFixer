@@ -6,174 +6,173 @@ using System.IO;
 using System.Text;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// 本批新增的四个设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 对照表里标"采纳"的行）：
+///
+/// <list type="number">
+/// <item><description><c>LowProcessPriority</c>：低运行优先级（**旧框架遗留，九页签界面已无开关**，运行时仍读配置，默认关）——
+/// 它以前是 <c>App.xaml.cs</c> 里的硬编码，用户觉得慢时**无从下手**。</description></item>
+/// <item><description><c>OpenOutputFolderWhenDone</c>：定稿完成后打开输出目录（**默认关**）——
+/// 这是"会动用户桌面"的行为，必须用户显式开启。</description></item>
+/// <item><description><c>RestRemovalDefaultMode</c>：「其余物」清理默认档（**默认回收站**）——
+/// 只决定确认框里那个勾选框的默认状态，不是"跳过确认"。</description></item>
+/// <item><description><c>ReportDangerousEntries</c>：危险条目统计（**默认开**，**只提示不阻断**）。</description></item>
+/// </list>
+///
+/// <para>
+/// 每个设置项都要钉住三件事（与 <see cref="PasswordAttemptLimitSettingTests"/> 同一口径）：
+/// ① 默认值就是文档承诺的那一个；② **能落盘、重启后保持**；
+/// ③ 旧配置缺这个字段时取默认值、**不报错**（System.Text.Json 不会碰属性初始化器已赋好的值）。
+/// </para>
+/// </summary>
+public class SettingsKnobsTests : IDisposable
 {
-    /// <summary>
-    /// 本批新增的四个设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 对照表里标"采纳"的行）：
-    ///
-    /// <list type="number">
-    /// <item><description><c>LowProcessPriority</c>：低运行优先级（**旧框架遗留，九页签界面已无开关**，运行时仍读配置，默认关）——
-    /// 它以前是 <c>App.xaml.cs</c> 里的硬编码，用户觉得慢时**无从下手**。</description></item>
-    /// <item><description><c>OpenOutputFolderWhenDone</c>：定稿完成后打开输出目录（**默认关**）——
-    /// 这是"会动用户桌面"的行为，必须用户显式开启。</description></item>
-    /// <item><description><c>RestRemovalDefaultMode</c>：「其余物」清理默认档（**默认回收站**）——
-    /// 只决定确认框里那个勾选框的默认状态，不是"跳过确认"。</description></item>
-    /// <item><description><c>ReportDangerousEntries</c>：危险条目统计（**默认开**，**只提示不阻断**）。</description></item>
-    /// </list>
-    ///
-    /// <para>
-    /// 每个设置项都要钉住三件事（与 <see cref="PasswordAttemptLimitSettingTests"/> 同一口径）：
-    /// ① 默认值就是文档承诺的那一个；② **能落盘、重启后保持**；
-    /// ③ 旧配置缺这个字段时取默认值、**不报错**（System.Text.Json 不会碰属性初始化器已赋好的值）。
-    /// </para>
-    /// </summary>
-    public class SettingsKnobsTests : IDisposable
+    private readonly string _dataRoot;
+
+    public SettingsKnobsTests()
     {
-        private readonly string _dataRoot;
+        _dataRoot = Path.Combine(Path.GetTempPath(), "ArchiveFixerSettingsKnobs", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dataRoot);
+    }
 
-        public SettingsKnobsTests()
+    public void Dispose()
+    {
+        try
         {
-            _dataRoot = Path.Combine(Path.GetTempPath(), "ArchiveFixerSettingsKnobs", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_dataRoot);
-        }
-
-        public void Dispose()
-        {
-            try
+            if (Directory.Exists(_dataRoot))
             {
-                if (Directory.Exists(_dataRoot))
-                {
-                    Directory.Delete(_dataRoot, recursive: true);
-                }
-            }
-            catch
-            {
-                // 临时目录清不掉不影响结论。
+                Directory.Delete(_dataRoot, recursive: true);
             }
         }
-
-        private PathService CreatePathService() => new() { DataRootDirectory = _dataRoot };
-
-        // ================================================================ ① 默认值
-
-        [Fact]
-        public void 默认值_低优先级关_完成后不打开输出目录_危险条目统计开()
+        catch
         {
-            AppSettings fresh = new AppSettings();
-            AppSettings defaults = AppSettings.CreateDefault();
-
-            /*
-             * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
-             * （那一格已随「启动时行为」整组移出界面、值由 `AppSettings.Normalize` 钉死）
-             * ⇒ 出厂默认与归一之后都必须是 false。
-             */
-            Assert.False(fresh.LowProcessPriority, "低运行优先级：系统固定值 = 关（2026-10-14 用户拍板）");
-            Assert.False(defaults.LowProcessPriority);
-
-            Assert.False(fresh.OpenOutputFolderWhenDone, "「完成后打开输出目录」会动用户桌面，必须默认关");
-            Assert.False(defaults.OpenOutputFolderWhenDone);
-
-            Assert.True(fresh.ReportDangerousEntries, "危险条目统计默认开，而且只提示不阻断");
-            Assert.True(defaults.ReportDangerousEntries);
+            // 临时目录清不掉不影响结论。
         }
+    }
 
-        // ================================================================ ② （已删）其余物清理默认档
-        //
-        // ⛔ 2026-10-15：`RestRemovalDefaultMode` 与词表 `RestRemovalModes` **整条删除** ——
-        // 用户口径「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」，
-        // 手工清理只剩"彻底删除"一个动作，没有档可存（详见 AppSettings.cs 里那段说明）。
-        // 原来这一节的三条（空/非法回落回收站 · 合法值原样解析 · 归一化写回）随之删除；
-        // 现在钉这件事的是 `PipelineWiringTests.手工清理_只有彻底删除一档_确认框不再出现另一档`。
+    private PathService CreatePathService() => new() { DataRootDirectory = _dataRoot };
 
-        // ================================================================ ③ 落盘 + 重启保持
+    // ================================================================ ① 默认值
 
-        [Fact]
-        public void 三个设置项_存盘后重新读取仍然是用户设的值()
+    [Fact]
+    public void 默认值_低优先级关_完成后不打开输出目录_危险条目统计开()
+    {
+        AppSettings fresh = new AppSettings();
+        AppSettings defaults = AppSettings.CreateDefault();
+
+        /*
+         * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
+         * （那一格已随「启动时行为」整组移出界面、值由 `AppSettings.Normalize` 钉死）
+         * ⇒ 出厂默认与归一之后都必须是 false。
+         */
+        Assert.False(fresh.LowProcessPriority, "低运行优先级：系统固定值 = 关（2026-10-14 用户拍板）");
+        Assert.False(defaults.LowProcessPriority);
+
+        Assert.False(fresh.OpenOutputFolderWhenDone, "「完成后打开输出目录」会动用户桌面，必须默认关");
+        Assert.False(defaults.OpenOutputFolderWhenDone);
+
+        Assert.True(fresh.ReportDangerousEntries, "危险条目统计默认开，而且只提示不阻断");
+        Assert.True(defaults.ReportDangerousEntries);
+    }
+
+    // ================================================================ ② （已删）其余物清理默认档
+    //
+    // ⛔ 2026-10-15：`RestRemovalDefaultMode` 与词表 `RestRemovalModes` **整条删除** ——
+    // 用户口径「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」，
+    // 手工清理只剩"彻底删除"一个动作，没有档可存（详见 AppSettings.cs 里那段说明）。
+    // 原来这一节的三条（空/非法回落回收站 · 合法值原样解析 · 归一化写回）随之删除；
+    // 现在钉这件事的是 `PipelineWiringTests.手工清理_只有彻底删除一档_确认框不再出现另一档`。
+
+    // ================================================================ ③ 落盘 + 重启保持
+
+    [Fact]
+    public void 三个设置项_存盘后重新读取仍然是用户设的值()
+    {
+        var settingsService = new SettingsService(CreatePathService());
+
+        AppSettings settings = AppSettings.CreateDefault();
+        settings.LowProcessPriority = false;
+        settings.OpenOutputFolderWhenDone = true;
+        settings.ReportDangerousEntries = false;
+        settingsService.Save(settings);
+
+        // 换一个全新的 SettingsService/PathService 读回来 = 模拟"重启程序"
+        AppSettings reloaded = new SettingsService(CreatePathService()).Load();
+
+        Assert.False(reloaded.LowProcessPriority);
+        Assert.True(reloaded.OpenOutputFolderWhenDone);
+        Assert.False(reloaded.ReportDangerousEntries);
+    }
+
+    [Fact]
+    public void 升级前的配置文件没有这四项时_用默认值且不报错()
+    {
+        /*
+         * 老用户的 appsettings.json 里当然没有这四个字段。
+         * System.Text.Json 反序列化时不会碰属性初始化器已经赋好的值 ——
+         * 这条就是钉住"旧配置缺字段不报错、也不悄悄变成激进档"这个前提的。
+         */
+        string json = """
         {
-            var settingsService = new SettingsService(CreatePathService());
-
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.LowProcessPriority = false;
-            settings.OpenOutputFolderWhenDone = true;
-            settings.ReportDangerousEntries = false;
-            settingsService.Save(settings);
-
-            // 换一个全新的 SettingsService/PathService 读回来 = 模拟"重启程序"
-            AppSettings reloaded = new SettingsService(CreatePathService()).Load();
-
-            Assert.False(reloaded.LowProcessPriority);
-            Assert.True(reloaded.OpenOutputFolderWhenDone);
-            Assert.False(reloaded.ReportDangerousEntries);
+          "RecursiveScan": true,
+          "ScanMode": "ScanAllFiles",
+          "MaxParallelExtractCount": 1,
+          "SourceHandling": "MoveToRest"
         }
+        """;
 
-        [Fact]
-        public void 升级前的配置文件没有这四项时_用默认值且不报错()
+        var pathService = CreatePathService();
+        File.WriteAllText(pathService.SettingsFilePath, json, new UTF8Encoding(false));
+
+        AppSettings loaded = new SettingsService(pathService).Load();
+
+        Assert.False(loaded.LowProcessPriority, "低运行优先级：系统固定值 = 关");
+        Assert.False(loaded.OpenOutputFolderWhenDone);
+        Assert.True(loaded.ReportDangerousEntries);
+    }
+
+    // ================================================================ ④ 两个旋钮互相独立
+
+    [Fact]
+    public void 低优先级与并发数是两个独立的旋钮_改一个不会动另一个()
+    {
+        /*
+         * 抄的是 WinRAR 6.02 修过的坑（docs/WinRAR功能参考.md §2 D 组）：
+         * 它的 `-ri`（优先级）曾被 `-ibck`（后台）覆盖，用户调了 A 却被 B 决定。
+         * 我们这里钉住的是"两个设置项各管各的"——归一化、序列化都不会顺手改另一个。
+         */
+        var settings = new AppSettings
         {
-            /*
-             * 老用户的 appsettings.json 里当然没有这四个字段。
-             * System.Text.Json 反序列化时不会碰属性初始化器已经赋好的值 ——
-             * 这条就是钉住"旧配置缺字段不报错、也不悄悄变成激进档"这个前提的。
-             */
-            string json = """
-            {
-              "RecursiveScan": true,
-              "ScanMode": "ScanAllFiles",
-              "MaxParallelExtractCount": 1,
-              "SourceHandling": "MoveToRest"
-            }
-            """;
+            MaxParallelExtractCount = 4,
+            LowProcessPriority = false
+        };
 
-            var pathService = CreatePathService();
-            File.WriteAllText(pathService.SettingsFilePath, json, new UTF8Encoding(false));
+        settings.Normalize();
 
-            AppSettings loaded = new SettingsService(pathService).Load();
+        Assert.Equal(4, settings.MaxParallelExtractCount);
+        Assert.False(settings.LowProcessPriority);
 
-            Assert.False(loaded.LowProcessPriority, "低运行优先级：系统固定值 = 关");
-            Assert.False(loaded.OpenOutputFolderWhenDone);
-            Assert.True(loaded.ReportDangerousEntries);
-        }
+        settings.ConcurrencyOverride = 2;
+        settings.Normalize();
 
-        // ================================================================ ④ 两个旋钮互相独立
+        Assert.Equal(2, settings.ConcurrencyOverride);
+        Assert.False(settings.LowProcessPriority);
+    }
 
-        [Fact]
-        public void 低优先级与并发数是两个独立的旋钮_改一个不会动另一个()
-        {
-            /*
-             * 抄的是 WinRAR 6.02 修过的坑（docs/WinRAR功能参考.md §2 D 组）：
-             * 它的 `-ri`（优先级）曾被 `-ibck`（后台）覆盖，用户调了 A 却被 B 决定。
-             * 我们这里钉住的是"两个设置项各管各的"——归一化、序列化都不会顺手改另一个。
-             */
-            var settings = new AppSettings
-            {
-                MaxParallelExtractCount = 4,
-                LowProcessPriority = false
-            };
+    // ================================================================ ⑤ 设置项真的接到进程优先级上
 
-            settings.Normalize();
-
-            Assert.Equal(4, settings.MaxParallelExtractCount);
-            Assert.False(settings.LowProcessPriority);
-
-            settings.ConcurrencyOverride = 2;
-            settings.Normalize();
-
-            Assert.Equal(2, settings.ConcurrencyOverride);
-            Assert.False(settings.LowProcessPriority);
-        }
-
-        // ================================================================ ⑤ 设置项真的接到进程优先级上
-
-        [Theory]
-        [InlineData(true, ProcessPriorityClass.BelowNormal)]
-        [InlineData(false, ProcessPriorityClass.Normal)]
-        public void 低运行优先级设置_映射到进程优先级(bool lowProcessPriority, ProcessPriorityClass expected)
-        {
-            /*
-             * 只测"设置值 → 优先级类"这一个纯映射（唯一实现处 App.ResolveProcessPriorityClass）。
-             * 刻意**不**在测试里真的改测试宿主进程的优先级：那会拖慢同进程里并行跑的其它测试，
-             * 而且宿主进程的优先级本来就该由启动方决定。
-             */
-            Assert.Equal(expected, App.ResolveProcessPriorityClass(lowProcessPriority));
-        }
+    [Theory]
+    [InlineData(true, ProcessPriorityClass.BelowNormal)]
+    [InlineData(false, ProcessPriorityClass.Normal)]
+    public void 低运行优先级设置_映射到进程优先级(bool lowProcessPriority, ProcessPriorityClass expected)
+    {
+        /*
+         * 只测"设置值 → 优先级类"这一个纯映射（唯一实现处 App.ResolveProcessPriorityClass）。
+         * 刻意**不**在测试里真的改测试宿主进程的优先级：那会拖慢同进程里并行跑的其它测试，
+         * 而且宿主进程的优先级本来就该由启动方决定。
+         */
+        Assert.Equal(expected, App.ResolveProcessPriorityClass(lowProcessPriority));
     }
 }

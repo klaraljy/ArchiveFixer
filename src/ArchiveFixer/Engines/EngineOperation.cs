@@ -1,9 +1,8 @@
-namespace ArchiveFixer.Engines
+namespace ArchiveFixer.Engines;
+
+public enum EngineOperation
 {
-    public enum EngineOperation
-    {
-        List,
-        Test,
-        Extract
-    }
+    List,
+    Test,
+    Extract
 }

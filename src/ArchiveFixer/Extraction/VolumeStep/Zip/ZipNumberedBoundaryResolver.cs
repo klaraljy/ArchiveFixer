@@ -2,18 +2,17 @@ using ArchiveFixer.Detection;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Extraction.VolumeStep
+namespace ArchiveFixer.Extraction.VolumeStep;
+
+/// <summary>通用 ZIP 分片专属 resolver（第 1 片 `.zip.001` 是入口）。</summary>
+public sealed class ZipNumberedBoundaryResolver : IVolumeBoundaryResolver
 {
-    /// <summary>通用 ZIP 分片专属 resolver（第 1 片 `.zip.001` 是入口）。</summary>
-    public sealed class ZipNumberedBoundaryResolver : IVolumeBoundaryResolver
-    {
-        private readonly ZipBoundaryResolverCore _core = new(ZipVariant.Numbered);
+    private readonly ZipBoundaryResolverCore _core = new(ZipVariant.Numbered);
 
-        public VolumeNamingFamily Family => VolumeNamingFamily.ZipNumbered;
+    public VolumeNamingFamily Family => VolumeNamingFamily.ZipNumbered;
 
-        public Task<PreparedVolumeGroup?> ResolveAsync(
-            VolumeBoundaryContext context,
-            CancellationToken cancellationToken = default) =>
-            _core.ResolveAsync(context, cancellationToken);
-    }
+    public Task<PreparedVolumeGroup?> ResolveAsync(
+        VolumeBoundaryContext context,
+        CancellationToken cancellationToken = default) =>
+        _core.ResolveAsync(context, cancellationToken);
 }

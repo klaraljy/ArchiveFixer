@@ -1,45 +1,44 @@
 using ArchiveFixer.Storage;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public class SpaceDecisionStateTests
 {
-    public class SpaceDecisionStateTests
+    [Fact]
+    public void ProbeFailureIsUnknownNotEnough()
     {
-        [Fact]
-        public void ProbeFailureIsUnknownNotEnough()
+        var decision = new SpaceGateDecision
         {
-            var decision = new SpaceGateDecision
-            {
-                Allowed = true,
-                AvailableBytes = -1
-            };
+            Allowed = true,
+            AvailableBytes = -1
+        };
 
-            Assert.Equal(SpaceDecisionState.Unknown, decision.State);
-            Assert.True(decision.ProbeFailed);
-        }
+        Assert.Equal(SpaceDecisionState.Unknown, decision.State);
+        Assert.True(decision.ProbeFailed);
+    }
 
-        [Fact]
-        public void AllowedWithKnownBytesIsEnough()
+    [Fact]
+    public void AllowedWithKnownBytesIsEnough()
+    {
+        var decision = new SpaceGateDecision
         {
-            var decision = new SpaceGateDecision
-            {
-                Allowed = true,
-                AvailableBytes = 1024
-            };
+            Allowed = true,
+            AvailableBytes = 1024
+        };
 
-            Assert.Equal(SpaceDecisionState.Enough, decision.State);
-        }
+        Assert.Equal(SpaceDecisionState.Enough, decision.State);
+    }
 
-        [Fact]
-        public void RejectedWithKnownBytesIsNotEnough()
+    [Fact]
+    public void RejectedWithKnownBytesIsNotEnough()
+    {
+        var decision = new SpaceGateDecision
         {
-            var decision = new SpaceGateDecision
-            {
-                Allowed = false,
-                AvailableBytes = 1024
-            };
+            Allowed = false,
+            AvailableBytes = 1024
+        };
 
-            Assert.Equal(SpaceDecisionState.NotEnough, decision.State);
-        }
+        Assert.Equal(SpaceDecisionState.NotEnough, decision.State);
     }
 }

@@ -21,468 +21,467 @@ using System.Windows;
 
 
 
-namespace ArchiveFixer.ViewModels
+namespace ArchiveFixer.ViewModels;
+
+internal sealed partial class ExtractionCoordinator
 {
-    internal sealed partial class ExtractionCoordinator
+
+    /// <summary>
+    /// 「其余物」目录名（契约 §3.2，2026-09-22 由「过程物」改名）：为得到内容物而产生、
+    /// 用户不需要的东西 —— 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹；**以及源包本身**
+    /// （决策 D-9：一键处理默认把源包也移进来，用户在那个目录里一次删掉就干净了）。
+    ///
+    /// 名字的**唯一来源**是 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
+    /// 这里只是给本类内部一个短名字用（别在别处再写一遍字面量）。
+    /// </summary>
+    internal const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
+
+    internal readonly MainViewModel _vm;
+    internal readonly IArchiveEngine _archiveEngine;
+    internal readonly PasswordService _passwordService;
+    private readonly PasswordFailureRegistry _passwordFailureRegistry;
+
+    /// <summary>测试/既有调用点仍按字段名读本批手动密码（唯一实现已搬进 PasswordFailureRegistry）。</summary>
+    internal List<string> _manualBatchPasswords => _passwordFailureRegistry.ManualBatchPasswords;
+    internal readonly PathService _pathService;
+    internal readonly DialogService _dialogService;
+
+    /// <summary>
+    /// 源包搬运要碰的文件系统（决策 D-12）。
+    ///
+    /// 默认走真实文件系统；单测注入假实现来验证**跨盘那条路**（真机上很难临时造第二个卷）：
+    /// "复制成功后再删原件、复制失败源包一个字节都不动"是红线，不能只靠读代码。
+    /// </summary>
+    private readonly ISourceMoveFileSystem _sourceMoveFileSystem;
+
+    /// <summary>特定解压独立管线用的引擎（只读转发，不另造实例）。</summary>
+    internal IArchiveEngine SpecificExtractionEngine => _archiveEngine;
+
+    /// <summary>边界 resolver 试开用的引擎（只读转发；⛔ 不另造实例）。</summary>
+    internal IArchiveEngine ArchiveEngine => _archiveEngine;
+
+    /// <summary>特定解压批次开工时清空“本次导入内已成功”的两本账。</summary>
+    internal void BeginSpecificPasswordBatch() => _passwordService.BeginBatch();
+
+    /// <summary>特定解压某层成功后记账；空密码不进本批复用表（与主解压同一口径）。</summary>
+    internal void RecordSpecificPasswordSuccess(string sourceArchive, string? password) =>
+        _passwordService.RecordPasswordSuccess(sourceArchive, password);
+
+    /// <summary>特定解压候选日志的来源描述（只影响日志，不参与密码选择逻辑）。</summary>
+    internal string DescribeSpecificPasswordCandidate(string? password, int index)
     {
-
-        /// <summary>
-        /// 「其余物」目录名（契约 §3.2，2026-09-22 由「过程物」改名）：为得到内容物而产生、
-        /// 用户不需要的东西 —— 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹；**以及源包本身**
-        /// （决策 D-9：一键处理默认把源包也移进来，用户在那个目录里一次删掉就干净了）。
-        ///
-        /// 名字的**唯一来源**是 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
-        /// 这里只是给本类内部一个短名字用（别在别处再写一遍字面量）。
-        /// </summary>
-        internal const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
-
-        internal readonly MainViewModel _vm;
-        internal readonly IArchiveEngine _archiveEngine;
-        internal readonly PasswordService _passwordService;
-        private readonly PasswordFailureRegistry _passwordFailureRegistry;
-
-        /// <summary>测试/既有调用点仍按字段名读本批手动密码（唯一实现已搬进 PasswordFailureRegistry）。</summary>
-        internal List<string> _manualBatchPasswords => _passwordFailureRegistry.ManualBatchPasswords;
-        internal readonly PathService _pathService;
-        internal readonly DialogService _dialogService;
-
-        /// <summary>
-        /// 源包搬运要碰的文件系统（决策 D-12）。
-        ///
-        /// 默认走真实文件系统；单测注入假实现来验证**跨盘那条路**（真机上很难临时造第二个卷）：
-        /// "复制成功后再删原件、复制失败源包一个字节都不动"是红线，不能只靠读代码。
-        /// </summary>
-        private readonly ISourceMoveFileSystem _sourceMoveFileSystem;
-
-        /// <summary>特定解压独立管线用的引擎（只读转发，不另造实例）。</summary>
-        internal IArchiveEngine SpecificExtractionEngine => _archiveEngine;
-
-        /// <summary>边界 resolver 试开用的引擎（只读转发；⛔ 不另造实例）。</summary>
-        internal IArchiveEngine ArchiveEngine => _archiveEngine;
-
-        /// <summary>特定解压批次开工时清空“本次导入内已成功”的两本账。</summary>
-        internal void BeginSpecificPasswordBatch() => _passwordService.BeginBatch();
-
-        /// <summary>特定解压某层成功后记账；空密码不进本批复用表（与主解压同一口径）。</summary>
-        internal void RecordSpecificPasswordSuccess(string sourceArchive, string? password) =>
-            _passwordService.RecordPasswordSuccess(sourceArchive, password);
-
-        /// <summary>特定解压候选日志的来源描述（只影响日志，不参与密码选择逻辑）。</summary>
-        internal string DescribeSpecificPasswordCandidate(string? password, int index)
+        if (string.IsNullOrEmpty(password))
         {
-            if (string.IsNullOrEmpty(password))
-            {
-                return "尝试空密码";
-            }
-
-            if (_passwordService.BatchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
-            {
-                return "复用本批已成功的密码：******";
-            }
-
-            return $"尝试密码列表第 {index} 项：******";
+            return "尝试空密码";
         }
 
-        /// <summary>
-        /// 特定解压每层候选：无密码 → 空串 → 本批已成功的密码（按**本批**成功次数从多到少）
-        /// → 列表顺序（用户 2026-10-25：频率只限单次导入，下一次导入仍按④页原顺序）。
-        /// </summary>
-        internal IReadOnlyList<string?> SpecificExtractionPasswords
+        if (_passwordService.BatchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
         {
-            get
-            {
-                var values = new List<string?> { null, string.Empty };
-                var seen = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
+            return "复用本批已成功的密码：******";
+        }
 
-                foreach (string password in _passwordService.BatchVerifiedPasswords
-                             .Where(value => !string.IsNullOrEmpty(value))
-                             .OrderByDescending(_passwordService.GetBatchSuccessCount))
+        return $"尝试密码列表第 {index} 项：******";
+    }
+
+    /// <summary>
+    /// 特定解压每层候选：无密码 → 空串 → 本批已成功的密码（按**本批**成功次数从多到少）
+    /// → 列表顺序（用户 2026-10-25：频率只限单次导入，下一次导入仍按④页原顺序）。
+    /// </summary>
+    internal IReadOnlyList<string?> SpecificExtractionPasswords
+    {
+        get
+        {
+            var values = new List<string?> { null, string.Empty };
+            var seen = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
+
+            foreach (string password in _passwordService.BatchVerifiedPasswords
+                         .Where(value => !string.IsNullOrEmpty(value))
+                         .OrderByDescending(_passwordService.GetBatchSuccessCount))
+            {
+                if (seen.Add(password))
                 {
-                    if (seen.Add(password))
-                    {
-                        values.Add(password);
-                    }
+                    values.Add(password);
+                }
+            }
+
+            foreach (string? password in _passwordService.Passwords
+                         .Where(item => item.IsEnabled)
+                         .Select(item => item.Value))
+            {
+                string value = password ?? string.Empty;
+
+                if (seen.Add(value))
+                {
+                    values.Add(value);
+                }
+            }
+
+            return values;
+        }
+    }
+
+
+    /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
+    private const int MaxPreflightPasswordAttempts = 3;
+
+    // ================================================================
+    // 不变量 11：源文件变化（AGENTS.md §6 第 11 条）
+    // ================================================================
+
+
+    internal CancellationTokenSource? _operationCts;
+
+    /// <summary>
+    /// **第二大步"当前工作"的取消源**：解析 / 试开 / 命名 / 建入口根这一整段。
+    ///
+    /// <para>它不在任务表里，所以旧的「停止当前任务」只看任务 CTS 时会报"没有正在执行的任务"，
+    /// 而实际上一组 21 GB 正在被整组试开（真机 2026-11-10 00:00:45）。现在这段工作也有句柄：
+    /// 「停止当前任务 / 暂停所有操作」先取消它，再取消任务；停止后续（只停后续）不碰它。</para>
+    /// </summary>
+    private readonly SecondStepWorkTracker _secondStepWorkTracker = new();
+    /// <summary>
+    /// 正在跑的任务各自的取消源。
+    ///
+    /// <para>⚠ <b>必须加锁访问</b>（2026-09-22：默认并发由 1 提到 4 之后暴露的真缺陷）：
+    /// 每个任务在**自己的线程**上加/删这个列表，而 <see cref="CancelCurrentTask"/> 在 UI 线程上读它。
+    /// 旧的裸 <c>List</c> 写法在并发下会直接把内部数组搞坏 ——
+    /// 实测到的现象是收尾时抛 <c>ArgumentOutOfRangeException</c>（<c>List.RemoveAt</c> 越界），
+    /// 一个任务因此变成「未知错误」，而不是它本来的结论。</para>
+    /// </summary>
+    private readonly List<CancellationTokenSource> _runningTaskCts = new();
+
+    private readonly Dictionary<CancellationTokenSource, ArchiveTask> _runningTaskOwners = new();
+
+    private readonly object _runningTaskCtsLock = new();
+
+    /// <summary>
+    /// 这一批用户导入的源文件路径（含分卷各卷）。供别名清理判“这是用户的东西，绝不许删”。
+    /// 批首建立；任务表在清理时可能已被移动 / 改写，不能只靠当时的 CurrentPath 再猜。
+    /// </summary>
+    private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
+
+    internal void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
+    {
+        lock (_runningTaskCtsLock)
+        {
+            _runningTaskCts.Add(cts);
+            _runningTaskOwners[cts] = task;
+        }
+    }
+
+    internal void UntrackRunningTask(CancellationTokenSource cts)
+    {
+        lock (_runningTaskCtsLock)
+        {
+            _runningTaskCts.Remove(cts);
+            _runningTaskOwners.Remove(cts);
+        }
+    }
+
+    /// <summary>取一份快照（取消时**在锁外**逐个 Cancel：Cancel 会触发回调，不能拿着锁做）。</summary>
+    private List<CancellationTokenSource> SnapshotRunningTasks()
+    {
+        lock (_runningTaskCtsLock)
+        {
+            return _runningTaskCts.ToList();
+        }
+    }
+
+    /// <summary>特定解压的 unit 也注册进同一张运行任务表，取消当前才能找到它。</summary>
+    internal CancellationTokenSource BeginSpecificTask(ArchiveTask task)
+    {
+        var cts = new CancellationTokenSource();
+        TrackRunningTask(cts, task);
+        return cts;
+    }
+
+    internal void EndSpecificTask(CancellationTokenSource cts)
+    {
+        UntrackRunningTask(cts);
+        cts.Dispose();
+    }
+
+    internal bool _isExtracting;
+
+    /*
+     * 本批因密码没通过而失败的任务（密码错误 / 达到密码尝试上限）。
+     *
+     * 旧逻辑在每个任务的循环体里各弹一次模态框，而且用的是**同步** Dispatcher.Invoke：
+     * 50 个错包 = 50 次阻塞点击，批量跑不动。现在只在这里登记，
+     * 批次结束后由 ShowPasswordFailuresSummaryAsync 合并成一次提示。
+     * 并发解压时多个任务会同时写它，所以必须加锁（而不是靠"反正都在 UI 线程上"）。
+     */
+
+    /*
+     * ===== 同名冲突（ConflictAction = Ask）的批内状态 =====
+     *
+     * 决策 D-4：用户的真实场景是 50–200+ 个包，逐个弹窗等于不可用。所以"询问"这一档必须做到
+     * **本批只问一次**：用户答了「覆盖全部 / 跳过全部 / 全部自动重命名」之后，后面的冲突一律照办，
+     * 一个字都不许再问。这三条状态就是这件事的全部记账（批内重置、并发下加锁）。
+     *
+     * · _batchConflictDecision —— "全部 X"：本批后续所有冲突的答案；
+     * · _taskConflictDecision  —— "这一个"：同一个任务内后面的冲突沿用（一次聚合询问管整任务）；
+     * · _conflictPromptUnavailable —— 无界面宿主（单元测试 / 控制台宿主）或问不出答案：
+     *   记下来，后面的冲突不再尝试弹窗，直接走保守档并只写一次日志。
+     */
+
+    /*
+     * ===== 本批的"完成后打开输出目录"记账（设置项 OpenOutputFolderWhenDone，默认关）=====
+     *
+     * 为什么必须记账：设置开着的时候，如果每个任务成功都开一次资源管理器，
+     * 一批 50–200 个包就会在用户桌面上炸出几十个窗口 —— 那不是"看一眼结果"，是骚扰。
+     * 所以整批**只开一次**（第一个成功收尾的最外层任务），批开始时清零。
+     *
+     * 并发下多个任务会同时走到判断处，所以必须加锁（与 _passwordFailures 同一个理由）。
+     */
+
+    /*
+     * ===== 手动输入的密码（WinRAR 参考 §3 附注 / §2 H 组采纳项）=====
+     *
+     * 不变量 5 的红线：**只对本次运行有效、绝不落盘**。所以它只是一个字段 ——
+     * 不进 AppSettings、不进密码列表、不进日志、不进报告，进程一退就没了。
+     *
+     * 为什么需要它：密码本没命中、统一密码也不对时，用户以前只能"改设置再重跑整批"。
+     * 现在整批**一次性**问一次，输入的值当成本批所有任务的候选（排在空密码之后、
+     * 密码本之前 —— 它比密码本更"新"，是用户刚给出的信息）。
+     *
+     * ⚠ <c>internal</c>（2026-10-05）：单测要钉住"它必须同时进**递归**那条路的候选表"——
+     * 只靠公开入口造不出"本批手动输过密码"这个状态（无界面宿主不会弹那个框）。
+     */
+
+    /*
+     * ===== 「一键处理 · 本次选项」的运行期覆盖（规格 docs/输出与整理模型.md §9）=====
+     *
+     * 面板选的落点 / 终端落法 / 源包处理**只对这一次一键处理有效**：
+     * · 它是一个**每批一份、批结束就置空**的字段（不是静态、不进设置、不落盘）——
+     *   「不勾存为默认就不许改设置文件」这条硬要求靠的就是"这里根本没有写设置的路径"；
+     * · 同时只有一批能在跑（_isExtracting 守着），所以字段不会被两批同时用到；
+     * · 手动「只解压」（地基路径）**不带**它：那条路径照旧完全按设置走。
+     */
+    internal OneClickRunOptions? _runOptions;
+
+    /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
+    internal OneClickRunOptions? RunOptions => _runOptions;
+
+    /*
+     * ===== 手动档「解压到当前文件夹」的运行期开关（用户 2026-09-27）=====
+     *
+     * 语义 = WinRAR 右键的「解压到当前文件夹」：`111\222.rar` → `111\内容物`（**不建包名那一层**）。
+     * 三条边界写死在这里，别的路径一律不许打开它：
+     * ① 只有①页那个显式按钮会传 true（一键处理 / 批量 / 续解一律 false）—— 用户红线：批量绝不摊平；
+     * ② 与「本次选项」同寿：批首置入、`finally` 里连同 _runOptions 一起清掉，不进设置、不落盘；
+     * ③ 同名冲突照走既定冲突档（用户拍板接受这个代价：摊平本来就更容易撞名）。
+     */
+    internal bool _extractIntoSourceFolderThisRun;
+
+    /*
+     * 2026-10-25 用户拍板：手动「只解压」只解当前这一层（WinRAR 语义）。
+     * 这条运行期事实只给定稿分类用：这一层引擎刚写出来的所有东西都是内容物，
+     * ⛔ 不许再按"像不像归档"把它们扫进其余物。一键处理始终 false。
+     */
+    private bool _manualSingleLayerThisRun;
+
+    /*
+     * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
+     * 2026-09-25 第 32 条之后**管线里再没有任何一处调用 `SourceCleanupService`**
+     * （删除统一走 `Storage/RestItemPurger`，它自己的执行体接缝在 `RecycleBinService` 那一层），
+     * 所以这个接缝成了"看起来能影响删除、其实什么都不影响"的假接口 —— 一并删掉，
+     * 免得以后有人拿它当"删除没发生"的证据。
+     */
+
+    /*
+     * ===== 空间规划 + 危险模式（用户 2026-09-22 需求）=====
+     *
+     * 三件互相咬合的东西，都在这一批里活着：
+     * · _ledger         —— 空间预留账本：并发时"已经许出去多少空间"的唯一记账处。
+     *                      没有它，5G 与 6G 两个包会各自看到"还剩 10G"然后一起开跑。
+     * · _runtime        —— 逐任务的运行期记录（预留了多少、开工前的可用空间、危险模式删了多少）。
+     *                      自测证据与"跳过报告"都从这里取数；key 是任务路径。
+     * · _refinedEstimates —— 解压前那一遍 list 算出来的**精确**空间需求（按任务路径存）。
+     *                      自测的空间曲线要用它的"内容物"那一项，而任务对象上没有这个字段
+     *                      （Models\ArchiveTask.cs 不在本批授权范围内，也就不去动它）。
+     */
+
+    /*
+     * ⚠ 两张表都用**任务对象本身**做键，不用路径 —— 这一点有实际后果：
+     * 源包搬进其余物之后，协调器会把 task.CurrentPath 改写到新位置（决策 D-12 要求的回写）。
+     * 用路径当键的话，同一个任务在"搬之前"与"搬之后"会落进两个不同的格子：
+     * 自测读证据时拿到的是全新的一份（RestPurged=false、可用空间 -1），于是"明明删掉了却报没删"。
+     * ArchiveTask 没有重写 Equals，字典默认就是引用相等 —— 正是这里要的语义。
+     */
+
+    /// <summary>
+    /// 本批是不是**一键处理**（批首钉一次；<c>oneClickRun</c> 只在批首那个参数里，
+    /// 而"中途撞上空间不足该不该弹提示"这件事发生在很深的地方，需要它当判据）。
+    ///
+    /// <para>为什么需要：一键档的批中间是**零弹窗**红线，而那条"空间不足"的纯提示恰恰是
+    /// 唯一被允许的例外之一（纯提示 / 一个按钮 / 非模态 / 同一批一次）——
+    /// 手动档保持原样（只写日志），所以要能把两档分开。</para>
+    /// </summary>
+    internal bool _oneClickThisBatch;
+
+    /// <summary>
+    /// 本批是不是按「空间不足」的**安全档**跑（「不删原包」勾着时；见
+    /// <see cref="MainViewModel.SpaceTightKeepSource"/>）。
+    ///
+    /// <para>安全档与默认档的差别**只有一条**：源包一个字节都不动（不搬进其余物、也不删除）。
+    /// 并发、排序、其余物删除这三件事两档完全一致 —— 用户要的正是"先看清空间怎么变，
+    /// 再决定要不要开那个会删源包的档"（他的原话：怕"没成功而且原包也没有了"）。</para>
+    /// </summary>
+
+    /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
+    internal SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
+
+    public ExtractionCoordinator(
+        MainViewModel vm,
+        IArchiveEngine archiveEngine,
+        PasswordService passwordService,
+        PathService pathService,
+        DialogService dialogService,
+        ISourceMoveFileSystem? sourceMoveFileSystem = null)
+    {
+        _workspaceStep = new WorkspaceStep(this);
+
+        _vm = vm;
+        _archiveEngine = archiveEngine;
+        _passwordService = passwordService;
+        _pathService = pathService;
+        _dialogService = dialogService;
+
+        _uiThread = new UiThreadStep(_dialogService);
+        _progressHeartbeat = new ProgressHeartbeatStep(this);
+        _conflictStep = new ConflictStep(this);
+        _passwordCandidatesStep = new PasswordCandidatesStep(this);
+        _passwordFailureRegistry = new PasswordFailureRegistry();
+        _placementStep = new PlacementStep(this);
+        _partialPublishStep = new PartialPublishStep(this);
+        _restHandlingStep = new RestHandlingStep(this);
+        _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
+    }
+
+    /// <summary>源包搬运用的文件系统（真实实现或测试注入的假实现）。</summary>
+    private ISourceMoveFileSystem SourceMoveFileSystem => _sourceMoveFileSystem;
+
+    private AppSettings? _runSettings;
+
+    internal AppSettings Settings => _runSettings ?? _vm.Settings;
+
+
+    private string GlobalPassword => _vm.GlobalPassword;
+
+    private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
+
+    internal ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
+
+    internal bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
+
+    internal bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
+
+
+    public void StopAfterCurrent()
+    {
+        try
+        {
+            IsStopping = true;
+
+            /*
+             * 说明：
+             * 这里取消的是批量操作 token，用来阻止启动后续任务。
+             *
+             * 正在运行的任务各自持有独立的取消源，
+             * 所以这里只停止后续，不强制结束当前任务。
+             *
+             * 如果用户想立即取消正在运行的任务，需要再点“取消当前任务”。
+             */
+            _operationCts?.Cancel();
+
+            LogStopRequestOnce();
+        }
+        catch (Exception ex)
+        {
+            AppendLog("ERROR", "停止后续任务失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 进入第二大步（解析 / 试开 / 命名）时挂上"当前工作"句柄；结束时 Dispose。
+    /// 一键处理的轮循环是串行的，所以同一时刻只允许一个句柄。
+    /// </summary>
+    internal SecondStepWorkScope BeginSecondStepWork()
+    {
+        return _secondStepWorkTracker.Begin();
+    }
+
+    private bool CancelSecondStepWork()
+    {
+        return _secondStepWorkTracker.Cancel();
+    }
+
+    public void CancelCurrentTask(string operation = "停止当前任务")
+    {
+        try
+        {
+            // 先取消"第二大步当前工作"（解析/试开/命名），再按任务取消；两者都是"当前正在执行"。
+            bool secondStepWorkCancelled = CancelSecondStepWork();
+
+            // 先取快照再逐个 Cancel：Cancel 会同步触发回调，不能拿着列表的锁做这件事。
+            List<CancellationTokenSource> running = SnapshotRunningTasks();
+
+            if (running.Count == 0)
+            {
+                if (secondStepWorkCancelled)
+                {
+                    AppendLog("INFO", $"{operation}：已取消正在进行的第二大步工作（解析 / 试开 / 命名）。");
+                }
+                else
+                {
+                    AppendLog("WARN", $"当前没有正在执行的任务可{operation}。");
                 }
 
-                foreach (string? password in _passwordService.Passwords
-                             .Where(item => item.IsEnabled)
-                             .Select(item => item.Value))
+                return;
+            }
+
+            foreach (CancellationTokenSource cts in running)
+            {
+                ArchiveTask? owner;
+
+                lock (_runningTaskCtsLock)
                 {
-                    string value = password ?? string.Empty;
-
-                    if (seen.Add(value))
-                    {
-                        values.Add(value);
-                    }
+                    _runningTaskOwners.TryGetValue(cts, out owner);
                 }
-
-                return values;
-            }
-        }
-
-
-        /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
-        private const int MaxPreflightPasswordAttempts = 3;
-
-        // ================================================================
-        // 不变量 11：源文件变化（AGENTS.md §6 第 11 条）
-        // ================================================================
-
-
-        internal CancellationTokenSource? _operationCts;
-
-        /// <summary>
-        /// **第二大步"当前工作"的取消源**：解析 / 试开 / 命名 / 建入口根这一整段。
-        ///
-        /// <para>它不在任务表里，所以旧的「停止当前任务」只看任务 CTS 时会报"没有正在执行的任务"，
-        /// 而实际上一组 21 GB 正在被整组试开（真机 2026-11-10 00:00:45）。现在这段工作也有句柄：
-        /// 「停止当前任务 / 暂停所有操作」先取消它，再取消任务；停止后续（只停后续）不碰它。</para>
-        /// </summary>
-        private readonly SecondStepWorkTracker _secondStepWorkTracker = new();
-        /// <summary>
-        /// 正在跑的任务各自的取消源。
-        ///
-        /// <para>⚠ <b>必须加锁访问</b>（2026-09-22：默认并发由 1 提到 4 之后暴露的真缺陷）：
-        /// 每个任务在**自己的线程**上加/删这个列表，而 <see cref="CancelCurrentTask"/> 在 UI 线程上读它。
-        /// 旧的裸 <c>List</c> 写法在并发下会直接把内部数组搞坏 ——
-        /// 实测到的现象是收尾时抛 <c>ArgumentOutOfRangeException</c>（<c>List.RemoveAt</c> 越界），
-        /// 一个任务因此变成「未知错误」，而不是它本来的结论。</para>
-        /// </summary>
-        private readonly List<CancellationTokenSource> _runningTaskCts = new();
-
-        private readonly Dictionary<CancellationTokenSource, ArchiveTask> _runningTaskOwners = new();
-
-        private readonly object _runningTaskCtsLock = new();
-
-        /// <summary>
-        /// 这一批用户导入的源文件路径（含分卷各卷）。供别名清理判“这是用户的东西，绝不许删”。
-        /// 批首建立；任务表在清理时可能已被移动 / 改写，不能只靠当时的 CurrentPath 再猜。
-        /// </summary>
-        private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
-
-        internal void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
-        {
-            lock (_runningTaskCtsLock)
-            {
-                _runningTaskCts.Add(cts);
-                _runningTaskOwners[cts] = task;
-            }
-        }
-
-        internal void UntrackRunningTask(CancellationTokenSource cts)
-        {
-            lock (_runningTaskCtsLock)
-            {
-                _runningTaskCts.Remove(cts);
-                _runningTaskOwners.Remove(cts);
-            }
-        }
-
-        /// <summary>取一份快照（取消时**在锁外**逐个 Cancel：Cancel 会触发回调，不能拿着锁做）。</summary>
-        private List<CancellationTokenSource> SnapshotRunningTasks()
-        {
-            lock (_runningTaskCtsLock)
-            {
-                return _runningTaskCts.ToList();
-            }
-        }
-
-        /// <summary>特定解压的 unit 也注册进同一张运行任务表，取消当前才能找到它。</summary>
-        internal CancellationTokenSource BeginSpecificTask(ArchiveTask task)
-        {
-            var cts = new CancellationTokenSource();
-            TrackRunningTask(cts, task);
-            return cts;
-        }
-
-        internal void EndSpecificTask(CancellationTokenSource cts)
-        {
-            UntrackRunningTask(cts);
-            cts.Dispose();
-        }
-
-        internal bool _isExtracting;
-
-        /*
-         * 本批因密码没通过而失败的任务（密码错误 / 达到密码尝试上限）。
-         *
-         * 旧逻辑在每个任务的循环体里各弹一次模态框，而且用的是**同步** Dispatcher.Invoke：
-         * 50 个错包 = 50 次阻塞点击，批量跑不动。现在只在这里登记，
-         * 批次结束后由 ShowPasswordFailuresSummaryAsync 合并成一次提示。
-         * 并发解压时多个任务会同时写它，所以必须加锁（而不是靠"反正都在 UI 线程上"）。
-         */
-
-        /*
-         * ===== 同名冲突（ConflictAction = Ask）的批内状态 =====
-         *
-         * 决策 D-4：用户的真实场景是 50–200+ 个包，逐个弹窗等于不可用。所以"询问"这一档必须做到
-         * **本批只问一次**：用户答了「覆盖全部 / 跳过全部 / 全部自动重命名」之后，后面的冲突一律照办，
-         * 一个字都不许再问。这三条状态就是这件事的全部记账（批内重置、并发下加锁）。
-         *
-         * · _batchConflictDecision —— "全部 X"：本批后续所有冲突的答案；
-         * · _taskConflictDecision  —— "这一个"：同一个任务内后面的冲突沿用（一次聚合询问管整任务）；
-         * · _conflictPromptUnavailable —— 无界面宿主（单元测试 / 控制台宿主）或问不出答案：
-         *   记下来，后面的冲突不再尝试弹窗，直接走保守档并只写一次日志。
-         */
-
-        /*
-         * ===== 本批的"完成后打开输出目录"记账（设置项 OpenOutputFolderWhenDone，默认关）=====
-         *
-         * 为什么必须记账：设置开着的时候，如果每个任务成功都开一次资源管理器，
-         * 一批 50–200 个包就会在用户桌面上炸出几十个窗口 —— 那不是"看一眼结果"，是骚扰。
-         * 所以整批**只开一次**（第一个成功收尾的最外层任务），批开始时清零。
-         *
-         * 并发下多个任务会同时走到判断处，所以必须加锁（与 _passwordFailures 同一个理由）。
-         */
-
-        /*
-         * ===== 手动输入的密码（WinRAR 参考 §3 附注 / §2 H 组采纳项）=====
-         *
-         * 不变量 5 的红线：**只对本次运行有效、绝不落盘**。所以它只是一个字段 ——
-         * 不进 AppSettings、不进密码列表、不进日志、不进报告，进程一退就没了。
-         *
-         * 为什么需要它：密码本没命中、统一密码也不对时，用户以前只能"改设置再重跑整批"。
-         * 现在整批**一次性**问一次，输入的值当成本批所有任务的候选（排在空密码之后、
-         * 密码本之前 —— 它比密码本更"新"，是用户刚给出的信息）。
-         *
-         * ⚠ <c>internal</c>（2026-10-05）：单测要钉住"它必须同时进**递归**那条路的候选表"——
-         * 只靠公开入口造不出"本批手动输过密码"这个状态（无界面宿主不会弹那个框）。
-         */
-
-        /*
-         * ===== 「一键处理 · 本次选项」的运行期覆盖（规格 docs/输出与整理模型.md §9）=====
-         *
-         * 面板选的落点 / 终端落法 / 源包处理**只对这一次一键处理有效**：
-         * · 它是一个**每批一份、批结束就置空**的字段（不是静态、不进设置、不落盘）——
-         *   「不勾存为默认就不许改设置文件」这条硬要求靠的就是"这里根本没有写设置的路径"；
-         * · 同时只有一批能在跑（_isExtracting 守着），所以字段不会被两批同时用到；
-         * · 手动「只解压」（地基路径）**不带**它：那条路径照旧完全按设置走。
-         */
-        internal OneClickRunOptions? _runOptions;
-
-        /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
-        internal OneClickRunOptions? RunOptions => _runOptions;
-
-        /*
-         * ===== 手动档「解压到当前文件夹」的运行期开关（用户 2026-09-27）=====
-         *
-         * 语义 = WinRAR 右键的「解压到当前文件夹」：`111\222.rar` → `111\内容物`（**不建包名那一层**）。
-         * 三条边界写死在这里，别的路径一律不许打开它：
-         * ① 只有①页那个显式按钮会传 true（一键处理 / 批量 / 续解一律 false）—— 用户红线：批量绝不摊平；
-         * ② 与「本次选项」同寿：批首置入、`finally` 里连同 _runOptions 一起清掉，不进设置、不落盘；
-         * ③ 同名冲突照走既定冲突档（用户拍板接受这个代价：摊平本来就更容易撞名）。
-         */
-        internal bool _extractIntoSourceFolderThisRun;
-
-        /*
-         * 2026-10-25 用户拍板：手动「只解压」只解当前这一层（WinRAR 语义）。
-         * 这条运行期事实只给定稿分类用：这一层引擎刚写出来的所有东西都是内容物，
-         * ⛔ 不许再按"像不像归档"把它们扫进其余物。一键处理始终 false。
-         */
-        private bool _manualSingleLayerThisRun;
-
-        /*
-         * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
-         * 2026-09-25 第 32 条之后**管线里再没有任何一处调用 `SourceCleanupService`**
-         * （删除统一走 `Storage/RestItemPurger`，它自己的执行体接缝在 `RecycleBinService` 那一层），
-         * 所以这个接缝成了"看起来能影响删除、其实什么都不影响"的假接口 —— 一并删掉，
-         * 免得以后有人拿它当"删除没发生"的证据。
-         */
-
-        /*
-         * ===== 空间规划 + 危险模式（用户 2026-09-22 需求）=====
-         *
-         * 三件互相咬合的东西，都在这一批里活着：
-         * · _ledger         —— 空间预留账本：并发时"已经许出去多少空间"的唯一记账处。
-         *                      没有它，5G 与 6G 两个包会各自看到"还剩 10G"然后一起开跑。
-         * · _runtime        —— 逐任务的运行期记录（预留了多少、开工前的可用空间、危险模式删了多少）。
-         *                      自测证据与"跳过报告"都从这里取数；key 是任务路径。
-         * · _refinedEstimates —— 解压前那一遍 list 算出来的**精确**空间需求（按任务路径存）。
-         *                      自测的空间曲线要用它的"内容物"那一项，而任务对象上没有这个字段
-         *                      （Models\ArchiveTask.cs 不在本批授权范围内，也就不去动它）。
-         */
-
-        /*
-         * ⚠ 两张表都用**任务对象本身**做键，不用路径 —— 这一点有实际后果：
-         * 源包搬进其余物之后，协调器会把 task.CurrentPath 改写到新位置（决策 D-12 要求的回写）。
-         * 用路径当键的话，同一个任务在"搬之前"与"搬之后"会落进两个不同的格子：
-         * 自测读证据时拿到的是全新的一份（RestPurged=false、可用空间 -1），于是"明明删掉了却报没删"。
-         * ArchiveTask 没有重写 Equals，字典默认就是引用相等 —— 正是这里要的语义。
-         */
-
-        /// <summary>
-        /// 本批是不是**一键处理**（批首钉一次；<c>oneClickRun</c> 只在批首那个参数里，
-        /// 而"中途撞上空间不足该不该弹提示"这件事发生在很深的地方，需要它当判据）。
-        ///
-        /// <para>为什么需要：一键档的批中间是**零弹窗**红线，而那条"空间不足"的纯提示恰恰是
-        /// 唯一被允许的例外之一（纯提示 / 一个按钮 / 非模态 / 同一批一次）——
-        /// 手动档保持原样（只写日志），所以要能把两档分开。</para>
-        /// </summary>
-        internal bool _oneClickThisBatch;
-
-        /// <summary>
-        /// 本批是不是按「空间不足」的**安全档**跑（「不删原包」勾着时；见
-        /// <see cref="MainViewModel.SpaceTightKeepSource"/>）。
-        ///
-        /// <para>安全档与默认档的差别**只有一条**：源包一个字节都不动（不搬进其余物、也不删除）。
-        /// 并发、排序、其余物删除这三件事两档完全一致 —— 用户要的正是"先看清空间怎么变，
-        /// 再决定要不要开那个会删源包的档"（他的原话：怕"没成功而且原包也没有了"）。</para>
-        /// </summary>
-
-        /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
-        internal SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
-
-        public ExtractionCoordinator(
-            MainViewModel vm,
-            IArchiveEngine archiveEngine,
-            PasswordService passwordService,
-            PathService pathService,
-            DialogService dialogService,
-            ISourceMoveFileSystem? sourceMoveFileSystem = null)
-        {
-            _workspaceStep = new WorkspaceStep(this);
-
-            _vm = vm;
-            _archiveEngine = archiveEngine;
-            _passwordService = passwordService;
-            _pathService = pathService;
-            _dialogService = dialogService;
-
-            _uiThread = new UiThreadStep(_dialogService);
-            _progressHeartbeat = new ProgressHeartbeatStep(this);
-            _conflictStep = new ConflictStep(this);
-            _passwordCandidatesStep = new PasswordCandidatesStep(this);
-            _passwordFailureRegistry = new PasswordFailureRegistry();
-            _placementStep = new PlacementStep(this);
-            _partialPublishStep = new PartialPublishStep(this);
-            _restHandlingStep = new RestHandlingStep(this);
-            _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
-        }
-
-        /// <summary>源包搬运用的文件系统（真实实现或测试注入的假实现）。</summary>
-        private ISourceMoveFileSystem SourceMoveFileSystem => _sourceMoveFileSystem;
-
-        private AppSettings? _runSettings;
-
-        internal AppSettings Settings => _runSettings ?? _vm.Settings;
-
-
-        private string GlobalPassword => _vm.GlobalPassword;
-
-        private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
-
-        internal ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
-
-        internal bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
-
-        internal bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
-
-
-        public void StopAfterCurrent()
-        {
-            try
-            {
-                IsStopping = true;
 
                 /*
-                 * 说明：
-                 * 这里取消的是批量操作 token，用来阻止启动后续任务。
-                 *
-                 * 正在运行的任务各自持有独立的取消源，
-                 * 所以这里只停止后续，不强制结束当前任务。
-                 *
-                 * 如果用户想立即取消正在运行的任务，需要再点“取消当前任务”。
+                 * 取消是用户的选择，必须在收尾清理之前就落成机器事实；
+                 * 否则工作区清理会把还没跑完的“成功”状态当成真成功。
                  */
-                _operationCts?.Cancel();
-
-                LogStopRequestOnce();
-            }
-            catch (Exception ex)
-            {
-                AppendLog("ERROR", "停止后续任务失败：" + ex.Message);
-            }
-        }
-
-        /// <summary>
-        /// 进入第二大步（解析 / 试开 / 命名）时挂上"当前工作"句柄；结束时 Dispose。
-        /// 一键处理的轮循环是串行的，所以同一时刻只允许一个句柄。
-        /// </summary>
-        internal SecondStepWorkScope BeginSecondStepWork()
-        {
-            return _secondStepWorkTracker.Begin();
-        }
-
-        private bool CancelSecondStepWork()
-        {
-            return _secondStepWorkTracker.Cancel();
-        }
-
-        public void CancelCurrentTask(string operation = "停止当前任务")
-        {
-            try
-            {
-                // 先取消"第二大步当前工作"（解析/试开/命名），再按任务取消；两者都是"当前正在执行"。
-                bool secondStepWorkCancelled = CancelSecondStepWork();
-
-                // 先取快照再逐个 Cancel：Cancel 会同步触发回调，不能拿着列表的锁做这件事。
-                List<CancellationTokenSource> running = SnapshotRunningTasks();
-
-                if (running.Count == 0)
+                if (owner != null)
                 {
-                    if (secondStepWorkCancelled)
-                    {
-                        AppendLog("INFO", $"{operation}：已取消正在进行的第二大步工作（解析 / 试开 / 命名）。");
-                    }
-                    else
-                    {
-                        AppendLog("WARN", $"当前没有正在执行的任务可{operation}。");
-                    }
-
-                    return;
+                    owner.Outcome = TaskOutcome.Cancelled;
+                    owner.Reason = TaskReason.Cancelled;
+                    owner.ErrorMessage = $"用户{operation}";
                 }
 
-                foreach (CancellationTokenSource cts in running)
+                try
                 {
-                    ArchiveTask? owner;
-
-                    lock (_runningTaskCtsLock)
-                    {
-                        _runningTaskOwners.TryGetValue(cts, out owner);
-                    }
-
-                    /*
-                     * 取消是用户的选择，必须在收尾清理之前就落成机器事实；
-                     * 否则工作区清理会把还没跑完的“成功”状态当成真成功。
-                     */
-                    if (owner != null)
-                    {
-                        owner.Outcome = TaskOutcome.Cancelled;
-                        owner.Reason = TaskReason.Cancelled;
-                        owner.ErrorMessage = $"用户{operation}";
-                    }
-
-                    try
-                    {
-                        cts.Cancel();
-                    }
-                    catch
-                    {
-                    }
+                    cts.Cancel();
                 }
+                catch
+                {
+                }
+            }
 
-                AppendLog("WARN", $"已请求{operation}，正在结束当前任务进程。");
-            }
-            catch (Exception ex)
-            {
-                AppendLog("ERROR", $"{operation}失败：" + ex.Message);
-            }
+            AppendLog("WARN", $"已请求{operation}，正在结束当前任务进程。");
         }
-
-
-        private ExtractionTaskRunner? _taskRunner;
-
-        /// <summary>一个任务从开工到收工的执行器（生命周期与协调器同寿命）。</summary>
-        internal ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
+        catch (Exception ex)
+        {
+            AppendLog("ERROR", $"{operation}失败：" + ex.Message);
+        }
     }
+
+
+    private ExtractionTaskRunner? _taskRunner;
+
+    /// <summary>一个任务从开工到收工的执行器（生命周期与协调器同寿命）。</summary>
+    internal ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
 }
 

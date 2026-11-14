@@ -5,318 +5,299 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Extraction;
+
+
+/// <summary>
+/// 可选清理源包（AGENTS.md §9.5，用户 2026-09-21 指示：默认关闭，只有解压成功 + 校验通过才删）。
+///
+/// <para>
+/// ⚠ <b>2026-09-25 第 32 条之后它不再挂在"解压收尾"那一条路上</b>：用户把"删源包"表达成
+/// "源包操作 = 放入其余物 + 删除操作 = 回收站 / 彻底删除"，那条路的唯一执行体是
+/// <see cref="ArchiveFixer.Storage.RestItemPurger"/>（它删的是定稿时记下的那一份 `其余物`，
+/// 门槛也更多）。
+/// </para>
+///
+/// <para>
+/// ✅ <b>它在管线上有、且只有两个调用点</b>，两处都是同一件事"**这一层跑完就删它自己那一层的源**"，
+/// 由 <c>ExtractionCoordinator.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
+/// ① ①页「空间不足」模式（<c>LayerPurgeTrigger.SpaceTight</c>）—— 那个模式的**全部机制**
+/// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包；
+/// ② 普通档的**逐层回收**（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板）——
+/// 续解层 / 递归层跑完就删掉上一层交给它的那个内层包（它对本层就是"解出这一层内容所消耗掉的
+/// 那份源"）；最外层源包仍留到链尾由 <see cref="ArchiveFixer.Storage.RestItemPurger"/> 按
+/// 「源包操作」处理。
+/// ⚠ <b>2026-10-15 起这一档与③页「删除操作」档位解绑</b>：成功链上的过程物**一律**当场永久删
+/// （用户 2026-10-14 口径逐字：「删除操作只针对**最后一层过程物**……其他的过程物统一彻底删除
+/// （因为他们都是成功的情况下），统一彻底删除」）—— 老口径"只有彻底删除档才逐层回收"已废。
+/// ⛔ 除了这两处，别再往管线里接它：两条以上删除路径并存正是"到底谁在删"这类问题的温床。
+/// </para>
+///
+/// <para>
+/// ⚠ <b>调用方必须替它把住这几道门（它自己只看"开关 + 校验 + 清单"）</b>：定稿成功、输出校验通过、
+/// 未取消、**可证完整**（<c>ResultCompletenessClassifier</c>）、以及**「半套分卷」那道闸门**
+/// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> —— 2026-10-03 独立复核查出的缺口：
+/// 本类只逐个 <c>File.Delete</c>，**不知道**同一组卷有没有被拆在两边，而 §44.2 那次 25 GB 永久消失
+/// 正是那个形状）。
+/// </para>
+///
+/// <para>
+/// 这个类是整个项目里**唯一**会删用户源文件的地方，因此所有安全边界都写死在这里：
+/// 1. 开关没开 → 一个文件都不碰；
+/// 2. 校验没过 → 一个文件都不碰；
+/// 3. 要删的清单只能来自任务自身（分卷组 = 这一组的分卷，单文件任务 = 它自己），
+///    **不扫描目录**、**不删目录**、**不递归**；
+/// 4. 单个文件删不掉（占用 / 权限）只记录并继续，不让整批任务因为一个文件失败。
+///
+/// <para>
+/// ⚠ <b>判据只准看事实（用户 2026-09-24 要求）</b>：删除条件就是「输出校验通过 + 未取消 + 属于本任务来源」，
+/// ⛔ <b>不许</b>写 <c>task.Status == "解压成功"</c> 之类的字符串判断 ——
+/// 真机日志里出现过"状态写着解压成功、校验却已判否"，拿状态字符串当判据迟早会删错东西。
+/// 本类因此**完全不读** <see cref="ArchiveTask.Status"/>。
+/// </para>
+/// </summary>
+public sealed class SourceCleanupService
 {
+    private readonly ISourceDeleteFileSystem _fileSystem;
 
     /// <summary>
-    /// 可选清理源包（AGENTS.md §9.5，用户 2026-09-21 指示：默认关闭，只有解压成功 + 校验通过才删）。
-    ///
-    /// <para>
-    /// ⚠ <b>2026-09-25 第 32 条之后它不再挂在"解压收尾"那一条路上</b>：用户把"删源包"表达成
-    /// "源包操作 = 放入其余物 + 删除操作 = 回收站 / 彻底删除"，那条路的唯一执行体是
-    /// <see cref="ArchiveFixer.Storage.RestItemPurger"/>（它删的是定稿时记下的那一份 `其余物`，
-    /// 门槛也更多）。
-    /// </para>
-    ///
-    /// <para>
-    /// ✅ <b>它在管线上有、且只有两个调用点</b>，两处都是同一件事"**这一层跑完就删它自己那一层的源**"，
-    /// 由 <c>ExtractionCoordinator.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
-    /// ① ①页「空间不足」模式（<c>LayerPurgeTrigger.SpaceTight</c>）—— 那个模式的**全部机制**
-    /// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包；
-    /// ② 普通档的**逐层回收**（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板）——
-    /// 续解层 / 递归层跑完就删掉上一层交给它的那个内层包（它对本层就是"解出这一层内容所消耗掉的
-    /// 那份源"）；最外层源包仍留到链尾由 <see cref="ArchiveFixer.Storage.RestItemPurger"/> 按
-    /// 「源包操作」处理。
-    /// ⚠ <b>2026-10-15 起这一档与③页「删除操作」档位解绑</b>：成功链上的过程物**一律**当场永久删
-    /// （用户 2026-10-14 口径逐字：「删除操作只针对**最后一层过程物**……其他的过程物统一彻底删除
-    /// （因为他们都是成功的情况下），统一彻底删除」）—— 老口径"只有彻底删除档才逐层回收"已废。
-    /// ⛔ 除了这两处，别再往管线里接它：两条以上删除路径并存正是"到底谁在删"这类问题的温床。
-    /// </para>
-    ///
-    /// <para>
-    /// ⚠ <b>调用方必须替它把住这几道门（它自己只看"开关 + 校验 + 清单"）</b>：定稿成功、输出校验通过、
-    /// 未取消、**可证完整**（<c>ResultCompletenessClassifier</c>）、以及**「半套分卷」那道闸门**
-    /// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> —— 2026-10-03 独立复核查出的缺口：
-    /// 本类只逐个 <c>File.Delete</c>，**不知道**同一组卷有没有被拆在两边，而 §44.2 那次 25 GB 永久消失
-    /// 正是那个形状）。
-    /// </para>
-    ///
-    /// <para>
-    /// 这个类是整个项目里**唯一**会删用户源文件的地方，因此所有安全边界都写死在这里：
-    /// 1. 开关没开 → 一个文件都不碰；
-    /// 2. 校验没过 → 一个文件都不碰；
-    /// 3. 要删的清单只能来自任务自身（分卷组 = 这一组的分卷，单文件任务 = 它自己），
-    ///    **不扫描目录**、**不删目录**、**不递归**；
-    /// 4. 单个文件删不掉（占用 / 权限）只记录并继续，不让整批任务因为一个文件失败。
-    ///
-    /// <para>
-    /// ⚠ <b>判据只准看事实（用户 2026-09-24 要求）</b>：删除条件就是「输出校验通过 + 未取消 + 属于本任务来源」，
-    /// ⛔ <b>不许</b>写 <c>task.Status == "解压成功"</c> 之类的字符串判断 ——
-    /// 真机日志里出现过"状态写着解压成功、校验却已判否"，拿状态字符串当判据迟早会删错东西。
-    /// 本类因此**完全不读** <see cref="ArchiveTask.Status"/>。
-    /// </para>
+    /// <paramref name="fileSystem"/> 只给测试用（注入一个记账的假执行器，断言"该不删时一次都没被调用"）；
+    /// 产品代码一律用默认的 <see cref="FileSystemSourceDeleteFileSystem"/>。
     /// </summary>
-    public sealed class SourceCleanupService
+    public SourceCleanupService(ISourceDeleteFileSystem? fileSystem = null)
     {
-        private readonly ISourceDeleteFileSystem _fileSystem;
+        _fileSystem = fileSystem ?? FileSystemSourceDeleteFileSystem.Instance;
+    }
 
-        /// <summary>
-        /// <paramref name="fileSystem"/> 只给测试用（注入一个记账的假执行器，断言"该不删时一次都没被调用"）；
-        /// 产品代码一律用默认的 <see cref="FileSystemSourceDeleteFileSystem"/>。
-        /// </summary>
-        public SourceCleanupService(ISourceDeleteFileSystem? fileSystem = null)
+    /// <summary>
+    /// 解压收尾那条路用的入口：只有**清单逐条核对通过**才算可删。
+    /// </summary>
+    public SourceCleanupResult Cleanup(ArchiveTask? task, OutputVerificationResult? verification, bool enabled)
+    {
+        SourceCleanupEvidence evidence = verification?.AllowsSourceRemoval == true
+            ? SourceCleanupEvidence.ManifestCrossChecked
+            : SourceCleanupEvidence.None;
+
+        return Cleanup(task, new SourceCleanupDecision
         {
-            _fileSystem = fileSystem ?? FileSystemSourceDeleteFileSystem.Instance;
-        }
+            Enabled = enabled,
+            Evidence = evidence,
+            Note = verification == null ? "没有校验结果" : verification.Message
+        });
+    }
 
-        /// <summary>
-        /// 解压收尾那条路用的入口：只有**清单逐条核对通过**才算可删。
-        /// </summary>
-        public SourceCleanupResult Cleanup(ArchiveTask? task, OutputVerificationResult? verification, bool enabled)
+    /// <summary>
+    /// 唯一删源入口：调用方只交事实（证据种类/说明/是否含其余物别名），可不可删在本类判。
+    /// </summary>
+    public SourceCleanupResult Cleanup(ArchiveTask? task, SourceCleanupDecision decision)
+    {
+        SourceCleanupDecision actual = decision ?? new SourceCleanupDecision
         {
-            SourceCleanupEvidence evidence = verification?.AllowsSourceRemoval == true
-                ? SourceCleanupEvidence.ManifestCrossChecked
-                : SourceCleanupEvidence.None;
+            Enabled = false,
+            Evidence = SourceCleanupEvidence.None,
+            Note = "没有删源裁决"
+        };
 
-            return Cleanup(task, new SourceCleanupDecision
+        return actual.Plan == null
+            ? CleanupCore(task, actual)
+            : CleanupExecutor.ExecuteDeletion(actual.Plan, _ => CleanupCore(task, actual));
+    }
+
+    private SourceCleanupResult CleanupCore(
+        ArchiveTask? task,
+        SourceCleanupDecision decision)
+    {
+        /*
+         * 规则 1：开关没开就什么都不做。
+         * 这一条放在最前面，是为了让"默认关闭"成为代码层面的保证，
+         * 而不是靠调用方记得别传 true。
+         */
+        if (!decision.Enabled)
+        {
+            return new SourceCleanupResult
             {
-                Enabled = enabled,
-                Evidence = evidence,
-                Note = verification == null ? "没有校验结果" : verification.Message
-            });
-        }
-
-        /// <summary>
-        /// 唯一删源入口：调用方只交事实（证据种类/说明/是否含其余物别名），可不可删在本类判。
-        /// </summary>
-        public SourceCleanupResult Cleanup(ArchiveTask? task, SourceCleanupDecision decision)
-        {
-            SourceCleanupDecision actual = decision ?? new SourceCleanupDecision
-            {
-                Enabled = false,
-                Evidence = SourceCleanupEvidence.None,
-                Note = "没有删源裁决"
+                Attempted = false,
+                Message = "未开启清理源包"
             };
-
-            return actual.Plan == null
-                ? CleanupCore(task, actual)
-                : CleanupExecutor.ExecuteDeletion(actual.Plan, _ => CleanupCore(task, actual));
         }
 
-        private SourceCleanupResult CleanupCore(
-            ArchiveTask? task,
-            SourceCleanupDecision decision)
+        if (task == null)
         {
-            /*
-             * 规则 1：开关没开就什么都不做。
-             * 这一条放在最前面，是为了让"默认关闭"成为代码层面的保证，
-             * 而不是靠调用方记得别传 true。
-             */
-            if (!decision.Enabled)
+            return new SourceCleanupResult
             {
-                return new SourceCleanupResult
-                {
-                    Attempted = false,
-                    Message = "未开启清理源包"
-                };
-            }
+                Attempted = false,
+                Message = "任务为空，已保留源文件"
+            };
+        }
 
-            if (task == null)
+        if (decision.Plan?.Cancelled == true)
+        {
+            return new SourceCleanupResult
             {
-                return new SourceCleanupResult
-                {
-                    Attempted = false,
-                    Message = "任务为空，已保留源文件"
-                };
-            }
+                Attempted = false,
+                Message = "用户已请求停止，源文件一个字节都不删"
+            };
+        }
 
-            if (decision.Plan?.Cancelled == true)
-            {
-                return new SourceCleanupResult
-                {
-                    Attempted = false,
-                    Message = "用户已请求停止，源文件一个字节都不删"
-                };
-            }
-
-            /*
-             * 规则 2：没有本链自己的完整性证据就不删。
-             * 宁可留下一个已经没用的源包，也不能把没解压全的包删掉 —— 后者无法恢复。
-             */
-            if (decision.Evidence == SourceCleanupEvidence.None)
-            {
-                string reason = string.IsNullOrWhiteSpace(decision.Note) ? "没有完整性证据" : decision.Note;
-
-                return new SourceCleanupResult
-                {
-                    Attempted = false,
-                    Message = $"校验未通过或判不出完整性，已保留源文件（{reason}）"
-                };
-            }
-
-            List<string> targets = decision.Plan?.Targets?.ToList()
-                                   ?? BuildTargetList(task, decision.IncludeRestAliases);
-
-            if (targets.Count == 0)
-            {
-                return new SourceCleanupResult
-                {
-                    Attempted = false,
-                    Message = "任务没有可删除的源文件路径，已保留源文件"
-                };
-            }
-
-            var deletedFiles = new List<string>();
-            var failedFiles = new List<string>();
-            long freedBytes = 0;
-
-            foreach (string targetPath in targets)
-            {
-                /*
-                 * ⚠ 「已经不在了」与「被占用」必须分开（2026-10-22，守门用例
-                 * `递归完成但源包没搬成_终态不许是成功` 逮到）：`File.Exists` 对**被独占打开**的文件
-                 * 也会返回 false（它内部要开句柄）⇒ 老写法把"删不掉"当成"本来就没有"，
-                 * 静默跳过、不记失败 ⇒ 任务终态照旧写「解压成功」。
-                 * `FileInfo.Exists` 只读文件属性、不打开句柄 ⇒ 被占用时照样为 true。
-                 */
-                bool exists = _fileSystem.FileExists(targetPath);
-
-                if (!exists && !new FileInfo(targetPath).Exists)
-                {
-                    // 已经不在了（用户手动删了 / 上一轮已经清过）：跳过，**不算失败**，
-                    // 否则每次重跑都会报一堆假的"删除失败"。
-                    continue;
-                }
-
-                if (!TryReadAttributes(targetPath, out FileAttributes attributes))
-                {
-                    failedFiles.Add(targetPath);
-                    continue;
-                }
-
-                /*
-                 * 只处理**文件**：
-                 * ① 目录一律不删（清单里理论上不会出现目录，但万一出现，这里也要拦住）；
-                 * ② 符号链接 / 联接点不删 —— 它可能指到别处，删它属于"删了不在任务范围内的东西"，
-                 *    与 AGENTS.md §6 第 13 条（不得误删工作区之外的文件）冲突。
-                 */
-                if ((attributes & FileAttributes.Directory) != 0 ||
-                    (attributes & FileAttributes.ReparsePoint) != 0)
-                {
-                    failedFiles.Add(targetPath);
-                    continue;
-                }
-
-                long size = 0;
-
-                try
-                {
-                    // 必须在删除前取大小：删完再问就永远是 0 了。
-                    size = new FileInfo(targetPath).Length;
-                }
-                catch
-                {
-                    // 取不到大小不影响删除，只是这次统计少算一点。
-                    size = 0;
-                }
-
-                try
-                {
-
-                    // File.Delete 不递归、不跟随 reparse point，删的就是清单里这一个文件。
-                    _fileSystem.DeleteFile(targetPath);
-
-                    deletedFiles.Add(targetPath);
-                    freedBytes += size;
-                }
-                catch
-                {
-                    // 被占用 / 权限不足：记下来继续处理其余文件，
-                    // 不让一个删不掉的分卷拖垮整批清理（AGENTS.md §6 第 9 条）。
-                    failedFiles.Add(targetPath);
-                }
-            }
+        /*
+         * 规则 2：没有本链自己的完整性证据就不删。
+         * 宁可留下一个已经没用的源包，也不能把没解压全的包删掉 —— 后者无法恢复。
+         */
+        if (decision.Evidence == SourceCleanupEvidence.None)
+        {
+            string reason = string.IsNullOrWhiteSpace(decision.Note) ? "没有完整性证据" : decision.Note;
 
             return new SourceCleanupResult
             {
-                Attempted = true,
-                DeletedFiles = deletedFiles,
-                FailedFiles = failedFiles,
-                FreedBytes = freedBytes,
-                Message = BuildMessage(task, deletedFiles.Count, failedFiles.Count, freedBytes)
+                Attempted = false,
+                Message = $"校验未通过或判不出完整性，已保留源文件（{reason}）"
             };
         }
 
-        /// <summary>
-        /// 生成"要删哪些文件"的清单。
-        ///
-        /// <para>这是本类最关键的安全边界：清单**只能**来自任务自身记录，
-        /// 分卷组 = <see cref="ArchiveTask.VolumePaths"/> 整组，单文件任务 = <see cref="ArchiveTask.CurrentPath"/>。
-        /// 绝不扫描目录去"顺便"删掉旁边的同名文件、说明文件或目录。</para>
-        ///
-        /// <para>⚠ 2026-10-03：改成 <c>internal</c> 是因为**「半套分卷」那道闸门要读同一份清单**
-        /// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> 的候选 = 这里要删的那几个文件）
-        /// —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5：同一件事的真值只允许有一个出口），
-        /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
-        /// </summary>
-        /// <param name="additionalPaths">
-        /// 额外来源清单：第二大步新组的源片账在 <c>VolumeStepGroupWork.Pieces</c>，不一定写进
-        /// <see cref="ArchiveTask.VolumePaths"/>；调用方只在组可证完整且已通过删除闸门后传入。
-        /// </param>
-        internal static List<string> BuildTargetList(
-            ArchiveTask task,
-            bool includeRestAliases = false,
-            IReadOnlyList<string>? additionalPaths = null)
+        List<string> targets = decision.Plan?.Targets?.ToList()
+                               ?? BuildTargetList(task, decision.IncludeRestAliases);
+
+        if (targets.Count == 0)
         {
-            var targets = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            if (task.IsVolumeGroup)
+            return new SourceCleanupResult
             {
-                /*
-                 * 分卷组必须整组删：只删第一卷会留下一堆再也拼不起来的分卷碎片，
-                 * 对用户来说比不删更糟。
-                 *
-                 * 注意：VolumePaths 为空时**不回退**到 CurrentPath —— 那说明任务分组信息不完整，
-                 * 此时什么都不删才是对的（严格按清单执行，不替用户推断）。
-                 */
-                foreach (string volumePath in task.VolumePaths)
-                {
-                    AddTarget(targets, seen, volumePath);
-                }
+                Attempted = false,
+                Message = "任务没有可删除的源文件路径，已保留源文件"
+            };
+        }
 
-                /*
-                 * ⛔ **入口那一份自己的源包也要在清单里**（2026-10-18 用户 `&&` 口径，`22222222` 现场）：
-                 * `VolumePaths` 有时只装“其余卷”，入口那一份的 `CurrentPath` 不在里面
-                 * ⇒ 整组删了 3 个、入口那份却留在盘上（用户看到的仍是“原包没删干净”）。
-                 * 只在这一组**可证完整 + 内容物校验通过**时补（`&&` 的第二步已成立）；
-                 * 组不完整 / 判不出 ⇒ 清单与改动前逐字相同（⛔ 不替代任何闸门）。
-                 */
-                if (task.IsVolumeComplete
-                    && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
-                {
-                    AddTarget(targets, seen, task.CurrentPath);
-                    AddTarget(targets, seen, task.OriginalPath);
-                }
+        var deletedFiles = new List<string>();
+        var failedFiles = new List<string>();
+        long freedBytes = 0;
 
-                AddAdditionalTargets(additionalPaths, targets, seen);
+        foreach (string targetPath in targets)
+        {
+            /*
+             * ⚠ 「已经不在了」与「被占用」必须分开（2026-10-22，守门用例
+             * `递归完成但源包没搬成_终态不许是成功` 逮到）：`File.Exists` 对**被独占打开**的文件
+             * 也会返回 false（它内部要开句柄）⇒ 老写法把"删不掉"当成"本来就没有"，
+             * 静默跳过、不记失败 ⇒ 任务终态照旧写「解压成功」。
+             * `FileInfo.Exists` 只读文件属性、不打开句柄 ⇒ 被占用时照样为 true。
+             */
+            bool exists = _fileSystem.FileExists(targetPath);
 
-                if (includeRestAliases)
-                {
-                    AddRestAliases(task, targets, seen);
-                }
-
-                return targets;
+            if (!exists && !new FileInfo(targetPath).Exists)
+            {
+                // 已经不在了（用户手动删了 / 上一轮已经清过）：跳过，**不算失败**，
+                // 否则每次重跑都会报一堆假的"删除失败"。
+                continue;
             }
 
-            AddTarget(targets, seen, task.CurrentPath);
+            if (!TryReadAttributes(targetPath, out FileAttributes attributes))
+            {
+                failedFiles.Add(targetPath);
+                continue;
+            }
 
             /*
-             * ⛔ **改名过的源包**：`CurrentPath` 可能已经是改名后的路径（或已被清空），
-             * 而盘上真正那一份还叫 `OriginalPath`（`22222222` 现场：跟班片的清单被判成“空”，
-             * 源片原样留着）。两件都进清单；同一个路径 `AddTarget` 会去重。
+             * 只处理**文件**：
+             * ① 目录一律不删（清单里理论上不会出现目录，但万一出现，这里也要拦住）；
+             * ② 符号链接 / 联接点不删 —— 它可能指到别处，删它属于"删了不在任务范围内的东西"，
+             *    与 AGENTS.md §6 第 13 条（不得误删工作区之外的文件）冲突。
              */
-            AddTarget(targets, seen, task.OriginalPath);
+            if ((attributes & FileAttributes.Directory) != 0 ||
+                (attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                failedFiles.Add(targetPath);
+                continue;
+            }
+
+            long size = 0;
+
+            try
+            {
+                // 必须在删除前取大小：删完再问就永远是 0 了。
+                size = new FileInfo(targetPath).Length;
+            }
+            catch
+            {
+                // 取不到大小不影响删除，只是这次统计少算一点。
+                size = 0;
+            }
+
+            try
+            {
+
+                // File.Delete 不递归、不跟随 reparse point，删的就是清单里这一个文件。
+                _fileSystem.DeleteFile(targetPath);
+
+                deletedFiles.Add(targetPath);
+                freedBytes += size;
+            }
+            catch
+            {
+                // 被占用 / 权限不足：记下来继续处理其余文件，
+                // 不让一个删不掉的分卷拖垮整批清理（AGENTS.md §6 第 9 条）。
+                failedFiles.Add(targetPath);
+            }
+        }
+
+        return new SourceCleanupResult
+        {
+            Attempted = true,
+            DeletedFiles = deletedFiles,
+            FailedFiles = failedFiles,
+            FreedBytes = freedBytes,
+            Message = BuildMessage(task, deletedFiles.Count, failedFiles.Count, freedBytes)
+        };
+    }
+
+    /// <summary>
+    /// 生成"要删哪些文件"的清单。
+    ///
+    /// <para>这是本类最关键的安全边界：清单**只能**来自任务自身记录，
+    /// 分卷组 = <see cref="ArchiveTask.VolumePaths"/> 整组，单文件任务 = <see cref="ArchiveTask.CurrentPath"/>。
+    /// 绝不扫描目录去"顺便"删掉旁边的同名文件、说明文件或目录。</para>
+    ///
+    /// <para>⚠ 2026-10-03：改成 <c>internal</c> 是因为**「半套分卷」那道闸门要读同一份清单**
+    /// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> 的候选 = 这里要删的那几个文件）
+    /// —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5：同一件事的真值只允许有一个出口），
+    /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
+    /// </summary>
+    /// <param name="additionalPaths">
+    /// 额外来源清单：第二大步新组的源片账在 <c>VolumeStepGroupWork.Pieces</c>，不一定写进
+    /// <see cref="ArchiveTask.VolumePaths"/>；调用方只在组可证完整且已通过删除闸门后传入。
+    /// </param>
+    internal static List<string> BuildTargetList(
+        ArchiveTask task,
+        bool includeRestAliases = false,
+        IReadOnlyList<string>? additionalPaths = null)
+    {
+        var targets = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (task.IsVolumeGroup)
+        {
+            /*
+             * 分卷组必须整组删：只删第一卷会留下一堆再也拼不起来的分卷碎片，
+             * 对用户来说比不删更糟。
+             *
+             * 注意：VolumePaths 为空时**不回退**到 CurrentPath —— 那说明任务分组信息不完整，
+             * 此时什么都不删才是对的（严格按清单执行，不替用户推断）。
+             */
+            foreach (string volumePath in task.VolumePaths)
+            {
+                AddTarget(targets, seen, volumePath);
+            }
+
+            /*
+             * ⛔ **入口那一份自己的源包也要在清单里**（2026-10-18 用户 `&&` 口径，`22222222` 现场）：
+             * `VolumePaths` 有时只装“其余卷”，入口那一份的 `CurrentPath` 不在里面
+             * ⇒ 整组删了 3 个、入口那份却留在盘上（用户看到的仍是“原包没删干净”）。
+             * 只在这一组**可证完整 + 内容物校验通过**时补（`&&` 的第二步已成立）；
+             * 组不完整 / 判不出 ⇒ 清单与改动前逐字相同（⛔ 不替代任何闸门）。
+             */
+            if (task.IsVolumeComplete
+                && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
+            {
+                AddTarget(targets, seen, task.CurrentPath);
+                AddTarget(targets, seen, task.OriginalPath);
+            }
 
             AddAdditionalTargets(additionalPaths, targets, seen);
 
@@ -328,118 +309,136 @@ namespace ArchiveFixer.Extraction
             return targets;
         }
 
-        private static void AddAdditionalTargets(
-            IReadOnlyList<string>? additionalPaths,
-            List<string> targets,
-            HashSet<string> seen)
-        {
-            if (additionalPaths == null)
-            {
-                return;
-            }
+        AddTarget(targets, seen, task.CurrentPath);
 
-            foreach (string path in additionalPaths)
-            {
-                AddTarget(targets, seen, path);
-            }
+        /*
+         * ⛔ **改名过的源包**：`CurrentPath` 可能已经是改名后的路径（或已被清空），
+         * 而盘上真正那一份还叫 `OriginalPath`（`22222222` 现场：跟班片的清单被判成“空”，
+         * 源片原样留着）。两件都进清单；同一个路径 `AddTarget` 会去重。
+         */
+        AddTarget(targets, seen, task.OriginalPath);
+
+        AddAdditionalTargets(additionalPaths, targets, seen);
+
+        if (includeRestAliases)
+        {
+            AddRestAliases(task, targets, seen);
         }
 
-        /// <summary>
-        /// 空间不足成功路径：同一份源在「其余物」里可能还有一个硬链接名字。
-        /// 只删产品树那一个名字，字节不会真正释放，下一轮还会把它当新内层包扫到。
-        /// 这里把同一份文件在其余物里的已知别名一并加入清单，确保删完所有目录项。
-        /// </summary>
-        private static void AddRestAliases(ArchiveTask task, List<string> targets, HashSet<string> seen)
+        return targets;
+    }
+
+    private static void AddAdditionalTargets(
+        IReadOnlyList<string>? additionalPaths,
+        List<string> targets,
+        HashSet<string> seen)
+    {
+        if (additionalPaths == null)
         {
-            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
-            {
-                return;
-            }
-
-            foreach (string path in targets.ToList())
-            {
-                string name = Path.GetFileName(path);
-
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    continue;
-                }
-
-                string alias = Path.Combine(task.RestDirectoryPath, name);
-
-                // 只有"确实是同一份物理文件"的硬链接别名才能进删除清单；
-                // ⛔ 其余物里同名但不是同一份的文件，删了就是删用户的另一份数据。
-                if (!File.Exists(alias) || !FileIdentity.IsSamePhysicalFile(path, alias))
-                {
-                    continue;
-                }
-
-                AddTarget(targets, seen, alias);
-            }
+            return;
         }
 
-        private static void AddTarget(List<string> targets, HashSet<string> seen, string? path)
+        foreach (string path in additionalPaths)
         {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return;
-            }
+            AddTarget(targets, seen, path);
+        }
+    }
 
-            // 去重：同一路径在 VolumePaths 里出现两次时不能删两遍、也不能把释放字节算成两份。
-            if (seen.Add(path))
-            {
-                targets.Add(path);
-            }
+    /// <summary>
+    /// 空间不足成功路径：同一份源在「其余物」里可能还有一个硬链接名字。
+    /// 只删产品树那一个名字，字节不会真正释放，下一轮还会把它当新内层包扫到。
+    /// 这里把同一份文件在其余物里的已知别名一并加入清单，确保删完所有目录项。
+    /// </summary>
+    private static void AddRestAliases(ArchiveTask task, List<string> targets, HashSet<string> seen)
+    {
+        if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+        {
+            return;
         }
 
-        private static string BuildMessage(ArchiveTask task, int deletedCount, int failedCount, long freedBytes)
+        foreach (string path in targets.ToList())
         {
-            // 单位跟着任务类型走：用户看到"删了 3 个源分卷"才知道整组都清干净了。
-            string unit = task.IsVolumeGroup ? "个源分卷" : "个源文件";
+            string name = Path.GetFileName(path);
 
-            if (deletedCount == 0 && failedCount == 0)
+            if (string.IsNullOrWhiteSpace(name))
             {
-                return "清单里的源文件都已经不存在（可能已被移动或删除），无需清理";
+                continue;
             }
 
-            if (failedCount == 0)
+            string alias = Path.Combine(task.RestDirectoryPath, name);
+
+            // 只有"确实是同一份物理文件"的硬链接别名才能进删除清单；
+            // ⛔ 其余物里同名但不是同一份的文件，删了就是删用户的另一份数据。
+            if (!File.Exists(alias) || !FileIdentity.IsSamePhysicalFile(path, alias))
             {
-                return $"已删除 {deletedCount} {unit}，释放 {freedBytes} 字节";
+                continue;
             }
 
-            if (deletedCount == 0)
-            {
-                return $"删除失败：{failedCount} 个文件被占用或没有权限，一个都没删掉，源文件仍完整保留";
-            }
+            AddTarget(targets, seen, alias);
+        }
+    }
 
-            return $"部分失败：{failedCount} 个文件被占用未删除；已删除 {deletedCount} {unit}，释放 {freedBytes} 字节";
+    private static void AddTarget(List<string> targets, HashSet<string> seen, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
         }
 
-        internal static bool SafeFileExists(string? path)
+        // 去重：同一路径在 VolumePaths 里出现两次时不能删两遍、也不能把释放字节算成两份。
+        if (seen.Add(path))
         {
-            try
-            {
-                // 传目录进来时 File.Exists 返回 false，于是被当作"不存在"跳过 —— 正好是我们要的"不删目录"。
-                return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
-            }
-            catch
-            {
-                return false;
-            }
+            targets.Add(path);
+        }
+    }
+
+    private static string BuildMessage(ArchiveTask task, int deletedCount, int failedCount, long freedBytes)
+    {
+        // 单位跟着任务类型走：用户看到"删了 3 个源分卷"才知道整组都清干净了。
+        string unit = task.IsVolumeGroup ? "个源分卷" : "个源文件";
+
+        if (deletedCount == 0 && failedCount == 0)
+        {
+            return "清单里的源文件都已经不存在（可能已被移动或删除），无需清理";
         }
 
-        private static bool TryReadAttributes(string path, out FileAttributes attributes)
+        if (failedCount == 0)
         {
-            try
-            {
-                attributes = File.GetAttributes(path);
-                return true;
-            }
-            catch
-            {
-                attributes = default;
-                return false;
-            }
+            return $"已删除 {deletedCount} {unit}，释放 {freedBytes} 字节";
+        }
+
+        if (deletedCount == 0)
+        {
+            return $"删除失败：{failedCount} 个文件被占用或没有权限，一个都没删掉，源文件仍完整保留";
+        }
+
+        return $"部分失败：{failedCount} 个文件被占用未删除；已删除 {deletedCount} {unit}，释放 {freedBytes} 字节";
+    }
+
+    internal static bool SafeFileExists(string? path)
+    {
+        try
+        {
+            // 传目录进来时 File.Exists 返回 false，于是被当作"不存在"跳过 —— 正好是我们要的"不删目录"。
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadAttributes(string path, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return true;
+        }
+        catch
+        {
+            attributes = default;
+            return false;
         }
     }
 }

@@ -3,39 +3,38 @@ using ArchiveFixer.Models;
 using System;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+public class TaskReasonTests
 {
-    public class TaskReasonTests
+    [Fact]
+    public void VolumeMissingStatusWithoutReason_DoesNotBecomePartiallyCompleted()
     {
-        [Fact]
-        public void VolumeMissingStatusWithoutReason_DoesNotBecomePartiallyCompleted()
+        var task = new ArchiveTask
         {
-            var task = new ArchiveTask
-            {
-                Status = StatusText.VolumeMissing,
-                EndTime = DateTime.Now,
-                Outcome = TaskOutcome.Pending
-            };
+            Status = StatusText.VolumeMissing,
+            EndTime = DateTime.Now,
+            Outcome = TaskOutcome.Pending
+        };
 
-            OutcomeFinalizer.FinalizeIfPending(task, producedContent: false);
+        OutcomeFinalizer.FinalizeIfPending(task, producedContent: false);
 
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
-        }
+        Assert.Equal(TaskOutcome.Failed, task.Outcome);
+    }
 
-        [Fact]
-        public void VolumeMissingReason_BecomesPartiallyCompleted()
+    [Fact]
+    public void VolumeMissingReason_BecomesPartiallyCompleted()
+    {
+        var task = new ArchiveTask
         {
-            var task = new ArchiveTask
-            {
-                Status = StatusText.ExtractSuccess,
-                Reason = TaskReason.VolumeMissing,
-                EndTime = DateTime.Now,
-                Outcome = TaskOutcome.Pending
-            };
+            Status = StatusText.ExtractSuccess,
+            Reason = TaskReason.VolumeMissing,
+            EndTime = DateTime.Now,
+            Outcome = TaskOutcome.Pending
+        };
 
-            OutcomeFinalizer.FinalizeIfPending(task, producedContent: false);
+        OutcomeFinalizer.FinalizeIfPending(task, producedContent: false);
 
-            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
-        }
+        Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
     }
 }

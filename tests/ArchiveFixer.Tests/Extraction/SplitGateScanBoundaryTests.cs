@@ -5,95 +5,94 @@ using System;
 using System.IO;
 using Xunit;
 
-namespace ArchiveFixer.Tests
+namespace ArchiveFixer.Tests;
+
+/// <summary>
+/// 「半套分卷」扫描边界的唯一出口：未指定位置只看选中文件夹/文件所在目录；
+/// 指定位置只看指定根。⛔ 旧地址 CustomOutputDirectory 在未指定位置时不许参与。
+/// </summary>
+public sealed class SplitGateScanBoundaryTests : IDisposable
 {
-    /// <summary>
-    /// 「半套分卷」扫描边界的唯一出口：未指定位置只看选中文件夹/文件所在目录；
-    /// 指定位置只看指定根。⛔ 旧地址 CustomOutputDirectory 在未指定位置时不许参与。
-    /// </summary>
-    public sealed class SplitGateScanBoundaryTests : IDisposable
+    private readonly string _root;
+
+    public SplitGateScanBoundaryTests()
     {
-        private readonly string _root;
+        _root = Path.Combine(Path.GetTempPath(), "SplitGateBoundary_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
 
-        public SplitGateScanBoundaryTests()
+    public void Dispose()
+    {
+        try
         {
-            _root = Path.Combine(Path.GetTempPath(), "SplitGateBoundary_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_root);
+            Directory.Delete(_root, true);
         }
-
-        public void Dispose()
+        catch
         {
-            try
-            {
-                Directory.Delete(_root, true);
-            }
-            catch
-            {
-            }
         }
+    }
 
-        [Fact]
-        public void 未指定位置_选中文件夹_边界就是选中的文件夹_不读旧的自定义根()
+    [Fact]
+    public void 未指定位置_选中文件夹_边界就是选中的文件夹_不读旧的自定义根()
+    {
+        string selected = Path.Combine(_root, "666");
+        Directory.CreateDirectory(selected);
+
+        var task = new ArchiveTask(Path.Combine(selected, "583900112233.7z"))
         {
-            string selected = Path.Combine(_root, "666");
-            Directory.CreateDirectory(selected);
+            SourceSelectionKind = SourceSelectionKind.Folder,
+            SourceSelectionRoot = selected
+        };
 
-            var task = new ArchiveTask(Path.Combine(selected, "583900112233.7z"))
-            {
-                SourceSelectionKind = SourceSelectionKind.Folder,
-                SourceSelectionRoot = selected
-            };
-
-            var settings = new AppSettings
-            {
-                ExtractToOriginalDirectory = true,
-                CustomOutputDirectory = Path.Combine(_root, "旧测试位置")
-            };
-
-            Assert.Equal(
-                Path.GetFullPath(selected).TrimEnd(Path.DirectorySeparatorChar),
-                ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
-        }
-
-        [Fact]
-        public void 未指定位置_选中单个文件_边界是包基名成品文件夹()
+        var settings = new AppSettings
         {
-            string selected = Path.Combine(_root, "单个");
-            Directory.CreateDirectory(selected);
+            ExtractToOriginalDirectory = true,
+            CustomOutputDirectory = Path.Combine(_root, "旧测试位置")
+        };
 
-            var task = new ArchiveTask(Path.Combine(selected, "pack.7z"))
-            {
-                SourceSelectionKind = SourceSelectionKind.File,
-                SourceSelectionRoot = Path.Combine(selected, "pack.7z")
-            };
+        Assert.Equal(
+            Path.GetFullPath(selected).TrimEnd(Path.DirectorySeparatorChar),
+            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
+    }
 
-            var settings = new AppSettings
-            {
-                ExtractToOriginalDirectory = true,
-                CustomOutputDirectory = Path.Combine(_root, "旧测试位置")
-            };
+    [Fact]
+    public void 未指定位置_选中单个文件_边界是包基名成品文件夹()
+    {
+        string selected = Path.Combine(_root, "单个");
+        Directory.CreateDirectory(selected);
 
-            Assert.Equal(
-                Path.GetFullPath(Path.Combine(selected, "pack")).TrimEnd(Path.DirectorySeparatorChar),
-                ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
-        }
-
-        [Fact]
-        public void 指定位置_选单个文件_边界是包基名成品文件夹()
+        var task = new ArchiveTask(Path.Combine(selected, "pack.7z"))
         {
-            string outputRoot = Path.Combine(_root, "指定位置");
-            Directory.CreateDirectory(outputRoot);
+            SourceSelectionKind = SourceSelectionKind.File,
+            SourceSelectionRoot = Path.Combine(selected, "pack.7z")
+        };
 
-            var task = new ArchiveTask(Path.Combine(_root, "pack.7z"));
-            var settings = new AppSettings
-            {
-                ExtractToOriginalDirectory = false,
-                CustomOutputDirectory = outputRoot
-            };
+        var settings = new AppSettings
+        {
+            ExtractToOriginalDirectory = true,
+            CustomOutputDirectory = Path.Combine(_root, "旧测试位置")
+        };
 
-            Assert.Equal(
-                Path.GetFullPath(Path.Combine(outputRoot, "pack")).TrimEnd(Path.DirectorySeparatorChar),
-                ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
-        }
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(selected, "pack")).TrimEnd(Path.DirectorySeparatorChar),
+            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
+    }
+
+    [Fact]
+    public void 指定位置_选单个文件_边界是包基名成品文件夹()
+    {
+        string outputRoot = Path.Combine(_root, "指定位置");
+        Directory.CreateDirectory(outputRoot);
+
+        var task = new ArchiveTask(Path.Combine(_root, "pack.7z"));
+        var settings = new AppSettings
+        {
+            ExtractToOriginalDirectory = false,
+            CustomOutputDirectory = outputRoot
+        };
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(outputRoot, "pack")).TrimEnd(Path.DirectorySeparatorChar),
+            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
     }
 }

@@ -7,733 +7,732 @@ using System.IO;
 using System.Linq;
 using System.Text;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Services;
+
+/// <summary>
+/// 任务汇总服务。
+/// </summary>
+public class TaskSummaryService
 {
+    /// <summary>失败清单里第二级（"归档内条目 / 失败层"）的缩进。</summary>
+    public const string DetailIndent = "  ";
+
+    private const string ArchiveLinePrefix = "[归档] ";
+    private const string FailedListTitle = "ArchiveFixer 失败清单";
+    private const string GeneratedAtLabel = "生成时间：";
+    private const string EngineLabel = "引擎：";
+    private const string EngineVerdictLabel = "引擎结论：";
+    private const string LayerLabel = "层级：";
+    private const string VerifyLabel = "校验：";
+    private const string VolumeLabel = "分卷：缺少 ";
+    private const string EntryLabel = "条目：";
+    private const string LocationLabel = "位置：";
+
     /// <summary>
-    /// 任务汇总服务。
+    /// 本次选项那一行（规格 <c>docs/输出与整理模型.md</c> §9.2 硬要求⑥）。
+    /// 只在任务上有值时才写行，所以既有清单的格式（与钉住格式的用例）一个字都没变。
     /// </summary>
-    public class TaskSummaryService
+    private const string RunOptionsLabel = "本次选项：";
+    private const string NoFailedTaskText = "没有失败任务。";
+
+    /// <summary>
+    /// 表头那一行：<c>{0}</c> = 下面逐条列了几个，<c>{1}</c> = 全批几个，<c>{2}</c> = 全批的分项
+    /// （分项由 <see cref="BatchOutcomeTally.BuildParts"/> 给，⛔ 不在这里自己数）。
+    /// </summary>
+    private const string FailedListScopeFormat = "本次逐条列出：{0} 个（全批 {1} 个 —— {2}）";
+
+    /// <summary>末尾那一段的标题（<c>{0}</c> = 几条链）。</summary>
+    private const string RestKeptSectionTitleFormat = "其余物没有处理（{0} 条）：";
+
+    private EngineIdentity? _engineIdentity;
+
+    /// <summary>
+    /// 本次运行实际使用的引擎（失败清单里必须带引擎名 + 版本，AGENTS.md §6 第 14 条）。
+    ///
+    /// 默认按<b>引擎注册表</b>解析（不是在这里写死 7-Zip），并且是**惰性**的：
+    /// 只有真的要出报告时才去查版本，构造服务本身不碰文件系统。
+    /// 可注入，测试与将来"多个引擎各报各的"都从这里替换。
+    /// </summary>
+    public EngineIdentity EngineIdentity
     {
-        /// <summary>失败清单里第二级（"归档内条目 / 失败层"）的缩进。</summary>
-        public const string DetailIndent = "  ";
+        get => _engineIdentity ??= EngineIdentityResolver.ResolveDefault();
+        set => _engineIdentity = value ?? EngineIdentityResolver.Unavailable;
+    }
 
-        private const string ArchiveLinePrefix = "[归档] ";
-        private const string FailedListTitle = "ArchiveFixer 失败清单";
-        private const string GeneratedAtLabel = "生成时间：";
-        private const string EngineLabel = "引擎：";
-        private const string EngineVerdictLabel = "引擎结论：";
-        private const string LayerLabel = "层级：";
-        private const string VerifyLabel = "校验：";
-        private const string VolumeLabel = "分卷：缺少 ";
-        private const string EntryLabel = "条目：";
-        private const string LocationLabel = "位置：";
+    /// <summary>
+    /// 某个任务**实际**用的引擎（可选来源）。
+    ///
+    /// <para>
+    /// 为什么要留这个口子：<see cref="EngineIdentity"/> 回答的是"这个程序的通用引擎是谁"，
+    /// 而多引擎接进流程之后，一个 RAR 走 UnRAR、一个 zip 走 7-Zip 是**常态** ——
+    /// 报告里逐个任务都写"7-Zip"就把溯源写错了（不变量 14 要求追到**具体**引擎）。
+    /// 真正干活的引擎会在结果上盖戳（<c>ArchiveOperationResult.EngineId/EngineVersion</c>），
+    /// 由调用方（主窗口）按归档路径取回，这里只管用。
+    /// </para>
+    /// <para>
+    /// 返回 null / 不接这个口子时，逐任务那一行退回 <see cref="EngineIdentity"/> ——
+    /// 也就是说**引擎名 + 版本在任何情况下都不会缺**（不变量 14 的底线）。
+    /// </para>
+    /// </summary>
+    public Func<ArchiveTask, EngineIdentity?>? EngineIdentityProvider { get; set; }
 
-        /// <summary>
-        /// 本次选项那一行（规格 <c>docs/输出与整理模型.md</c> §9.2 硬要求⑥）。
-        /// 只在任务上有值时才写行，所以既有清单的格式（与钉住格式的用例）一个字都没变。
-        /// </summary>
-        private const string RunOptionsLabel = "本次选项：";
-        private const string NoFailedTaskText = "没有失败任务。";
+    /// <summary>
+    /// "归档内条目 / 失败层"明细的**外部来源**（可选）。
+    ///
+    /// 为什么留这个口子：任务模型本身只记到"这个包失败了"这一层，
+    /// 而当一个包里有 3 个条目失败、另 200 个成功时，用户要看的正是那 3 个条目的名字。
+    /// 逐条目结果在解压流程里（流水线手上），所以由调用方把行喂进来 ——
+    /// 没接这个口子时，第二级仍由任务自身的结构化字段（引擎 / 层级 / 校验 / 分卷 / 位置）组成，
+    /// **不会**凭空编条目名。
+    /// </summary>
+    public Func<ArchiveTask, IEnumerable<string>?>? EntryDetailProvider { get; set; }
 
-        /// <summary>
-        /// 表头那一行：<c>{0}</c> = 下面逐条列了几个，<c>{1}</c> = 全批几个，<c>{2}</c> = 全批的分项
-        /// （分项由 <see cref="BatchOutcomeTally.BuildParts"/> 给，⛔ 不在这里自己数）。
-        /// </summary>
-        private const string FailedListScopeFormat = "本次逐条列出：{0} 个（全批 {1} 个 —— {2}）";
-
-        /// <summary>末尾那一段的标题（<c>{0}</c> = 几条链）。</summary>
-        private const string RestKeptSectionTitleFormat = "其余物没有处理（{0} 条）：";
-
-        private EngineIdentity? _engineIdentity;
-
-        /// <summary>
-        /// 本次运行实际使用的引擎（失败清单里必须带引擎名 + 版本，AGENTS.md §6 第 14 条）。
-        ///
-        /// 默认按<b>引擎注册表</b>解析（不是在这里写死 7-Zip），并且是**惰性**的：
-        /// 只有真的要出报告时才去查版本，构造服务本身不碰文件系统。
-        /// 可注入，测试与将来"多个引擎各报各的"都从这里替换。
-        /// </summary>
-        public EngineIdentity EngineIdentity
+    /// <summary>
+    /// 把一个任务归到唯一的结果分桶。
+    ///
+    /// 判定顺序：先看<strong>终态</strong> <see cref="ArchiveTask.Status"/>（它是"这件事最后怎么了"的唯一权威），
+    /// 再看 <see cref="ArchiveTask.Operation"/>（只用来兜底"跳过"：有些路径只标了操作没标状态）。
+    /// <see cref="ArchiveTask.PasswordStatus"/> **不参与**判定 —— 它会在同一次任务里被反复改
+    /// （试了错密码、换了下一个候选、最后解压成功），拿它分桶必然重复计数。
+    /// </summary>
+    public static SummaryBucket ClassifyOutcome(ArchiveTask? task)
+    {
+        if (task == null)
         {
-            get => _engineIdentity ??= EngineIdentityResolver.ResolveDefault();
-            set => _engineIdentity = value ?? EngineIdentityResolver.Unavailable;
-        }
-
-        /// <summary>
-        /// 某个任务**实际**用的引擎（可选来源）。
-        ///
-        /// <para>
-        /// 为什么要留这个口子：<see cref="EngineIdentity"/> 回答的是"这个程序的通用引擎是谁"，
-        /// 而多引擎接进流程之后，一个 RAR 走 UnRAR、一个 zip 走 7-Zip 是**常态** ——
-        /// 报告里逐个任务都写"7-Zip"就把溯源写错了（不变量 14 要求追到**具体**引擎）。
-        /// 真正干活的引擎会在结果上盖戳（<c>ArchiveOperationResult.EngineId/EngineVersion</c>），
-        /// 由调用方（主窗口）按归档路径取回，这里只管用。
-        /// </para>
-        /// <para>
-        /// 返回 null / 不接这个口子时，逐任务那一行退回 <see cref="EngineIdentity"/> ——
-        /// 也就是说**引擎名 + 版本在任何情况下都不会缺**（不变量 14 的底线）。
-        /// </para>
-        /// </summary>
-        public Func<ArchiveTask, EngineIdentity?>? EngineIdentityProvider { get; set; }
-
-        /// <summary>
-        /// "归档内条目 / 失败层"明细的**外部来源**（可选）。
-        ///
-        /// 为什么留这个口子：任务模型本身只记到"这个包失败了"这一层，
-        /// 而当一个包里有 3 个条目失败、另 200 个成功时，用户要看的正是那 3 个条目的名字。
-        /// 逐条目结果在解压流程里（流水线手上），所以由调用方把行喂进来 ——
-        /// 没接这个口子时，第二级仍由任务自身的结构化字段（引擎 / 层级 / 校验 / 分卷 / 位置）组成，
-        /// **不会**凭空编条目名。
-        /// </summary>
-        public Func<ArchiveTask, IEnumerable<string>?>? EntryDetailProvider { get; set; }
-
-        /// <summary>
-        /// 把一个任务归到唯一的结果分桶。
-        ///
-        /// 判定顺序：先看<strong>终态</strong> <see cref="ArchiveTask.Status"/>（它是"这件事最后怎么了"的唯一权威），
-        /// 再看 <see cref="ArchiveTask.Operation"/>（只用来兜底"跳过"：有些路径只标了操作没标状态）。
-        /// <see cref="ArchiveTask.PasswordStatus"/> **不参与**判定 —— 它会在同一次任务里被反复改
-        /// （试了错密码、换了下一个候选、最后解压成功），拿它分桶必然重复计数。
-        /// </summary>
-        public static SummaryBucket ClassifyOutcome(ArchiveTask? task)
-        {
-            if (task == null)
-            {
-                return SummaryBucket.Pending;
-            }
-
-            string status = task.Status ?? string.Empty;
-
-            /*
-             * 「缺卷待批末判」那一档：批中间**先跳过**，不进任何失败桶
-             * （用户 2026-10-08：「没有到最后一步都是先跳过」「要留在最后检查才是真正的分卷缺失」）。
-             * 判据只有一位事实（`ArchiveTask.IsVolumeDeficitDeferred`）；批末定稿会清掉它，届时按真结论分桶。
-             */
-            if (task.IsVolumeDeficitDeferred)
-            {
-                return SummaryBucket.Skipped;
-            }
-
-            if (status == StatusText.RenameSuccess)
-            {
-                return SummaryBucket.RenameSuccess;
-            }
-
-            if (status == StatusText.RenameFailed)
-            {
-                return SummaryBucket.RenameFailed;
-            }
-
-            if (status == StatusText.TestPassed)
-            {
-                return SummaryBucket.TestPassed;
-            }
-
-            if (status == StatusText.TestFailed)
-            {
-                return SummaryBucket.TestFailed;
-            }
-
-            if (status == StatusText.ExtractSuccess || status == StatusText.Overwritten)
-            {
-                /*
-                 * ⚠ 光看状态**不够**：产物校验判否时一律算失败（用户 2026-09-24 铁证，不变量 6）。
-                 *
-                 * 现场：7z 用错密码"半成功"写出 0 字节的桩文件，校验已经判否，
-                 * 而任务状态仍然是「解压成功」—— 汇总于是把它算进了成功数，
-                 * 用户看到的"成功 N 个"里混着一个什么都没解出来的包。
-                 *
-                 * 这里读的是**机器可判的字段**（<see cref="ArchiveTask.OutputVerification"/>），
-                 * ⛔ 不是拿校验那句中文文案去做比较（AGENTS.md §7：统计不得依赖中文文案比较）。
-                 */
-                return task.OutputVerification == OutputVerificationOutcome.Failed
-                    ? SummaryBucket.ExtractFailed
-                    : SummaryBucket.ExtractSuccess;
-            }
-
-            if (status == StatusText.WrongPassword)
-            {
-                return SummaryBucket.PasswordError;
-            }
-
-            if (status == StatusText.Corrupted)
-            {
-                return SummaryBucket.Corrupted;
-            }
-
-            if (IsExtractFailureStatus(status))
-            {
-                return SummaryBucket.ExtractFailed;
-            }
-
-            /*
-             * ⚠ 2026-10-08 用户拍板：**缺卷与"部分完成"同桶**（不完整 ⇒ 部分完成，不是程序的错）。
-             * 排在 `IsExtractFailureStatus` 之后是因为它已从那份失败名单里移除，
-             * 落在这里才不会被下面的兜底读成"未处理"。判据用状态常量，⛔ 不比中文文案。
-             */
-            if (task.Reason == TaskReason.FinalGroupIncomplete)
-            {
-                return SummaryBucket.ExtractFailed;
-            }
-
-            if (task.Reason == TaskReason.FinalGroupCorrupted)
-            {
-                return SummaryBucket.Corrupted;
-            }
-
-            if (task.Reason == TaskReason.VolumeMissing)
-            {
-                return SummaryBucket.OtherFailed;
-            }
-
-            if (status == StatusText.Skipped
-                || status == StatusText.VolumeSizeAnomaly)
-            {
-                return SummaryBucket.Skipped;
-            }
-
-            if (status == StatusText.Cancelled)
-            {
-                return SummaryBucket.Cancelled;
-            }
-
-            if (status == StatusText.PartiallyCompleted || status == StatusText.UnknownFormat)
-            {
-                return SummaryBucket.OtherFailed;
-            }
-
-            /*
-             * 文件名已加密（RAR -hp / 7z -mhe）单独判，且**不能**并进"密码错误"分桶：
-             * 汇总行上那一格叫"密码错误"，把"内容无法判定"的包数进去，
-             * 等于在汇总层面重新给出了那个错误结论（用户会以为密码本错了）。
-             * 它归"其他失败"，与"部分完成"同一档：要人看一眼，绝不是成功。
-             */
-            if (status == StatusText.EncryptedHeaders)
-            {
-                return SummaryBucket.OtherFailed;
-            }
-
-            // 非终态：只有操作被标成"跳过"时才算跳过，其余都是"还没结果"。
-            if (task.Operation == StatusText.OpSkip)
-            {
-                return SummaryBucket.Skipped;
-            }
-
             return SummaryBucket.Pending;
         }
 
-        /// <summary>按分桶统计。这是 <see cref="BuildSummary"/> 唯一的取数来源。</summary>
-        public SummaryBucketCounts CountBuckets(IEnumerable<ArchiveTask>? tasks)
+        string status = task.Status ?? string.Empty;
+
+        /*
+         * 「缺卷待批末判」那一档：批中间**先跳过**，不进任何失败桶
+         * （用户 2026-10-08：「没有到最后一步都是先跳过」「要留在最后检查才是真正的分卷缺失」）。
+         * 判据只有一位事实（`ArchiveTask.IsVolumeDeficitDeferred`）；批末定稿会清掉它，届时按真结论分桶。
+         */
+        if (task.IsVolumeDeficitDeferred)
         {
-            int[] counts = new int[Enum.GetValues<SummaryBucket>().Length];
+            return SummaryBucket.Skipped;
+        }
 
-            foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
+        if (status == StatusText.RenameSuccess)
+        {
+            return SummaryBucket.RenameSuccess;
+        }
+
+        if (status == StatusText.RenameFailed)
+        {
+            return SummaryBucket.RenameFailed;
+        }
+
+        if (status == StatusText.TestPassed)
+        {
+            return SummaryBucket.TestPassed;
+        }
+
+        if (status == StatusText.TestFailed)
+        {
+            return SummaryBucket.TestFailed;
+        }
+
+        if (status == StatusText.ExtractSuccess || status == StatusText.Overwritten)
+        {
+            /*
+             * ⚠ 光看状态**不够**：产物校验判否时一律算失败（用户 2026-09-24 铁证，不变量 6）。
+             *
+             * 现场：7z 用错密码"半成功"写出 0 字节的桩文件，校验已经判否，
+             * 而任务状态仍然是「解压成功」—— 汇总于是把它算进了成功数，
+             * 用户看到的"成功 N 个"里混着一个什么都没解出来的包。
+             *
+             * 这里读的是**机器可判的字段**（<see cref="ArchiveTask.OutputVerification"/>），
+             * ⛔ 不是拿校验那句中文文案去做比较（AGENTS.md §7：统计不得依赖中文文案比较）。
+             */
+            return task.OutputVerification == OutputVerificationOutcome.Failed
+                ? SummaryBucket.ExtractFailed
+                : SummaryBucket.ExtractSuccess;
+        }
+
+        if (status == StatusText.WrongPassword)
+        {
+            return SummaryBucket.PasswordError;
+        }
+
+        if (status == StatusText.Corrupted)
+        {
+            return SummaryBucket.Corrupted;
+        }
+
+        if (IsExtractFailureStatus(status))
+        {
+            return SummaryBucket.ExtractFailed;
+        }
+
+        /*
+         * ⚠ 2026-10-08 用户拍板：**缺卷与"部分完成"同桶**（不完整 ⇒ 部分完成，不是程序的错）。
+         * 排在 `IsExtractFailureStatus` 之后是因为它已从那份失败名单里移除，
+         * 落在这里才不会被下面的兜底读成"未处理"。判据用状态常量，⛔ 不比中文文案。
+         */
+        if (task.Reason == TaskReason.FinalGroupIncomplete)
+        {
+            return SummaryBucket.ExtractFailed;
+        }
+
+        if (task.Reason == TaskReason.FinalGroupCorrupted)
+        {
+            return SummaryBucket.Corrupted;
+        }
+
+        if (task.Reason == TaskReason.VolumeMissing)
+        {
+            return SummaryBucket.OtherFailed;
+        }
+
+        if (status == StatusText.Skipped
+            || status == StatusText.VolumeSizeAnomaly)
+        {
+            return SummaryBucket.Skipped;
+        }
+
+        if (status == StatusText.Cancelled)
+        {
+            return SummaryBucket.Cancelled;
+        }
+
+        if (status == StatusText.PartiallyCompleted || status == StatusText.UnknownFormat)
+        {
+            return SummaryBucket.OtherFailed;
+        }
+
+        /*
+         * 文件名已加密（RAR -hp / 7z -mhe）单独判，且**不能**并进"密码错误"分桶：
+         * 汇总行上那一格叫"密码错误"，把"内容无法判定"的包数进去，
+         * 等于在汇总层面重新给出了那个错误结论（用户会以为密码本错了）。
+         * 它归"其他失败"，与"部分完成"同一档：要人看一眼，绝不是成功。
+         */
+        if (status == StatusText.EncryptedHeaders)
+        {
+            return SummaryBucket.OtherFailed;
+        }
+
+        // 非终态：只有操作被标成"跳过"时才算跳过，其余都是"还没结果"。
+        if (task.Operation == StatusText.OpSkip)
+        {
+            return SummaryBucket.Skipped;
+        }
+
+        return SummaryBucket.Pending;
+    }
+
+    /// <summary>按分桶统计。这是 <see cref="BuildSummary"/> 唯一的取数来源。</summary>
+    public SummaryBucketCounts CountBuckets(IEnumerable<ArchiveTask>? tasks)
+    {
+        int[] counts = new int[Enum.GetValues<SummaryBucket>().Length];
+
+        foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
+        {
+            if (task == null)
             {
-                if (task == null)
-                {
-                    continue;
-                }
-
-                counts[(int)ClassifyOutcome(task)]++;
+                continue;
             }
 
-            return new SummaryBucketCounts
-            {
-                Pending = counts[(int)SummaryBucket.Pending],
-                RenameSuccess = counts[(int)SummaryBucket.RenameSuccess],
-                RenameFailed = counts[(int)SummaryBucket.RenameFailed],
-                TestPassed = counts[(int)SummaryBucket.TestPassed],
-                TestFailed = counts[(int)SummaryBucket.TestFailed],
-                ExtractSuccess = counts[(int)SummaryBucket.ExtractSuccess],
-                PasswordError = counts[(int)SummaryBucket.PasswordError],
-                Corrupted = counts[(int)SummaryBucket.Corrupted],
-                ExtractFailed = counts[(int)SummaryBucket.ExtractFailed],
-                Skipped = counts[(int)SummaryBucket.Skipped],
-                Cancelled = counts[(int)SummaryBucket.Cancelled],
-                OtherFailed = counts[(int)SummaryBucket.OtherFailed]
-            };
+            counts[(int)ClassifyOutcome(task)]++;
         }
 
-        /// <summary>
-        /// 构建任务汇总。
-        ///
-        /// 11 个分项（改名成功/改名失败/测试通过/测试失败/解压成功/解压失败/密码错误/文件损坏/已跳过/已取消/其他失败）
-        /// 全部来自互斥分桶，**两两不重叠**，因此：
-        /// 分项之和 + 待处理（<see cref="SummaryBucket.Pending"/>，界面上没有单项）= 任务总数。
-        ///
-        /// 已识别 / 格式未知这两项是"识别阶段"的属性，不是结果分桶，**不参与求和**
-        /// （一个包可以既"已识别"又"解压成功"）。
-        /// </summary>
-        public TaskSummary BuildSummary(IEnumerable<ArchiveTask> tasks)
+        return new SummaryBucketCounts
         {
-            var list = tasks?.Where(x => x != null).ToList() ?? new List<ArchiveTask>();
-            SummaryBucketCounts buckets = CountBuckets(list);
+            Pending = counts[(int)SummaryBucket.Pending],
+            RenameSuccess = counts[(int)SummaryBucket.RenameSuccess],
+            RenameFailed = counts[(int)SummaryBucket.RenameFailed],
+            TestPassed = counts[(int)SummaryBucket.TestPassed],
+            TestFailed = counts[(int)SummaryBucket.TestFailed],
+            ExtractSuccess = counts[(int)SummaryBucket.ExtractSuccess],
+            PasswordError = counts[(int)SummaryBucket.PasswordError],
+            Corrupted = counts[(int)SummaryBucket.Corrupted],
+            ExtractFailed = counts[(int)SummaryBucket.ExtractFailed],
+            Skipped = counts[(int)SummaryBucket.Skipped],
+            Cancelled = counts[(int)SummaryBucket.Cancelled],
+            OtherFailed = counts[(int)SummaryBucket.OtherFailed]
+        };
+    }
 
-            return new TaskSummary
-            {
-                TotalCount = list.Count,
-                SelectedCount = list.Count(x => x.IsSelected),
+    /// <summary>
+    /// 构建任务汇总。
+    ///
+    /// 11 个分项（改名成功/改名失败/测试通过/测试失败/解压成功/解压失败/密码错误/文件损坏/已跳过/已取消/其他失败）
+    /// 全部来自互斥分桶，**两两不重叠**，因此：
+    /// 分项之和 + 待处理（<see cref="SummaryBucket.Pending"/>，界面上没有单项）= 任务总数。
+    ///
+    /// 已识别 / 格式未知这两项是"识别阶段"的属性，不是结果分桶，**不参与求和**
+    /// （一个包可以既"已识别"又"解压成功"）。
+    /// </summary>
+    public TaskSummary BuildSummary(IEnumerable<ArchiveTask> tasks)
+    {
+        var list = tasks?.Where(x => x != null).ToList() ?? new List<ArchiveTask>();
+        SummaryBucketCounts buckets = CountBuckets(list);
 
-                RecognizedCount = list.Count(x =>
-                    x.IsArchive ||
-                    x.Status == StatusText.Recognized ||
-                    x.ExtensionStatus == StatusText.ExtensionNormal ||
-                    x.ExtensionStatus == StatusText.ExtensionMissing ||
-                    x.ExtensionStatus == StatusText.ExtensionMismatch ||
-                    x.ExtensionStatus == StatusText.ExtensionMultiFake ||
-                    x.ExtensionStatus == StatusText.ExtensionVolume ||
-                    // 内嵌归档也算"已识别"：它的格式是确定的（ZIP，只是藏在文件尾部），
-                    // 归到"未知"会让用户以为识别失败，从而去改一个根本不该改的后缀。
-                    x.ExtensionStatus == StatusText.ExtensionEmbedded),
-
-                UnknownCount = list.Count(x =>
-                    x.DetectedFormat == "Unknown" ||
-                    x.Status == StatusText.UnknownFormat ||
-                    x.ExtensionStatus == StatusText.UnknownFormat),
-
-                RenameSuccessCount = buckets.RenameSuccess,
-                RenameFailedCount = buckets.RenameFailed,
-
-                TestSuccessCount = buckets.TestPassed,
-                TestFailedCount = buckets.TestFailed,
-
-                ExtractSuccessCount = buckets.ExtractSuccess,
-                ExtractFailedCount = buckets.ExtractFailed,
-
-                PasswordErrorCount = buckets.PasswordError,
-                CorruptedCount = buckets.Corrupted,
-
-                SkippedCount = buckets.Skipped,
-                CancelledCount = buckets.Cancelled,
-
-                /*
-                 * "部分完成"计入失败侧：它确实没做完，用户还要处理。
-                 * 宁可让统计显得悲观，也不能让"部分完成"混进成功数里 —— 那正是设计.md 不变量 9 要防的事。
-                 */
-                OtherFailedCount = buckets.OtherFailed
-            };
-        }
-
-        /// <summary>
-        /// 解压侧的失败状态（不含密码错误 / 文件损坏：它们各自单独成项）。
-        ///
-        /// <para>⚠ 名单本体只有一处：<see cref="TaskOutcomeClassifier.IsExtractFailureStatus"/>。
-        /// 旧写法在这里自己写一份 `status is …`，与 <c>OneClickCoordinator.IsFailureStatus</c>
-        /// 各写各的 —— 漏一条就立刻表现成"①页算失败、一键汇总算未处理"（用户 2026-09-27 真机）。</para>
-        /// </summary>
-        private static bool IsExtractFailureStatus(string status) =>
-            TaskOutcomeClassifier.IsExtractFailureStatus(status);
-
-        /// <summary>
-        /// 获取失败任务。
-        /// </summary>
-        public List<ArchiveTask> GetFailedTasks(IEnumerable<ArchiveTask> tasks)
+        return new TaskSummary
         {
-            return tasks?
-                .Where(x => x != null && IsFailedOrUnknownTask(x))
-                .ToList()
-                ?? new List<ArchiveTask>();
-        }
+            TotalCount = list.Count,
+            SelectedCount = list.Count(x => x.IsSelected),
 
-        /// <summary>
-        /// 构建失败列表文本（导出与复制共用同一份，格式是 txt）。
-        ///
-        /// 抄的是 WinRAR <c>-log[AF]</c> 的**两级分组**：一级一行"归档"，二级缩进写
-        /// "引擎 / 层级 / 校验 / 分卷 / 条目 / 位置"。旧实现只有一行 <c>文件名 - 原因</c>，
-        /// 一个包里有 3 个条目失败、另 200 个成功时根本说不清（M3 的验收判据就是"能说清每个为什么失败"）。
-        ///
-        /// 表头三行是"结果可追溯"的落点（不变量 14）：生成时间（**固定格式**，见 LogService）
-        /// 与引擎名 + 版本。以前失败清单里一个字都没有，事后无法回答"这是哪个版本跑出来的"。
-        /// 多引擎接进流程之后，表头列的是**本次实际用过的引擎**（可能不止一个），
-        /// 而逐个归档那一行写的是**它自己**用的那个（见 <see cref="EngineIdentityProvider"/>）。
-        /// </summary>
-        public string BuildFailedListText(IEnumerable<ArchiveTask> tasks)
-        {
-            var allTasks = tasks?.Where(x => x != null).ToList() ?? new List<ArchiveTask>();
-            List<ArchiveTask> failedTasks = GetFailedTasks(allTasks);
+            RecognizedCount = list.Count(x =>
+                x.IsArchive ||
+                x.Status == StatusText.Recognized ||
+                x.ExtensionStatus == StatusText.ExtensionNormal ||
+                x.ExtensionStatus == StatusText.ExtensionMissing ||
+                x.ExtensionStatus == StatusText.ExtensionMismatch ||
+                x.ExtensionStatus == StatusText.ExtensionMultiFake ||
+                x.ExtensionStatus == StatusText.ExtensionVolume ||
+                // 内嵌归档也算"已识别"：它的格式是确定的（ZIP，只是藏在文件尾部），
+                // 归到"未知"会让用户以为识别失败，从而去改一个根本不该改的后缀。
+                x.ExtensionStatus == StatusText.ExtensionEmbedded),
 
-            var builder = new StringBuilder();
+            UnknownCount = list.Count(x =>
+                x.DetectedFormat == "Unknown" ||
+                x.Status == StatusText.UnknownFormat ||
+                x.ExtensionStatus == StatusText.UnknownFormat),
 
-            builder.AppendLine(FailedListTitle);
-            builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(ArchiveFixer.Helpers.Clock.Now));
-            builder.AppendLine(EngineLabel + DescribeRunEngines(allTasks));
+            RenameSuccessCount = buckets.RenameSuccess,
+            RenameFailedCount = buckets.RenameFailed,
 
-            if (failedTasks.Count == 0)
-            {
-                builder.Append(NoFailedTaskText);
-                builder.AppendLine();
-                AppendRestKeptSection(builder, allTasks);
-                return builder.ToString().TrimEnd();
-            }
+            TestSuccessCount = buckets.TestPassed,
+            TestFailedCount = buckets.TestFailed,
+
+            ExtractSuccessCount = buckets.ExtractSuccess,
+            ExtractFailedCount = buckets.ExtractFailed,
+
+            PasswordErrorCount = buckets.PasswordError,
+            CorruptedCount = buckets.Corrupted,
+
+            SkippedCount = buckets.Skipped,
+            CancelledCount = buckets.Cancelled,
 
             /*
-             * 表头口径**转调 <see cref="BatchOutcomeTally"/>**（用户 2026-10-04 真机）。
-             *
-             * 现场：这份表头写着「失败：2 个任务（共 4 个）」，可其中 `第6集.7z` 的机器终态是
-             * **部分完成**（批末汇总是"部分完成 1"）—— 同一个词在两处指的不是一件事，
-             * 用户拿这份清单去对批末那行"本批汇总"，怎么都对不上。
-             * ⛔ 这里不再自己 `Count(...)`、也不再自己分类：数法只有 `BatchOutcomeTally` 一份。
+             * "部分完成"计入失败侧：它确实没做完，用户还要处理。
+             * 宁可让统计显得悲观，也不能让"部分完成"混进成功数里 —— 那正是设计.md 不变量 9 要防的事。
              */
-            BatchOutcomeTally tally = BatchOutcomeTally.Count(allTasks);
+            OtherFailedCount = buckets.OtherFailed
+        };
+    }
 
-            builder.AppendLine(string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                FailedListScopeFormat,
-                failedTasks.Count,
-                tally.Total,
-                string.Join(" / ", tally.BuildParts())));
+    /// <summary>
+    /// 解压侧的失败状态（不含密码错误 / 文件损坏：它们各自单独成项）。
+    ///
+    /// <para>⚠ 名单本体只有一处：<see cref="TaskOutcomeClassifier.IsExtractFailureStatus"/>。
+    /// 旧写法在这里自己写一份 `status is …`，与 <c>OneClickCoordinator.IsFailureStatus</c>
+    /// 各写各的 —— 漏一条就立刻表现成"①页算失败、一键汇总算未处理"（用户 2026-09-27 真机）。</para>
+    /// </summary>
+    private static bool IsExtractFailureStatus(string status) =>
+        TaskOutcomeClassifier.IsExtractFailureStatus(status);
 
-            string followerNote = tally.DescribeFollowerNote();
+    /// <summary>
+    /// 获取失败任务。
+    /// </summary>
+    public List<ArchiveTask> GetFailedTasks(IEnumerable<ArchiveTask> tasks)
+    {
+        return tasks?
+            .Where(x => x != null && IsFailedOrUnknownTask(x))
+            .ToList()
+            ?? new List<ArchiveTask>();
+    }
 
-            if (!string.IsNullOrWhiteSpace(followerNote))
-            {
-                builder.AppendLine(followerNote);
-            }
+    /// <summary>
+    /// 构建失败列表文本（导出与复制共用同一份，格式是 txt）。
+    ///
+    /// 抄的是 WinRAR <c>-log[AF]</c> 的**两级分组**：一级一行"归档"，二级缩进写
+    /// "引擎 / 层级 / 校验 / 分卷 / 条目 / 位置"。旧实现只有一行 <c>文件名 - 原因</c>，
+    /// 一个包里有 3 个条目失败、另 200 个成功时根本说不清（M3 的验收判据就是"能说清每个为什么失败"）。
+    ///
+    /// 表头三行是"结果可追溯"的落点（不变量 14）：生成时间（**固定格式**，见 LogService）
+    /// 与引擎名 + 版本。以前失败清单里一个字都没有，事后无法回答"这是哪个版本跑出来的"。
+    /// 多引擎接进流程之后，表头列的是**本次实际用过的引擎**（可能不止一个），
+    /// 而逐个归档那一行写的是**它自己**用的那个（见 <see cref="EngineIdentityProvider"/>）。
+    /// </summary>
+    public string BuildFailedListText(IEnumerable<ArchiveTask> tasks)
+    {
+        var allTasks = tasks?.Where(x => x != null).ToList() ?? new List<ArchiveTask>();
+        List<ArchiveTask> failedTasks = GetFailedTasks(allTasks);
 
-            string processNote = tally.DescribeContentGroupProcessNote();
+        var builder = new StringBuilder();
 
-            if (!string.IsNullOrWhiteSpace(processNote))
-            {
-                builder.AppendLine(processNote);
-            }
+        builder.AppendLine(FailedListTitle);
+        builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(ArchiveFixer.Helpers.Clock.Now));
+        builder.AppendLine(EngineLabel + DescribeRunEngines(allTasks));
 
+        if (failedTasks.Count == 0)
+        {
+            builder.Append(NoFailedTaskText);
             builder.AppendLine();
-
-            foreach (ArchiveTask task in failedTasks)
-            {
-                string fileName = !string.IsNullOrWhiteSpace(task.FileName)
-                    ? task.FileName
-                    : Path.GetFileName(task.CurrentPath);
-
-                string reason = GetFailureReason(task);
-
-                builder.Append(ArchiveLinePrefix);
-                builder.Append(fileName);
-                builder.Append(" - ");
-                builder.AppendLine(reason);
-
-                foreach (string line in BuildFailureDetailLines(task))
-                {
-                    builder.Append(DetailIndent);
-                    builder.AppendLine(line);
-                }
-
-                builder.AppendLine();
-            }
-
             AppendRestKeptSection(builder, allTasks);
-
             return builder.ToString().TrimEnd();
         }
 
-        /// <summary>
-        /// 失败清单末尾那一段：**哪几条链的其余物原封不动地留着、为什么**（用户 2026-10-04 真机）。
-        ///
-        /// <para>为什么要单独一段而不是塞进逐归档的第二级：那一句可能落在**成功**的那个任务上
-        /// （真机 `Sociology.7z` 就是解压成功、只是链上另一层没成功 ⇒ 其余物一个字节都不删），
-        /// 而成功任务按口径不进这份清单 —— 塞进第二级等于一个字都不会出现。</para>
-        ///
-        /// <para>文字取任务上那一句现成的话（<see cref="ArchiveTask.RestKeptReason"/>，
-        /// 与①页「错误信息」列、批末诊断**同一份**），⛔ 这里不重推判据。</para>
-        /// </summary>
-        private static void AppendRestKeptSection(StringBuilder builder, List<ArchiveTask> tasks)
+        /*
+         * 表头口径**转调 <see cref="BatchOutcomeTally"/>**（用户 2026-10-04 真机）。
+         *
+         * 现场：这份表头写着「失败：2 个任务（共 4 个）」，可其中 `第6集.7z` 的机器终态是
+         * **部分完成**（批末汇总是"部分完成 1"）—— 同一个词在两处指的不是一件事，
+         * 用户拿这份清单去对批末那行"本批汇总"，怎么都对不上。
+         * ⛔ 这里不再自己 `Count(...)`、也不再自己分类：数法只有 `BatchOutcomeTally` 一份。
+         */
+        BatchOutcomeTally tally = BatchOutcomeTally.Count(allTasks);
+
+        builder.AppendLine(string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            FailedListScopeFormat,
+            failedTasks.Count,
+            tally.Total,
+            string.Join(" / ", tally.BuildParts())));
+
+        string followerNote = tally.DescribeFollowerNote();
+
+        if (!string.IsNullOrWhiteSpace(followerNote))
         {
-            var lines = new List<string>();
+            builder.AppendLine(followerNote);
+        }
 
-            foreach (ArchiveTask task in tasks)
+        string processNote = tally.DescribeContentGroupProcessNote();
+
+        if (!string.IsNullOrWhiteSpace(processNote))
+        {
+            builder.AppendLine(processNote);
+        }
+
+        builder.AppendLine();
+
+        foreach (ArchiveTask task in failedTasks)
+        {
+            string fileName = !string.IsNullOrWhiteSpace(task.FileName)
+                ? task.FileName
+                : Path.GetFileName(task.CurrentPath);
+
+            string reason = GetFailureReason(task);
+
+            builder.Append(ArchiveLinePrefix);
+            builder.Append(fileName);
+            builder.Append(" - ");
+            builder.AppendLine(reason);
+
+            foreach (string line in BuildFailureDetailLines(task))
             {
-                if (string.IsNullOrWhiteSpace(task.RestKeptReason))
-                {
-                    continue;
-                }
-
-                string name = !string.IsNullOrWhiteSpace(task.FileName)
-                    ? task.FileName
-                    : Path.GetFileName(task.CurrentPath);
-
-                lines.Add(DetailIndent + (string.IsNullOrWhiteSpace(name) ? "-" : name) + "："
-                          + task.RestKeptReason.Trim());
-            }
-
-            if (lines.Count == 0)
-            {
-                return;
+                builder.Append(DetailIndent);
+                builder.AppendLine(line);
             }
 
             builder.AppendLine();
-            builder.AppendLine(string.Format(
-                System.Globalization.CultureInfo.CurrentCulture,
-                RestKeptSectionTitleFormat,
-                lines.Count));
-
-            foreach (string line in lines)
-            {
-                builder.AppendLine(line);
-            }
         }
 
-        /// <summary>
-        /// 失败清单的第二级：这个归档内部到底怎么了（"归档内条目 / 失败层"）。
-        ///
-        /// 只发布**结构化的既有字段**，不解析中文文案（AGENTS.md §7：统计与判定不得依赖文案比较）：
-        /// · 引擎名 + 版本 —— 不变量 14，逐任务一行（**优先写这个任务实际用的那个引擎**，
-        ///   见 <see cref="EngineIdentityProvider"/>；问不到才退回通用引擎身份）；
-        /// · 层级 —— 是用户给的源包，还是续解出来的内层包（含父包名）；
-        /// · 引擎结论 / 校验结论 —— 原样带出（里面有 7-Zip 报的条目数、预期与实际的文件数落差）；
-        /// · 分卷缺哪几个 —— 不变量 7 要求"报缺哪几个"，失败清单里同样要说清；
-        /// · 条目 —— 由 <see cref="EntryDetailProvider"/> 提供（有就写，没有就不编）；
-        /// · 位置 —— 完整路径，用户要能直接找到那个包。
-        /// </summary>
-        public IReadOnlyList<string> BuildFailureDetailLines(ArchiveTask? task)
+        AppendRestKeptSection(builder, allTasks);
+
+        return builder.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// 失败清单末尾那一段：**哪几条链的其余物原封不动地留着、为什么**（用户 2026-10-04 真机）。
+    ///
+    /// <para>为什么要单独一段而不是塞进逐归档的第二级：那一句可能落在**成功**的那个任务上
+    /// （真机 `Sociology.7z` 就是解压成功、只是链上另一层没成功 ⇒ 其余物一个字节都不删），
+    /// 而成功任务按口径不进这份清单 —— 塞进第二级等于一个字都不会出现。</para>
+    ///
+    /// <para>文字取任务上那一句现成的话（<see cref="ArchiveTask.RestKeptReason"/>，
+    /// 与①页「错误信息」列、批末诊断**同一份**），⛔ 这里不重推判据。</para>
+    /// </summary>
+    private static void AppendRestKeptSection(StringBuilder builder, List<ArchiveTask> tasks)
+    {
+        var lines = new List<string>();
+
+        foreach (ArchiveTask task in tasks)
         {
-            var lines = new List<string>();
-
-            if (task == null)
+            if (string.IsNullOrWhiteSpace(task.RestKeptReason))
             {
-                return lines;
+                continue;
             }
 
-            lines.Add(EngineLabel + (ResolveTaskEngine(task) ?? EngineIdentity).Describe());
+            string name = !string.IsNullOrWhiteSpace(task.FileName)
+                ? task.FileName
+                : Path.GetFileName(task.CurrentPath);
 
-            lines.Add(task.IsContinuationTask
-                ? LayerLabel + $"内层包（父包：{ResolveParentName(task)}）"
-                : LayerLabel + "第 0 层（用户给的源包）");
+            lines.Add(DetailIndent + (string.IsNullOrWhiteSpace(name) ? "-" : name) + "："
+                      + task.RestKeptReason.Trim());
+        }
 
-            if (!string.IsNullOrWhiteSpace(task.EngineVerdict))
-            {
-                lines.Add(EngineVerdictLabel + task.EngineVerdict);
-            }
+        if (lines.Count == 0)
+        {
+            return;
+        }
 
-            if (!string.IsNullOrWhiteSpace(task.VerifyMessage))
-            {
-                lines.Add(VerifyLabel + task.VerifyMessage);
-            }
+        builder.AppendLine();
+        builder.AppendLine(string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            RestKeptSectionTitleFormat,
+            lines.Count));
 
-            if (task.IsVolumeGroup && task.MissingVolumeNames.Count > 0)
-            {
-                lines.Add(VolumeLabel + string.Join('、', task.MissingVolumeNames));
-            }
+        foreach (string line in lines)
+        {
+            builder.AppendLine(line);
+        }
+    }
 
-            IEnumerable<string>? entryLines = null;
+    /// <summary>
+    /// 失败清单的第二级：这个归档内部到底怎么了（"归档内条目 / 失败层"）。
+    ///
+    /// 只发布**结构化的既有字段**，不解析中文文案（AGENTS.md §7：统计与判定不得依赖文案比较）：
+    /// · 引擎名 + 版本 —— 不变量 14，逐任务一行（**优先写这个任务实际用的那个引擎**，
+    ///   见 <see cref="EngineIdentityProvider"/>；问不到才退回通用引擎身份）；
+    /// · 层级 —— 是用户给的源包，还是续解出来的内层包（含父包名）；
+    /// · 引擎结论 / 校验结论 —— 原样带出（里面有 7-Zip 报的条目数、预期与实际的文件数落差）；
+    /// · 分卷缺哪几个 —— 不变量 7 要求"报缺哪几个"，失败清单里同样要说清；
+    /// · 条目 —— 由 <see cref="EntryDetailProvider"/> 提供（有就写，没有就不编）；
+    /// · 位置 —— 完整路径，用户要能直接找到那个包。
+    /// </summary>
+    public IReadOnlyList<string> BuildFailureDetailLines(ArchiveTask? task)
+    {
+        var lines = new List<string>();
 
-            try
-            {
-                entryLines = EntryDetailProvider?.Invoke(task);
-            }
-            catch
-            {
-                // 明细来源坏了不能把整份失败清单带崩：清单是失败后唯一的可读产物。
-                entryLines = null;
-            }
-
-            foreach (string entryLine in entryLines ?? Enumerable.Empty<string>())
-            {
-                if (!string.IsNullOrWhiteSpace(entryLine))
-                {
-                    lines.Add(EntryLabel + entryLine.Trim());
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(task.CurrentPath))
-            {
-                lines.Add(LocationLabel + task.CurrentPath);
-            }
-
-            /*
-             * 「本次为什么解到这里」（规格 §9.2 硬要求⑥）：一键处理带着"本次选项"跑过时才有值。
-             * 放在最后一行 —— 用户顺着读下来是"引擎 → 层级 → 结论 → 条目 → 在哪 → 为什么在那"。
-             */
-            if (!string.IsNullOrWhiteSpace(task.RunOptionsNote))
-            {
-                lines.Add(RunOptionsLabel + task.RunOptionsNote);
-            }
-
+        if (task == null)
+        {
             return lines;
         }
 
-        /// <summary>
-        /// 某个任务**实际**用的引擎；问不到（没接口子、或这个任务根本没跑过引擎）返回 null。
-        ///
-        /// 与 <see cref="EntryDetailProvider"/> 同一口径：外部来源抛异常**不能**把整份报告带崩 ——
-        /// 失败清单是用户失败后唯一能读到的产物。
-        /// </summary>
-        public EngineIdentity? ResolveTaskEngine(ArchiveTask? task)
-        {
-            if (task == null || EngineIdentityProvider == null)
-            {
-                return null;
-            }
+        lines.Add(EngineLabel + (ResolveTaskEngine(task) ?? EngineIdentity).Describe());
 
-            try
+        lines.Add(task.IsContinuationTask
+            ? LayerLabel + $"内层包（父包：{ResolveParentName(task)}）"
+            : LayerLabel + "第 0 层（用户给的源包）");
+
+        if (!string.IsNullOrWhiteSpace(task.EngineVerdict))
+        {
+            lines.Add(EngineVerdictLabel + task.EngineVerdict);
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.VerifyMessage))
+        {
+            lines.Add(VerifyLabel + task.VerifyMessage);
+        }
+
+        if (task.IsVolumeGroup && task.MissingVolumeNames.Count > 0)
+        {
+            lines.Add(VolumeLabel + string.Join('、', task.MissingVolumeNames));
+        }
+
+        IEnumerable<string>? entryLines = null;
+
+        try
+        {
+            entryLines = EntryDetailProvider?.Invoke(task);
+        }
+        catch
+        {
+            // 明细来源坏了不能把整份失败清单带崩：清单是失败后唯一的可读产物。
+            entryLines = null;
+        }
+
+        foreach (string entryLine in entryLines ?? Enumerable.Empty<string>())
+        {
+            if (!string.IsNullOrWhiteSpace(entryLine))
             {
-                return EngineIdentityProvider(task);
-            }
-            catch
-            {
-                return null;
+                lines.Add(EntryLabel + entryLine.Trim());
             }
         }
 
-        /// <summary>
-        /// 报告表头那一行的引擎信息。
-        ///
-        /// 优先列**本次这些任务实际用过的**引擎（多引擎分派之下可能不止一个：
-        /// RAR 走 UnRAR、zip 走 7-Zip；如实列全，不挑一个当代表）；
-        /// 一个都问不到时退回通用引擎身份 —— 两种写法都**一定**带引擎名 + 版本（不变量 14）。
-        /// </summary>
-        private string DescribeRunEngines(IEnumerable<ArchiveTask>? tasks)
+        if (!string.IsNullOrWhiteSpace(task.CurrentPath))
         {
-            var used = new List<EngineIdentity>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
-            {
-                EngineIdentity? identity = ResolveTaskEngine(task);
-
-                if (identity == null)
-                {
-                    continue;
-                }
-
-                if (seen.Add((identity.EngineId ?? string.Empty) + "|" + (identity.Version ?? string.Empty)))
-                {
-                    used.Add(identity);
-                }
-            }
-
-            if (used.Count == 0)
-            {
-                return EngineIdentity.Describe();
-            }
-
-            // 只有一个、且就是通用引擎时保持既有口径（"引擎：7-Zip 命令行 26.01"），不加注解。
-            if (used.Count == 1 &&
-                string.Equals(used[0].EngineId, EngineIdentity.EngineId, StringComparison.OrdinalIgnoreCase))
-            {
-                return used[0].Describe();
-            }
-
-            return string.Join(" / ", used.Select(x => x.Describe())) + "（本次实际使用）";
+            lines.Add(LocationLabel + task.CurrentPath);
         }
 
-        private static string ResolveParentName(ArchiveTask task)
+        /*
+         * 「本次为什么解到这里」（规格 §9.2 硬要求⑥）：一键处理带着"本次选项"跑过时才有值。
+         * 放在最后一行 —— 用户顺着读下来是"引擎 → 层级 → 结论 → 条目 → 在哪 → 为什么在那"。
+         */
+        if (!string.IsNullOrWhiteSpace(task.RunOptionsNote))
         {
-            if (!string.IsNullOrWhiteSpace(task.ParentTaskName))
-            {
-                return task.ParentTaskName;
-            }
-
-            // 父包名字没记下来时用父输出目录兜底 —— 宁可给一个能定位的路径，也不要写"未知"。
-            string parentFromPath = Path.GetFileName(
-                (task.ParentOutputDirectory ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-
-            return string.IsNullOrWhiteSpace(parentFromPath)
-                ? task.ParentOutputDirectory ?? string.Empty
-                : parentFromPath;
+            lines.Add(RunOptionsLabel + task.RunOptionsNote);
         }
 
-        /// <summary>
-        /// 获取失败原因。
-        /// </summary>
-        public string GetFailureReason(ArchiveTask task)
+        return lines;
+    }
+
+    /// <summary>
+    /// 某个任务**实际**用的引擎；问不到（没接口子、或这个任务根本没跑过引擎）返回 null。
+    ///
+    /// 与 <see cref="EntryDetailProvider"/> 同一口径：外部来源抛异常**不能**把整份报告带崩 ——
+    /// 失败清单是用户失败后唯一能读到的产物。
+    /// </summary>
+    public EngineIdentity? ResolveTaskEngine(ArchiveTask? task)
+    {
+        if (task == null || EngineIdentityProvider == null)
         {
-            if (task == null)
+            return null;
+        }
+
+        try
+        {
+            return EngineIdentityProvider(task);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 报告表头那一行的引擎信息。
+    ///
+    /// 优先列**本次这些任务实际用过的**引擎（多引擎分派之下可能不止一个：
+    /// RAR 走 UnRAR、zip 走 7-Zip；如实列全，不挑一个当代表）；
+    /// 一个都问不到时退回通用引擎身份 —— 两种写法都**一定**带引擎名 + 版本（不变量 14）。
+    /// </summary>
+    private string DescribeRunEngines(IEnumerable<ArchiveTask>? tasks)
+    {
+        var used = new List<EngineIdentity>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
+        {
+            EngineIdentity? identity = ResolveTaskEngine(task);
+
+            if (identity == null)
             {
-                return StatusText.UnknownError;
+                continue;
             }
 
-            if (!string.IsNullOrWhiteSpace(task.ErrorMessage))
+            if (seen.Add((identity.EngineId ?? string.Empty) + "|" + (identity.Version ?? string.Empty)))
             {
-                return task.ErrorMessage;
+                used.Add(identity);
             }
+        }
 
-            if (!string.IsNullOrWhiteSpace(task.Status))
-            {
-                return task.Status;
-            }
+        if (used.Count == 0)
+        {
+            return EngineIdentity.Describe();
+        }
 
-            if (!string.IsNullOrWhiteSpace(task.ExtensionStatus))
-            {
-                return task.ExtensionStatus;
-            }
+        // 只有一个、且就是通用引擎时保持既有口径（"引擎：7-Zip 命令行 26.01"），不加注解。
+        if (used.Count == 1 &&
+            string.Equals(used[0].EngineId, EngineIdentity.EngineId, StringComparison.OrdinalIgnoreCase))
+        {
+            return used[0].Describe();
+        }
 
+        return string.Join(" / ", used.Select(x => x.Describe())) + "（本次实际使用）";
+    }
+
+    private static string ResolveParentName(ArchiveTask task)
+    {
+        if (!string.IsNullOrWhiteSpace(task.ParentTaskName))
+        {
+            return task.ParentTaskName;
+        }
+
+        // 父包名字没记下来时用父输出目录兜底 —— 宁可给一个能定位的路径，也不要写"未知"。
+        string parentFromPath = Path.GetFileName(
+            (task.ParentOutputDirectory ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+        return string.IsNullOrWhiteSpace(parentFromPath)
+            ? task.ParentOutputDirectory ?? string.Empty
+            : parentFromPath;
+    }
+
+    /// <summary>
+    /// 获取失败原因。
+    /// </summary>
+    public string GetFailureReason(ArchiveTask task)
+    {
+        if (task == null)
+        {
             return StatusText.UnknownError;
         }
 
-        /// <summary>
-        /// 判断是否失败状态。
-        /// </summary>
-        public bool IsFailedStatus(string status)
+        if (!string.IsNullOrWhiteSpace(task.ErrorMessage))
         {
-            return status is
-                StatusText.UnknownFormat or
-                StatusText.RenameFailed or
-                StatusText.TestFailed or
-                StatusText.ExtractFailed or
-                StatusText.WrongPassword or
-                StatusText.Corrupted or
-                // 两义那一档（密码可能不对、也可能数据坏）：同样必须进失败清单 ——
-                // 这一单一个字节都没解出来，而"两种可能都在"这句话就是用户唯一的行动线索
-                // （先核对密码本；密码对得上就是数据坏了）。
-                StatusText.PasswordOrCorrupted or
-                StatusText.AccessDenied or
-                StatusText.OutputConflict or
-                /*
-                 * 缺卷留在这份「要处理的清单」里（不变量 7：必须报"缺哪几个"）——
-                 * ⚠ 2026-10-08 用户口径改变的是**分桶与配色**（缺卷 = 部分完成、不是"解压失败"），
-                 * ⛔ 不是"从清单里消失"。两件事分开看，见 `TaskOutcomeClassifier.IsFailureStatus` 的说明。
-                 */
-                StatusText.VolumeMissing or
-                StatusText.PathTooLong or
-                StatusText.SevenZipMissing or
-                // 一个引擎都没找到：必须进失败清单（用户唯一的行动线索就在这里）。
-                StatusText.NoEngineAvailable or
-                StatusText.PasswordAttemptLimitReached or
-                // 磁盘空间不足：必须出现在失败清单里（不变量 6 的同一精神：没做成的事不许消失）。
-                // 逐任务第二级里会带上"需要 X / 可用 Y / 差 Z"与建议动作（写进 ErrorMessage）。
-                StatusText.DiskSpaceInsufficient or
-                // 源文件已变化（不变量 11）：同样必须进失败清单 —— 这一条是用户唯一的行动线索
-                // （"右键 → 重新扫描此文件"），ErrorMessage 里已经点名是哪个文件、哪一项变了。
-                StatusText.SourceChanged or
-                // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
-                StatusText.PartiallyCompleted or
-                // 文件名已加密：这一单没拿到可用结论，用户必须看见（否则它就消失在"处理完了"里）。
-                StatusText.EncryptedHeaders or
-                StatusText.UnknownError;
+            return task.ErrorMessage;
         }
 
-        /// <summary>
-        /// 判断是否需要进入失败列表。
-        /// </summary>
-        public bool IsFailedOrUnknownTask(ArchiveTask task)
+        if (!string.IsNullOrWhiteSpace(task.Status))
         {
-            if (task == null)
-            {
-                return false;
-            }
+            return task.Status;
+        }
 
+        if (!string.IsNullOrWhiteSpace(task.ExtensionStatus))
+        {
+            return task.ExtensionStatus;
+        }
+
+        return StatusText.UnknownError;
+    }
+
+    /// <summary>
+    /// 判断是否失败状态。
+    /// </summary>
+    public bool IsFailedStatus(string status)
+    {
+        return status is
+            StatusText.UnknownFormat or
+            StatusText.RenameFailed or
+            StatusText.TestFailed or
+            StatusText.ExtractFailed or
+            StatusText.WrongPassword or
+            StatusText.Corrupted or
+            // 两义那一档（密码可能不对、也可能数据坏）：同样必须进失败清单 ——
+            // 这一单一个字节都没解出来，而"两种可能都在"这句话就是用户唯一的行动线索
+            // （先核对密码本；密码对得上就是数据坏了）。
+            StatusText.PasswordOrCorrupted or
+            StatusText.AccessDenied or
+            StatusText.OutputConflict or
             /*
-             * 产物校验判否的必须进失败清单（用户 2026-09-24 要求），**无论状态写着什么**：
-             * 那一行"校验：…"正是用户事后唯一能看懂"到底差在哪"的地方（预期与实际三个数字都在里面）。
-             * 判据是机器可判的枚举，不是中文文案。
+             * 缺卷留在这份「要处理的清单」里（不变量 7：必须报"缺哪几个"）——
+             * ⚠ 2026-10-08 用户口径改变的是**分桶与配色**（缺卷 = 部分完成、不是"解压失败"），
+             * ⛔ 不是"从清单里消失"。两件事分开看，见 `TaskOutcomeClassifier.IsFailureStatus` 的说明。
              */
-            if (task.OutputVerification == OutputVerificationOutcome.Failed)
-            {
-                return true;
-            }
+            StatusText.VolumeMissing or
+            StatusText.PathTooLong or
+            StatusText.SevenZipMissing or
+            // 一个引擎都没找到：必须进失败清单（用户唯一的行动线索就在这里）。
+            StatusText.NoEngineAvailable or
+            StatusText.PasswordAttemptLimitReached or
+            // 磁盘空间不足：必须出现在失败清单里（不变量 6 的同一精神：没做成的事不许消失）。
+            // 逐任务第二级里会带上"需要 X / 可用 Y / 差 Z"与建议动作（写进 ErrorMessage）。
+            StatusText.DiskSpaceInsufficient or
+            // 源文件已变化（不变量 11）：同样必须进失败清单 —— 这一条是用户唯一的行动线索
+            // （"右键 → 重新扫描此文件"），ErrorMessage 里已经点名是哪个文件、哪一项变了。
+            StatusText.SourceChanged or
+            // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
+            StatusText.PartiallyCompleted or
+            // 文件名已加密：这一单没拿到可用结论，用户必须看见（否则它就消失在"处理完了"里）。
+            StatusText.EncryptedHeaders or
+            StatusText.UnknownError;
+    }
 
-            if (IsFailedStatus(task.Status))
-            {
-                return true;
-            }
-
-            if (task.DetectedFormat == "Unknown" ||
-                task.ExtensionStatus == StatusText.UnknownFormat)
-            {
-                return true;
-            }
-
+    /// <summary>
+    /// 判断是否需要进入失败列表。
+    /// </summary>
+    public bool IsFailedOrUnknownTask(ArchiveTask task)
+    {
+        if (task == null)
+        {
             return false;
         }
+
+        /*
+         * 产物校验判否的必须进失败清单（用户 2026-09-24 要求），**无论状态写着什么**：
+         * 那一行"校验：…"正是用户事后唯一能看懂"到底差在哪"的地方（预期与实际三个数字都在里面）。
+         * 判据是机器可判的枚举，不是中文文案。
+         */
+        if (task.OutputVerification == OutputVerificationOutcome.Failed)
+        {
+            return true;
+        }
+
+        if (IsFailedStatus(task.Status))
+        {
+            return true;
+        }
+
+        if (task.DetectedFormat == "Unknown" ||
+            task.ExtensionStatus == StatusText.UnknownFormat)
+        {
+            return true;
+        }
+
+        return false;
     }
 }

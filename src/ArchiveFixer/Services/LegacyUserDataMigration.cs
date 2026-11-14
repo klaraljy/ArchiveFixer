@@ -2,197 +2,196 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Services;
+
+/// <summary>
+/// 把旧版本留在 <c>%APPDATA%\ArchiveFixer</c> 或安装目录 <c>data\</c> 里的
+/// 设置/密码一次性补到固定数据根。
+///
+/// <para>只补**目标不存在**的文件，⛔ 不覆盖当前设置/密码；日志、temp、备份不迁。
+/// 只在目标根没有迁移标记时执行一次；旧文件保留不删，用户可自行清理。</para>
+/// </summary>
+internal static class LegacyUserDataMigration
 {
-    /// <summary>
-    /// 把旧版本留在 <c>%APPDATA%\ArchiveFixer</c> 或安装目录 <c>data\</c> 里的
-    /// 设置/密码一次性补到固定数据根。
-    ///
-    /// <para>只补**目标不存在**的文件，⛔ 不覆盖当前设置/密码；日志、temp、备份不迁。
-    /// 只在目标根没有迁移标记时执行一次；旧文件保留不删，用户可自行清理。</para>
-    /// </summary>
-    internal static class LegacyUserDataMigration
+    internal const string VersionFileName = "legacy-user-data.migration.version";
+    internal const int CurrentVersion = 1;
+
+    private static readonly string[] MigratableFiles =
     {
-        internal const string VersionFileName = "legacy-user-data.migration.version";
-        internal const int CurrentVersion = 1;
+        "appsettings.json",
+        "passwords.txt",
+        "passwords.txt.bak",
+        "passwords.meta.json",
+        "passwords.meta.json.bak",
+        "password-list.dat",
+        "password-book.path"
+    };
 
-        private static readonly string[] MigratableFiles =
+    internal static IReadOnlyList<string> MigrateIfNeeded(
+        string programDirectory,
+        string destinationRoot,
+        string? legacyRoamingDirectory = null,
+        Action<string>? log = null)
+    {
+        var copied = new List<string>();
+        bool hadFailure = false;
+
+        if (string.IsNullOrWhiteSpace(destinationRoot))
         {
-            "appsettings.json",
-            "passwords.txt",
-            "passwords.txt.bak",
-            "passwords.meta.json",
-            "passwords.meta.json.bak",
-            "password-list.dat",
-            "password-book.path"
-        };
+            return copied;
+        }
 
-        internal static IReadOnlyList<string> MigrateIfNeeded(
-            string programDirectory,
-            string destinationRoot,
-            string? legacyRoamingDirectory = null,
-            Action<string>? log = null)
+        try
         {
-            var copied = new List<string>();
-            bool hadFailure = false;
+            Directory.CreateDirectory(destinationRoot);
+        }
+        catch
+        {
+            return copied;
+        }
 
-            if (string.IsNullOrWhiteSpace(destinationRoot))
+        string versionPath = Path.Combine(destinationRoot, VersionFileName);
+        if (ReadVersion(versionPath) >= CurrentVersion)
+        {
+            return copied;
+        }
+
+        var sources = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(programDirectory))
+        {
+            sources.Add(Path.Combine(programDirectory, "data"));
+        }
+
+        string roaming = legacyRoamingDirectory
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                PathService.DataFolderName);
+
+        if (!string.IsNullOrWhiteSpace(roaming))
+        {
+            sources.Add(roaming);
+        }
+
+        foreach (string sourceDirectory in sources)
+        {
+            if (string.IsNullOrWhiteSpace(sourceDirectory)
+                || !Directory.Exists(sourceDirectory)
+                || PathsEqual(sourceDirectory, destinationRoot))
             {
-                return copied;
+                continue;
             }
 
-            try
+            foreach (string fileName in MigratableFiles)
             {
-                Directory.CreateDirectory(destinationRoot);
-            }
-            catch
-            {
-                return copied;
-            }
+                string source = Path.Combine(sourceDirectory, fileName);
+                string destination = Path.Combine(destinationRoot, fileName);
 
-            string versionPath = Path.Combine(destinationRoot, VersionFileName);
-            if (ReadVersion(versionPath) >= CurrentVersion)
-            {
-                return copied;
-            }
-
-            var sources = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(programDirectory))
-            {
-                sources.Add(Path.Combine(programDirectory, "data"));
-            }
-
-            string roaming = legacyRoamingDirectory
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    PathService.DataFolderName);
-
-            if (!string.IsNullOrWhiteSpace(roaming))
-            {
-                sources.Add(roaming);
-            }
-
-            foreach (string sourceDirectory in sources)
-            {
-                if (string.IsNullOrWhiteSpace(sourceDirectory)
-                    || !Directory.Exists(sourceDirectory)
-                    || PathsEqual(sourceDirectory, destinationRoot))
+                if (!File.Exists(source) || File.Exists(destination))
                 {
                     continue;
                 }
 
-                foreach (string fileName in MigratableFiles)
+                // 主密码本已存在时，旧 .bak 只是过期副本；直接复制会把旧版本可能留下的
+                // 明文备份重新带回数据根。只有主文件缺失时才对备份做迁移（恢复时会升级加密）。
+                if (string.Equals(fileName, "passwords.txt.bak", StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(Path.Combine(destinationRoot, "passwords.txt")))
                 {
-                    string source = Path.Combine(sourceDirectory, fileName);
-                    string destination = Path.Combine(destinationRoot, fileName);
-
-                    if (!File.Exists(source) || File.Exists(destination))
-                    {
-                        continue;
-                    }
-
-                    // 主密码本已存在时，旧 .bak 只是过期副本；直接复制会把旧版本可能留下的
-                    // 明文备份重新带回数据根。只有主文件缺失时才对备份做迁移（恢复时会升级加密）。
-                    if (string.Equals(fileName, "passwords.txt.bak", StringComparison.OrdinalIgnoreCase)
-                        && File.Exists(Path.Combine(destinationRoot, "passwords.txt")))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        CopyAtomically(source, destination);
-                        copied.Add(fileName);
-                        log?.Invoke($"旧数据已补入固定数据目录：{fileName}");
-                    }
-                    catch
-                    {
-                        // 迁移失败不阻断启动；不写标记，下次启动还会再试。
-                        hadFailure = true;
-                    }
-                }
-            }
-
-            if (!hadFailure)
-            {
-                WriteVersion(versionPath);
-            }
-
-            return copied;
-        }
-
-        private static void CopyAtomically(string source, string destination)
-        {
-            string temp = destination + ".legacy-migration-tmp";
-
-            try
-            {
-                File.Copy(source, temp, overwrite: true);
-                if (new FileInfo(source).Length != new FileInfo(temp).Length)
-                {
-                    throw new IOException("迁移临时文件长度不一致");
+                    continue;
                 }
 
-                File.Move(temp, destination, overwrite: false);
-            }
-            finally
-            {
                 try
                 {
-                    if (File.Exists(temp))
-                    {
-                        File.Delete(temp);
-                    }
+                    CopyAtomically(source, destination);
+                    copied.Add(fileName);
+                    log?.Invoke($"旧数据已补入固定数据目录：{fileName}");
                 }
                 catch
                 {
+                    // 迁移失败不阻断启动；不写标记，下次启动还会再试。
+                    hadFailure = true;
                 }
             }
         }
 
-        private static void WriteVersion(string path)
+        if (!hadFailure)
         {
-            try
-            {
-                string temp = path + ".tmp";
-                File.WriteAllText(temp, CurrentVersion.ToString());
-                File.Move(temp, path, overwrite: true);
-            }
-            catch
-            {
-                // 标记写不进去不影响已经补入的文件；下次会再尝试。
-            }
+            WriteVersion(versionPath);
         }
 
-        private static int ReadVersion(string path)
+        return copied;
+    }
+
+    private static void CopyAtomically(string source, string destination)
+    {
+        string temp = destination + ".legacy-migration-tmp";
+
+        try
+        {
+            File.Copy(source, temp, overwrite: true);
+            if (new FileInfo(source).Length != new FileInfo(temp).Length)
+            {
+                throw new IOException("迁移临时文件长度不一致");
+            }
+
+            File.Move(temp, destination, overwrite: false);
+        }
+        finally
         {
             try
             {
-                return File.Exists(path)
-                    && int.TryParse(File.ReadAllText(path), out int version)
-                    ? version
-                    : 0;
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
             }
             catch
             {
-                return 0;
             }
         }
+    }
 
-        private static bool PathsEqual(string left, string right)
+    private static void WriteVersion(string path)
+    {
+        try
         {
-            try
-            {
-                return string.Equals(
-                    Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
-                    Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar),
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
+            string temp = path + ".tmp";
+            File.WriteAllText(temp, CurrentVersion.ToString());
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            // 标记写不进去不影响已经补入的文件；下次会再尝试。
+        }
+    }
+
+    private static int ReadVersion(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                && int.TryParse(File.ReadAllText(path), out int version)
+                ? version
+                : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 }

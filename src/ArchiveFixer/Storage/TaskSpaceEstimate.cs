@@ -6,266 +6,264 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Storage
+namespace ArchiveFixer.Storage;
+
+/// <summary>
+/// 一个解压任务的**空间需求**（用户 2026-09-22 需求："空间核算必须包含内容物 + 本次会产生的过程物
+/// （分卷、内层包）+ 去重后的峰值需求"）。
+///
+/// <para><b>为什么需要它</b>：<c>Security/ResourceBudget</c> 回答的是"这个包该不该解"（硬上限），
+/// 而用户真正会撞上的是"解到一半盘满了"。要提前拦住，就必须有一个**任务级的空间账面**。</para>
+///
+/// <para><b>三个组成（去重后）</b>：</para>
+/// <list type="number">
+/// <item><description><see cref="SourceBytes"/> —— 本任务源包**整组**（分卷求和）。
+/// 解压期间它一直占着盘：成功之后只是**搬进 `其余物`**（同盘移动不释放空间），
+/// 只有①页「空间不足」模式才会在定稿 + 校验通过之后真的把它删掉（那份空间才回到可用空间里）。</description></item>
+/// <item><description><see cref="ContentBytes"/> —— 内容物。清单拿得到时是解压后总大小（与
+/// <c>ResourceBudget</c> 同一份 list、同一套累加口径）；拿不到时按源包体积估**下界**并标注
+/// <see cref="ContentEstimated"/>。</description></item>
+/// <item><description><see cref="ProcessArtifactBytes"/> —— 本次会**额外**产生的过程物：
+/// 内嵌归档抠出来的过程物（源文件尾部那一段的副本）+ 内容物里的内层包**再展开**的增量
+/// （内层包自身已经算在 <see cref="ContentBytes"/> 里，这里只算它展开后多出来的那一份）。</description></item>
+/// </list>
+///
+/// <para><b>去重规则（三条，缺一条就会把需求算大一倍）</b>：</para>
+/// <list type="number">
+/// <item><description>同一个**全路径**只算一次：源包与它的各卷按路径去重（改名前后的同一个文件不重复计）。</description></item>
+/// <item><description>分卷各卷只进 <see cref="SourceBytes"/>，**绝不**再按"过程物"算第二遍
+/// （旧 `解压7z分卷文件.bat` 的场景里，分卷既被当成源包又被当成过程物，很容易重复计）。</description></item>
+/// <item><description>内层归档自身已在 <see cref="ContentBytes"/> 里，<see cref="ProcessArtifactBytes"/>
+/// 只计它的**净增量**（展开后 − 包本体 ≈ 0，见 <see cref="SpaceEstimator.NestedExpansionAllowance"/>；
+/// 用户 2026-10-03 第 ③ 条把老口径的"整份再扣一遍"改掉了）。</description></item>
+/// </list>
+///
+/// <para><b>峰值（描述）</b>：<see cref="PeakBytes"/> = 源包 + 过程物 + 内容物，即"这一切同时存在"的那一刻。
+/// ⛔ 它是**描述**不是**判据**：盘上"还能用多少"（可用空间）本来就不含源包，
+/// 拿峰值去比可用空间等于把源包算两遍（2026-09-29 真机事故，见 <see cref="FreeSpaceDemandBytes"/>）。</para>
+///
+/// <para><b>判据（唯一出口）</b>：<see cref="FreeSpaceDemandBytes"/> = 内容物 + 过程物 ——
+/// 这一次真正要从可用空间里**新写**的字节数。放行 / 拦下、并发累计、日志里的"需要多少"全用它。</para>
+///
+/// <para><b>峰值与"同卷 / 跨卷"的关系（用户 2026-09-30 拍板改口径）</b>：工作区默认落在**这一单的
+/// 目标目录里面**（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），于是"暂存内容物"与"成品"落在
+/// **同一棵树的同一块盘**上。
+/// 这一件事必须如实算进去，因为旧注释里那句"定稿搬运是同盘移动（不额外占）"当时只是**假设**
+/// （工作区在程序盘、成品在输出盘时它并不成立，只是恰好数字还能对上）：</para>
+/// <list type="bullet">
+/// <item><description><b>同卷</b>（默认档）：暂存与成品是同一份字节 —— 定稿走的是同卷**改名**
+/// （<c>File.Move</c> 同卷 = rename），所以内容物在峰值里**只算一份**；峰值那一刻是
+/// "内容物已解进工作区、源包还在这块盘上"。</description></item>
+/// <item><description><b>跨卷</b>（这一批的目标目录跨盘：工作区跟着第一个目标目录，
+/// 落在别的盘上的那些任务定稿就要跨盘）：
+/// 定稿那一步是**复制 + 删原件**，成品盘在那一刻会多出一份内容物；而**工作区盘**另外还要留得下
+/// <see cref="StagingBytes"/>（内容物 + 过程物）。当前账本只按成品盘核算 ——
+/// 工作区盘那一半是**已知限制**，日志里必须说明，不许假装它也被核过。</description></item>
+/// </list>
+/// <para><see cref="WorkspaceSharesTargetVolume"/> 为 null（取不到落点或工作区根）时**不做同卷假设**，
+/// 说明文字也照实写"未知"。</para>
+/// </summary>
+public sealed class TaskSpaceEstimate
 {
+    /// <summary>任务路径（源包路径，或分卷组第一卷）。只用于日志与去重，不参与判断。</summary>
+    public string TaskPath { get; init; } = string.Empty;
+
+    /// <summary>给用户看的名字（文件名）。</summary>
+    public string DisplayName { get; init; } = string.Empty;
+
+    /// <summary>源包整组字节数（分卷求和；路径去重后）。</summary>
+    public long SourceBytes { get; init; }
+
+    /// <summary>内容物字节数。清单拿不到时是按源包体积估的下界（见 <see cref="ContentEstimated"/>）。</summary>
+    public long ContentBytes { get; init; }
+
+    /// <summary>本次会额外产生的过程物字节数（内嵌归档过程物 + 内层包再展开的增量）。</summary>
+    public long ProcessArtifactBytes { get; init; }
+
+    /// <summary>是不是"清单读不到、内容物按源包体积估的"。</summary>
+    public bool ContentEstimated { get; init; }
+
+    /// <summary>估算用没用引擎给的条目清单。</summary>
+    public bool HasListing { get; init; }
+
+    /// <summary>估算依据的一句话（进日志与任务详情，让用户能自己复核这个数字怎么来的）。</summary>
+    public string Basis { get; init; } = string.Empty;
+
     /// <summary>
-    /// 一个解压任务的**空间需求**（用户 2026-09-22 需求："空间核算必须包含内容物 + 本次会产生的过程物
-    /// （分卷、内层包）+ 去重后的峰值需求"）。
+    /// 任务完成前**一直占着盘**的那部分（源包 + 过程物）。
     ///
-    /// <para><b>为什么需要它</b>：<c>Security/ResourceBudget</c> 回答的是"这个包该不该解"（硬上限），
-    /// 而用户真正会撞上的是"解到一半盘满了"。要提前拦住，就必须有一个**任务级的空间账面**。</para>
+    /// <para>①页「空间不足」模式"边解边删源包"能立刻收回的就是它 —— 这也是那个模式能解决"空间不够"的
+    /// 全部原因：普通档下这些字节只是从源目录搬进了 `其余物`，净占用一点没变。</para>
     ///
-    /// <para><b>三个组成（去重后）</b>：</para>
-    /// <list type="number">
-    /// <item><description><see cref="SourceBytes"/> —— 本任务源包**整组**（分卷求和）。
-    /// 解压期间它一直占着盘：成功之后只是**搬进 `其余物`**（同盘移动不释放空间），
-    /// 只有①页「空间不足」模式才会在定稿 + 校验通过之后真的把它删掉（那份空间才回到可用空间里）。</description></item>
-    /// <item><description><see cref="ContentBytes"/> —— 内容物。清单拿得到时是解压后总大小（与
-    /// <c>ResourceBudget</c> 同一份 list、同一套累加口径）；拿不到时按源包体积估**下界**并标注
-    /// <see cref="ContentEstimated"/>。</description></item>
-    /// <item><description><see cref="ProcessArtifactBytes"/> —— 本次会**额外**产生的过程物：
-    /// 内嵌归档抠出来的过程物（源文件尾部那一段的副本）+ 内容物里的内层包**再展开**的增量
-    /// （内层包自身已经算在 <see cref="ContentBytes"/> 里，这里只算它展开后多出来的那一份）。</description></item>
-    /// </list>
-    ///
-    /// <para><b>去重规则（三条，缺一条就会把需求算大一倍）</b>：</para>
-    /// <list type="number">
-    /// <item><description>同一个**全路径**只算一次：源包与它的各卷按路径去重（改名前后的同一个文件不重复计）。</description></item>
-    /// <item><description>分卷各卷只进 <see cref="SourceBytes"/>，**绝不**再按"过程物"算第二遍
-    /// （旧 `解压7z分卷文件.bat` 的场景里，分卷既被当成源包又被当成过程物，很容易重复计）。</description></item>
-    /// <item><description>内层归档自身已在 <see cref="ContentBytes"/> 里，<see cref="ProcessArtifactBytes"/>
-    /// 只计它的**净增量**（展开后 − 包本体 ≈ 0，见 <see cref="SpaceEstimator.NestedExpansionAllowance"/>；
-    /// 用户 2026-10-03 第 ③ 条把老口径的"整份再扣一遍"改掉了）。</description></item>
-    /// </list>
-    ///
-    /// <para><b>峰值（描述）</b>：<see cref="PeakBytes"/> = 源包 + 过程物 + 内容物，即"这一切同时存在"的那一刻。
-    /// ⛔ 它是**描述**不是**判据**：盘上"还能用多少"（可用空间）本来就不含源包，
-    /// 拿峰值去比可用空间等于把源包算两遍（2026-09-29 真机事故，见 <see cref="FreeSpaceDemandBytes"/>）。</para>
-    ///
-    /// <para><b>判据（唯一出口）</b>：<see cref="FreeSpaceDemandBytes"/> = 内容物 + 过程物 ——
-    /// 这一次真正要从可用空间里**新写**的字节数。放行 / 拦下、并发累计、日志里的"需要多少"全用它。</para>
-    ///
-    /// <para><b>峰值与"同卷 / 跨卷"的关系（用户 2026-09-30 拍板改口径）</b>：工作区默认落在**这一单的
-    /// 目标目录里面**（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），于是"暂存内容物"与"成品"落在
-    /// **同一棵树的同一块盘**上。
-    /// 这一件事必须如实算进去，因为旧注释里那句"定稿搬运是同盘移动（不额外占）"当时只是**假设**
-    /// （工作区在程序盘、成品在输出盘时它并不成立，只是恰好数字还能对上）：</para>
-    /// <list type="bullet">
-    /// <item><description><b>同卷</b>（默认档）：暂存与成品是同一份字节 —— 定稿走的是同卷**改名**
-    /// （<c>File.Move</c> 同卷 = rename），所以内容物在峰值里**只算一份**；峰值那一刻是
-    /// "内容物已解进工作区、源包还在这块盘上"。</description></item>
-    /// <item><description><b>跨卷</b>（这一批的目标目录跨盘：工作区跟着第一个目标目录，
-    /// 落在别的盘上的那些任务定稿就要跨盘）：
-    /// 定稿那一步是**复制 + 删原件**，成品盘在那一刻会多出一份内容物；而**工作区盘**另外还要留得下
-    /// <see cref="StagingBytes"/>（内容物 + 过程物）。当前账本只按成品盘核算 ——
-    /// 工作区盘那一半是**已知限制**，日志里必须说明，不许假装它也被核过。</description></item>
-    /// </list>
-    /// <para><see cref="WorkspaceSharesTargetVolume"/> 为 null（取不到落点或工作区根）时**不做同卷假设**，
-    /// 说明文字也照实写"未知"。</para>
+    /// <para>⛔ **它不进放行判据**（判据是 <see cref="FreeSpaceDemandBytes"/>）：源包本来就在盘上、
+    /// 从来不在"可用空间"里，把它加进"需要"就是算两遍。</para>
     /// </summary>
-    public sealed class TaskSpaceEstimate
+    public long RetainedBytes => SaturatingSum(SourceBytes, ProcessArtifactBytes);
+
+    /// <summary>
+    /// 本任务会写进**工作区**的字节数（暂存内容物 + 过程物）。
+    ///
+    /// <para>它是"跨卷时工作区那块盘至少要留得下多少"的那个数（见类注释里的同卷 / 跨卷说明）。
+    /// 同卷（默认档）时它已经包含在 <see cref="PeakBytes"/> 里，**不额外再加一遍** ——
+    /// 加一遍等于凭空把需求算大一倍。</para>
+    ///
+    /// <para>它同时就是**放行判据**那个数（<see cref="FreeSpaceDemandBytes"/> 直接引它）：
+    /// 工作区默认跟着输出盘走，于是"新写进工作区"= "从目标盘可用空间里吃掉"。</para>
+    /// </summary>
+    public long StagingBytes => SaturatingSum(ContentBytes, ProcessArtifactBytes);
+
+    /// <summary>
+    /// 工作区根与成品落点是不是**同一个卷**（null = 取不到落点或工作区根，未知）。
+    ///
+    /// <para>true = 暂存与成品同盘（定稿是同卷改名，内容物只算一份）；
+    /// false = 跨卷（定稿是复制，见类注释）。这个事实由调用方给出
+    /// （<c>ExtractionCoordinator</c> 拿当前生效的工作区根与实际落点比盘根），
+    /// 估算器本身不碰文件系统、也不读设置。</para>
+    /// </summary>
+    public bool? WorkspaceSharesTargetVolume { get; init; }
+
+    /// <summary>盘上**总占地**：源包 + 过程物 + 内容物同时存在的那一刻（描述用，⛔ 不是放行判据）。</summary>
+    public long PeakBytes => SaturatingSum(RetainedBytes, ContentBytes);
+
+    /// <summary>
+    /// **放行判据（唯一出口）**：这一次真正要从**目标盘可用空间**里吃掉多少字节
+    /// = 内容物 + 过程物（= <see cref="StagingBytes"/>）。
+    ///
+    /// <para><b>⛔ 绝不加源包。</b>可用空间这个数**已经**把盘上现有的东西（含源包）排除在外：
+    /// 源包占着的字节从来不在"可用"里，再把它算进"需要"就是把源包算两遍。
+    /// 盘上塞得下的恒等式是"本次新写 ≤ 可用 − 要保留的余量"，而"本次新写"只有内容物与过程物
+    /// （源包原地不动、或者搬进**同盘**的 `其余物`，都不产生新字节）。</para>
+    ///
+    /// <para><b>为什么 2026-09-29 之前是错的</b>（用户真机当场报"普通人随便都能解压"）：
+    /// 老口径拿 <see cref="PeakBytes"/>（含源包）去比可用空间 ——
+    /// 三卷共 19,008,319,874 字节、目标盘可用 33.45 GiB 的那一组，明明只要 17.70 GiB 就能解出来
+    /// （余 15.25 GiB），却被按 35.41 GiB 判成"整盘都放不下"（差 2.46 GiB），一个字节都没解。</para>
+    ///
+    /// <para>并发的账也按它记：同时在跑的几个任务，各自"新写"的量之和才是那一刻盘上多出来的量。
+    /// ①页「空间不足」模式**不需要另立一套判据** —— 源包在两种档下都不进需求；
+    /// 那个模式的差别只体现在"跑完把源包收回来、下一个包更宽"（账本每个任务收尾都真实重探可用空间）。</para>
+    ///
+    /// <para><b>唯一的例外 = 部分完成发布（<see cref="CountsSourceAsNewOccupancy"/>）</b>：
+    /// 那一档跑完源包**一定还在盘上**（用户定的红线），也就是说这一单跑完盘上会多留一整个源包的占用
+    /// ⇒ 需求要加上它。⛔ 不加就等于把"两份"的承诺按"一份"排计划（用户 2026-10-02 顾虑 2 点名的
+    /// 危险组合：空间不足 + 大容量 + 多份相同文件一起开）。</para>
+    /// </summary>
+    public long FreeSpaceDemandBytes =>
+        CountsSourceAsNewOccupancy ? SaturatingSum(StagingBytes, SourceBytes) : StagingBytes;
+
+    /// <summary>
+    /// **部分完成发布开着**：这一单跑完源包仍然占着盘（那一档一律不搬不删源包）
+    /// ⇒ <see cref="FreeSpaceDemandBytes"/> 要把整份源包算进来。
+    ///
+    /// <para>它只影响"要不要启动这个任务"这一个判断；<see cref="PeakBytes"/> /
+    /// <see cref="ReclaimableBytes"/> 这些描述性的数一个都不改（口径仍然是"盘上同时有什么"）。</para>
+    /// </summary>
+    public bool CountsSourceAsNewOccupancy { get; init; }
+
+    /// <summary>
+    /// ①页「空间不足」模式在定稿 + 校验通过之后能收回的字节数（源包 + 过程物）。
+    ///
+    /// <para>它**不参与放行判断**（那一刻这些字节还在盘上），只用于两处：
+    /// 建议文案里的"开那个模式可以少要多少"，以及空间不足模式自己的排序口径
+    /// （净占用 = <see cref="PeakBytes"/> − 它，见 <c>ExtractionScheduler.Build</c> 的 sortKey）。</para>
+    /// </summary>
+    public long ReclaimableBytes => RetainedBytes;
+
+    /// <summary>
+    /// **净占用**：这个任务跑完（源包与过程物都已按模式回收）之后真正留在盘上的字节数。
+    ///
+    /// <para>= <see cref="PeakBytes"/> − <see cref="ReclaimableBytes"/> = <see cref="ContentBytes"/>。
+    /// 空间不足模式按它**从小到大**排执行顺序：先解"解完占地最少"的包，盘上越跑越宽。</para>
+    /// </summary>
+    public long NetOccupancyBytes => ContentBytes;
+
+    /// <summary>
+    /// 把"同卷 / 跨卷"这个事实补进这一份估算（返回**新的一份**，不原地改）。
+    ///
+    /// <para>为什么要单独一步：粗估发生在排计划的时候（那时还没有精确落点），
+    /// 精估发生在解压前的预检里（那时落点已经定下来了并按冲突档让过位）。
+    /// 两处都要带上这个事实，而事实的口径只有一处实现（<see cref="DescribeVolumeLayout"/>）。</para>
+    /// </summary>
+    public TaskSpaceEstimate WithVolumeLayout(bool? workspaceSharesTargetVolume)
     {
-        /// <summary>任务路径（源包路径，或分卷组第一卷）。只用于日志与去重，不参与判断。</summary>
-        public string TaskPath { get; init; } = string.Empty;
+        string note = DescribeVolumeLayout(workspaceSharesTargetVolume);
 
-        /// <summary>给用户看的名字（文件名）。</summary>
-        public string DisplayName { get; init; } = string.Empty;
-
-        /// <summary>源包整组字节数（分卷求和；路径去重后）。</summary>
-        public long SourceBytes { get; init; }
-
-        /// <summary>内容物字节数。清单拿不到时是按源包体积估的下界（见 <see cref="ContentEstimated"/>）。</summary>
-        public long ContentBytes { get; init; }
-
-        /// <summary>本次会额外产生的过程物字节数（内嵌归档过程物 + 内层包再展开的增量）。</summary>
-        public long ProcessArtifactBytes { get; init; }
-
-        /// <summary>是不是"清单读不到、内容物按源包体积估的"。</summary>
-        public bool ContentEstimated { get; init; }
-
-        /// <summary>估算用没用引擎给的条目清单。</summary>
-        public bool HasListing { get; init; }
-
-        /// <summary>估算依据的一句话（进日志与任务详情，让用户能自己复核这个数字怎么来的）。</summary>
-        public string Basis { get; init; } = string.Empty;
-
-        /// <summary>
-        /// 任务完成前**一直占着盘**的那部分（源包 + 过程物）。
-        ///
-        /// <para>①页「空间不足」模式"边解边删源包"能立刻收回的就是它 —— 这也是那个模式能解决"空间不够"的
-        /// 全部原因：普通档下这些字节只是从源目录搬进了 `其余物`，净占用一点没变。</para>
-        ///
-        /// <para>⛔ **它不进放行判据**（判据是 <see cref="FreeSpaceDemandBytes"/>）：源包本来就在盘上、
-        /// 从来不在"可用空间"里，把它加进"需要"就是算两遍。</para>
-        /// </summary>
-        public long RetainedBytes => SaturatingSum(SourceBytes, ProcessArtifactBytes);
-
-        /// <summary>
-        /// 本任务会写进**工作区**的字节数（暂存内容物 + 过程物）。
-        ///
-        /// <para>它是"跨卷时工作区那块盘至少要留得下多少"的那个数（见类注释里的同卷 / 跨卷说明）。
-        /// 同卷（默认档）时它已经包含在 <see cref="PeakBytes"/> 里，**不额外再加一遍** ——
-        /// 加一遍等于凭空把需求算大一倍。</para>
-        ///
-        /// <para>它同时就是**放行判据**那个数（<see cref="FreeSpaceDemandBytes"/> 直接引它）：
-        /// 工作区默认跟着输出盘走，于是"新写进工作区"= "从目标盘可用空间里吃掉"。</para>
-        /// </summary>
-        public long StagingBytes => SaturatingSum(ContentBytes, ProcessArtifactBytes);
-
-        /// <summary>
-        /// 工作区根与成品落点是不是**同一个卷**（null = 取不到落点或工作区根，未知）。
-        ///
-        /// <para>true = 暂存与成品同盘（定稿是同卷改名，内容物只算一份）；
-        /// false = 跨卷（定稿是复制，见类注释）。这个事实由调用方给出
-        /// （<c>ExtractionCoordinator</c> 拿当前生效的工作区根与实际落点比盘根），
-        /// 估算器本身不碰文件系统、也不读设置。</para>
-        /// </summary>
-        public bool? WorkspaceSharesTargetVolume { get; init; }
-
-        /// <summary>盘上**总占地**：源包 + 过程物 + 内容物同时存在的那一刻（描述用，⛔ 不是放行判据）。</summary>
-        public long PeakBytes => SaturatingSum(RetainedBytes, ContentBytes);
-
-        /// <summary>
-        /// **放行判据（唯一出口）**：这一次真正要从**目标盘可用空间**里吃掉多少字节
-        /// = 内容物 + 过程物（= <see cref="StagingBytes"/>）。
-        ///
-        /// <para><b>⛔ 绝不加源包。</b>可用空间这个数**已经**把盘上现有的东西（含源包）排除在外：
-        /// 源包占着的字节从来不在"可用"里，再把它算进"需要"就是把源包算两遍。
-        /// 盘上塞得下的恒等式是"本次新写 ≤ 可用 − 要保留的余量"，而"本次新写"只有内容物与过程物
-        /// （源包原地不动、或者搬进**同盘**的 `其余物`，都不产生新字节）。</para>
-        ///
-        /// <para><b>为什么 2026-09-29 之前是错的</b>（用户真机当场报"普通人随便都能解压"）：
-        /// 老口径拿 <see cref="PeakBytes"/>（含源包）去比可用空间 ——
-        /// 三卷共 19,008,319,874 字节、目标盘可用 33.45 GiB 的那一组，明明只要 17.70 GiB 就能解出来
-        /// （余 15.25 GiB），却被按 35.41 GiB 判成"整盘都放不下"（差 2.46 GiB），一个字节都没解。</para>
-        ///
-        /// <para>并发的账也按它记：同时在跑的几个任务，各自"新写"的量之和才是那一刻盘上多出来的量。
-        /// ①页「空间不足」模式**不需要另立一套判据** —— 源包在两种档下都不进需求；
-        /// 那个模式的差别只体现在"跑完把源包收回来、下一个包更宽"（账本每个任务收尾都真实重探可用空间）。</para>
-        ///
-        /// <para><b>唯一的例外 = 部分完成发布（<see cref="CountsSourceAsNewOccupancy"/>）</b>：
-        /// 那一档跑完源包**一定还在盘上**（用户定的红线），也就是说这一单跑完盘上会多留一整个源包的占用
-        /// ⇒ 需求要加上它。⛔ 不加就等于把"两份"的承诺按"一份"排计划（用户 2026-10-02 顾虑 2 点名的
-        /// 危险组合：空间不足 + 大容量 + 多份相同文件一起开）。</para>
-        /// </summary>
-        public long FreeSpaceDemandBytes =>
-            CountsSourceAsNewOccupancy ? SaturatingSum(StagingBytes, SourceBytes) : StagingBytes;
-
-        /// <summary>
-        /// **部分完成发布开着**：这一单跑完源包仍然占着盘（那一档一律不搬不删源包）
-        /// ⇒ <see cref="FreeSpaceDemandBytes"/> 要把整份源包算进来。
-        ///
-        /// <para>它只影响"要不要启动这个任务"这一个判断；<see cref="PeakBytes"/> /
-        /// <see cref="ReclaimableBytes"/> 这些描述性的数一个都不改（口径仍然是"盘上同时有什么"）。</para>
-        /// </summary>
-        public bool CountsSourceAsNewOccupancy { get; init; }
-
-        /// <summary>
-        /// ①页「空间不足」模式在定稿 + 校验通过之后能收回的字节数（源包 + 过程物）。
-        ///
-        /// <para>它**不参与放行判断**（那一刻这些字节还在盘上），只用于两处：
-        /// 建议文案里的"开那个模式可以少要多少"，以及空间不足模式自己的排序口径
-        /// （净占用 = <see cref="PeakBytes"/> − 它，见 <c>ExtractionScheduler.Build</c> 的 sortKey）。</para>
-        /// </summary>
-        public long ReclaimableBytes => RetainedBytes;
-
-        /// <summary>
-        /// **净占用**：这个任务跑完（源包与过程物都已按模式回收）之后真正留在盘上的字节数。
-        ///
-        /// <para>= <see cref="PeakBytes"/> − <see cref="ReclaimableBytes"/> = <see cref="ContentBytes"/>。
-        /// 空间不足模式按它**从小到大**排执行顺序：先解"解完占地最少"的包，盘上越跑越宽。</para>
-        /// </summary>
-        public long NetOccupancyBytes => ContentBytes;
-
-        /// <summary>
-        /// 把"同卷 / 跨卷"这个事实补进这一份估算（返回**新的一份**，不原地改）。
-        ///
-        /// <para>为什么要单独一步：粗估发生在排计划的时候（那时还没有精确落点），
-        /// 精估发生在解压前的预检里（那时落点已经定下来了并按冲突档让过位）。
-        /// 两处都要带上这个事实，而事实的口径只有一处实现（<see cref="DescribeVolumeLayout"/>）。</para>
-        /// </summary>
-        public TaskSpaceEstimate WithVolumeLayout(bool? workspaceSharesTargetVolume)
+        // 事实一样、依据里也已经写着这句：原样返回（两处估算会重复调用它）。
+        if (WorkspaceSharesTargetVolume == workspaceSharesTargetVolume &&
+            Basis.Contains(note, StringComparison.Ordinal))
         {
-            string note = DescribeVolumeLayout(workspaceSharesTargetVolume);
-
-            // 事实一样、依据里也已经写着这句：原样返回（两处估算会重复调用它）。
-            if (WorkspaceSharesTargetVolume == workspaceSharesTargetVolume &&
-                Basis.Contains(note, StringComparison.Ordinal))
-            {
-                return this;
-            }
-
-            return new TaskSpaceEstimate
-            {
-                TaskPath = TaskPath,
-                DisplayName = DisplayName,
-                SourceBytes = SourceBytes,
-                ContentBytes = ContentBytes,
-                ProcessArtifactBytes = ProcessArtifactBytes,
-                ContentEstimated = ContentEstimated,
-                HasListing = HasListing,
-                CountsSourceAsNewOccupancy = CountsSourceAsNewOccupancy,
-                WorkspaceSharesTargetVolume = workspaceSharesTargetVolume,
-                Basis = string.IsNullOrWhiteSpace(Basis) ? note : Basis + "；" + note
-            };
+            return this;
         }
 
-        /// <summary>
-        /// "工作区与成品同不同卷"的一句话（**口径的唯一来源**，估算依据、空间门日志、文档都引它）。
-        /// 未知的一档照样要说清"未知"，绝不默认成同卷。
-        /// </summary>
-        public static string DescribeVolumeLayout(bool? workspaceSharesTargetVolume)
+        return new TaskSpaceEstimate
         {
-            if (workspaceSharesTargetVolume == true)
-            {
-                return "工作区与成品同卷：暂存与成品是同一份字节（定稿走同卷改名），"
-                       + "内容物在峰值里只算一份；峰值那一刻 = 内容物已解进工作区、源包还在这块盘上";
-            }
-
-            if (workspaceSharesTargetVolume == false)
-            {
-                return "工作区与成品跨卷：定稿那一步是复制 + 删原件，成品盘会多出一份内容物；"
-                       + "工作区盘另外还要留得下 内容物 + 过程物（当前账本只按成品盘核算，"
-                       + "工作区盘那一半是已知限制）";
-            }
-
-            return "工作区与成品是否同卷未知（取不到落点或工作区根）：不做同卷假设，按最保守的口径算";
-        }
-
-        /// <summary>饱和加法：回绕成负数等于把空间判断整个废掉（"需要 -2G"永远放行）。</summary>
-        public static long SaturatingSum(long left, long right)
-        {
-            long a = left > 0 ? left : 0L;
-            long b = right > 0 ? right : 0L;
-
-            return a > long.MaxValue - b ? long.MaxValue : a + b;
-        }
-
-        /// <summary>
-        /// 一句话说法（日志/确认框用；数字一律走与 <see cref="SpaceChecker"/> 一致的口径）。
-        ///
-        /// <para>两个数都要说出来，而且要说清哪个是**判据**：只写"峰值"时用户会拿它去对可用空间，
-        /// 然后得出"17.7 GiB 的包怎么说需要 35.41 GiB"（2026-09-29 真机就是这么被看出来的）。</para>
-        /// </summary>
-        public string Describe()
-        {
-            string name = string.IsNullOrWhiteSpace(DisplayName) ? TaskPath : DisplayName;
-
-            return $"{name}：源包 {FormatSize(SourceBytes)} + 内容物 {FormatSize(ContentBytes)}"
-                   + (ContentEstimated ? "（估）" : string.Empty)
-                   + $" + 过程物 {FormatSize(ProcessArtifactBytes)}"
-                   + $"（盘上总占地 {FormatSize(PeakBytes)}；"
-                   + $"本次要从可用空间里新写 {FormatSize(FreeSpaceDemandBytes)}）"
-                   + (WorkspaceSharesTargetVolume == false
-                       ? $"（工作区与成品跨卷：工作区那块盘另需 {FormatSize(StagingBytes)}）"
-                       : string.Empty);
-        }
-
-        /// <summary>
-        /// 把字节数说成人话。**口径必须与 <c>SpaceChecker</c> / <c>ResourceBudget</c> 一致** ——
-        /// 三处各写一套换算时，同一块盘在界面上会出现两个不同的数字（历史上因此被投诉过）。
-        /// </summary>
-        internal static string FormatSize(long bytes) => SizeFormat.Format(bytes);
+            TaskPath = TaskPath,
+            DisplayName = DisplayName,
+            SourceBytes = SourceBytes,
+            ContentBytes = ContentBytes,
+            ProcessArtifactBytes = ProcessArtifactBytes,
+            ContentEstimated = ContentEstimated,
+            HasListing = HasListing,
+            CountsSourceAsNewOccupancy = CountsSourceAsNewOccupancy,
+            WorkspaceSharesTargetVolume = workspaceSharesTargetVolume,
+            Basis = string.IsNullOrWhiteSpace(Basis) ? note : Basis + "；" + note
+        };
     }
 
+    /// <summary>
+    /// "工作区与成品同不同卷"的一句话（**口径的唯一来源**，估算依据、空间门日志、文档都引它）。
+    /// 未知的一档照样要说清"未知"，绝不默认成同卷。
+    /// </summary>
+    public static string DescribeVolumeLayout(bool? workspaceSharesTargetVolume)
+    {
+        if (workspaceSharesTargetVolume == true)
+        {
+            return "工作区与成品同卷：暂存与成品是同一份字节（定稿走同卷改名），"
+                   + "内容物在峰值里只算一份；峰值那一刻 = 内容物已解进工作区、源包还在这块盘上";
+        }
+
+        if (workspaceSharesTargetVolume == false)
+        {
+            return "工作区与成品跨卷：定稿那一步是复制 + 删原件，成品盘会多出一份内容物；"
+                   + "工作区盘另外还要留得下 内容物 + 过程物（当前账本只按成品盘核算，"
+                   + "工作区盘那一半是已知限制）";
+        }
+
+        return "工作区与成品是否同卷未知（取不到落点或工作区根）：不做同卷假设，按最保守的口径算";
+    }
+
+    /// <summary>饱和加法：回绕成负数等于把空间判断整个废掉（"需要 -2G"永远放行）。</summary>
+    public static long SaturatingSum(long left, long right)
+    {
+        long a = left > 0 ? left : 0L;
+        long b = right > 0 ? right : 0L;
+
+        return a > long.MaxValue - b ? long.MaxValue : a + b;
+    }
+
+    /// <summary>
+    /// 一句话说法（日志/确认框用；数字一律走与 <see cref="SpaceChecker"/> 一致的口径）。
+    ///
+    /// <para>两个数都要说出来，而且要说清哪个是**判据**：只写"峰值"时用户会拿它去对可用空间，
+    /// 然后得出"17.7 GiB 的包怎么说需要 35.41 GiB"（2026-09-29 真机就是这么被看出来的）。</para>
+    /// </summary>
+    public string Describe()
+    {
+        string name = string.IsNullOrWhiteSpace(DisplayName) ? TaskPath : DisplayName;
+
+        return $"{name}：源包 {FormatSize(SourceBytes)} + 内容物 {FormatSize(ContentBytes)}"
+               + (ContentEstimated ? "（估）" : string.Empty)
+               + $" + 过程物 {FormatSize(ProcessArtifactBytes)}"
+               + $"（盘上总占地 {FormatSize(PeakBytes)}；"
+               + $"本次要从可用空间里新写 {FormatSize(FreeSpaceDemandBytes)}）"
+               + (WorkspaceSharesTargetVolume == false
+                   ? $"（工作区与成品跨卷：工作区那块盘另需 {FormatSize(StagingBytes)}）"
+                   : string.Empty);
+    }
+
+    /// <summary>
+    /// 把字节数说成人话。**口径必须与 <c>SpaceChecker</c> / <c>ResourceBudget</c> 一致** ——
+    /// 三处各写一套换算时，同一块盘在界面上会出现两个不同的数字（历史上因此被投诉过）。
+    /// </summary>
+    internal static string FormatSize(long bytes) => SizeFormat.Format(bytes);
 }
