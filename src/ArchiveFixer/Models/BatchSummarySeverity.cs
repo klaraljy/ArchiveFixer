@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Models
 {
