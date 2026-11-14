@@ -6,14 +6,6 @@ using System.Linq;
 
 namespace ArchiveFixer.Experimental.AutoConcurrency
 {
-    public readonly record struct DeviceCapacityChange(
-        string Root,
-        int Previous,
-        int Current,
-        string Reason,
-        double AggregateMegabytesPerSecond,
-        double AverageLatencySecondsPerGb);
-
     /// <summary>
     /// 每设备/卷一个 SlotScheduler + CapacityPolicy。设备池只管调度，
     /// 不碰普通空间门、特定解压 unit、落点或源包处理。
