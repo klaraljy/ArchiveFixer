@@ -2,12 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 
-namespace ArchiveFixer.Storage
+namespace ArchiveFixer.Extraction
 {
     /// <summary>
     /// 「删除操作」那一档的**唯一执行体**：按用户选的方式处理一个任务自己的 `其余物`

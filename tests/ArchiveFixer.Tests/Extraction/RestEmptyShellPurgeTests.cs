@@ -5,6 +5,7 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
 using ArchiveFixer.ViewModels;
 using Xunit;
+using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Tests
 {

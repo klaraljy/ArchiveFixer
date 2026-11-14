@@ -7,6 +7,7 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
 using Xunit;
+using ArchiveFixer.Extraction;
 
 namespace ArchiveFixer.Tests
 {
