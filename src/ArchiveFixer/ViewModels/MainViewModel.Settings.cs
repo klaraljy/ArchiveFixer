@@ -147,6 +147,8 @@ public partial class MainViewModel
 
     internal Func<Task>? SmartRenameRunnerOverride { get; set; }
 
+    private SpaceAdviceCoordinator? _spaceAdvice;
+    private SpaceAdviceCoordinator Space => _spaceAdvice ??= new SpaceAdviceCoordinator(this);
     private TaskActionCoordinator? _taskActions;
 
     private TaskActionCoordinator TaskActions => _taskActions ??= new TaskActionCoordinator(this);
@@ -783,5 +785,6 @@ public partial class MainViewModel
 
     private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
 }
+
 
 
