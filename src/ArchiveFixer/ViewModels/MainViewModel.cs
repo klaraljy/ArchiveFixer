@@ -368,64 +368,7 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>把"当前密码本"摘要刷新成 PasswordService 的真实状态（不猜、不缓存）。</summary>
-    public void RefreshPasswordBookSummary()
-    {
-        int count = _passwordService.Passwords.Count;
-        int enabled = _passwordService.Passwords.Count(p => p.IsEnabled);
-        string book = _passwordService.LastImportedBookPath;
 
-        IReadOnlyList<string> books = _passwordService.RememberedBookPaths;
-
-        if (_passwordService.UseTextStore)
-        {
-            string textPath = _passwordService.TextStore.FilePath;
-
-            if (count == 0)
-            {
-                PasswordBookSummary = "密码本：passwords.txt 暂无条目 ——点「密码列表管理」添加或导入";
-                PasswordBookTooltip = "内置明文密码清单：" + textPath
-                    + Environment.NewLine + "空密码仍会按设置尝试；日志不记明文。";
-                AppendRememberedListWarningToSummary();
-                return;
-            }
-
-            PasswordBookSummary = $"密码本：passwords.txt — {count} 条（启用 {enabled} 条）";
-            PasswordBookTooltip = "内置明文密码清单：" + textPath
-                + Environment.NewLine + "行顺序就是尝试顺序；可上下移动。外部密码本只导入一次，不再链接。";
-            AppendRememberedListWarningToSummary();
-            return;
-        }
-
-        if (count == 0)
-        {
-            PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或在④「密码」页点「导入密码本…」";
-            PasswordBookTooltip = "空密码仍会按设置尝试；密码列表按本机加密保存（可在设置里关掉），日志不记明文。";
-
-            AppendRememberedListWarningToSummary();
-            return;
-        }
-
-        string name;
-
-        if (books.Count > 1)
-        {
-            // 多本密码本（用户 2026-09-24 要求）：主界面这一行只报本数与总条数，明细在窗口里看。
-            name = $"{books.Count} 本密码本";
-        }
-        else if (books.Count == 1)
-        {
-            name = System.IO.Path.GetFileName(books[0]);
-        }
-        else
-        {
-            name = string.IsNullOrWhiteSpace(book) ? "（手动添加）" : System.IO.Path.GetFileName(book);
-        }
-
-        PasswordBookSummary = $"密码本：{name} — {count} 条（启用 {enabled} 条）";
-        PasswordBookTooltip = BuildPasswordBookTooltip(book, books);
-
-        AppendRememberedListWarningToSummary();
-    }
 
     /// <summary>
     /// 记忆读不出来时，在摘要那一行后面挂一句**短**提示（明细在密码列表窗口的提示条上）。
@@ -433,44 +376,13 @@ public partial class MainViewModel : ViewModelBase
     /// <para>为什么要挂：解不开时列表是空的，主界面会显示"未加载（0 条）"——
     /// 用户很容易理解成"程序把我密码弄丢了"。这里必须说清"是读不出来、已忽略、文件没被动"。</para>
     /// </summary>
-    private void AppendRememberedListWarningToSummary()
-    {
-        if (_passwordService.LastListWarning.Length == 0)
-        {
-            return;
-        }
 
-        PasswordBookSummary += "　⚠ " + StatusText.PasswordListMemoryUnavailableShort;
-
-        PasswordBookTooltip = PasswordBookTooltip.Length == 0
-            ? _passwordService.LastListWarning
-            : PasswordBookTooltip + Environment.NewLine + Environment.NewLine + _passwordService.LastListWarning;
-    }
 
     /// <summary>
     /// 摘要那一行的 ToolTip：**可以写完整路径**（界面是给用户自己核对的），
     /// 但它只显示、绝不进日志（§8：个人路径不入日志）。
     /// </summary>
-    private static string BuildPasswordBookTooltip(string lastImported, IReadOnlyList<string> books)
-    {
-        if (books.Count == 0)
-        {
-            return string.IsNullOrWhiteSpace(lastImported)
-                ? "列表按本机加密保存（可在设置里关掉）；本文件未记录来源路径。"
-                : lastImported;
-        }
 
-        var builder = new System.Text.StringBuilder();
-        builder.Append("已记住的密码本（启动时按这个顺序逐本合并）：");
-
-        foreach (string path in books)
-        {
-            builder.AppendLine();
-            builder.Append(path);
-        }
-
-        return builder.ToString();
-    }
 
     public bool ShowPassword
     {

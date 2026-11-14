@@ -44,6 +44,12 @@ public partial class MainViewModel
 
     private bool WriteSettingsToDisk(string what) => SettingsPersistence.WriteSettingsToDisk(what);
 
+    public void RefreshPasswordBookSummary()
+    {
+        (string summary, string tooltip) = PasswordSummaryBuilder.Build(_passwordService);
+        PasswordBookSummary = summary;
+        PasswordBookTooltip = tooltip;
+    }
     internal void MarkSettingsBaseline() => SettingsPersistence.MarkCurrentSettingsAsSaved();
     internal void FlushSettingsAutoSave() => SettingsPersistence.FlushSettingsAutoSave();
 
@@ -718,6 +724,7 @@ public partial class MainViewModel
 
     private string PromptNoCheckedTask(string title) => TaskCollection.PromptNoCheckedTask(title);
 }
+
 
 
 
