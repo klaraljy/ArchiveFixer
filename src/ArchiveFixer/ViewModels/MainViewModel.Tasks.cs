@@ -407,9 +407,9 @@ public partial class MainViewModel
     {
         const string title = "移除选中";
 
-        CleanupTargetSelection selection = ResolveCleanupTargets(Tasks);
+        CleanupTargetSelection selection = CleanupSelection.Resolve(Tasks);
 
-        AppendLog(selection.HasTarget ? "INFO" : "WARN", DescribeCleanupTargets(title, selection));
+        AppendLog(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
 
         if (!selection.HasTarget)
         {

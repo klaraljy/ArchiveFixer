@@ -44,7 +44,7 @@ public static partial class StatusText
     /// <see cref="NoCheckedTaskPromptFormat"/> 构造，两边就不可能再各写一套。
     /// </para>
     /// <para>
-    /// 作用域口径（与 <c>MainViewModel.ResolveCleanupTargets</c> 的实际行为一一对应）：
+    /// 作用域口径（与 <c>CleanupSelection.Resolve</c> 的实际行为一一对应）：
     /// <b>一律只认勾选</b> —— 一个都没勾就什么都不做，只提示先勾选。
     /// ⛔ 用户 2026-09-24 第 12 条明确否掉了"一个都没勾时退回当前点中的那一行"这条兜底
     /// （原话："你只需要操作我选中的文件，其他的不用管"），**不要再加回来**。

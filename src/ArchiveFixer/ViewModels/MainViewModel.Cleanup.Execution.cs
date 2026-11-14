@@ -83,9 +83,9 @@ public partial class MainViewModel
                 ? "清理空文件夹"
                 : everything ? "删除本目录全部其余物" : "删除其余物";
 
-        CleanupTargetSelection selection = ResolveCleanupTargets(Tasks, selectedTargets);
+        CleanupTargetSelection selection = CleanupSelection.Resolve(Tasks, selectedTargets);
 
-        AppendLog(selection.HasTarget ? "INFO" : "WARN", DescribeCleanupTargets(title, selection));
+        AppendLog(selection.HasTarget ? "INFO" : "WARN", CleanupSelection.Describe(title, selection));
 
         if (!selection.HasTarget)
         {
@@ -94,7 +94,7 @@ public partial class MainViewModel
             return;
         }
 
-        List<ArchiveTask> targets = ExpandCleanupTargets(selection, everything);
+        List<ArchiveTask> targets = CleanupSelection.Expand(selection, everything);
 
         EnterBusy();
 

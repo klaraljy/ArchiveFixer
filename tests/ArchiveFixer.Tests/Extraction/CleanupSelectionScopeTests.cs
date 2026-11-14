@@ -24,7 +24,7 @@ namespace ArchiveFixer.Tests;
 /// 点「工具 → 删除其余物…」弹出的却是"请先在列表里选中一个任务"，
 /// 日志还写着"没有选中任务，已取消" —— 把人往"是不是没勾上"的方向带。手动点中那一行它才工作。</para>
 ///
-/// <para><b>现在的语义</b>（<c>MainViewModel.ResolveCleanupTargets</c> 是唯一判定处，
+/// <para><b>现在的语义</b>（<c>CleanupSelection.Resolve</c> 是唯一判定处，
 /// 用户 2026-09-24 第 12 条亲自拍板）：<b>一律只认勾选</b> —— 有勾选 → 作用于勾选的那些；
 /// 一个都没勾 → **只提示"没有勾选任何任务"、什么都不做**。
 /// ⛔ 那条"一个都没勾时退化为当前点中的那一行"的兜底**已经删掉，不要再加回来**
@@ -404,24 +404,24 @@ public class CleanupSelectionScopeTests : IDisposable
         var checkedTask = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = true };
         var notChecked = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
 
-        MainViewModel.CleanupTargetSelection byCheckbox =
-            MainViewModel.ResolveCleanupTargets(new[] { checkedTask, notChecked });
+        CleanupTargetSelection byCheckbox =
+            CleanupSelection.Resolve(new[] { checkedTask, notChecked });
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.Checked, byCheckbox.Source);
+        Assert.Equal(CleanupTargetSource.Checked, byCheckbox.Source);
         Assert.Equal(new[] { checkedTask }, byCheckbox.Tasks);
 
         // 一个都没勾：哪怕列表里就摆着任务、哪怕它就是"当前点中的那一行"，也**一个都不给**。
-        MainViewModel.CleanupTargetSelection none =
-            MainViewModel.ResolveCleanupTargets(new[] { notChecked });
+        CleanupTargetSelection none =
+            CleanupSelection.Resolve(new[] { notChecked });
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.None, none.Source);
+        Assert.Equal(CleanupTargetSource.None, none.Source);
         Assert.False(none.HasTarget);
         Assert.Empty(none.Tasks);
 
         // 空列表同理（别在这里抛异常）。
-        MainViewModel.CleanupTargetSelection empty = MainViewModel.ResolveCleanupTargets(null);
+        CleanupTargetSelection empty = CleanupSelection.Resolve(null);
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.None, empty.Source);
+        Assert.Equal(CleanupTargetSource.None, empty.Source);
         Assert.False(empty.HasTarget);
     }
 
@@ -431,15 +431,15 @@ public class CleanupSelectionScopeTests : IDisposable
         var checkedTask = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = true };
         var currentTask = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
 
-        MainViewModel.CleanupTargetSelection selection =
-            MainViewModel.ResolveCleanupTargets(
+        CleanupTargetSelection selection =
+            CleanupSelection.Resolve(
                 new[] { checkedTask, currentTask },
                 new[] { currentTask });
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.Selected, selection.Source);
+        Assert.Equal(CleanupTargetSource.Selected, selection.Source);
         Assert.Equal(new[] { currentTask }, selection.Tasks);
 
-        string description = MainViewModel.DescribeCleanupTargets("清理当前任务产物", selection);
+        string description = CleanupSelection.Describe("清理当前任务产物", selection);
         Assert.Contains("只作用于当前任务", description, StringComparison.Ordinal);
         Assert.DoesNotContain("勾选为准", description, StringComparison.Ordinal);
     }
@@ -451,10 +451,10 @@ public class CleanupSelectionScopeTests : IDisposable
 
         // 「任务被移除之后 SelectedTask 还指着旧对象」这一类幽灵状态，现在天然不可能再被当成目标 ——
         // 判定只看 IsSelected，不接收也读不到任何"当前行"。
-        MainViewModel.CleanupTargetSelection selection =
-            MainViewModel.ResolveCleanupTargets(new[] { inList });
+        CleanupTargetSelection selection =
+            CleanupSelection.Resolve(new[] { inList });
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.None, selection.Source);
+        Assert.Equal(CleanupTargetSource.None, selection.Source);
         Assert.False(selection.HasTarget);
     }
 
@@ -463,18 +463,18 @@ public class CleanupSelectionScopeTests : IDisposable
     {
         var task = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = true };
 
-        string byChecked = MainViewModel.DescribeCleanupTargets(
+        string byChecked = CleanupSelection.Describe(
             "删除其余物",
-            MainViewModel.ResolveCleanupTargets(new[] { task }));
+            CleanupSelection.Resolve(new[] { task }));
 
         Assert.Contains("以勾选为准", byChecked, StringComparison.Ordinal);
         Assert.Contains("222.7z", byChecked, StringComparison.Ordinal);
 
         var rowTask = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
 
-        string nothing = MainViewModel.DescribeCleanupTargets(
+        string nothing = CleanupSelection.Describe(
             "删除其余物",
-            MainViewModel.ResolveCleanupTargets(new[] { rowTask }));
+            CleanupSelection.Resolve(new[] { rowTask }));
 
         Assert.Contains("没有勾选任何任务", nothing, StringComparison.Ordinal);
         Assert.Contains("已取消", nothing, StringComparison.Ordinal);
@@ -491,14 +491,14 @@ public class CleanupSelectionScopeTests : IDisposable
         var second = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = true, OutputPath = @"C:\t\out" };
         var third = new ArchiveTask(@"C:\t\444.7z", 3) { IsSelected = true, OutputPath = @"C:\t\other" };
 
-        MainViewModel.CleanupTargetSelection selection =
-            MainViewModel.ResolveCleanupTargets(new[] { first, second, third });
+        CleanupTargetSelection selection =
+            CleanupSelection.Resolve(new[] { first, second, third });
 
         // 整目录语义：同目录只算一次（其余两个包本来也会被这一次删掉）。
-        Assert.Equal(2, MainViewModel.ExpandCleanupTargets(selection, everythingInDirectory: true).Count);
+        Assert.Equal(2, CleanupSelection.Expand(selection, everythingInDirectory: true).Count);
 
         // 其余两档是"每个任务各删自己那一份"，一个都不能少。
-        Assert.Equal(3, MainViewModel.ExpandCleanupTargets(selection, everythingInDirectory: false).Count);
+        Assert.Equal(3, CleanupSelection.Expand(selection, everythingInDirectory: false).Count);
     }
 
     // ================================================================ ⑥ 合并确认（用户 2026-09-22 拍板）

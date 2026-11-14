@@ -340,10 +340,10 @@ public class TaskSelectionTests
         Assert.False(first.IsSelected);
         Assert.False(second.IsSelected);
 
-        MainViewModel.CleanupTargetSelection selection =
-            MainViewModel.ResolveCleanupTargets(vm.Tasks);
+        CleanupTargetSelection selection =
+            CleanupSelection.Resolve(vm.Tasks);
 
-        Assert.Equal(MainViewModel.CleanupTargetSource.None, selection.Source);
+        Assert.Equal(CleanupTargetSource.None, selection.Source);
         Assert.False(selection.HasTarget);
         Assert.Empty(selection.Tasks);
     }
