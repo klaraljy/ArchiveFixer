@@ -6,31 +6,6 @@ using System.Threading.Tasks;
 
 namespace ArchiveFixer.Storage
 {
-    /// <summary>一针空间采样：什么时候、那块盘还剩多少、当时在干什么。</summary>
-    public sealed class SpaceTrendSample
-    {
-        public DateTime At { get; init; }
-
-        /// <summary>可用字节数（&lt; 0 = 取不到）。</summary>
-        public long FreeBytes { get; init; }
-
-        /// <summary>为什么采这一针（"批首" / "每 5 秒" / "「x.7z」开工"…）——进日志用。</summary>
-        public string Note { get; init; } = string.Empty;
-    }
-
-    /// <summary>一次**有意义的变化**（够大、够久才算，免得刷屏）。</summary>
-    public sealed class SpaceTrendChange
-    {
-        public SpaceTrendSample Previous { get; init; } = new();
-
-        public SpaceTrendSample Current { get; init; } = new();
-
-        /// <summary>当前 − 上一针（负数 = 空间在变少）。</summary>
-        public long DeltaBytes => Current.FreeBytes - Previous.FreeBytes;
-
-        public TimeSpan Since => Current.At - Previous.At;
-    }
-
     /// <summary>
     /// **空间变化侦察**（用户 2026-09-27："你要时刻弄空间检测" / "同样也要弄空间检查技术"）。
     ///
