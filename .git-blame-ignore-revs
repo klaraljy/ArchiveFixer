@@ -1,3 +1,4 @@
 # 机械格式/导入排序提交，不影响行为；git blame 时跳过。
 # 详见 docs/adr/0001-modern-csharp.md 与 E:\AF\规范性\修改方案-v2.md。
 c6b40a44
+974b264a
