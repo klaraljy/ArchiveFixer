@@ -176,19 +176,17 @@ public partial class MainViewModel
             }
         }
 
-        Application? application = Application.Current;
-
-        if (application == null || application.Dispatcher == null)
+        if (UiThread.IsAvailable?.Invoke() != true)
         {
             return;
         }
 
-        if (application.Dispatcher.CheckAccess())
+        if (UiThread.CheckAccess?.Invoke() == true)
         {
             Add();
             return;
         }
 
-        application.Dispatcher.BeginInvoke(new Action(Add));
+        UiThread.BeginInvoke?.Invoke(Add);
     }
 }

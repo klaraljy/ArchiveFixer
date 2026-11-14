@@ -3,6 +3,7 @@ using ArchiveFixer.Views;
 using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -109,6 +110,34 @@ public partial class App : Application
                 Owner = Application.Current?.MainWindow
             };
             return window.ShowDialog() == true ? window.ViewModel : null;
+        };
+
+        ArchiveFixer.ViewModels.UiThread.IsAvailable = () => Application.Current?.Dispatcher != null;
+        ArchiveFixer.ViewModels.UiThread.CheckAccess = () => Application.Current?.Dispatcher?.CheckAccess() ?? false;
+        ArchiveFixer.ViewModels.UiThread.BeginInvoke = action => Application.Current?.Dispatcher?.BeginInvoke(action);
+        ArchiveFixer.ViewModels.UiThread.InvokeAsync = action =>
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            return dispatcher == null
+                ? action()
+                : dispatcher.InvokeAsync(action).Task.Unwrap();
+        };
+        ArchiveFixer.ViewModels.UiThread.StartMonitor = warn =>
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            return dispatcher == null ? null : UiResponsivenessMonitor.Start(dispatcher, warn);
+        };
+        ArchiveFixer.ViewModels.UiThread.StartTimer = (interval, tick) =>
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null)
+            {
+                return null;
+            }
+
+            var timer = new DispatcherTimer(interval, DispatcherPriority.Background, (_, _) => tick(), dispatcher);
+            timer.Start();
+            return new DispatcherTimerLease(timer);
         };
 
         // X 只隐藏到托盘；真正退出由托盘菜单 / 文件菜单显式调用。
@@ -475,6 +504,21 @@ public partial class App : Application
         catch
         {
             // 不能因为写 fatal 日志失败导致程序再次崩溃。
+        }
+    }
+
+    private sealed class DispatcherTimerLease : IDisposable
+    {
+        private readonly DispatcherTimer _timer;
+
+        public DispatcherTimerLease(DispatcherTimer timer)
+        {
+            _timer = timer;
+        }
+
+        public void Dispose()
+        {
+            _timer.Stop();
         }
     }
 }

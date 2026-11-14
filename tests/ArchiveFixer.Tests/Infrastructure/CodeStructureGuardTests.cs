@@ -114,6 +114,36 @@ public sealed class CodeStructureGuardTests
     }
 
     [Fact]
+    public void ViewModels不能直接创建窗口或读ApplicationCurrent()
+    {
+        string root = Path.Combine(FindRepoRoot(), "src", "ArchiveFixer", "ViewModels");
+        var failures = new List<string>();
+
+        foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            foreach (string line in File.ReadLines(file))
+            {
+                string text = line.TrimStart();
+                if (text.StartsWith("//", StringComparison.Ordinal)
+                    || text.StartsWith("*", StringComparison.Ordinal)
+                    || text.StartsWith("/*", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (Regex.IsMatch(text, @"new\s+\w*Window\b")
+                    || text.Contains("Application.Current", StringComparison.Ordinal)
+                    || text.Contains("MessageBox.", StringComparison.Ordinal))
+                {
+                    failures.Add(RelativeSourcePath(file) + "：" + text);
+                }
+            }
+        }
+
+        Assert.True(failures.Count == 0, "ViewModels 不得直接创建窗口/读 Application.Current：" + string.Join("；", failures));
+    }
+
+    [Fact]
     public void 源文件必须使用file_scoped命名空间()
     {
         var failures = new List<string>();

@@ -1015,7 +1015,6 @@ public partial class MainViewModel : ViewModelBase
          * 都会触发它，口径与关窗后那次刷新完全一致。关窗时退订，别让窗口对象挂住主 ViewModel。
          */
         Action unhook = HookPasswordBookSummaryRefresh(vm, RefreshPasswordBookSummary);
-
         try
         {
             // 窗口创建由宿主（App）注入；ViewModel 不再 new Window / 读 Application.Current。

@@ -209,11 +209,9 @@ public partial class MainViewModel
     /// </summary>
     public void RefreshSummaryAfterSelectionChange()
     {
-        System.Windows.Threading.Dispatcher? dispatcher = Application.Current?.Dispatcher;
-
-        if (dispatcher != null && !dispatcher.CheckAccess())
+        if (UiThread.IsAvailable?.Invoke() == true && UiThread.CheckAccess?.Invoke() == false)
         {
-            dispatcher.BeginInvoke(new Action(UpdateSummary));
+            UiThread.BeginInvoke?.Invoke(UpdateSummary);
             return;
         }
 

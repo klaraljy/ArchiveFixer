@@ -32,21 +32,25 @@ internal sealed partial class ExtractionCoordinator
     /// <see cref="DialogService.ShowConfirm(string)"/>，无界面宿主时返回 false 已是保守档，
     /// 但它仍然要求调用方在 UI 上下文里；这里显式调度，后台线程调用也安全。
     /// </summary>
-    private Task<bool> DispatcherSafeConfirmAsync(string message)
+    private async Task<bool> DispatcherSafeConfirmAsync(string message)
     {
-        System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
-
-        if (dispatcher == null)
+        if (UiThread.IsAvailable?.Invoke() != true)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        if (dispatcher.CheckAccess())
+        if (UiThread.CheckAccess?.Invoke() == true || UiThread.InvokeAsync == null)
         {
-            return Task.FromResult(_dialogService.ShowConfirm(message));
+            return _dialogService.ShowConfirm(message);
         }
 
-        return dispatcher.InvokeAsync(() => _dialogService.ShowConfirm(message)).Task;
+        bool result = false;
+        await UiThread.InvokeAsync(() =>
+        {
+            result = _dialogService.ShowConfirm(message);
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>
@@ -56,20 +60,23 @@ internal sealed partial class ExtractionCoordinator
     /// </summary>
     private async Task<string> ShowFolderBrowserOnUiThreadAsync()
     {
-        System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
-
-        if (dispatcher == null)
+        if (UiThread.IsAvailable?.Invoke() != true)
         {
             return string.Empty;
         }
 
-        if (dispatcher.CheckAccess())
+        if (UiThread.CheckAccess?.Invoke() == true || UiThread.InvokeAsync == null)
         {
             return _dialogService.ShowFolderBrowserDialog();
         }
 
-        // ⛔ 这里原来是 .Result：在后台线程上阻塞等 UI 线程。改成 await 之后不再占着一个线程空转。
-        return await dispatcher.InvokeAsync(() => _dialogService.ShowFolderBrowserDialog());
+        string result = string.Empty;
+        await UiThread.InvokeAsync(() =>
+        {
+            result = _dialogService.ShowFolderBrowserDialog();
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>
@@ -674,7 +681,7 @@ internal sealed partial class ExtractionCoordinator
             return ReminderAnswerOverride(message);
         }
 
-        if (System.Windows.Application.Current == null)
+        if (UiThread.IsAvailable?.Invoke() != true)
         {
             AppendLog("WARN", StatusText.JunkReminderNoHostLog);
 
@@ -693,44 +700,37 @@ internal sealed partial class ExtractionCoordinator
     /// </summary>
     private async Task<ReminderAnswer> ShowReminderConfirmOnUiThreadAsync(string message)
     {
-        System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
-
         bool confirmed;
         bool optionChecked = false;
 
-        if (dispatcher == null || dispatcher.CheckAccess())
+        if (UiThread.CheckAccess?.Invoke() != false || UiThread.InvokeAsync == null)
         {
-            confirmed = _dialogService.ShowReminderConfirm(
-                StatusText.JunkReminderTitle,
-                message,
-                StatusText.JunkReminderYesText,
-                StatusText.JunkReminderNoText,
-                StatusText.JunkReminderOptionText,
-                optionCheckedByDefault: false,
-                out optionChecked);
+            confirmed = ShowReminderDirect(message, out optionChecked);
         }
         else
         {
-            confirmed = await dispatcher.InvokeAsync(() =>
+            confirmed = false;
+            await UiThread.InvokeAsync(() =>
             {
-                bool checkedNow;
-
-                bool result = _dialogService.ShowReminderConfirm(
-                    StatusText.JunkReminderTitle,
-                    message,
-                    StatusText.JunkReminderYesText,
-                    StatusText.JunkReminderNoText,
-                    StatusText.JunkReminderOptionText,
-                    optionCheckedByDefault: false,
-                    out checkedNow);
-
+                confirmed = ShowReminderDirect(message, out bool checkedNow);
                 optionChecked = checkedNow;
-
-                return result;
-            }).Task.ConfigureAwait(false);
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
         }
 
         return new ReminderAnswer { Confirmed = confirmed, OptionChecked = optionChecked };
+    }
+
+    private bool ShowReminderDirect(string message, out bool optionChecked)
+    {
+        return _dialogService.ShowReminderConfirm(
+            StatusText.JunkReminderTitle,
+            message,
+            StatusText.JunkReminderYesText,
+            StatusText.JunkReminderNoText,
+            StatusText.JunkReminderOptionText,
+            optionCheckedByDefault: false,
+            out optionChecked);
     }
 
 

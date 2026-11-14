@@ -31,10 +31,10 @@ public partial class MainViewModel
 {        /// <summary>上一次**真的写进磁盘**的那份设置（自动保存的判据；见 <see cref="AutoSaveSettingsIfChanged"/>）。</summary>
     private string _lastSavedSettingsJson = string.Empty;
 
-    private System.Windows.Threading.DispatcherTimer? _settingsAutoSaveTimer;
+    private IDisposable? _settingsAutoSaveTimer;
 
     /// <summary>UI 响应心跳；只在 WPF 宿主里有 Dispatcher。</summary>
-    private UiResponsivenessMonitor? _uiResponsivenessMonitor;
+    private IDisposable? _uiResponsivenessMonitor;
 
     /// <summary>自动保存的间隔：够短（改完几乎立刻落盘）又够长（拖滑块/连点勾选框时不会写几十次盘）。</summary>
     internal static readonly TimeSpan SettingsAutoSaveInterval = TimeSpan.FromMilliseconds(800);
@@ -53,20 +53,9 @@ public partial class MainViewModel
     /// </summary>
     private void StartSettingsAutoSaveTimer()
     {
-        System.Windows.Threading.Dispatcher? dispatcher = Application.Current?.Dispatcher;
-
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-        _settingsAutoSaveTimer = new System.Windows.Threading.DispatcherTimer(
+        _settingsAutoSaveTimer = UiThread.StartTimer?.Invoke(
             SettingsAutoSaveInterval,
-            System.Windows.Threading.DispatcherPriority.Background,
-            (_, _) => AutoSaveSettingsIfChanged(),
-            dispatcher);
-
-        _settingsAutoSaveTimer.Start();
+            () => AutoSaveSettingsIfChanged());
     }
 
     /// <summary>
@@ -210,7 +199,7 @@ public partial class MainViewModel
     /// </summary>
     internal void FlushSettingsAutoSave()
     {
-        _settingsAutoSaveTimer?.Stop();
+        _settingsAutoSaveTimer?.Dispose();
         AutoSaveSettingsIfChanged();
     }
 

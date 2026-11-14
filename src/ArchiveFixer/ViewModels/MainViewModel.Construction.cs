@@ -177,16 +177,12 @@ public partial class MainViewModel
 
         StartSettingsAutoSaveTimer();
 
-        if (Application.Current?.Dispatcher != null)
-        {
-            _uiResponsivenessMonitor = UiResponsivenessMonitor.Start(
-                Application.Current.Dispatcher,
-                message => AppendDiagnosticLog(
-                    "WARN",
-                    message,
-                    DiagnosticCodes.UiStall,
-                    "UiResponsivenessMonitor"));
-        }
+        _uiResponsivenessMonitor = UiThread.StartMonitor?.Invoke(
+            message => AppendDiagnosticLog(
+                "WARN",
+                message,
+                DiagnosticCodes.UiStall,
+                "UiResponsivenessMonitor"));
 
         /*
          * 设置编辑器（选项卡②③④⑥绑它）与打包编辑器（⑤绑它）。
