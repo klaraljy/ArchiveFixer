@@ -146,7 +146,7 @@ namespace ArchiveFixer.Tests
              * 这一条就是不依赖后缀/基名的那条判据 —— 撤掉修复它必红。
              */
             string copiedOuter = Path.Combine(record.Workspace, "原包", Path.GetFileName(outerPath));
-            ArchiveFixer.Detection.FirstStepFileLedger? ledger = Batch120Operation.LastLedger;
+            ArchiveFixer.Detection.FirstStepFileLedger? ledger = record.FirstStepLedger;
 
             Assert.True(ledger != null, "拿不到这次运行的第一大步账本");
             Assert.True(

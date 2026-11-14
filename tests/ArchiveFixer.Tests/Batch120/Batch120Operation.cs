@@ -41,15 +41,98 @@ namespace ArchiveFixer.Tests.Batch120
             ? rootOverride
             : @"E:\DeepSeekProjects\ArchiveFixer\测试";
         public static readonly string BackupBatchRoot = Path.Combine(BatchRoot, "备份位置", Seed + "-125批次-备份");
-        public static readonly string TestBatchRoot = Path.Combine(BatchRoot, "测试位置", Seed + "-125批次-测试未指定位置");
-        public static readonly string SpecifiedBatchRoot = Path.Combine(BatchRoot, "指定位置", Seed + "-125批次-测试指定位置");
-        public static readonly string LogRoot = Path.Combine(BatchRoot, "日志位置", Seed + "-125批次-日志");
+
+        /*
+         * 可写的运行目录每次进程唯一：seed + pid + UTC 时间戳。
+         * ⛔ 不再复用仓库里固定的 <seed>-125批次-测试位置（上一轮崩溃留下的工作区会让下一轮随机红）。
+         * 样本来源（BackupBatchRoot / recipe / 原包）仍是只读的仓库母本，不动。
+         */
+        public static readonly string RunRoot =
+            Environment.GetEnvironmentVariable("ARCHIVEFIXER_125_RUN_ROOT") is { Length: > 0 } runOverride
+                ? runOverride
+                : Path.Combine(
+                    @"E:\DeepSeekProjects\_tmp\ArchiveFixer\125-runs",
+                    Seed + "-" + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" +
+                    DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture));
+
+        public static readonly string TestBatchRoot = Path.Combine(RunRoot, "测试位置", Seed + "-125批次-测试未指定位置");
+        public static readonly string SpecifiedBatchRoot = Path.Combine(RunRoot, "指定位置", Seed + "-125批次-测试指定位置");
+        public static readonly string LogRoot = Path.Combine(RunRoot, "日志位置", Seed + "-125批次-日志");
         public static readonly string RecordRoot = Path.Combine(LogRoot, "操作");
+
+        static Batch120Operation()
+        {
+            Directory.CreateDirectory(TestBatchRoot);
+            Directory.CreateDirectory(SpecifiedBatchRoot);
+            Directory.CreateDirectory(RecordRoot);
+
+            if (Environment.GetEnvironmentVariable("ARCHIVEFIXER_125_KEEP_RUN") != "1")
+            {
+                AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+                {
+                    try
+                    {
+                        if (Directory.Exists(RunRoot))
+                        {
+                            Directory.Delete(RunRoot, recursive: true);
+                        }
+                    }
+                    catch
+                    {
+                        // 清不掉不影响结果（下次进程会用新目录）。
+                    }
+                };
+            }
+
+            TryCleanupStaleRuns();
+        }
+
+        /// <summary>
+        /// 顺手清掉一天前留下的运行目录（同一台机器多次跑全量时不让 %TEMP% 无限涨）。
+        /// 只碰 <see cref="RunRoot"/> 的父目录，⛔ 不认识别的路径；失败一律忽略。
+        /// </summary>
+        private static void TryCleanupStaleRuns()
+        {
+            try
+            {
+                string? parent = Path.GetDirectoryName(RunRoot);
+                if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+                {
+                    return;
+                }
+
+                DateTime cutoff = DateTime.UtcNow.AddDays(-1);
+
+                foreach (string directory in Directory.GetDirectories(parent))
+                {
+                    if (string.Equals(Path.GetFullPath(directory), Path.GetFullPath(RunRoot), StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (Directory.GetLastWriteTimeUtc(directory) < cutoff)
+                        {
+                            Directory.Delete(directory, recursive: true);
+                        }
+                    }
+                    catch
+                    {
+                        // 单个旧目录清不掉不影响本次运行。
+                    }
+                }
+            }
+            catch
+            {
+                // 清理是尽力而为，不制造新的失败。
+            }
+        }
 
         private const string PasswordBook = "2中！0@文#2删￥6除%\nDemo#Pass1\nDemo#Pass2\n";
 
-        /// <summary>最近一次运行用的第一大步账本（用例读「已消费源包」这类路径事实时用）。</summary>
-        internal static ArchiveFixer.Detection.FirstStepFileLedger? LastLedger { get; private set; }
+        // 第一大步账本不再放共享 static：每次运行随 Batch120RunRecord 携带，
+        // 同一测试 RunOneAsync 返回的记录读得到，跨测试并行不互覆。
 
         public static async Task<Batch120RunRecord> RunOneAsync(string sampleId, bool? keepLogs = null)
         {
@@ -102,7 +185,6 @@ namespace ArchiveFixer.Tests.Batch120
             Directory.CreateDirectory(dataRoot);
             File.WriteAllText(Path.Combine(dataRoot, "passwords.txt"), PasswordBook, new UTF8Encoding(false));
 
-            LastLedger = null;
 
             var record = new Batch120RunRecord
             {
@@ -189,7 +271,7 @@ namespace ArchiveFixer.Tests.Batch120
                     ProducedFiles = t.ProducedFiles.ToArray()
                 }).ToArray();
 
-                LastLedger = extraction.FirstStepLedger;
+                record.FirstStepLedger = extraction.FirstStepLedger;
             }
             catch (Exception ex)
             {
@@ -300,7 +382,6 @@ namespace ArchiveFixer.Tests.Batch120
         {
             if (!Directory.Exists(path))
             {
-                FixtureGate.Skip("Batch120Operation.cs", "前置条件不满足：夹具或运行环境缺失");
                 return;
             }
 
@@ -455,6 +536,13 @@ namespace ArchiveFixer.Tests.Batch120
     internal sealed class Batch120RunRecord
     {
         public string SampleId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 这次运行的第一大步账本（用例读「已消费源包」这类路径事实时用）。
+        /// ⛔ 不进 JSON：记录文件只留可序列化的运行事实。
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        internal ArchiveFixer.Detection.FirstStepFileLedger? FirstStepLedger { get; set; }
         public string Category { get; set; } = string.Empty;
         public string Placement { get; set; } = string.Empty;
         public string SourceHandling { get; set; } = string.Empty;
