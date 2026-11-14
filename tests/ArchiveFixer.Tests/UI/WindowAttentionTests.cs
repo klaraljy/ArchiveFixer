@@ -141,12 +141,12 @@ public class WindowAttentionTests
 
         // ③ 解压中途"手动输入密码"那个窗口（它由后台线程投递显示，最容易躲到主窗口后面）。
         AssertFileMentions(
-            Path.Combine("src", "ArchiveFixer", "ViewModels", "ExtractionCoordinator.PasswordPromptStep.cs"),
+            Path.Combine("src", "ArchiveFixer", "Views", "PasswordPromptWindowFactory.cs"),
             "WindowAttention.Attach");
 
         // 提醒强度必须是强提醒：这三种都是"没人处理就卡住整批"的情形。
         AssertFileMentions(
-            Path.Combine("src", "ArchiveFixer", "ViewModels", "ExtractionCoordinator.PasswordPromptStep.cs"),
+            Path.Combine("src", "ArchiveFixer", "Views", "PasswordPromptWindowFactory.cs"),
             "AttentionStrength.Strong");
     }
 

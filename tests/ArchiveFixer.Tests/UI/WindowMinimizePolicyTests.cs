@@ -51,8 +51,8 @@ public class WindowMinimizePolicyTests
     /// ⛔ **代码里内联建的**子窗也要挂（它们不在 XAML 名单里，最容易漏）。
     /// </summary>
     [Theory]
-    [InlineData(@"src\ArchiveFixer\ViewModels\RenameCoordinator.cs")]
-    [InlineData(@"src\ArchiveFixer\ViewModels\ExtractionCoordinator.PasswordPromptStep.cs")]
+    [InlineData(@"src\ArchiveFixer\Views\RenameWindowFactory.cs")]
+    [InlineData(@"src\ArchiveFixer\Views\PasswordPromptWindowFactory.cs")]
     public void 内联建的子窗_同样挂了这条策略(string relativePath)
     {
         string source = File.ReadAllText(RepoPath(relativePath.Split('\\')));
@@ -94,7 +94,7 @@ public class WindowMinimizePolicyTests
             "这些窗口把自己排除了任务栏 —— 它们被最小化之后就找不回来了：" + string.Join("、", offenders));
 
         // 内联建的那个「改名」框同理（它当初也写着 ShowInTaskbar = false）。
-        string rename = File.ReadAllText(RepoPath("src", "ArchiveFixer", "ViewModels", "RenameCoordinator.cs"));
+        string rename = File.ReadAllText(RepoPath("src", "ArchiveFixer", "Views", "RenameWindowFactory.cs"));
 
         Assert.DoesNotContain("ShowInTaskbar = false", rename);
     }
