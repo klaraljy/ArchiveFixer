@@ -171,6 +171,81 @@ public sealed class CodeStructureGuardTests
     }
 
     [Fact]
+    public void 目录级依赖图不能有环()
+    {
+        var knownLayers = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Detection", "Engines", "Extraction", "Helpers", "Models",
+            "Packing", "Password", "Security", "Services", "Storage", "ViewModels", "Views"
+        };
+
+        var graph = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var usingPattern = new Regex(@"^using\s+ArchiveFixer\.([A-Za-z0-9_]+)", RegexOptions.Compiled | RegexOptions.Multiline);
+
+        foreach (string file in EnumerateSourceFiles())
+        {
+            string relative = RelativeSourcePath(file).Replace('\\', '/');
+            string[] parts = relative.Split('/');
+            string source = parts.Length == 1 ? parts[0] : parts[0];
+
+            if (!graph.TryGetValue(source, out HashSet<string>? targets))
+            {
+                targets = new HashSet<string>(StringComparer.Ordinal);
+                graph[source] = targets;
+            }
+
+            foreach (Match match in usingPattern.Matches(File.ReadAllText(file)))
+            {
+                string target = match.Groups[1].Value;
+                if (knownLayers.Contains(target) && !string.Equals(target, source, StringComparison.Ordinal))
+                {
+                    targets.Add(target);
+                }
+            }
+        }
+
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var cycles = new List<string>();
+
+        void Visit(string node, List<string> path)
+        {
+            if (visiting.Contains(node))
+            {
+                int start = path.IndexOf(node);
+                cycles.Add(string.Join(" -> ", path.Skip(start).Concat(new[] { node })));
+                return;
+            }
+
+            if (!visited.Add(node))
+            {
+                return;
+            }
+
+            visiting.Add(node);
+            path.Add(node);
+
+            if (graph.TryGetValue(node, out HashSet<string>? targets))
+            {
+                foreach (string target in targets)
+                {
+                    Visit(target, path);
+                }
+            }
+
+            path.RemoveAt(path.Count - 1);
+            visiting.Remove(node);
+        }
+
+        foreach (string node in graph.Keys.OrderBy(value => value, StringComparer.Ordinal))
+        {
+            Visit(node, new List<string>());
+        }
+
+        Assert.True(cycles.Count == 0, "目录级依赖图出现环：" + string.Join("；", cycles));
+    }
+
+    [Fact]
     public void 反向分层引用不能重新出现()
     {
         var failures = new List<string>();

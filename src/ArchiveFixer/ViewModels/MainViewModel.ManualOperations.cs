@@ -7,7 +7,6 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

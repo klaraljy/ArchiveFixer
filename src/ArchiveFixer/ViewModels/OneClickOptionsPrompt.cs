@@ -5,7 +5,6 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;

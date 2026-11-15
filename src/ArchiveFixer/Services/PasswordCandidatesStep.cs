@@ -1,9 +1,9 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
-using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;

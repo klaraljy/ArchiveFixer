@@ -1,7 +1,7 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
-using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;

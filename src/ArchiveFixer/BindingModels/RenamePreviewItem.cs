@@ -5,7 +5,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.ViewModels;
+namespace ArchiveFixer.BindingModels;
 
 public class RenamePreviewItem : INotifyPropertyChanged
 {

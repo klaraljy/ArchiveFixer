@@ -5,7 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 
-namespace ArchiveFixer.ViewModels;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 支持**批量变更只通知一次**的 <see cref="ObservableCollection{T}"/>。
@@ -22,7 +22,8 @@ namespace ArchiveFixer.ViewModels;
 /// 请照旧用 <see cref="ObservableCollection{T}"/> 自己的方法。</para>
 ///
 /// <para>它不含任何 WPF 类型（只是 <c>System.Collections.ObjectModel</c>），放在
-/// <c>ViewModels/BindingModels</c> 只是因为它是给界面绑定用的协助类（M6：Models 不再放 UI 绑定类型）。</para>
+/// <c>BindingModels</c> 只是因为它是给界面绑定用的协助类（M6：Models 不再放 UI 绑定类型；
+/// M6g：整个目录从 ViewModels 提升为独立层，Storage 不再引用 ViewModels）。</para>
 /// </summary>
 /// <typeparam name="T">元素类型。</typeparam>
 public class RangeObservableCollection<T> : ObservableCollection<T>

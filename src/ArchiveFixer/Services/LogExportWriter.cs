@@ -1,6 +1,6 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
-using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;

@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
@@ -7,7 +8,6 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

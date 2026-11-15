@@ -112,6 +112,17 @@ public partial class App : Application
             return window.ShowDialog() == true ? window.ViewModel : null;
         };
 
+        /*
+         * 一键处理确认框的真实入口（⛔ 生产里就这么一处赋值）。
+         *
+         * 为什么由宿主注入、而不是让 ViewModels 直接 new：Views 要绑定 ViewModels 的类型
+         * （窗口正文与快照都来自那一层），这条边删不掉；ViewModels 再反向引用 Views
+         * 就成了目录级依赖环（CodeStructureGuardTests 里被钉住）。
+         * 这里注入的正是原来那一个窗口入口，行为与注入前逐字相同。
+         */
+        ArchiveFixer.ViewModels.OneClickOptionsPromptSource.DefaultPromptFactory =
+            OneClickOptionsWindow.Show;
+
         ArchiveFixer.ViewModels.UiThread.IsAvailable = () => Application.Current?.Dispatcher != null;
         ArchiveFixer.ViewModels.UiThread.CheckAccess = () => Application.Current?.Dispatcher?.CheckAccess() ?? false;
         ArchiveFixer.ViewModels.UiThread.BeginInvoke = action => Application.Current?.Dispatcher?.BeginInvoke(action);

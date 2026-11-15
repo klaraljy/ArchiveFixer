@@ -3,7 +3,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.ViewModels;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 屏幕日志项。

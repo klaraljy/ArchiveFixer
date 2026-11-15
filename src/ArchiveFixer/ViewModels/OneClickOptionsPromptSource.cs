@@ -1,5 +1,4 @@
 using ArchiveFixer.Models;
-using ArchiveFixer.Views;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -53,6 +52,28 @@ internal sealed class OneClickOptionsPromptSource
     /// </summary>
     internal Func<OneClickRunOptions, OneClickOptionsPrompt>? OptionsPromptOverride { get; set; }
 
+    /// <summary>
+    /// 真窗口入口（生产里**唯一**的确认框在 <c>Views/OneClickOptionsWindow</c>，由宿主注入）。
+    ///
+    /// <para>⛔ 本类**不许**直接引用 <c>ArchiveFixer.Views</c>：Views 侧要绑定本层类型
+    /// （窗口的 <c>OneClickRunOptions</c> / <c>OneClickConfirmFacts</c>），那条边删不掉；
+    /// 本层再反向 <c>using ArchiveFixer.Views</c>，两条边合起来就是目录级依赖环
+    /// （<c>CodeStructureGuardTests.目录级依赖图不能有环</c>）。所以这里只留一个**端口**，
+    /// 真实实现由 <c>App.OnStartup</c> 设成 <c>OneClickOptionsWindow.Show</c>
+    /// （与 <c>DialogWindowFactories</c> / <c>RenamePreviewWindowFactory</c> 同一套做法）。</para>
+    ///
+    /// <para>没注入 = 无 UI 宿主（单元测试 / 控制台宿主）：直接
+    /// <see cref="OneClickOptionsPrompt.NotShown"/>，与窗口在无宿主时自己返回的结论逐字相同
+    /// （§9.2 硬要求④：不弹窗、不死等）。</para>
+    /// </summary>
+    internal static Func<
+        OneClickRunOptions,
+        AppSettings?,
+        OneClickConfirmFacts?,
+        Func<OneClickRunOptions, Task<string>>?,
+        OneClickOptionsPrompt>? DefaultPromptFactory
+    { get; set; }
+
     /// <summary>本次选项的种子（按设置 + 界面上选中的落点；改落点前的正文第一行就用它）。</summary>
     internal OneClickRunOptions BuildSeed() =>
         OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
@@ -93,7 +114,20 @@ internal sealed class OneClickOptionsPromptSource
             return OneClickOptionsPrompt.NotShown();
         }
 
-        return OneClickOptionsWindow.Show(seed, Settings, facts, BuildDestinationEchoFactory(targets));
+        Func<
+            OneClickRunOptions,
+            AppSettings?,
+            OneClickConfirmFacts?,
+            Func<OneClickRunOptions, Task<string>>?,
+            OneClickOptionsPrompt>? promptFactory = DefaultPromptFactory;
+
+        if (promptFactory == null)
+        {
+            // 没有宿主注入真窗口（无 UI 宿主）：不弹窗、不死等，调用方按设置值继续。
+            return OneClickOptionsPrompt.NotShown();
+        }
+
+        return promptFactory(seed, Settings, facts, BuildDestinationEchoFactory(targets));
     }
 
     /// <summary>

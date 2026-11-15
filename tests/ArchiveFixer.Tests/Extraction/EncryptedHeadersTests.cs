@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Converters;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;

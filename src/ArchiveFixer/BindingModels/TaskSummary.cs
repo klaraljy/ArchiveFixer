@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.ViewModels;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 任务汇总统计。
