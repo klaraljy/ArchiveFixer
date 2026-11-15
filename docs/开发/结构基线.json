@@ -12,11 +12,6 @@
     "Storage/RecycleBinService.cs": 466,
     "ViewModels/ExtractionCoordinator.ConsumedSettlementStep.cs": 349,
     "ViewModels/ExtractionCoordinator.DeferredVolumeDeficitStep.cs": 357,
-    "ViewModels/ExtractionCoordinator.PieceAdoptionStep.cs": 688,
-    "ViewModels/ExtractionCoordinator.Source.cs": 633,
-    "ViewModels/ExtractionCoordinator.VolumeGatherStep.cs": 670,
-    "ViewModels/ExtractionCoordinator.VolumeHandoffStep.cs": 589,
-    "ViewModels/ExtractionCoordinator.VolumeStepStep.cs": 688,
     "ViewModels/MainViewModel.cs": 1494,
     "ViewModels/RenameCoordinator.cs": 829
   },
