@@ -89,6 +89,9 @@ internal sealed class ExtractionTaskConclusionWriter
                 task.IsEncrypted || PasswordProbe.ShouldSkipEmptyPassword(preflightList) || preflightSaidEncryptedHeaders,
                 anyCandidateWroteBytes);
 
+            // 兜底与"没换/判不出"那几句都走同一个无状态 Handler（只持有宿主）。
+            EngineFallbackHandler fallbackHandler = new(host);
+
             if (PasswordEngineFallback.ShouldFallBack(fallbackFacts))
             {
                 PasswordCandidatesStep.FallbackCandidateSlice fallbackSlice = host.BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
@@ -100,11 +103,11 @@ internal sealed class ExtractionTaskConclusionWriter
                         Candidates = fallbackSlice.Values,
                         TargetDirectory = engineOutputPath,
                         Label = task.FileName,
-                        FailedEngineName = host.ResolveFailedEngineName(lastResult),
+                        FailedEngineName = fallbackHandler.ResolveFailedEngineName(lastResult),
                         FailedErrorType = lastResult?.DetectedErrorType,
 
                         // 与循环里同一个清法（⛔ 不在这里另写一份"怎么清"）。
-                        ResetTarget = token => host.DiscardStageProductsAsync(task, engineOutputPath, token),
+                        ResetTarget = token => fallbackHandler.DiscardStageProductsAsync(task, engineOutputPath, token),
 
                         // 与循环里同一个描述器（⛔ 绝不出明文）。
                         DescribeCandidate = (_, ordinal) => fallbackSlice.Describe(ordinal),
@@ -122,7 +125,7 @@ internal sealed class ExtractionTaskConclusionWriter
                      * **不说明那些东西是对的**。所以收尾**先过这一层的结果校验**，
                      * 校验不过 ⇒ 这个候选不算数（不发布、不翻结论、现场留着）。
                      */
-                    bool accepted = await host.FinishFallbackSuccessAsync(
+                    bool accepted = await fallbackHandler.FinishFallbackSuccessAsync(
                             task,
                             engineArchivePath,
                             fallback.HitPassword ?? string.Empty,
@@ -152,7 +155,7 @@ internal sealed class ExtractionTaskConclusionWriter
                  * ⛔ 不许静默跳过、⛔ 不许把没跑过的兜底说成跑过了）。
                  */
                 passwordConclusionNote += PasswordEngineFallback
-                    .ReportMissingEngine(task.FileName, host.ResolveFailedEngineName(lastResult), host.AppendLogPair)
+                    .ReportMissingEngine(task.FileName, fallbackHandler.ResolveFailedEngineName(lastResult), host.AppendLogPair)
                     .Note;
             }
             else if (PasswordEngineFallback.ShouldReportIndistinguishableEvidence(fallbackFacts))
@@ -164,7 +167,7 @@ internal sealed class ExtractionTaskConclusionWriter
                  */
                 PasswordEngineFallback.ReportIndistinguishableEvidence(
                     task.FileName,
-                    host.ResolveFailedEngineName(lastResult),
+                    fallbackHandler.ResolveFailedEngineName(lastResult),
                     host.AppendLogPair);
             }
         }
@@ -263,7 +266,7 @@ internal sealed class ExtractionTaskConclusionWriter
 
                     // 与另一条收尾链同一口径：**结论是缺卷就必须进"缺卷留到最后再判"那份名单**
                     // （唯一出口，见那一处的说明；⛔ 不碰 Status / ErrorMessage，⛔ 幂等）。
-                    host.RememberDeferredVolumeDeficit(task, task.CurrentPath);
+                    host.VolumeLedger.RememberDeferredVolumeDeficit(task, task.CurrentPath);
 
                     host.AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
                 }

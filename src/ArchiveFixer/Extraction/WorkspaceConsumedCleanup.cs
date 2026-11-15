@@ -159,7 +159,7 @@ internal static class WorkspaceConsumedCleanup
     /// <summary>
     /// 被解开的分卷组是**整组**一起被消费掉的：只删掉"这一层要解的那一卷"，同组的后续卷会缺了首卷
     /// 留在产物里 —— 而定稿那一侧的分卷完整性闸门
-    /// （<c>ExtractionCoordinator.TryConfirmVolumeGroupComplete</c>：<c>.002</c> 必须能找到同目录的
+    /// （<c>VolumeRepairHandler.TryConfirmVolumeGroupComplete</c>：<c>.002</c> 必须能找到同目录的
     /// <c>.001</c>）会判定"整组不完整" ⇒ **整份计划作废、任务报失败**（2026-09-30 那 25 GB 踩的
     /// 正是同一道闸门）。这一组卷刚刚被我们成功解开、内容物也已经落位，所以它们**整个**是过程物，
     /// 一起清掉才不会留下半套。

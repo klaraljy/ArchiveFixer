@@ -11,13 +11,22 @@ namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 任务级日志捕获 / 摘要行 / 批清账（第 11 块，原 <c>ExtractionCoordinator.LogCaptureStep.cs</c> 的全部实现）——
-/// 按职责整块搬到本协作类，宿主那一分片只留同签名薄转发 + 四个 <c>internal</c> 记账字段。
+/// 按职责整块搬到本协作类。
 ///
-/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、文案、日志级别与落盘顺序与原来逐字一致；
-/// ⛔ 调用点一处未改。</para>
+/// <para>M5 类型总行数治理：协调器那一分片已**删除**，不再留同名薄转发。宿主现在只剩
+/// ① 唯一实例 <c>ExtractionCoordinator.LogCapture</c>（加锁懒建，见那里的说明）
+/// ② 宿主级入口 <c>AppendLog</c>（两个带 caller 的重载）/ <c>AppendLogPair</c> / <c>AppendLogWithCode</c> /
+/// <c>CriterionLog</c> / <c>UpdateSummary</c>（全仓 300+ 调用点直接走它们，它们各自转调本类同名成员）
+/// ③ 两个测试/别的 Handler 直接读写的状态（<c>KeepTaskDetailInLog</c> / <c>PostProcessStartedForTests</c>）。
+/// 批记账的四个字段（<c>_batchPurged*</c> / <c>_stopNoticeLogged</c>）随实现搬进本类，
+/// 批首清零仍只有 <c>ExtractionCoordinator.ResetBatchPurgeCounters</c> 一个出口（转调 <see cref="ResetBatchPurgeCounters"/>）。</para>
 ///
-/// <para>搬过来的还有两个**实例状态**（任务级 <c>AsyncLocal</c> 捕获缓冲、批记账的锁）：宿主只有一个实例，
-/// 懒建的那一个 <see cref="LogCaptureHandler"/> 也就全类共用，生命周期与原来完全相同。</para>
+/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、文案、日志级别与落盘顺序与原来逐字一致。</para>
+///
+/// <para>本类有**实例状态**（任务级 <c>AsyncLocal</c> 捕获缓冲 + 批记账的锁）：宿主只有一个实例，
+/// 懒建的那一个 <see cref="LogCaptureHandler"/> 全类共用，生命周期与原来完全相同。
+/// ⛔ 任何调用方都**不得**自己 <c>new LogCaptureHandler(host)</c> —— 那会造出第二个缓冲，
+/// 让"开始捕获"与"写日志"落到两个不同实例上（普通档下成功任务的 INFO 细节会漏上屏幕，踩既有红线）。</para>
 ///
 /// <para>⚠ 诊断日志里的"调用点"字段：宿主转发保留了
 /// <c>CallerFilePath</c> / <c>CallerLineNumber</c> / <c>CallerMemberName</c>，
@@ -55,7 +64,7 @@ internal sealed class LogCaptureHandler
          */
         bool screenVisible = _host.Settings.VerboseLog || _host.KeepTaskDetailInLog;
 
-        foreach (ArchiveTask row in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask row in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (row == null)
             {
@@ -294,18 +303,46 @@ internal sealed class LogCaptureHandler
     /// <summary>
     /// 本批"其余物已处理"的记账（逐任务只写一行，批末一条汇总 —— 第 44 条）。
     ///
-    /// <para>⚠ 计数本体留在宿主（别的 partial 在批首直接清零），这里只负责在锁里累加。</para>
+    /// <para>⚠ M5：计数本体随实现搬进本类（原先留在宿主分片，因为批首清零由宿主直接赋值）；
+    /// 批首清零的唯一出口仍是 <c>ExtractionCoordinator.ResetBatchPurgeCounters</c>
+    /// （<c>ExtractionCoordinator.ExtractEntryStep.cs</c>），它转调本类的 <see cref="ResetBatchPurgeCounters"/>。</para>
     /// </summary>
+    private int _batchPurgedTaskCount;
+
+    private long _batchPurgedBytes;
+
+    private bool _batchPurgedPermanently;
+
+    /// <summary>
+    /// 「停止后续」的那条日志**本批只写一次**（2026-09-27 真机：他连点两次按钮，
+    /// 日志里"已请求停止后续任务"出现两遍，跑完收尾又是第三句不同措辞）。
+    /// 批开始处（<c>_operationCts = new CancellationTokenSource()</c> 那一段）转调
+    /// <see cref="ResetBatchPurgeCounters"/> 复位。
+    /// </summary>
+    private bool _stopNoticeLogged;
+
+    /// <summary>
+    /// 批首那四句记账清零（原 <c>StartExtractCoreAsync</c> 开头，顺序与原来一致）：
+    /// 其余物记账三项 + 「停止后续只写一次」。
+    /// </summary>
+    internal void ResetBatchPurgeCounters()
+    {
+        _batchPurgedTaskCount = 0;
+        _batchPurgedBytes = 0;
+        _batchPurgedPermanently = false;
+        _stopNoticeLogged = false;
+    }
+
     internal void NoteBatchPurge(long freedBytes, bool permanent)
     {
         lock (_batchPurgeGate)
         {
-            _host._batchPurgedTaskCount++;
-            _host._batchPurgedBytes += freedBytes;
+            _batchPurgedTaskCount++;
+            _batchPurgedBytes += freedBytes;
 
             if (permanent)
             {
-                _host._batchPurgedPermanently = true;
+                _batchPurgedPermanently = true;
             }
         }
     }
@@ -313,12 +350,12 @@ internal sealed class LogCaptureHandler
     /// <summary>见 <see cref="StatusText.StopRequestedNotice"/>：措辞统一、只写一次。</summary>
     internal void LogStopRequestOnce()
     {
-        if (_host._stopNoticeLogged)
+        if (_stopNoticeLogged)
         {
             return;
         }
 
-        _host._stopNoticeLogged = true;
+        _stopNoticeLogged = true;
 
         AppendLog("WARN", StatusText.StopRequestedNotice);
     }
@@ -327,7 +364,7 @@ internal sealed class LogCaptureHandler
     {
         lock (_batchPurgeGate)
         {
-            return (_host._batchPurgedTaskCount, _host._batchPurgedBytes, _host._batchPurgedPermanently);
+            return (_batchPurgedTaskCount, _batchPurgedBytes, _batchPurgedPermanently);
         }
     }
 

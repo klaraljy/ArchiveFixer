@@ -367,7 +367,7 @@ internal sealed class RecursionHandler
     /// </param>
     /// <returns>
     /// 递归结论（调用方要用它判断"展开了几层"——结果校验拿什么当预期全靠这个，见
-    /// <see cref="PostProcessSuccessAsync"/> 的 <c>recursion</c> 参数）。
+    /// <see cref="PostProcessSuccessHandler.PostProcessSuccessAsync"/> 的 <c>recursion</c> 参数）。
     /// </returns>
     internal async Task<RecursionResult?> RunRecursiveAsync(
         ArchiveTask task,
@@ -589,7 +589,7 @@ internal sealed class RecursionHandler
                      * 理由与收尾那一段完全相同（见 PostProcessSuccessAsync 的线程规则）。
                      */
                     int moved = await Task.Run(
-                        () => ExtractionCoordinator.MoveDirectoryContentForRecursion(layerZeroOutput, stageDirectory),
+                        () => RecursionOutcomeHandler.MoveDirectoryContent(layerZeroOutput, stageDirectory),
                         cancellationToken);
 
                     result = new RecursionResult
@@ -615,7 +615,7 @@ internal sealed class RecursionHandler
                      * （单个文件搬不动就跳过、只记进返回的文件数），漏下的那些还在工作区里，
                      * 删掉它们等于丢用户的产物（不变量 1 的精神）。
                      */
-                    if (ExtractionCoordinator.HasNoFilesForRecursion(layerZeroOutput))
+                    if (RecursionOutcomeHandler.HasNoFiles(layerZeroOutput))
                     {
                         recursiveExtractor.TryCleanupCurrentWorkspace(
                             task.FileName,
@@ -630,7 +630,7 @@ internal sealed class RecursionHandler
             }
         }
 
-        _host.ApplyRecursionResultForRecursion(task, result);
+        _host.RecursionOutcome.ApplyRecursionResult(task, result);
 
         if (_host._spaceTightPolicy.Enabled && !string.IsNullOrWhiteSpace(recursiveExtractor.RetainedProcessArtifactPath))
         {
@@ -673,7 +673,7 @@ internal sealed class RecursionHandler
              * ⛔ `Status` / `Outcome` 一个字不动（它们是"装箱单"，发布链 / 定稿 / 源包处理都读，
              * 见上面那段说明），⛔ 也不改判据。批末定稿时清掉它，那一格随即回到真结论。
              */
-            if (!_host._volumeDeficitFinalPass.Contains(task))
+            if (!_host._volumeLedgerState.VolumeDeficitFinalPass.Contains(task))
             {
                 // 显示/统计那一格照旧点亮（批中间不许顶着红色「分卷缺失」）—— 与改动前逐字相同。
                 task.IsVolumeDeficitDeferred = true;
@@ -691,14 +691,14 @@ internal sealed class RecursionHandler
                  * —— 这就是"第一大步不闭环"。</para>
                  *
                  * <para>⛔ 进名单**只进"停下来的那一组就是我这一组"的那一单**
-                 * （<see cref="IsStalledGroupOwnGroup"/>）：批末那一站是拿**这一单自己的包基名**
+                 * （<see cref="StalledGroupHandler.IsStalledGroupOwnGroup"/>）：批末那一站是拿**这一单自己的包基名**
                  * 去问"这一组齐了没"的，名字对不上的单进去只会被扣一句不相干的「分卷缺失」。</para>
                  */
-                if (ExtractionCoordinator.IsStalledGroupOwnGroup(task, result))
+                if (StalledGroupHandler.IsStalledGroupOwnGroup(task, result))
                 {
-                    _host.RememberDeferredVolumeDeficit(task);
+                    _host.VolumeLedger.RememberDeferredVolumeDeficit(task);
                 }
-                else if (ExtractionCoordinator.FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
+                else if (StalledGroupHandler.FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
                          && !_host.AnyTaskRepresentsGroupForRecursion(stalledPiece))
                 {
                     /*
@@ -726,7 +726,7 @@ internal sealed class RecursionHandler
                         stalledPiece,
                         FileNature.Inspect(stalledPiece));
 
-                    _host.RememberDeferredVolumeDeficit(task, reference.Length > 0 ? reference : stalledPiece);
+                    _host.VolumeLedger.RememberDeferredVolumeDeficit(task, reference.Length > 0 ? reference : stalledPiece);
                 }
                 else
                 {
@@ -737,10 +737,10 @@ internal sealed class RecursionHandler
                      */
                     _host.AppendLog(
                         "WARN",
-                        $"{task.LogName}：缺卷登记判据输入：停下的那一组是不是自己这一组={ExtractionCoordinator.IsStalledGroupOwnGroup(task, result)}｜"
+                        $"{task.LogName}：缺卷登记判据输入：停下的那一组是不是自己这一组={StalledGroupHandler.IsStalledGroupOwnGroup(task, result)}｜"
                         + $"这一趟自报的分卷片 {result.UnresolvedVolumePieces.Count} 个｜"
-                        + $"停下的那一片里的参照名=「{(ExtractionCoordinator.FindStalledVolumePiece(result) is { Length: > 0 } stalledForLog ? FileNameHelper.GetFileName(stalledForLog) : "（空）")}」｜"
-                        + $"任务表里已有别单代表这一组={(ExtractionCoordinator.FindStalledVolumePiece(result) is { Length: > 0 } represented ? _host.AnyTaskRepresentsGroupForRecursion(represented) : false)}｜"
+                        + $"停下的那一片里的参照名=「{(StalledGroupHandler.FindStalledVolumePiece(result) is { Length: > 0 } stalledForLog ? FileNameHelper.GetFileName(stalledForLog) : "（空）")}」｜"
+                        + $"任务表里已有别单代表这一组={(StalledGroupHandler.FindStalledVolumePiece(result) is { Length: > 0 } represented ? _host.AnyTaskRepresentsGroupForRecursion(represented) : false)}｜"
                         + "⇒ 不进批末名单（批末那一站不会为这一组补判）");
                 }
             }

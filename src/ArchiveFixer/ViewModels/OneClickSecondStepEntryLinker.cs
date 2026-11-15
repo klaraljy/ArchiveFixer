@@ -50,7 +50,7 @@ internal sealed class OneClickSecondStepEntryLinker
          * ===== 交界处消费端 · 第二段（B）：点名入口任务（只解一层，⛔ 不搬片）=====
          *
          * 可证完整的交接组 ⇒ 在任务表里找到入口那一份，清掉它上一轮「已跳过」的结论，
-         * 登记第二大步事实位（`_volumeStepTasks` ⇒ 只解一层），并把它排进下一轮。
+         * 登记第二大步事实位（`_volumeLedgerState.VolumeStepTasks` ⇒ 只解一层），并把它排进下一轮。
          * ⛔ 这一版不搬片、不改名、不动盘；片进不进入口层由 C 段再做。
          */
         List<ArchiveTask> volumeEntryTasks = roundState.VolumeEntryTasks;
@@ -67,7 +67,7 @@ internal sealed class OneClickSecondStepEntryLinker
 
         foreach (ArchiveFixer.Extraction.StandardNameFastPath.Decision decision
                  in ArchiveFixer.Extraction.StandardNameFastPath.Decide(
-                     _extractionCoordinator.FirstStepLedger
+                     _extractionCoordinator.VolumeHandoff.FirstStepLedger
                          .AllSecondStepCandidates()
                          .Select(entry => entry.Path)))
         {
@@ -156,7 +156,7 @@ internal sealed class OneClickSecondStepEntryLinker
                  * 组事实层落最终组失败：不点名、不链接、不解压、不删源包。
                  * 缺片不是第一大步的交接跳过，而是第二大步最终组失败。
                  */
-                _extractionCoordinator.RecordFinalGroupFailure(
+                new ContentGroupFinalizerHandler(_extractionCoordinator).RecordFinalGroupFailure(
                     preUnit,
                     FinalGroupFailureKind.Incomplete,
                     $"最终内容分卷组不完整：{preUnit.Verdict}",
@@ -175,7 +175,7 @@ internal sealed class OneClickSecondStepEntryLinker
                 if (preUnit.State == ArchiveFixer.Extraction.VolumeStep.VolumeGroupState.SizeAnomaly
                     && preUnit.MissingNumbers.Count > 0)
                 {
-                    _extractionCoordinator.RecordFinalGroupFailure(
+                    new ContentGroupFinalizerHandler(_extractionCoordinator).RecordFinalGroupFailure(
                         preUnit,
                         FinalGroupFailureKind.Incomplete,
                         $"最终内容分卷组结构异常且缺片：{preUnit.Verdict}",
@@ -368,12 +368,12 @@ internal sealed class OneClickSecondStepEntryLinker
                 continue;
             }
 
-            _extractionCoordinator.AttachContentGroupOwner(
+            _extractionCoordinator.VolumeHandoff.AttachContentGroupOwner(
                 group.PreparedGroup,
                 entryTask.FileName,
                 entryTask.CurrentPath);
 
-            _extractionCoordinator.RememberVolumeStepTaskForRound(entryTask);
+            new ExtractionVolumeStepFacts(_extractionCoordinator).RememberVolumeStepTaskForRound(entryTask);
 
             IReadOnlyList<string> consumedPaths = group.PreparedGroup?.Pieces
                 .Select(piece => piece.OriginalPath)
@@ -381,7 +381,7 @@ internal sealed class OneClickSecondStepEntryLinker
                 .ToList()
                 ?? group.Pieces;
 
-            _extractionCoordinator.MarkVolumeHandoffConsumed(consumedPaths, "第二大步·点名");
+            _extractionCoordinator.VolumeHandoff.Ledger.MarkVolumeHandoffConsumed(consumedPaths, "第二大步·点名");
 
             /*
              * ===== C 段：把片放进入口层，**一律只建硬链接** =====
@@ -403,7 +403,7 @@ internal sealed class OneClickSecondStepEntryLinker
                     + $"{FileNameHelper.GetFileName(entryPath)}（原始入口 {FileNameHelper.GetFileName(originalEntryPath)}；"
                     + "源文件未动）");
 
-                _extractionCoordinator.RememberVolumeStepGroupWork(
+                _extractionCoordinator.VolumeStepPreflight.RememberVolumeStepGroupWork(
                     entryTask,
                     group.BaseName,
                     entryLayer,
@@ -461,7 +461,7 @@ internal sealed class OneClickSecondStepEntryLinker
                     AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
                 }
 
-                _extractionCoordinator.RememberVolumeStepGroupWork(
+                _extractionCoordinator.VolumeStepPreflight.RememberVolumeStepGroupWork(
                     entryTask,
                     group.BaseName,
                     entryLayer,

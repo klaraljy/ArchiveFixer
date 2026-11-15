@@ -46,10 +46,10 @@ internal sealed partial class ExtractionCoordinator
      * 协作类要用、但定义在**别的 partial** 里的 private 成员（不改那几个文件）：
      * 这里只加**最小 internal 访问器**，⛔ 不复制判据、⛔ 不用反射（唯一实现仍在原处）。
      *
-     * 已经在 ServiceForwarding / Source / PieceAdoptionStep / LogCaptureStep / VolumeHandoffStep
+     * 已经在 ServiceForwarding / SourceHandler / PieceAdoptionHandler / LogCaptureHandler / VolumeHandoffHandler
      * 里 internal 的那些直接复用：_archiveEngine / Settings / AppendLogPair / AppendLog /
      * BuildRecursionPasswordCandidates / IsUserImportedSourcePath / _extractionContentGraph /
-     * _passwordService / _vm / _cleanupLedger / PurgeLayerSourcePackage / IsStopping / BudgetLimits。
+     * _passwordService / _vm / Source.CleanupLedger / Source.PurgeLayerSourcePackage / IsStopping / Schedule.BudgetLimits。
      */
 
     /// <summary>访问器：给 <see cref="RecursiveLayerReclaimHandler"/> 判"本批走不走逐层回收"（唯一写入点 = 批首）。</summary>
@@ -63,17 +63,17 @@ internal sealed partial class ExtractionCoordinator
 
     /// <summary>访问器：给 <see cref="RecursiveLayerReclaimHandler"/> 在解第 0 层前问"源还是原来那份吗"。</summary>
     internal Task<string?> CheckRootSourceUnchangedForRecursiveLayerReclaim(ArchiveTask task) =>
-        CheckRootSourceUnchangedAsync(task);
+        Source.CheckRootSourceUnchangedAsync(task);
 
     /// <summary>访问器：给 <see cref="RecursiveLayerReclaimHandler"/> 判"这条路径是某单的原始源包吗"。</summary>
-    internal bool IsAnyTaskOriginalPathForRecursiveLayerReclaim(string path) => IsAnyTaskOriginalPath(path);
+    internal bool IsAnyTaskOriginalPathForRecursiveLayerReclaim(string path) => PieceAdoption.IsAnyTaskOriginalPath(path);
 
     /// <summary>访问器：给 <see cref="RecursiveLayerReclaimHandler"/> 判"这条路径的物理身份是某单的原始源包吗"。</summary>
     internal bool IsAnyTaskOriginalIdentityForRecursiveLayerReclaim(string path) =>
-        IsAnyTaskOriginalIdentity(path);
+        PieceAdoption.IsAnyTaskOriginalIdentity(path);
 
     /// <summary>访问器：给 <see cref="RecursiveLayerReclaimHandler"/> 记账"这一层用过哪些内层包"（唯一账本 = 本类）。</summary>
-    internal void AddChainInnerLayerInputForRecursiveLayerReclaim(string path) => _chainInnerLayerInputs.Add(path);
+    internal void AddChainInnerLayerInputForRecursiveLayerReclaim(string path) => Source.ChainInnerLayerInputs.Add(path);
 
     /// <summary>
     /// 本次运行里每个任务用过的**递归核心**（<see cref="RecursiveExtractor"/> 实例）。

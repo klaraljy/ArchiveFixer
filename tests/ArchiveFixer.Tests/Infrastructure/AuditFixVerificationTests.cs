@@ -369,7 +369,7 @@ public class AuditFixVerificationTests : IDisposable
     [Fact]
     public void 引擎不可用提示_调用方不许再写死7z路径()
     {
-        string coordinator = File.ReadAllText(RepoPath("src", "ArchiveFixer", "ViewModels", "ExtractionCoordinator.ExtractEntryStep.cs"))
+        string coordinator = File.ReadAllText(RepoPath("src", "ArchiveFixer", "ViewModels", "ExtractionCoordinator.Entries.cs"))
             + File.ReadAllText(RepoPath("src", "ArchiveFixer", "ViewModels", "ExtractionBatchEntry.cs"));
         string parser = File.ReadAllText(RepoPath("src", "ArchiveFixer", "Engines", "SevenZip", "SevenZipOutputParser.cs"));
 

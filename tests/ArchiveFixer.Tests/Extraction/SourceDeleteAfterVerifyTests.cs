@@ -319,7 +319,7 @@ public class SourceDeleteAfterVerifyTests : IDisposable
 
         Assert.NotEqual(StatusText.ExtractSuccess, continuation.Status);
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { task },
             new[] { task, continuation });
 

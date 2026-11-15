@@ -24,8 +24,8 @@ using System.Windows;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 整组候选收集与收拢（从 `ExtractionCoordinator.VolumeGatherCollectStep.cs` 搬出）：组目录/参考名/成员判定/槽位键/规范名准备。
-/// ⛔ 分卷收集判据与日志顺序逐字沿用原实现；协调器只保留同名薄转发。
+/// 整组候选收集与收拢（M5：原 `ExtractionCoordinator.VolumeGatherCollectStep.cs` 已整份删除）：组目录/参考名/成员判定/槽位键/规范名准备。
+/// ⛔ 分卷收集判据与日志顺序逐字沿用原实现；协调器只保留访问器（<c>VolumeGatherCollect</c>）、不再留同名薄转发。
 /// </summary>
 internal sealed class VolumeGatherCollectHandler
 {
@@ -167,7 +167,7 @@ internal sealed class VolumeGatherCollectHandler
     {
         string first = SafePathHelper.GetFullPathSafe(firstVolumePath);
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null || ReferenceEquals(candidate, task))
             {
@@ -428,7 +428,7 @@ internal sealed class VolumeGatherCollectHandler
 
         var members = new List<string>();
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             string path = candidate?.CurrentPath ?? string.Empty;
 
@@ -470,7 +470,7 @@ internal sealed class VolumeGatherCollectHandler
          */
         if (memberUsable)
         {
-            foreach (ArchiveTask? other in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+            foreach (ArchiveTask? other in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
             {
                 if (other == null)
                 {
@@ -484,7 +484,7 @@ internal sealed class VolumeGatherCollectHandler
                         continue;
                     }
 
-                    foreach (string candidate in ExtractionCoordinator.CollectVolumeFilesInDirectory(directory))
+                    foreach (string candidate in VolumeRepairHandler.CollectVolumeFilesInDirectory(directory))
                     {
                         if (MemberBelongsToGroup(candidate, tailName)
                             && !members.Contains(candidate))
@@ -524,9 +524,9 @@ internal sealed class VolumeGatherCollectHandler
              */
             ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
 
-            string predicted = _host.ResolveProducerEntryArchivePathCore(
+            string predicted = new ExtractionVolumeStepFacts(_host).ResolveProducerEntryArchivePathCore(
                 owner,
-                _host.BuildExtractOptions(tryExtractUnknownFormat: false),
+                _host.BatchReminders.BuildExtractOptions(tryExtractUnknownFormat: false),
                 member,
                 0);
 
@@ -548,13 +548,13 @@ internal sealed class VolumeGatherCollectHandler
          *
          * ⛔ **这里删掉了一条兜底**（2026-10-11，真机 FFFF 那一批 + 复现用例把它钉死）：
          * 原来最后还问 `ResolveGroupProducerDirectory(baseName)` = "**谁先把这一组的片吐出来**，
-         * 就落谁那条链的落点目录"（读 `_groupPieceProducers`）—— 于是这一组的层**由时序决定**：
+         * 就落谁那条链的落点目录"（读 `_volumeLedgerState.GroupPieceProducers`）—— 于是这一组的层**由时序决定**：
          * 同一份输入，谁先跑完谁定层。真机那一批就是它把四片全收进了 `1113__.rar` 那条链的层
          * （它只是恰好第一个吐出 part3），而真正的入口包 `111_.part1.rar` 是**最后**才出来的
          * （它得先穿两层 rar→zip），反被搬进别人的层（盘上同一个 inode 挂了三四个名字，
          * `fsutil hardlink list` 逐字可查）。
          * ⇒ **"谁先到"不许当判据**；判不出时正解是"这一次不决定"，不是"先占一层"。
-         * ⛔ `_groupPieceProducers` 那份账照旧保留：它回答"有哪些片被产出来了 / 该谁收场"，
+         * ⛔ `_volumeLedgerState.GroupPieceProducers` 那份账照旧保留：它回答"有哪些片被产出来了 / 该谁收场"，
          *   **不回答层**（谁先产出一片与"入口包在哪"是两件事）。
          */
         string observed = !string.IsNullOrWhiteSpace(memberPath)
@@ -568,7 +568,7 @@ internal sealed class VolumeGatherCollectHandler
         {
             ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
 
-            if (_host.FindProducerTaskForPackageForHandler(owner, member, entryName) is { } producerTask)
+            if (new ExtractionVolumeStepFacts(_host).FindProducerTaskForPackage(owner, member, entryName) is { } producerTask)
             {
                 producerName = producerTask.LogName;
                 break;
@@ -635,7 +635,7 @@ internal sealed class VolumeGatherCollectHandler
 
     internal ArchiveTask? FindTaskByPath(string path)
     {
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null)
             {
@@ -742,8 +742,8 @@ internal sealed class VolumeGatherCollectHandler
 
             bool samePhysical = FileIdentity.IsSamePhysicalFile(target, orderedPieces[index]);
             bool hasLinks = FileIdentity.TryGetLinkCount(target, out uint linkCount);
-            bool userSource = _host.IsUserImportedSourcePath(target);
-            bool taskSource = _host.IsAnyTaskSourcePath(target);
+            bool userSource = _host.PieceAdoption.IsUserImportedSourcePath(target);
+            bool taskSource = _host.PieceAdoption.IsAnyTaskSourcePath(target);
 
             _host.AppendLog(
                 "INFO",

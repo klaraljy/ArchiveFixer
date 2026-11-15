@@ -459,7 +459,7 @@ public class LogVolumePolicyTests : IDisposable
          * 加密包会撞上「解压前提醒」那个确认框。本用例要的是**解压失败现场**，
          * 所以按一键档的口径把那个框压掉（判定与日志一条都不少，少的只是弹窗）。
          */
-        harness.Coordinator.SuppressBatchReminderDialogForThisRun();
+        harness.Coordinator.BatchReminders.SuppressBatchReminderDialogForThisRun();
 
         await harness.AddTaskAsync(encrypted);
         await harness.Coordinator.StartExtractAsync();

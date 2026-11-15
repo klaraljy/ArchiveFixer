@@ -41,7 +41,7 @@ internal sealed class ExtractionVolumeHandoffLedger
 
         ArchiveFixer.Detection.VolumeHandoffEntry? dropChainDuplicate = null;
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry existing in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry existing in _host.VolumeHandoff.EntryLedger)
         {
             if (string.Equals(existing.Path, path, StringComparison.OrdinalIgnoreCase))
             {
@@ -80,7 +80,7 @@ internal sealed class ExtractionVolumeHandoffLedger
 
         if (dropChainDuplicate != null)
         {
-            _host._volumeHandoffEntries.Remove(dropChainDuplicate);
+            _host.VolumeHandoff.EntryLedger.Remove(dropChainDuplicate);
         }
 
         var entry = new ArchiveFixer.Detection.VolumeHandoffEntry
@@ -115,7 +115,7 @@ internal sealed class ExtractionVolumeHandoffLedger
                 : ArchiveFixer.Detection.VolumeHandoffSource.UserImported
         };
 
-        _host._volumeHandoffEntries.Add(entry);
+        _host.VolumeHandoff.EntryLedger.Add(entry);
         return entry;
     }
 
@@ -126,10 +126,10 @@ internal sealed class ExtractionVolumeHandoffLedger
     /// </summary>
     internal void ClearVolumeHandoffLedger()
     {
-        _host.ClearProducedCardCache();
-        _host._volumeHandoffEntries.Clear();
-        _host._firstStepFileLedger.Clear();
-        _host._extractionContentGraph.Clear();
+        _host.VolumeHandoff.ProducedVolumeGate.ClearProducedCardCache();
+        _host.VolumeHandoff.EntryLedger.Clear();
+        _host.VolumeHandoff.FirstStepLedger.Clear();
+        _host.VolumeHandoff.ContentGraph.Clear();
     }
 
     /// <summary>
@@ -152,7 +152,7 @@ internal sealed class ExtractionVolumeHandoffLedger
             return;
         }
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host.VolumeHandoff.EntryLedger)
         {
             if (entry.ConsumedAt.HasValue || !wanted.Contains(entry.Path))
             {
@@ -170,14 +170,14 @@ internal sealed class ExtractionVolumeHandoffLedger
     /// </summary>
     internal void AppendVolumeHandoffBatchSummary()
     {
-        if (_host._volumeHandoffEntries.Count == 0 && _host._volumeStepGroupVerdicts.Count == 0)
+        if (_host.VolumeHandoff.EntryLedger.Count == 0 && _host.VolumeStepPreflight.GroupVerdicts.Count == 0)
         {
             return;
         }
 
         int onDisk = 0;
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host.VolumeHandoff.EntryLedger)
         {
             try
             {
@@ -192,31 +192,31 @@ internal sealed class ExtractionVolumeHandoffLedger
             }
         }
 
-        int consumed = _host._volumeHandoffEntries.Count(entry => entry.ConsumedAt.HasValue);
+        int consumed = _host.VolumeHandoff.EntryLedger.Count(entry => entry.ConsumedAt.HasValue);
 
         string consumers = string.Join(
             "、",
-            _host._volumeHandoffEntries
+            _host.VolumeHandoff.EntryLedger
                 .Where(entry => entry.ConsumedBy.Length > 0)
                 .Select(entry => entry.ConsumedBy)
                 .Distinct(StringComparer.Ordinal));
 
-        if (_host._volumeHandoffEntries.Count > 0)
+        if (_host.VolumeHandoff.EntryLedger.Count > 0)
         {
             _host.AppendLog(
                 "INFO",
-                $"[第二大步·交接] 本批交接 {_host._volumeHandoffEntries.Count} 份"
-                + $"（在盘 {onDisk} / 已不在 {_host._volumeHandoffEntries.Count - onDisk}）"
-                + $"｜已消费 {consumed} 份｜待处理 {_host._volumeHandoffEntries.Count - consumed} 份"
+                $"[第二大步·交接] 本批交接 {_host.VolumeHandoff.EntryLedger.Count} 份"
+                + $"（在盘 {onDisk} / 已不在 {_host.VolumeHandoff.EntryLedger.Count - onDisk}）"
+                + $"｜已消费 {consumed} 份｜待处理 {_host.VolumeHandoff.EntryLedger.Count - consumed} 份"
                 + (consumers.Length > 0 ? $"｜消费方：{consumers}" : string.Empty));
         }
 
         /*
          * **P4 回写：每组一行结论**（用户 2026-10-24「回写结论」）：
-         * 结论由第二大步收尾时写进账本（`_host._volumeStepGroupVerdicts`），⛔ 不从日志里反推；
+         * 结论由第二大步收尾时写进账本（`_host.VolumeStepPreflight.GroupVerdicts`），⛔ 不从日志里反推；
          * 没有交接单的批次（批首点名那一档）也能读到。
          */
-        foreach (KeyValuePair<string, string> verdict in _host._volumeStepGroupVerdicts)
+        foreach (KeyValuePair<string, string> verdict in _host.VolumeStepPreflight.GroupVerdicts)
         {
             _host.AppendLog("INFO", $"[第二大步·结论] {verdict.Key}：{verdict.Value}");
         }
@@ -242,7 +242,7 @@ internal sealed class ExtractionVolumeHandoffLedger
             return;
         }
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host.VolumeHandoff.EntryLedger)
         {
             if (wanted.Contains(entry.Path))
             {
@@ -285,19 +285,19 @@ internal sealed class ExtractionVolumeHandoffLedger
     /// <para>⛔ 判不出 ⇒ 返回 <c>false</c>（照旧落「已跳过」）—— 兜底永远是"什么都不做"。</para>
     /// </summary>
     /// <summary>
-    /// 批末：把 <see cref="_host._unrecognizedMaybePiece"/> 里那些**升级**成「分卷缺失」（严格判据成立时）。
+    /// 批末：把 <see cref="_host._volumeLedgerState.UnrecognizedMaybePiece"/> 里那些**升级**成「分卷缺失」（严格判据成立时）。
     ///
     /// <para>⛔ 只升级、不改别的：判据不成立的那些**保持「已跳过」**（它们是真的"不是压缩包"）；
     /// 机器终态与结束时间由 <see cref="_host.MarkStoppedBeforeExtract"/> 一次性收口（那一支的注释里有理由）。</para>
     /// </summary>
     private void UpgradeUnrecognizedMaybePieceVerdicts()
     {
-        if (_host._unrecognizedMaybePiece.Count == 0)
+        if (_host._volumeLedgerState.UnrecognizedMaybePiece.Count == 0)
         {
             return;
         }
 
-        foreach (ArchiveTask task in _host._unrecognizedMaybePiece.ToList())
+        foreach (ArchiveTask task in _host._volumeLedgerState.UnrecognizedMaybePiece.ToList())
         {
             if (task.Outcome != TaskOutcome.Skipped)
             {
@@ -352,7 +352,7 @@ internal sealed class ExtractionVolumeHandoffLedger
             return false;
         }
 
-        foreach (ArchiveTask? other in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask? other in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (other == null || ReferenceEquals(other, task) || string.IsNullOrWhiteSpace(other.CurrentPath))
             {
@@ -441,7 +441,7 @@ internal sealed class ExtractionVolumeHandoffLedger
     /// </summary>
     internal void RegisterUnrecognizedSuspect(ArchiveTask task)
     {
-        _host._unrecognizedMaybePiece.Add(task);
+        _host._volumeLedgerState.UnrecognizedMaybePiece.Add(task);
     }
 }
 

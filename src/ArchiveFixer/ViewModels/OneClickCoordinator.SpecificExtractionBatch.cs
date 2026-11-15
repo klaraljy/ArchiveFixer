@@ -39,7 +39,7 @@ internal sealed partial class OneClickCoordinator
             .ThenBy(unit => unit.Entry.CurrentPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        int configuredTarget = _extractionCoordinator.ResolveManualConcurrencyLimit();
+        int configuredTarget = _extractionCoordinator.BatchReminders.ResolveManualConcurrencyLimit();
         AppendLog(
             "INFO",
             $"特定解压：按预计耗时降序排好；普通并发按用户选择 {configuredTarget} 个"
@@ -196,7 +196,7 @@ internal sealed partial class OneClickCoordinator
         bool spaceTight)
     {
         using IDisposable taskSpan = DiagnosticSpan.BeginTask(unit.Entry.TaskId, unit.Entry.LogName);
-        _extractionCoordinator.BeginTaskLogCapture(unit.Entry);
+        _extractionCoordinator.LogCapture.BeginTaskLogCapture(unit.Entry);
         try
         {
             bool success = await ProcessSpecificTaskAsync(
@@ -220,7 +220,7 @@ internal sealed partial class OneClickCoordinator
         }
         finally
         {
-            _extractionCoordinator.EndTaskLogCapture(unit.Entry);
+            _extractionCoordinator.LogCapture.EndTaskLogCapture(unit.Entry);
         }
     }
 
@@ -258,7 +258,7 @@ internal sealed partial class OneClickCoordinator
                 IncludeRestAliases = includeRestAliases
             });
 
-        _extractionCoordinator.AppendTaskLog(
+        _extractionCoordinator.LogCapture.AppendTaskLog(
             task,
             cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
             $"特定解压后源包处理 —— {cleanup.Message}");
@@ -298,7 +298,7 @@ internal sealed partial class OneClickCoordinator
             }
 
             task.RestDirectoryPath = string.Empty;
-            _extractionCoordinator.AppendTaskLog(
+            _extractionCoordinator.LogCapture.AppendTaskLog(
                 task,
                 spaceTight
                     ? "空间不足模式，最后一层过程物在成功后彻底删除"
@@ -306,7 +306,7 @@ internal sealed partial class OneClickCoordinator
         }
         catch (Exception ex)
         {
-            _extractionCoordinator.AppendTaskLog(task, "WARN", $"特定解压其余物删除失败：{ex.Message}");
+            _extractionCoordinator.LogCapture.AppendTaskLog(task, "WARN", $"特定解压其余物删除失败：{ex.Message}");
         }
     }
 
@@ -346,7 +346,7 @@ internal sealed partial class OneClickCoordinator
 
         var runner = new SpecificExtractionRunner(
             _extractionCoordinator.SpecificExtractionEngine,
-            message => _extractionCoordinator.AppendTaskLog(task, message));
+            message => _extractionCoordinator.LogCapture.AppendTaskLog(task, message));
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
@@ -374,7 +374,7 @@ internal sealed partial class OneClickCoordinator
              */
             long required = TaskSpaceEstimate.SaturatingSum(
                 sourceBytes,
-                _extractionCoordinator.SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes);
+                _extractionCoordinator.Schedule.SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes);
 
             if (freeBytes < required)
             {
@@ -497,7 +497,7 @@ internal sealed partial class OneClickCoordinator
         if (cancelled)
         {
             MarkSpecificTaskCancelled(task);
-            _extractionCoordinator.AppendTaskLog(task, "WARN", $"已按「{task.ErrorMessage}」停下。");
+            _extractionCoordinator.LogCapture.AppendTaskLog(task, "WARN", $"已按「{task.ErrorMessage}」停下。");
             return false;
         }
 
@@ -524,7 +524,7 @@ internal sealed partial class OneClickCoordinator
              */
             ApplySpecificRestHandling(task, result, runOptions, spaceTight);
 
-            _extractionCoordinator.AppendTaskLog(
+            _extractionCoordinator.LogCapture.AppendTaskLog(
                 task,
                 $"特定解压完成 → {Path.GetFileName(result.OutputPath)}（{result.Depth + 1} 层）"
                 + (spaceTight ? $"；空间不足剩余 {TryGetFreeBytes(outputRoot)}" : string.Empty));
@@ -546,7 +546,7 @@ internal sealed partial class OneClickCoordinator
         task.RestDirectoryPath = result.RestDirectory;
         ApplySpecificRestHandling(task, result, runOptions, spaceTight);
         MarkSpecificTaskFailed(task, result.Message);
-        _extractionCoordinator.AppendTaskLog(task, "WARN", $"特定解压失败 —— {result.Message}");
+        _extractionCoordinator.LogCapture.AppendTaskLog(task, "WARN", $"特定解压失败 —— {result.Message}");
 
         _vm.Logger.Event(
             "specific.failure",
@@ -660,7 +660,7 @@ internal sealed partial class OneClickCoordinator
     {
         try
         {
-            if (_extractionCoordinator.SpaceProbeOverride is { } probe
+            if (_extractionCoordinator.Schedule.SpaceProbeOverride is { } probe
                 && probe(path) is long injected)
             {
                 return injected;
@@ -679,7 +679,7 @@ internal sealed partial class OneClickCoordinator
     {
         try
         {
-            if (_extractionCoordinator.SpaceProbeOverride is { } probe
+            if (_extractionCoordinator.Schedule.SpaceProbeOverride is { } probe
                 && probe(path) is long injected)
             {
                 return injected.ToString("N0") + " 字节（注入）";

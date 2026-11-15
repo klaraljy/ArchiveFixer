@@ -18,9 +18,11 @@ namespace ArchiveFixer.ViewModels;
 /// 解压成功之后的收尾（定稿搬运 → 校验 → 归集 → 视开关清理源包）——从
 /// <see cref="ExtractionCoordinator"/> 的 <c>PostProcessSuccessStep</c> partial 整体搬出的协作类。
 ///
-/// <para>为什么单独成类：它只编排"这一单已经解出东西之后怎么结案"，与协调器的调度/批次无关；
+/// <para>本类就是这一段的**唯一落点**（M5：原 <c>ExtractionCoordinator.PostProcessSuccessStep.cs</c>
+/// 分片已删除，不再留薄转发/访问器）—— 调用点直接 <c>new PostProcessSuccessHandler(coordinator)</c>；
 /// ⛔ 判据、终态、工作区与源包处理仍全部走协调器既有出口（<see cref="_host"/>），
-/// 需要碰协调器私有成员的访问器集中登记在那个 partial 里，⛔ 不用反射、不复制判据。</para>
+/// 重活那一段走宿主**共享**的那个 <c>SourceHandler</c>（<c>_host.Source</c>，测试缝挂在它上面，⛔ 不 new），
+/// 需要碰的私有成员按最小范围提到 internal，⛔ 不用反射、不复制判据。</para>
 ///
 /// <para>无状态：<c>_host</c> 是唯一的持有物，所有中间结论都是方法内的局部变量 ——
 /// 多个任务并发跑收尾时各自一个实例也不会有共享状态。</para>
@@ -117,7 +119,7 @@ internal sealed class PostProcessSuccessHandler
         cancellationToken.ThrowIfCancellationRequested();
 
         // 手动单层入口（oneClickRun=false）：这一层写出来的都是用户要的内容物。
-        _host.ManualSingleLayerThisRun = !oneClickRun;
+        _host._manualSingleLayerThisRun = !oneClickRun;
 
         /*
          * 递归展开超过一层 → 外层清单不再描述最终产物（见 recursion 参数说明）。
@@ -248,17 +250,17 @@ internal sealed class PostProcessSuccessHandler
          * 已经答过"全部 X"或是本任务已经答过"这一个"时（GetEffectiveConflictDecision 非空），
          * 连预检都不做 —— 决策 D-4：50–200+ 个包逐个问等于不可用。
          */
-        string conflictAction = _host.ConflictActionValueForStep;
+        string conflictAction = _host.ConflictActionValue;
         ConflictDecision? conflictDecision = null;
 
         if (ConflictActions.IsAsk(conflictAction))
         {
-            ConflictDecision? decided = _host.GetEffectiveConflictDecisionForStep();
+            ConflictDecision? decided = _host.GetEffectiveConflictDecision();
 
-            if (decided == null && !_host.ConflictPromptUnavailableForStep)
+            if (decided == null && !_host.IsConflictPromptUnavailable)
             {
                 ConflictPrecheck precheck = await Task.Run(
-                    () => _host.PrecheckFinalLayoutConflictsForStep(
+                    () => _host.PrecheckFinalLayoutConflicts(
                         task,
                         productDirectory,
                         task.OutputPath,
@@ -277,10 +279,10 @@ internal sealed class PostProcessSuccessHandler
                             : "都在其余物里。") +
                         "请选择同名时怎么处理。";
 
-                    decided = await _host.AskConflictForStepAsync(
+                    decided = await _host.AskConflictAsync(
                         task,
                         message,
-                        ExtractionCoordinator.BuildConflictDetailForStep(precheck),
+                        ExtractionCoordinator.BuildConflictDetail(precheck),
                         cancellationToken);
                 }
             }
@@ -289,8 +291,8 @@ internal sealed class PostProcessSuccessHandler
             conflictDecision = decided ?? ConflictDecision.Conservative;
         }
 
-        ExtractionCoordinator.PostProcessWorkResult work = await Task.Run(
-            () => _host.RunPostProcessWorkForStep(
+        PostProcessWorkResult work = await Task.Run(
+            () => _host.Source.RunPostProcessWork(
                 task,
                 productDirectory,
                 expected,
@@ -453,7 +455,7 @@ internal sealed class PostProcessSuccessHandler
                 task,
                 work.Verification.FailureMessage,
                 _host.AppendLogPair,
-                _host.AppendLogWithCodeForStep);
+                _host.AppendLogWithCode);
 
             _host.CriterionLog(
                 "输出校验",
@@ -478,7 +480,7 @@ internal sealed class PostProcessSuccessHandler
          * L4 的那一行证据（用户 2026-09-30：日志不许再让人猜）。
          * 位置刻意在"校验通过"这条分支之内：判否那一支上面已经带着原因 return 了。
          */
-        _host.AppendCompletenessEvidenceForStep(task, work.Verification, sourceHandling);
+        _host.AppendCompletenessEvidence(task, work.Verification, sourceHandling);
 
         // 定稿里搬不动的文件也必须让用户看得见：产物还在暂存区，不在他打开的那个目录里。
         if (work.Commit is { FailedCount: > 0 })
@@ -611,7 +613,7 @@ internal sealed class PostProcessSuccessHandler
              * 内容物实际落地的那一层目录（第 35 条）：续解产物的落点要跟着它走。
              * 同样要按归集后的位置换算 —— 归集把整个产物目录搬走了，旧路径已经不在了。
              */
-            string contentDirectory = ExtractionCoordinator.ResolveContentDirectoryAfterCollectForStep(work.Commit, work.Collected);
+            string contentDirectory = ExtractionCoordinator.ResolveContentDirectoryAfterCollect(work.Commit, work.Collected);
 
             if (!string.IsNullOrWhiteSpace(contentDirectory))
             {
@@ -656,7 +658,7 @@ internal sealed class PostProcessSuccessHandler
         {
             UiActivity.Mark("收尾", task.LogName, "清理中间工作区");
             var cleanupWatch = Stopwatch.StartNew();
-            await Task.Run(() => _host.CleanupTaskWorkspaceDirectoryForStep(task, stageDirectory));
+            await Task.Run(() => _host.CleanupTaskWorkspaceDirectory(task, stageDirectory));
             cleanupWatch.Stop();
             UiActivity.ClearBackground();
 
@@ -690,7 +692,7 @@ internal sealed class PostProcessSuccessHandler
             if (work.Verification.Verified &&
                 !cancellationToken.IsCancellationRequested)
             {
-                _host.TryOpenOutputFolderOnceForStep(task);
+                _host.BatchReminders.TryOpenOutputFolderOnce(task);
             }
         }
         catch (Exception ex)
@@ -753,14 +755,14 @@ internal sealed class PostProcessSuccessHandler
 
         if (!string.IsNullOrWhiteSpace(original))
         {
-            _host.FirstStepLedger.MarkConsumed(original);
+            _host.VolumeHandoff.FirstStepLedger.MarkConsumed(original);
         }
 
         string current = task.CurrentPath;
 
         if (!string.IsNullOrWhiteSpace(current))
         {
-            _host.FirstStepLedger.MarkConsumed(current);
+            _host.VolumeHandoff.FirstStepLedger.MarkConsumed(current);
         }
     }
 }

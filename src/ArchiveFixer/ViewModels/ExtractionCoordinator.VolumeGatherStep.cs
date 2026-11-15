@@ -79,18 +79,18 @@ internal sealed partial class ExtractionCoordinator
         FindLandedCopyBesideProducer(piecePath, owner);
 
     internal static string ResolveObservedPiecePathForHandler(ArchiveTask? task, string? memberPath) =>
-        ResolveObservedPiecePath(task, memberPath);
+        VolumeGatherCollectHandler.ResolveObservedPiecePath(task, memberPath);
 
     internal string ResolveOwnerChainDirectoryForHandler(ArchiveTask? owner) =>
-        ResolveOwnerChainDirectory(owner);
+        PieceAdoption.ResolveOwnerChainDirectory(owner);
 
     internal ArchiveTask? ResolveLandedPieceProducerForHandler(string piecePath, ArchiveTask? owner) =>
-        ResolveLandedPieceProducer(piecePath, owner);
+        PieceAdoption.ResolveLandedPieceProducer(piecePath, owner);
 
     internal bool TrySnapshotGroupPieceProducersForHandler(
         string baseName,
         out List<(ArchiveTask Task, string PieceName)> producers) =>
-        TrySnapshotGroupPieceProducers(baseName, out producers);
+        PieceAdoption.TrySnapshotGroupPieceProducers(baseName, out producers);
 
     internal static bool IsByteIdenticalForHandler(string left, string right) =>
         IsByteIdentical(left, right);

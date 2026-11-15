@@ -69,9 +69,9 @@ internal sealed class OneClickSecondStepRunner
              * （真机 336 的 13:45/13:51 两次路径不一致就是这么来的）。
              */
 
-            List<string> groupRoots = _extractionCoordinator.VolumeHandoffEntries
+            List<string> groupRoots = _extractionCoordinator.VolumeHandoff.Entries
                 .Select(entry => entry.SourceLayer)
-                .Concat(_extractionCoordinator.VolumeHandoffEntries
+                .Concat(_extractionCoordinator.VolumeHandoff.Entries
                     .Select(entry => Path.GetDirectoryName(entry.Path ?? string.Empty) ?? string.Empty))
                 .Where(directory => !string.IsNullOrWhiteSpace(directory))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -107,7 +107,7 @@ internal sealed class OneClickSecondStepRunner
             }
 
             List<string> analysisRoots = groupRoots
-                .Concat(_extractionCoordinator.FirstStepLedger.Entries
+                .Concat(_extractionCoordinator.VolumeHandoff.FirstStepLedger.Entries
                     .Select(entry => entry.SourceLayer)
                     .Where(layer => !string.IsNullOrWhiteSpace(layer)))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -119,7 +119,7 @@ internal sealed class OneClickSecondStepRunner
              * 未单独建交接单的 Unknown/内层片也补成候选。
              */
             List<ArchiveFixer.Detection.VolumeHandoffEntry> ledgerHandoff =
-                _extractionCoordinator.FirstStepLedger.Entries
+                _extractionCoordinator.VolumeHandoff.FirstStepLedger.Entries
                     /*
                      * ⛔ 账本收所有已发布产物（MP4/TXT/PNG 也在内），但第二大步候选只认
                      * 分卷事实：内容身份/卷号/名字槽/ZIP split 证据/交界前租约。
@@ -157,7 +157,7 @@ internal sealed class OneClickSecondStepRunner
                         SourceLayer = entry.SourceLayer,
                         Source = entry.Source
                     })
-                    .Concat(_extractionCoordinator.VolumeHandoffEntries)
+                    .Concat(_extractionCoordinator.VolumeHandoff.Entries)
                     .GroupBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.First())
                     .ToList();
@@ -183,7 +183,7 @@ internal sealed class OneClickSecondStepRunner
              * ⇒ 它绝不参与自己产物所组成的分卷组。
              */
             var nonVolumeRootSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var ledgerByPath = _extractionCoordinator.FirstStepLedger.Entries
+            var ledgerByPath = _extractionCoordinator.VolumeHandoff.FirstStepLedger.Entries
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Path))
                 .GroupBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
@@ -252,15 +252,15 @@ internal sealed class OneClickSecondStepRunner
                         ledgerTask.CurrentPath,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    _extractionCoordinator.FirstStepLedger.RetargetPath(
+                    _extractionCoordinator.VolumeHandoff.FirstStepLedger.RetargetPath(
                         ledgerTask.OriginalPath,
                         ledgerTask.CurrentPath);
                 }
             }
 
             IReadOnlyList<PreparedVolumeGroup> preparedGroups =
-                await _extractionCoordinator.VolumeBoundaryPipeline.ResolveAllAsync(
-                        _extractionCoordinator.FirstStepLedger,
+                await _extractionCoordinator.VolumeHandoff.VolumeBoundaryPipeline.ResolveAllAsync(
+                        _extractionCoordinator.VolumeHandoff.FirstStepLedger,
                         baseName =>
                         {
                             long trialLastTicks = 0;
@@ -268,7 +268,7 @@ internal sealed class OneClickSecondStepRunner
 
                             return new VolumeBoundaryContext
                             {
-                                Ledger = _extractionCoordinator.FirstStepLedger,
+                                Ledger = _extractionCoordinator.VolumeHandoff.FirstStepLedger,
                                 BaseName = baseName,
                                 Engine = _extractionCoordinator.ArchiveEngine,
                                 WorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot,
@@ -279,8 +279,8 @@ internal sealed class OneClickSecondStepRunner
                                  * 用外层包那条的路径/层会让密码探测和快通道键全偏（真机 2026-11-10）。
                                  */
                                 PasswordCandidates = _extractionCoordinator.BuildVolumeProbePasswordCandidates(
-                                    _extractionCoordinator.FirstStepLedger.CandidateRepresentativePath(baseName)),
-                                OriginalSourceLayer = _extractionCoordinator.FirstStepLedger
+                                    _extractionCoordinator.VolumeHandoff.FirstStepLedger.CandidateRepresentativePath(baseName)),
+                                OriginalSourceLayer = _extractionCoordinator.VolumeHandoff.FirstStepLedger
                                     .CandidateSourceLayer(baseName),
                                 Log = (level, message) => AppendLog(level, message),
                                 Progress = new Progress<ArchiveFixer.Engines.ArchiveProgress>(progress =>
@@ -382,7 +382,7 @@ internal sealed class OneClickSecondStepRunner
                  * 交界屏障：prepared 组此刻已经拿到族/片/入口，登记成内容组，
                  * 接上第一大步账本里的来源根与落点域。只登记事实，不点名、不动盘。
                  */
-                _extractionCoordinator.RegisterContentGroups(preparedGroups);
+                _extractionCoordinator.VolumeHandoff.RegisterContentGroups(preparedGroups);
 
                 /*
                  * ⛔ 2026-11-01：旧行为"prepared 组一旦存在，同基名旧候选让位"必须保留
@@ -548,8 +548,8 @@ internal sealed class OneClickSecondStepRunner
                         }
                     }
 
-                    _extractionCoordinator.RememberVolumeStepTaskForRound(createdTask);
-                    _extractionCoordinator.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名（补建）");
+                    new ExtractionVolumeStepFacts(_extractionCoordinator).RememberVolumeStepTaskForRound(createdTask);
+                    _extractionCoordinator.VolumeHandoff.Ledger.MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名（补建）");
                 }
             }
             catch (Exception ex)

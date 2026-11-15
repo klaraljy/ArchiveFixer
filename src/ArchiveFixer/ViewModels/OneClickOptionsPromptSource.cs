@@ -145,6 +145,6 @@ internal sealed class OneClickOptionsPromptSource
             return null;
         }
 
-        return options => _extractionCoordinator.DescribePlannedDestinationAsync(targets, options);
+        return options => _extractionCoordinator.BatchReminders.DescribePlannedDestinationAsync(targets, options);
     }
 }

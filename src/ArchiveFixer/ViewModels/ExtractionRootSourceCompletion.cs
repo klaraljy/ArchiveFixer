@@ -109,7 +109,7 @@ internal sealed class ExtractionRootSourceCompletion
 
         if (rootTasks == null || rootTasks.Count == 0)
         {
-            _host.SettleVerifiedContentGroupSources(runOptions);
+            new ContentGroupFinalizerHandler(_host).SettleVerifiedContentGroupSources(runOptions);
             return;
         }
 
@@ -153,7 +153,7 @@ internal sealed class ExtractionRootSourceCompletion
              */
             if (!string.IsNullOrWhiteSpace(rootTask.CurrentPath))
             {
-                _host._cleanupLedger.Add(new CleanupItem
+                _host.Source.CleanupLedger.Add(new CleanupItem
                 {
                     Path = rootTask.CurrentPath,
                     Kind = CleanupItemKind.UserSource,
@@ -164,7 +164,7 @@ internal sealed class ExtractionRootSourceCompletion
 
             if (!string.IsNullOrWhiteSpace(rootTask.RestDirectoryPath))
             {
-                _host._cleanupLedger.Add(new CleanupItem
+                _host.Source.CleanupLedger.Add(new CleanupItem
                 {
                     Path = rootTask.RestDirectoryPath,
                     Kind = CleanupItemKind.RestArtifact,
@@ -237,7 +237,7 @@ internal sealed class ExtractionRootSourceCompletion
          * 组级最后一道：只有组最终内容 Verified 才处理组内所有贡献源根。
          * 旧的逐 rootTask 循环可能只认入口那一单；这里按组补齐，组未证则一个字节不动。
          */
-        _host.SettleVerifiedContentGroupSources(runOptions);
+        new ContentGroupFinalizerHandler(_host).SettleVerifiedContentGroupSources(runOptions);
     }
 }
 

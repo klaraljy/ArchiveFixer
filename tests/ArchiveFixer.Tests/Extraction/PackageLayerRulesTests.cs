@@ -508,7 +508,7 @@ public class PackageLayerRulesTests
         /*
          * 被解开的分卷组是**整组**一起被消费掉的。只删掉"这一层要解的那一卷"，
          * 后续卷会缺了首卷留在产物里 —— 而定稿那一侧的分卷完整性闸门
-         * （`ExtractionCoordinator.TryConfirmVolumeGroupComplete`：`.002` 必须能找到同目录的 `.001`）
+         * （`VolumeRepairHandler.TryConfirmVolumeGroupComplete`：`.002` 必须能找到同目录的 `.001`）
          * 会判定"整组不完整"⇒ 整份计划作废、任务报失败（用户 2026-09-30 那 25 GB 的同一道闸门）。
          * 这里只钉一件事：被就地替换掉的那一组卷，产物里一卷都不许剩。
          */

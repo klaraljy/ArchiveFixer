@@ -338,7 +338,7 @@ public class SpaceTightModeTests : IDisposable
         OneClickRunOptions seed = OneClickRunOptions.FromSettings(harness.Vm.Settings);
 
         // ① 模式关着：没有红字，正文说的是设置里的值（留在原地 / 不动其余物）。
-        OneClickConfirmFacts normal = await harness.Coordinator.BuildConfirmFactsAsync(
+        OneClickConfirmFacts normal = await harness.Coordinator.BatchReminders.BuildConfirmFactsAsync(
             new[] { task }, seed, reminders: null);
 
         Assert.Equal(string.Empty, normal.SpaceTightEcho);
@@ -349,7 +349,7 @@ public class SpaceTightModeTests : IDisposable
         // ② 模式开着：红字出现，正文两行**都换成覆盖后的值**（用户不会被同一框里的两句话绕进去）。
         harness.Vm.SpaceTightMode = true;
 
-        OneClickConfirmFacts tight = await harness.Coordinator.BuildConfirmFactsAsync(
+        OneClickConfirmFacts tight = await harness.Coordinator.BatchReminders.BuildConfirmFactsAsync(
             new[] { task }, seed, reminders: null);
 
         Assert.Equal(StatusText.SpaceTightConfirmText, tight.SpaceTightEcho);
@@ -455,8 +455,8 @@ public class SpaceTightModeTests : IDisposable
          * ⚠ 探测口子在**视图模型自己那一个**协调器上（`ExtractionPipeline`）：体检是
          * `Vm.CheckSpaceForTasksAsync` 发起的，用测试另建的那个实例注入是打不中的。
          */
-        harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 2048;
-        harness.Vm.ExtractionPipeline.SpaceReserveOverride = 0;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceProbeOverride = _ => 2048;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceReserveOverride = 0;
 
         string folder = Path.Combine(_root, "src", "check");
         Directory.CreateDirectory(folder);
@@ -499,8 +499,8 @@ public class SpaceTightModeTests : IDisposable
     {
         Harness harness = CreateHarness();
 
-        harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 4096;
-        harness.Vm.ExtractionPipeline.SpaceReserveOverride = 0;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceProbeOverride = _ => 4096;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceReserveOverride = 0;
 
         string folder = Path.Combine(_root, "src", "auto-check");
         Directory.CreateDirectory(folder);
@@ -531,8 +531,8 @@ public class SpaceTightModeTests : IDisposable
     {
         Harness harness = CreateHarness();
 
-        harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 4096;
-        harness.Vm.ExtractionPipeline.SpaceReserveOverride = 0;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceProbeOverride = _ => 4096;
+        harness.Vm.ExtractionPipeline.Schedule.SpaceReserveOverride = 0;
 
         // ① ②页那颗按钮：选完目录要说一声（值也真的写进设置）。
         string picked = Path.Combine(_root, "picked-output");
@@ -664,8 +664,8 @@ public class SpaceTightModeTests : IDisposable
         Harness harness = CreateHarness();
 
         long free = 10L * 1024 * 1024 * 1024;
-        harness.Coordinator.SpaceProbeOverride = _ => free;
-        harness.Coordinator.SpaceReserveOverride = 0;
+        harness.Coordinator.Schedule.SpaceProbeOverride = _ => free;
+        harness.Coordinator.Schedule.SpaceReserveOverride = 0;
 
         string source = harness.CreateSource("pack.7z");
         ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
@@ -776,7 +776,7 @@ public class SpaceTightModeTests : IDisposable
 
         // 空间不足（删除档）+ 让"删源包"必失败 → 内容物已好、源包没删掉 = 部分完成。
         harness.Vm.SpaceTightMode = true;
-        harness.Coordinator.SourcePackageDeleteFileSystem = new FailingDeleteFileSystem();
+        harness.Coordinator.Source.SourcePackageDeleteFileSystem = new FailingDeleteFileSystem();
 
         await harness.Coordinator.StartExtractAsync();
 
@@ -944,11 +944,11 @@ public class SpaceTightModeTests : IDisposable
         const long twoHundredMiB = 200L * 1024 * 1024;
 
         DateTime started = DateTime.UtcNow;
-        harness.Coordinator.SpaceProbeOverride = _ =>
+        harness.Coordinator.Schedule.SpaceProbeOverride = _ =>
             DateTime.UtcNow - started > TimeSpan.FromMilliseconds(200)
                 ? 2L * 1024 * 1024 * 1024
                 : 210L * 1024 * 1024;
-        harness.Coordinator.SpaceReserveOverride = 0;
+        harness.Coordinator.Schedule.SpaceReserveOverride = 0;
 
         string folderA = Path.Combine(_root, "排队-甲");
         string folderB = Path.Combine(_root, "排队-乙");

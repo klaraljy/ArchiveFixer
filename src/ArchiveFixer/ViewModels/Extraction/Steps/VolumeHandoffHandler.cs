@@ -27,15 +27,96 @@ namespace ArchiveFixer.ViewModels;
 /// <summary>
 /// 分卷交接登记与"这一份是不是本批某组的一片"（从 `ExtractionCoordinator.VolumeHandoffStep.cs` 搬出）：
 /// 源根登记 / 内容组登记与 owner 补齐 / 递归层候选片拦截 / 后缀清洗 / 收拢源片放回 / 落点解释那一行。
-/// ⛔ 判据、日志顺序、落点推导一个字都没改；协调器只保留同名薄转发与一处最小 internal 访问器。
+/// ⛔ 判据、日志顺序、落点推导一个字都没改。
+///
+/// <para>M5：协调器那一分片已删除，本类就是**交接事实与入口的唯一落点** —— 交接账、第一大步文件账本、
+/// 内容组图、边界解析管线、收拢源片账、"这一组同一套片试过一遍"签名都归本类持有；
+/// 协调器只保留 <c>VolumeHandoff</c> 一个访问器（⛔ 不再留同名薄转发）。
+/// 交接账本记录器 <see cref="Ledger"/> 与产出物内容卡闸门 <see cref="ProducedVolumeGate"/>
+/// 也挂在这里（它们读写同一份账，⛔ 各自 new 会分成两半）。</para>
+///
+/// <para>⚠ <b>唯一实例</b>：本类有实例状态（上面那几本账），只能由
+/// <c>ExtractionCoordinator.VolumeHandoff</c> 懒建一次；⛔ 不许在别处 <c>new VolumeHandoffHandler(host)</c>
+/// —— 第二份实例会让同一批的交接账分成两半。</para>
 /// </summary>
 internal sealed class VolumeHandoffHandler
 {
     private readonly ExtractionCoordinator _host;
 
+    /*
+     * 交接事实与第一大步账本：唯一存放点就是本类（原为协调器分片里的实例字段）。
+     * 字段名、类型、初始化与搬家前逐字相同；别的 partial / 协作类改走下面的 internal 属性，
+     * ⛔ 不复制判据、⛔ 不另造第二本账。
+     */
+    private readonly List<ArchiveFixer.Detection.VolumeHandoffEntry> _volumeHandoffEntries = new();
+    private readonly FirstStepFileLedger _firstStepFileLedger = new();
+    private readonly ExtractionContentGraph _extractionContentGraph = new();
+    private readonly VolumeBoundaryPipeline _volumeBoundaryPipeline = CreateVolumeBoundaryPipeline();
+    private readonly List<(string OriginalPath, string CurrentPath)> _gatheredUserSourcePieces = new();
+    private readonly HashSet<string> _triedVolumeGroupSignatures = new(StringComparer.OrdinalIgnoreCase);
+
+    private ExtractionVolumeHandoffLedger? _ledger;
+    private ExtractionProducedVolumeGate? _producedVolumeGate;
+
     internal VolumeHandoffHandler(ExtractionCoordinator host)
     {
         _host = host;
+    }
+
+    /// <summary>第一大步的交接事实表（第二大步的组分析从这里取候选）。</summary>
+    internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> Entries => _volumeHandoffEntries;
+
+    /// <summary>交接账的**可变**口子（只给 <see cref="Ledger"/> 登记/消费/清空；别处只读 <see cref="Entries"/>）。</summary>
+    internal List<ArchiveFixer.Detection.VolumeHandoffEntry> EntryLedger => _volumeHandoffEntries;
+
+    /// <summary>
+    /// **第一大步文件账本**（共用骨架）：闸门通过的每一份文件都登记，
+    /// 包括内容 Unknown 的中间片；族 resolver 从这里取候选。
+    /// </summary>
+    internal FirstStepFileLedger FirstStepLedger => _firstStepFileLedger;
+
+    /// <summary>本批的源根 → 产出物 → 内容组账本骨架。</summary>
+    internal ExtractionContentGraph ContentGraph => _extractionContentGraph;
+
+    /// <summary>
+    /// **边界解析管线**（共用骨架）：族 resolver 从这里注册；骨架阶段未注册任何族，
+    /// 因此 `ResolveAllAsync` 返回空，既有行为一个字不变。
+    /// </summary>
+    internal VolumeBoundaryPipeline VolumeBoundaryPipeline => _volumeBoundaryPipeline;
+
+    /// <summary>被「收拢」搬离用户原目录的那几片（原路径 ↔ 搬走后的路径）。</summary>
+    internal List<(string OriginalPath, string CurrentPath)> GatheredUserSourcePieces => _gatheredUserSourcePieces;
+
+    /// <summary>
+    /// **这一批已经用「完全同一组片」试过一遍的组签名**（批末补判去重用的那本账）。
+    /// 签名 = 组的 `GroupKey` + 每一卷「完整路径 + 字节数」；只要有新片进来签名就会变。
+    /// </summary>
+    internal HashSet<string> TriedVolumeGroupSignatures => _triedVolumeGroupSignatures;
+
+    /// <summary>
+    /// 第二大步交接账本记录器（登记/消费/结论/批末汇总/未识别嫌疑登记）—— 本类唯一实例。
+    /// 它读写的交接账就是本类的 <see cref="EntryLedger"/>，⛔ 各自 new 会分成两半。
+    /// </summary>
+    internal ExtractionVolumeHandoffLedger Ledger => _ledger ??= new ExtractionVolumeHandoffLedger(_host);
+
+    /// <summary>
+    /// 产出物内容卡闸门（内容卡缓存 / 产出物登记 / 第一大步账本登记）—— 本类唯一实例。
+    /// ⚠ 它有实例缓存（内容卡），必须共享同一个实例，⛔ 不许每处 new。
+    /// </summary>
+    internal ExtractionProducedVolumeGate ProducedVolumeGate =>
+        _producedVolumeGate ??= new ExtractionProducedVolumeGate(_host);
+
+    private static VolumeBoundaryPipeline CreateVolumeBoundaryPipeline()
+    {
+        var pipeline = new VolumeBoundaryPipeline();
+
+        // 7z / RAR 先接；ZIP 支线再接，⛔ 不在共享层写族特判。
+        pipeline.Register(new SevenZipBoundaryResolver());
+        pipeline.Register(new RarBoundaryResolver());
+        pipeline.Register(new ZipSpannedBoundaryResolver());
+        pipeline.Register(new ZipNumberedBoundaryResolver());
+
+        return pipeline;
     }
 
     /// <summary>
@@ -73,7 +154,7 @@ internal sealed class VolumeHandoffHandler
             }
 
             string placementKey = BuildSourcePlacementKey(task, placementMode, customRoot);
-            _host._extractionContentGraph.RegisterSourceRoot(task, placementKey, sourceHandling);
+            _extractionContentGraph.RegisterSourceRoot(task, placementKey, sourceHandling);
             registered++;
         }
 
@@ -127,9 +208,9 @@ internal sealed class VolumeHandoffHandler
                 continue;
             }
 
-            ContentGroup contentGroup = _host._extractionContentGraph.RegisterContentGroup(
+            ContentGroup contentGroup = _extractionContentGraph.RegisterContentGroup(
                 group,
-                _host._firstStepFileLedger);
+                _firstStepFileLedger);
 
             _host.AppendLog("INFO", $"[内容组] {contentGroup.Describe()}");
             registered++;
@@ -146,7 +227,7 @@ internal sealed class VolumeHandoffHandler
     {
         if (prepared == null
             || string.IsNullOrWhiteSpace(ownerTaskFileName)
-            || !_host._extractionContentGraph.TryGetContentGroup(
+            || !_extractionContentGraph.TryGetContentGroup(
                 prepared.BaseName,
                 prepared.Family,
                 prepared.OriginalSourceLayer,
@@ -189,15 +270,15 @@ internal sealed class VolumeHandoffHandler
             return false;
         }
 
-        string originRootId = _host._extractionContentGraph.ResolveRootId(owner);
-        string placementKey = _host._extractionContentGraph.ResolvePlacementKey(owner);
-        string leaseId = _host._extractionContentGraph.LeaseCandidate(
+        string originRootId = _extractionContentGraph.ResolveRootId(owner);
+        string placementKey = _extractionContentGraph.ResolvePlacementKey(owner);
+        string leaseId = _extractionContentGraph.LeaseCandidate(
             path,
             originRootId,
             owner.TaskId,
             placementKey);
 
-        if (_host._firstStepFileLedger.TryGetByPath(path, out _))
+        if (_firstStepFileLedger.TryGetByPath(path, out _))
         {
             return true;
         }
@@ -209,7 +290,7 @@ internal sealed class VolumeHandoffHandler
 
             int? nameSlot = LegacyVolumeNames.TryGetIndex(FileNameHelper.GetFileName(path));
 
-            _host._firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+            _firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
                 card,
                 owner.LogName,
                 VolumeHandoffSource.ChainProduced,
@@ -288,7 +369,7 @@ internal sealed class VolumeHandoffHandler
     {
         int renamed = 0;
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _volumeHandoffEntries)
         {
             if (string.IsNullOrWhiteSpace(entry.Path) || !File.Exists(entry.Path))
             {
@@ -321,7 +402,7 @@ internal sealed class VolumeHandoffHandler
 
                 string oldPath = entry.Path;
                 entry.Path = target;
-                _host.SuffixRenamedSourcesForVolumeHandoff.Add((oldPath, target));
+                _host._volumeLedgerState.SuffixRenamedSources.Add((oldPath, target));
                 renamed++;
 
                 if (tasks != null)
@@ -373,12 +454,12 @@ internal sealed class VolumeHandoffHandler
                 continue;
             }
 
-            if (!_host.IsUserImportedSourcePath(item.CurrentPath))
+            if (!_host.PieceAdoption.IsUserImportedSourcePath(item.CurrentPath))
             {
                 continue;
             }
 
-            _host._gatheredUserSourcePieces.Add((item.CurrentPath, item.TargetPath));
+            _gatheredUserSourcePieces.Add((item.CurrentPath, item.TargetPath));
         }
     }
 
@@ -388,20 +469,20 @@ internal sealed class VolumeHandoffHandler
     /// </summary>
     internal int RestoreGatheredUserSourcePieces(List<(string Level, string Message)>? logEntries)
     {
-        if (_host._gatheredUserSourcePieces.Count == 0)
+        if (_gatheredUserSourcePieces.Count == 0)
         {
             return 0;
         }
 
         int restored = 0;
 
-        foreach ((string originalPath, string currentPath) in _host._gatheredUserSourcePieces.ToList())
+        foreach ((string originalPath, string currentPath) in _gatheredUserSourcePieces.ToList())
         {
             try
             {
                 if (!File.Exists(currentPath))
                 {
-                    _host._gatheredUserSourcePieces.Remove((originalPath, currentPath));
+                    _gatheredUserSourcePieces.Remove((originalPath, currentPath));
                     continue;
                 }
 
@@ -430,7 +511,7 @@ internal sealed class VolumeHandoffHandler
                     $"用户源片放回原目录：{Path.GetFileName(originalPath)}（它是被「收拢」搬走的，"
                     + "按「源包操作 = 留下」一个字节都不许少）。"));
 
-                _host._gatheredUserSourcePieces.Remove((originalPath, currentPath));
+                _gatheredUserSourcePieces.Remove((originalPath, currentPath));
                 restored++;
             }
             catch (Exception ex)

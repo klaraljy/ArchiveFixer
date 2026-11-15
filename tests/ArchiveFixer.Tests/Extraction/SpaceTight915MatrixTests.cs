@@ -103,8 +103,8 @@ public sealed class SpaceTight915MatrixTests
         var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-        extraction.SpaceProbeOverride = _ => freeBytes;
-        extraction.SpaceReserveOverride = reserveBytes;
+        extraction.Schedule.SpaceProbeOverride = _ => freeBytes;
+        extraction.Schedule.SpaceReserveOverride = reserveBytes;
         vm.SpaceTightMode = true;
         vm.SpaceTightKeepSource = false;
 

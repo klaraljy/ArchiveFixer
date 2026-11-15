@@ -21,7 +21,7 @@ internal sealed class SpaceTextCoordinator
         }
 
         // 这一句现在只说"源包 + 其余物"两档（2026-09-25 第 32 条：危险模式与自测凭证整块退役）。
-        _vm.SetSpaceModeText(_vm.ExtractionCoordinator?.DescribeSpaceMode() ?? string.Empty);
+        _vm.SetSpaceModeText(_vm.ExtractionCoordinator?.Schedule.DescribeSpaceMode() ?? string.Empty);
 
         RefreshSpaceTightOverrideText();
 

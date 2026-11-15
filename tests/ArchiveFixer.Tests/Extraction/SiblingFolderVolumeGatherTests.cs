@@ -337,10 +337,10 @@ public class SiblingFolderVolumeGatherTests : IDisposable
 
         producer.OutputPath = producerOutput;
 
-        harness.Coordinator.ResetBatchLedgersForTests();
-        harness.Coordinator.RememberGroupConsumerForTests(baseName, consumer.FileName);
-        harness.Coordinator.RememberGroupPieceProducerForTests(baseName, producer);
-        harness.Coordinator.RememberAdoptedLandedPieceForTests(adoptionOwner ?? producer, baseName, landedPiece);
+        harness.Coordinator.VolumeLedger.ResetBatchLedgersForTests();
+        harness.Coordinator.VolumeLedger.RememberGroupConsumerForTests(baseName, consumer.FileName);
+        harness.Coordinator.VolumeLedger.RememberGroupPieceProducerForTests(baseName, producer);
+        harness.Coordinator.VolumeLedger.RememberAdoptedLandedPieceForTests(adoptionOwner ?? producer, baseName, landedPiece);
 
         Assert.True(File.Exists(landedPiece), "摆中间态失败：产出方那一份应当先在盘上");
 

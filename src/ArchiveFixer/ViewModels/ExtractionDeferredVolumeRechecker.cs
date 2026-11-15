@@ -52,25 +52,25 @@ internal sealed class ExtractionDeferredVolumeRechecker
          *
          * 现场（用户：「原包怎么还没有删除」「其余物怎么还留着」）：`111.z0删除2` / `111.z0删除3`
          * 是散在 `111(3)`/`111(4)` 的**续卷片**，整组由 `111.rar` 那一单解开 ⇒ 它们按跟班卷收场、
-         * **源片却一直留在盘上** —— 因为上面那一档只认"吐出过片的那几单"（`_groupPieceProducers`），
+         * **源片却一直留在盘上** —— 因为上面那一档只认"吐出过片的那几单"（`_volumeLedgerState.GroupPieceProducers`），
          * 而这两单自己没吐过任何东西，从没进过那份账。
          *
-         * 判据只有两条**事实位**：① 这一单的路径在既有那份"借来用过的源片"账（`_consumedVolumeSources`）
+         * 判据只有两条**事实位**：① 这一单的路径在既有那份"借来用过的源片"账（`_volumeLedgerState.ConsumedVolumeSources`）
          * 里；② 那位消费方**真的成功了**（机器终态）。⛔ 与"如实报缺卷"那条路**同一个事实位**，
          * ⛔ 不另造第二套判据；⛔ 搬运仍只有既有出口（六道闸门一条都不绕过）。
          */
         _host.SettleConsumedGroupVolumeSources(logEntries: null);
 
-        if (_host._volumeDeficitDeferred.Count == 0)
+        if (_host._volumeLedgerState.VolumeDeficitDeferred.Count == 0)
         {
             return toRun;
         }
 
-        foreach (ArchiveTask task in _host._volumeDeficitDeferred.ToList())
+        foreach (ArchiveTask task in _host._volumeLedgerState.VolumeDeficitDeferred.ToList())
         {
             if (task == null)
             {
-                _host._volumeDeficitDeferred.Remove(task!);
+                _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task!);
                 continue;
             }
 
@@ -107,7 +107,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
              * 直接问它必然回"仍然缺卷"（一句会把人指错的结论）。
              * ⛔ 判据一个字没放宽：收完仍然只由它回答"齐不齐"。
              */
-            string entryLayer = _host.ResolveBatchGroupDirectory(
+            string entryLayer = _host.VolumeGatherCollect.ResolveBatchGroupDirectory(
                 FileNameHelper.GetArchiveBaseName(_host.ResolveDeferredGroupMemberPath(task)),
                 task,
                 _host.ResolveDeferredGroupMemberPath(task));
@@ -152,7 +152,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                  * 候选 = 这一层里与"这一单手上那一片"同族的文件（既有尺子 `BelongsToSameGroup`），
                  * ⛔ 不递归、⛔ 不猜。
                  */
-                List<string> gatherCandidates = _host.CollectVolumeCandidatePaths(
+                List<string> gatherCandidates = _host.VolumeCandidateCollector.CollectVolumeCandidatePaths(
                     task,
                     entryLayer,
                     out string gatherReference,
@@ -281,7 +281,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                 ?? _host.ResolveGatheredGroupFromEntryLayer(
                         task,
                         entryLayer,
-                    _host._deferredVolumeGroupMember.TryGetValue(task, out string? stalledForGroup) ? stalledForGroup : null)
+                    _host._volumeLedgerState.DeferredVolumeGroupMember.TryGetValue(task, out string? stalledForGroup) ? stalledForGroup : null)
                 ?? ExtractionCoordinator.ResolveCompleteGroupFromDisk(task, entryLayer);
 
             /*
@@ -333,7 +333,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
 
                 string groupUnitKey = groupBaseName + "|" + (groupFamily?.ToString() ?? "?");
 
-                if (!_host._volumeGroupUnits.TryGetValue(groupUnitKey, out VolumeGroupUnit? groupUnit))
+                if (!_host._volumeLedgerState.VolumeGroupUnits.TryGetValue(groupUnitKey, out VolumeGroupUnit? groupUnit))
                 {
                     groupUnit = new VolumeGroupUnit(
                         groupBaseName,
@@ -341,7 +341,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                         groupSourceLayer,
                         firstVolume);
 
-                    _host._volumeGroupUnits[groupUnitKey] = groupUnit;
+                    _host._volumeLedgerState.VolumeGroupUnits[groupUnitKey] = groupUnit;
 
                     _host.AppendLog(
                         "INFO",
@@ -397,7 +397,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                      */
                     task.CurrentPath = firstVolume;
                     task.OutputPath = groupLanding;
-                    _host._stagedGroupOutputPaths[task] = groupLanding;
+                    _host._volumeLedgerState.StagedGroupOutputPaths[task] = groupLanding;
                 }
                 else if (!stagedOrderGroup
                     && groupUnit.SourceLayer.Length > 0
@@ -411,7 +411,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
 
                     task.CurrentPath = firstVolume;
                     task.OutputPath = groupLanding;
-                    _host._stagedGroupOutputPaths[task] = groupLanding;
+                    _host._volumeLedgerState.StagedGroupOutputPaths[task] = groupLanding;
                 }
 
                 /*
@@ -442,7 +442,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                             $"{task.LogName}：这一组已有跟班接管者「{groupUnit.OwnerTaskFileName}」—— "
                             + "这一单不重复开组");
 
-                        _host._volumeDeficitDeferred.Remove(task);
+                        _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
                         task.IsVolumeDeficitDeferred = false;
                         continue;
                     }
@@ -488,7 +488,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                             $"{task.LogName}：这一单这一批已经成功过（内容物已经得到）—— 这一组不再交给它跑第二遍"
                             + "（不重复解压：同一组只解一次）。");
 
-                        _host._volumeDeficitDeferred.Remove(task);
+                        _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
                         task.IsVolumeDeficitDeferred = false;
 
                         continue;
@@ -529,7 +529,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                  * 首卷那一单干（很可能它刚刚已经解成功了）。这一单照旧按"跟班卷"走既有的跳过口径 ——
                  * 改起点会让两单指着同一个文件、把同一份内容解第二遍。
                  */
-                if (_host.IsFirstVolumeOwnedByAnotherTask(task, firstVolume) && !forceGroupOwner)
+                if (_host.VolumeGatherCollect.IsFirstVolumeOwnedByAnotherTask(task, firstVolume) && !forceGroupOwner)
                 {
                     task.CaptureSourceSnapshot();
                 }
@@ -554,7 +554,7 @@ internal sealed class ExtractionDeferredVolumeRechecker
                          * ⛔ 起点改了，但**列表那一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06：
                          * "48MB 在列表里面显示到了 111(4) 那一行"）。只改显示，⛔ 起点口径一个字不动。
                          */
-                        task.ShowUserFileIdentity(firstVolume, ExtractionCoordinator.FindUserOwnFileBesideItsDirectory(task, firstVolume));
+                        task.ShowUserFileIdentity(firstVolume, PieceAdoptionHandler.FindUserOwnFileBesideItsDirectory(task, firstVolume));
                     }
 
                     task.CaptureSourceSnapshot();
@@ -568,8 +568,8 @@ internal sealed class ExtractionDeferredVolumeRechecker
                         task.FileName,
                         task.VolumeInfoText));
 
-                _host._volumeDeficitDeferred.Remove(task);
-                _host._volumeDeficitFinalPass.Add(task);
+                _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
+                _host._volumeLedgerState.VolumeDeficitFinalPass.Add(task);
 
                 /*
                  * ⚠ 2026-10-10 修：**离开名单就得把那个显示/统计事实位一起清掉**——
@@ -603,25 +603,25 @@ internal sealed class ExtractionDeferredVolumeRechecker
                  * 位置就在"那一组齐了 ⇒ 照常跑这一组"这一刻；⛔ 这不是用户的档位设置，
                  * 产品只有完全递归，这里只是第二大步任务位。
                  */
-                _host.RememberVolumeStepTask(task);
+                new ExtractionVolumeStepFacts(_host).RememberVolumeStepTask(task);
 
                 /*
                  * 这一组**其余的片**：内容已经由这一单解出来 ⇒ 记进既有那份"借来用过的源片"账
-                 * （`_consumedVolumeSources`），让它们按**跟班卷**收场
+                 * （`_volumeLedgerState.ConsumedVolumeSources`），让它们按**跟班卷**收场
                  * （`TryResolveConsumedByAnotherTask` 读的就是它；⛔ 不另造第二套判据）。
                  *
                  * 真机第九批 CCCC 的现场：这一档必须也覆盖"批末补判才补上的那一组" ——
                  * 否则同一组里另一单在批末仍然会如实报「分卷缺失」，而内容其实刚刚被这一单解出来了
                  * （用户原话：别在解压过程中就报分卷缺失）。
                  */
-                _host.RememberGroupPiecesConsumedBy(task);
+                _host.VolumeLedger.RememberGroupPiecesConsumedBy(task);
 
                 // 这一组的消费方是谁：同一组别的单在它收尾之前**不落任何结论**（见下面的判据）。
-                _host._groupConsumerByName[FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty)] = task.FileName;
+                _host._volumeLedgerState.GroupConsumerByName[FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty)] = task.FileName;
                 continue;
             }
 
-            string missing = ExtractionCoordinator.DescribeMissingVolumeNames(task);
+            string missing = StalledGroupHandler.DescribeMissingVolumeNames(task);
 
             /*
              * ===== 这一组的内容**已经由本批另一个任务解出来了** ⇒ 按跟班卷收场（2026-10-05 真机第八批）=====

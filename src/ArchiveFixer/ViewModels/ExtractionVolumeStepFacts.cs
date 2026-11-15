@@ -12,9 +12,13 @@ using System.IO;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 批首分卷入口点名 + 入口包/产出链解析 + 第二大步事实位（第 12 块）的真实现；
-/// 从 `ExtractionCoordinator.VolumeStepFacts.cs` 搬出，判据/文案/终态沿用原实现。
-/// 宿主 <see cref="ExtractionCoordinator"/> 只保留调用点兼容的薄转发。
+/// 批首分卷入口点名 + 入口包/产出链解析 + 第二大步事实位（第 12 块）的实现；
+/// 判据/文案/终态沿用原实现。
+///
+/// <para>M5：协调器那一分片（原 <c>ExtractionCoordinator.VolumeStepFacts.cs</c>，内容只剩同签名薄转发）
+/// 已删除 —— 本类是这些入口的**唯一落点**，调用点直接
+/// <c>new ExtractionVolumeStepFacts(coordinator)</c>；⛔ 协调器不再保留同名转发。
+/// 本类除宿主引用外没有自身状态，因此调用点各自新建与共用一份行为一致。</para>
 /// </summary>
 internal sealed class ExtractionVolumeStepFacts
 {
@@ -180,7 +184,7 @@ internal sealed class ExtractionVolumeStepFacts
             return null;
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null || ReferenceEquals(candidate, task))
             {
@@ -291,7 +295,7 @@ internal sealed class ExtractionVolumeStepFacts
     {
         if (task != null)
         {
-            _host.VolumeStepTasksForVolumeLedger.Add(task);
+            _host._volumeLedgerState.VolumeStepTasks.Add(task);
         }
     }
 
@@ -313,7 +317,7 @@ internal sealed class ExtractionVolumeStepFacts
     /// <para>⚠ 没点名 / 传 null ⇒ false（第一大步）。</para>
     /// </summary>
     internal bool IsSecondStepTask(ArchiveTask? task) =>
-        task != null && _host.VolumeStepTasksForVolumeLedger.Contains(task);
+        task != null && _host._volumeLedgerState.VolumeStepTasks.Contains(task);
 
 
     /// <summary>产出方那条链最多追几层（防环、防病态输入；真机这一条链是 3 层）。</summary>

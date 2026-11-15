@@ -7,15 +7,16 @@ using System.Collections.Generic;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 本批账本的**事实存放点**（从 <c>ExtractionCoordinator.VolumeLedgerStep.cs</c> 整块搬出）。
+/// 本批账本的**事实存放点**。
 ///
 /// <para>⛔ 这里只存事实（哪几单欠卷、哪一组谁在解、哪一片由谁吐出、本批动过哪些源名/槽位/暂存目录），
-/// **一条判据都不在这里**：判据与写入点仍在 <see cref="VolumeLedgerHandler"/> 与各步骤里；
-/// 协调器那一分片只留**同名薄转发**（<c>_volumeDeficitDeferred</c> 这些字段名、类型、初始化与搬家前逐字相同）
-/// ⇒ 所有调用点（含别的 partial 与协作类里的 <c>_host._xxx</c>）零改动。</para>
+/// **一条判据都不在这里**：判据与写入点仍在 <see cref="VolumeLedgerHandler"/> 与各步骤里。
+/// 唯一实例住在协调器（<c>ViewModels/ExtractionCoordinator.cs</c> 的
+/// <see cref="ExtractionCoordinator._volumeLedgerState"/>）：各 partial 直接读写它，
+/// 协作类走 <c>_host._volumeLedgerState.Xxx</c>；⛔ 不再为每一本账留同名薄转发。</para>
 ///
 /// <para>为什么单独一个类：这些账本原先全是 <c>ExtractionCoordinator</c> 的实例字段，既被多个 partial
-/// 直接读写、也被协作类通过宿主访问 —— 只有搬成独立状态对象，协调器那一分片才能降到薄转发。</para>
+/// 直接读写、也被协作类通过宿主访问 —— 只有搬成独立状态对象，协调器那一分片才能整份删掉。</para>
 ///
 /// <para>⚠ 并发口径照旧：唯一带锁的账仍是 <see cref="GroupPieceProducersGate"/>（见该属性说明）；
 /// 其余账本的并发读写口径与搬家前逐字相同 —— ⛔ 本类不新增也不减少任何锁或判据。</para>
@@ -98,12 +99,12 @@ internal sealed class VolumeLedgerState
     /// 这一批里"**停在别人那一组**"的那几单 → 停下来的那一片（2026-10-13 困难批 `11111111` 取证）。
     ///
     /// <para><b>为什么要有它</b>：批末那一站问"这一组齐了没"用的是**这一单自己的包基名**
-    /// （`ResolveBatchGroupDirectory`），所以 <c>IsStalledGroupOwnGroup</c> 只放"停的就是自己这一组"的单进名单。
+    /// （`ResolveBatchGroupDirectory`），所以 <c>StalledGroupHandler.IsStalledGroupOwnGroup</c> 只放"停的就是自己这一组"的单进名单。
     /// 可困难批的形状是：**入口包那一组的每一片各自被另一条链解出来** ——
     /// 逐字（`11111111` 运行的判据输入）：`入口包=222-L2.part1.rar，产出它的那一单=判不出`
     /// ⇒ `推不出「这一组该拼到哪一层」` ⇒ `接片一个字节都不动`；而产出这一片的单叫 `222-W0-1.zip`
     /// （族与基名都对不上 `222-L2`）⇒ 老的闸门把它挡在名单外 ⇒ **运行期实测**
-    /// `RecheckDeferredVolumeDeficits` 那一刻 `_volumeDeficitDeferred.Count = 0`
+    /// `RecheckDeferredVolumeDeficits` 那一刻 <c>VolumeDeficitDeferred.Count = 0</c>
     /// ⇒ `批末重判` 一次都没出现 ⇒ 三片永远散在三条链的落点里 ⇒ ①「内容物解出来」红。</para>
     ///
     /// <para>存的就是"批末该拿谁去问那一组"：那一片自己的路径（它的基名 = 那一组的基名，
@@ -255,7 +256,7 @@ internal sealed class VolumeLedgerState
     /// <c>DeferredVolumeStatusTests.未识别的东西_只跳过_机器终态必须收口不许算未处理</c> 钉着这条），
     /// 这里只是"记一笔"，好在批末把它们**升级**成「分卷缺失」（当严格判据成立时）。</para>
     ///
-    /// <para>⛔ 与"缺卷名单"（<c>_volumeDeficitDeferred</c>）**不是一回事**：那一份装的是
+    /// <para>⛔ 与"缺卷名单"（<see cref="VolumeDeficitDeferred"/>）**不是一回事**：那一份装的是
     /// "已确认是分卷、只是缺片"的单；装错了会把纯文本文件改判成「分卷缺失」（第一版就是这么错的）。</para>
     /// </summary>
     internal HashSet<ArchiveTask> UnrecognizedMaybePiece { get; } = new();

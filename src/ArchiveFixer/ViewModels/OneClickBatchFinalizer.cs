@@ -56,7 +56,7 @@ internal sealed class OneClickBatchFinalizer
     /// ① 链没跑完（停止后续 / 撞轮数上限）→ 取消语义，源包留在原地；
     /// ② 没有一个源包需要补搬 → 什么都不做（连日志都不写，免得每批都刷一行废话）；
     /// ③ 具体的判据不成立（根任务没成功 / 校验没过 / 分卷不完整 / 那个目录里没有内容物）→
-    ///    由 <see cref="ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync"/> 逐条说清原因。
+    ///    由 <see cref="SourceHandler.CompleteRootSourcePackagesAfterChainAsync"/> 逐条说清原因。
     /// </para>
     /// </summary>
     internal async Task CompleteRootSourcePackagesAsync(
@@ -117,7 +117,7 @@ internal sealed class OneClickBatchFinalizer
          * （正是他真机报的那个现象；形状 B 的包因为 pending > 0 反而照常生效，
          * 所以这个缺陷只在"第一层就出内容物"的包上露出来）。
          */
-        await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await _extractionCoordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             rootTasks,
             chainTasks,
             cancellationToken: default,
@@ -138,10 +138,10 @@ internal sealed class OneClickBatchFinalizer
 
         _batchFinalized = true;
 
-        _extractionCoordinator.CleanupAllVolumeStepEntryDirectories();
-        _extractionCoordinator.CleanupGroupEntryShellsFor(Tasks);
-        _extractionCoordinator.RestoreKeepInPlaceSourceNames();
-        _extractionCoordinator.PurgeRedundantPieceAliases();
+        _extractionCoordinator.VolumeStepPreflight.CleanupAllVolumeStepEntryDirectories();
+        _extractionCoordinator.VolumeStepPreflight.CleanupGroupEntryShellsFor(Tasks);
+        _extractionCoordinator.SourceProtection.RestoreKeepInPlaceSourceNames();
+        _extractionCoordinator.PieceAdoption.PurgeRedundantPieceAliases();
 
         // 源快照删完、片名收完，再把这一趟用过的每个工作区根收一遍空壳（根下无文件才删）。
         _extractionCoordinator.CleanupRunWorkspaceShells();
@@ -471,7 +471,7 @@ internal sealed class OneClickBatchFinalizer
         return SecondStepEntryRootResolver.Resolve(
             group,
             Tasks,
-            _extractionCoordinator.FirstStepLedger,
+            _extractionCoordinator.VolumeHandoff.FirstStepLedger,
             AppendLog);
     }
 

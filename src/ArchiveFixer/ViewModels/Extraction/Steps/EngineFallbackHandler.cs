@@ -24,10 +24,12 @@ using System.Windows;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 引擎回退与暂存校验（从 `ExtractionCoordinator.EngineFallbackStep.cs` 搬出）：结论里点名哪个引擎 /
-/// 兜底命中后的校验收尾 / 产物校验 / 候选残留清理 / 暂存目录准备 / 上次回落留下的抠取副本清理。
-/// ⛔ 判据、日志文案与顺序、await 顺序逐字沿用原实现；协调器只保留同名薄转发、一处最小 internal
-/// 访问器与嵌套类型 <c>StageProductVerification</c>（类型身份不变）。
+/// 引擎回退与暂存校验：结论里点名哪个引擎 / 兜底命中后的校验收尾 / 产物校验 / 候选残留清理 /
+/// 暂存目录准备 / 上次回落留下的抠取副本清理。
+///
+/// <para>调用点直接 <c>new EngineFallbackHandler(coordinator)</c>：协调器不再为这些入口保留薄转发，
+/// 原 <c>ExtractionCoordinator.EngineFallbackStep.cs</c> 已整块并入本文件。⛔ 判据、日志文案与顺序、
+/// await 顺序与搬出前逐字一致。</para>
 /// </summary>
 internal sealed class EngineFallbackHandler
 {
@@ -88,7 +90,7 @@ internal sealed class EngineFallbackHandler
          * 先校验（⚠ 这里**还不许**动 task.Status / PasswordStatus / ErrorMessage）：
          * 判否时那些字段必须保持调用方原来那条密码类结论，一个字都不许被"成功"盖掉。
          */
-        ExtractionCoordinator.StageProductVerification stage = await VerifyStageProductsAsync(
+        StageProductVerification stage = await VerifyStageProductsAsync(
                 task,
                 engineArchivePath,
                 password,
@@ -120,7 +122,7 @@ internal sealed class EngineFallbackHandler
         // 与循环里同一处：密码成功记录挂源文件，不挂工作区里的临时文件。
         _host._passwordService.RecordPasswordSuccess(task.CurrentPath, password);
 
-        bool conclusionStands = await _host.PostProcessSuccessAsync(
+        bool conclusionStands = await new PostProcessSuccessHandler(_host).PostProcessSuccessAsync(
                 task,
                 engineArchivePath,
                 password,
@@ -160,7 +162,7 @@ internal sealed class EngineFallbackHandler
     ///
     /// <para><b>只允许在后台线程上跑</b>：列目录是引擎进程调用，量产物是整棵目录树的磁盘活。</para>
     /// </summary>
-    internal async Task<ExtractionCoordinator.StageProductVerification> VerifyStageProductsAsync(
+    internal async Task<StageProductVerification> VerifyStageProductsAsync(
         ArchiveTask task,
         string engineArchivePath,
         string password,
@@ -183,7 +185,7 @@ internal sealed class EngineFallbackHandler
             () => OutputVerifier.Verify(stageDirectory, list),
             cancellationToken);
 
-        return new ExtractionCoordinator.StageProductVerification(list, verification);
+        return new StageProductVerification(list, verification);
     }
 
     /// <summary>
@@ -312,7 +314,7 @@ internal sealed class EngineFallbackHandler
          * 只按 `.zip` 找 ⇒ 上一次被按内容改名成 `.rar` 的那一份永远清不掉，
          * 定稿时会被当成本任务的其余物搬进用户目录（正是这个方法要防的那件事）。
          */
-        var candidates = new List<string> { _host.BuildEmbeddedArchivePathForEngineFallback(task) };
+        var candidates = new List<string> { new EmbeddedZipHandler(_host).BuildEmbeddedArchivePath(task) };
 
         foreach (string extension in new[] { "7z", "rar", "zip" })
         {
@@ -352,5 +354,21 @@ internal sealed class EngineFallbackHandler
                 "WARN",
                 $"{task.LogName}：上次留下的抠取副本没清掉（{ex.Message}），它会在定稿时被当成其余物搬走。");
         }
+    }
+
+    /// <summary>一个候选的产物校验结论（清单 + 校验，见 <see cref="VerifyStageProductsAsync"/>）。</summary>
+    internal sealed class StageProductVerification
+    {
+        public StageProductVerification(ArchiveListResult list, OutputVerificationResult verification)
+        {
+            List = list;
+            Verification = verification;
+        }
+
+        /// <summary>这一轮列目录拿到的清单（定稿那一步复用，避免再列一次）。</summary>
+        public ArchiveListResult List { get; }
+
+        /// <summary>产物校验结论（判否时 <c>FailureMessage</c> 里带着预期与实际的三个数字）。</summary>
+        public OutputVerificationResult Verification { get; }
     }
 }

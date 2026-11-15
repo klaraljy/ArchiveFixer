@@ -41,7 +41,7 @@ namespace ArchiveFixer.Tests;
 /// 真 <see cref="SevenZipEngine"/>、真 <see cref="MainViewModel"/> 与真的解压管线。</para>
 ///
 /// <para><b>⛔ 两条自我约束</b>：① 绝不往**用户的系统回收站**里塞东西 —— 回收站那一档全部走注入的假执行器
-/// （<c>ExtractionCoordinator.RestDeleteExecutor</c> 这个测试缝）；② 只在临时目录里动真实文件系统，
+/// （<c>ExtractionCoordinator.Source.RestDeleteExecutor</c> 这个测试缝）；② 只在临时目录里动真实文件系统，
 /// <see cref="Dispose"/> 里清干净。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
@@ -586,7 +586,7 @@ public class ChainLayerReclaimTests : IDisposable
         var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
 
         var sourceDeletes = new RecordingDeleteFileSystem(_root);
-        extraction.SourcePackageDeleteFileSystem = sourceDeletes;
+        extraction.Source.SourcePackageDeleteFileSystem = sourceDeletes;
 
         // 默认档下成功的任务在日志里只留一行，而本类要断言的"每层都说过它回收了"正是那些中间行。
         extraction.KeepTaskDetailInLog = true;
@@ -963,7 +963,7 @@ public class ChainLayerReclaimTests : IDisposable
 
         var sourceDeletes = new RecordingDeleteFileSystem(runRoot);
 
-        extraction.SourcePackageDeleteFileSystem = sourceDeletes;
+        extraction.Source.SourcePackageDeleteFileSystem = sourceDeletes;
         extraction.KeepTaskDetailInLog = true;
 
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());

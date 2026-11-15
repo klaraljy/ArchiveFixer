@@ -24,9 +24,14 @@ using System.Windows;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 分卷账本记账（从 `ExtractionCoordinator.VolumeLedgerStep.cs` 搬出）：过路层其余物/组片消费/
-/// 缺卷延期/测试钩子。
-/// ⛔ 判据、日志顺序、账本写入点逐字沿用原实现；协调器只保留同名薄转发与三处最小 internal 访问器。
+/// 分卷账本记账：过路层其余物/组片消费/缺卷延期/测试钩子。
+///
+/// <para>M5 类型总行数治理：协调器那一分片 <c>ExtractionCoordinator.VolumeLedgerStep.cs</c> 已整份删除 ——
+/// 本类是这些入口的**唯一落点**，调用点直接 <c>host.VolumeLedger.Xxx(...)</c>（测试同样）。
+/// 账本事实住在 <see cref="VolumeLedgerState"/>（宿主字段 <c>_volumeLedgerState</c>），
+/// ⛔ 协调器不再留任何同名薄转发或 internal 访问器。</para>
+///
+/// <para>⛔ 判据、日志顺序、账本写入点逐字沿用原实现。</para>
 /// </summary>
 internal sealed class VolumeLedgerHandler
 {
@@ -40,7 +45,7 @@ internal sealed class VolumeLedgerHandler
     /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
     internal void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
     {
-        foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _host.PendingPassThroughRestForVolumeLedger)
+        foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _host._volumeLedgerState.PendingPassThroughRest)
         {
             if (ReferenceEquals(item.Producer, producer))
             {
@@ -48,7 +53,7 @@ internal sealed class VolumeLedgerHandler
             }
         }
 
-        _host.PendingPassThroughRestForVolumeLedger.Add((producer, consumer, groupBaseName));
+        _host._volumeLedgerState.PendingPassThroughRest.Add((producer, consumer, groupBaseName));
     }
 
     /// <summary>
@@ -58,12 +63,12 @@ internal sealed class VolumeLedgerHandler
     /// </summary>
     internal void RetryPendingPassThroughRestPurges()
     {
-        foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _host.PendingPassThroughRestForVolumeLedger.ToList())
+        foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _host._volumeLedgerState.PendingPassThroughRest.ToList())
         {
             if (string.IsNullOrWhiteSpace(item.Producer.RestDirectoryPath)
                 || !Directory.Exists(item.Producer.RestDirectoryPath))
             {
-                _host.PendingPassThroughRestForVolumeLedger.RemoveAll(pending => ReferenceEquals(pending.Producer, item.Producer));
+                _host._volumeLedgerState.PendingPassThroughRest.RemoveAll(pending => ReferenceEquals(pending.Producer, item.Producer));
                 continue;
             }
 
@@ -84,11 +89,11 @@ internal sealed class VolumeLedgerHandler
          * 组一旦不是跨盘 ZIP 族（`X.partN.rar` / `X.7z.001` / `X.r00`），写死的引用名一个成员都匹配不上
          * ⇒ 这一组"借来用过的源片"账**一条都记不上** ⇒ 那些片永远不会按跟班卷收场（2026-10-11 统一）。
          */
-        string tailName = ExtractionCoordinator.ResolveGroupReferenceName(
+        string tailName = VolumeGatherCollectHandler.ResolveGroupReferenceName(
             consumer,
             FileNameHelper.GetArchiveBaseName(consumer.CurrentPath));
 
-        foreach (ArchiveTask other in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask other in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (other == null || ReferenceEquals(other, consumer))
             {
@@ -103,7 +108,7 @@ internal sealed class VolumeLedgerHandler
                 continue;
             }
 
-            _host._consumedVolumeSources[path] = consumer.FileName;
+            _host._volumeLedgerState.ConsumedVolumeSources[path] = consumer.FileName;
         }
     }
 
@@ -118,7 +123,7 @@ internal sealed class VolumeLedgerHandler
             return;
         }
 
-        _host._consumedVolumeSources[piecePath] = consumerName;
+        _host._volumeLedgerState.ConsumedVolumeSources[piecePath] = consumerName;
     }
 
     /// <summary>
@@ -138,9 +143,9 @@ internal sealed class VolumeLedgerHandler
             return;
         }
 
-        if (!_host._volumeDeficitDeferred.Contains(task))
+        if (!_host._volumeLedgerState.VolumeDeficitDeferred.Contains(task))
         {
-            _host._volumeDeficitDeferred.Add(task);
+            _host._volumeLedgerState.VolumeDeficitDeferred.Add(task);
         }
 
         /*
@@ -151,7 +156,7 @@ internal sealed class VolumeLedgerHandler
          */
         if (!string.IsNullOrWhiteSpace(stalledMemberPath))
         {
-            _host._deferredVolumeGroupMember[task] = stalledMemberPath!;
+            _host._volumeLedgerState.DeferredVolumeGroupMember[task] = stalledMemberPath!;
         }
 
         task.IsVolumeDeficitDeferred = true;
@@ -217,24 +222,24 @@ internal sealed class VolumeLedgerHandler
     /// </summary>
     internal void ResetBatchLedgersForTests()
     {
-        _host._volumeDeficitDeferred.Clear();
-        _host._triedVolumeGroupSignatures.Clear();
-        _host._gatheredUserSourcePieces.Clear();
-        _host._deferredVolumeGroupMember.Clear();
-        _host._byteBudgetLinkedSources.Clear();
-        _host._scoredSlotAttempts.Clear();
-        _host._scoredSlotLinks.Clear();
-        _host._volumeDeficitFinalPass.Clear();
-        _host.ClearGroupPieceProducers();
-        _host._groupConsumerByName.Clear();
-        _host._volumeGroupUnits.Clear();
-        _host._consumedVolumeSources.Clear();
-        _host._producerSourcesCollected.Clear();
-        _host._adoptedLandedPieces.Clear();
-        _host._groupLayerByBaseName.Clear();
-        _host.VolumeStepTasksForVolumeLedger.Clear();
-        _host._volumeGroupEntriesThisBatch.Clear();
-        _host.SuffixRenamedSourcesForVolumeLedger.Clear();
+        _host._volumeLedgerState.VolumeDeficitDeferred.Clear();
+        _host.VolumeHandoff.TriedVolumeGroupSignatures.Clear();
+        _host.VolumeHandoff.GatheredUserSourcePieces.Clear();
+        _host._volumeLedgerState.DeferredVolumeGroupMember.Clear();
+        _host._volumeLedgerState.ByteBudgetLinkedSources.Clear();
+        _host._volumeLedgerState.ScoredSlotAttempts.Clear();
+        _host._volumeLedgerState.ScoredSlotLinks.Clear();
+        _host._volumeLedgerState.VolumeDeficitFinalPass.Clear();
+        _host.PieceAdoption.ClearGroupPieceProducers();
+        _host._volumeLedgerState.GroupConsumerByName.Clear();
+        _host._volumeLedgerState.VolumeGroupUnits.Clear();
+        _host._volumeLedgerState.ConsumedVolumeSources.Clear();
+        _host._volumeLedgerState.ProducerSourcesCollected.Clear();
+        _host._volumeLedgerState.AdoptedLandedPieces.Clear();
+        _host._volumeLedgerState.GroupLayerByBaseName.Clear();
+        _host._volumeLedgerState.VolumeStepTasks.Clear();
+        _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
+        _host._volumeLedgerState.SuffixRenamedSources.Clear();
     }
 
     /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -245,7 +250,7 @@ internal sealed class VolumeLedgerHandler
             return;
         }
 
-        _host._consumedVolumeSources[piecePath] = consumerName;
+        _host._volumeLedgerState.ConsumedVolumeSources[piecePath] = consumerName;
     }
 
     /// <summary>单测用：把"这一组谁在解"记进既有那份账。</summary>
@@ -256,7 +261,7 @@ internal sealed class VolumeLedgerHandler
             return;
         }
 
-        _host._groupConsumerByName[baseName] = consumerName;
+        _host._volumeLedgerState.GroupConsumerByName[baseName] = consumerName;
     }
 
     /// <summary>单测用：把"这一单吐出了这一组的一片"记进既有那份账（写入点唯一 = <see cref="RememberGroupPieceProducer"/>）。</summary>
@@ -265,7 +270,7 @@ internal sealed class VolumeLedgerHandler
 
     /// <summary>
     /// 单测用：把"**产出方那一份已经落地的片**被接进了这一组"记进这本账
-    /// （写入点唯一 = <see cref="RememberAdoptedLandedPiece"/>，⛔ 判据一条都不复制：
+    /// （写入点唯一 = <see cref="PieceAdoptionHandler.RememberAdoptedLandedPiece"/>，⛔ 判据一条都不复制：
     /// 落点根、过程物目录、源包路径三道闸门照旧全部生效）。
     ///
     /// <para>⚠ <paramref name="adoptionOwner"/> = **接片那一刻调用方给的那一单**，⛔ 不等于产出方：
@@ -276,7 +281,7 @@ internal sealed class VolumeLedgerHandler
         ArchiveTask adoptionOwner,
         string groupBaseName,
         string piecePath)
-        => _host.RememberAdoptedLandedPiece(piecePath, adoptionOwner, groupBaseName, renamedInPlace: false);
+        => _host.PieceAdoption.RememberAdoptedLandedPiece(piecePath, adoptionOwner, groupBaseName, renamedInPlace: false);
 
     /// <summary>单测用：把一单放进"缺卷留到最后再判"那份名单（写入点唯一 = <see cref="RecordDeferredVolumeDeficit"/>）。</summary>
     internal void RecordDeferredVolumeDeficitForTests(ArchiveTask task)
@@ -288,7 +293,7 @@ internal sealed class VolumeLedgerHandler
 
         // ⛔ 走**真实那条路**（同一个出口）：批首记缺口 = 中性状态 + 缺口写进错误信息 + 一条日志。
         // 只把任务塞进名单的旧写法会让"批中间顶着红色的分卷缺失"这条口径**没有守门**。
-        RecordDeferredVolumeDeficit(task, ExtractionCoordinator.DescribeMissingVolumeNames(task));
+        RecordDeferredVolumeDeficit(task, StalledGroupHandler.DescribeMissingVolumeNames(task));
     }
 
     /// <summary>这本账现在有几组（并发安全）。</summary>
@@ -296,9 +301,9 @@ internal sealed class VolumeLedgerHandler
     {
         get
         {
-            lock (_host._groupPieceProducersGate)
+            lock (_host._volumeLedgerState.GroupPieceProducersGate)
             {
-                return _host._groupPieceProducers.Count;
+                return _host._volumeLedgerState.GroupPieceProducers.Count;
             }
         }
     }

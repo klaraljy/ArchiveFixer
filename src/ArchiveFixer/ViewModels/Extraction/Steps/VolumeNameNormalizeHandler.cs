@@ -13,17 +13,14 @@ namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 批首改名归一 + 改后任务表同步（原 <c>ExtractionCoordinator.VolumeNameNormalizeStep.cs</c> 的全部实现）——
-/// 按职责整块搬到本协作类，宿主那一分片只留同签名薄转发。
+/// M5 类型总行数治理：宿主那一分片的同签名薄转发已删除，四个成员只在本类保留一份实现。
 ///
 /// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、文案、任务表同步范围与原来逐字一致；
-/// ⛔ 调用点一处未改（<c>TaskActionCoordinator</c> / <c>ExtractionCandidateLoop</c> / 其它 partial /
-/// 多个 Handler / 用例仍按原签名调用）。</para>
+/// 调用点（<c>TaskActionCoordinator</c> / <c>ExtractionCandidateLoop</c> / 各 Handler / 用例）
+/// 直接按原签名调用本类，不再经过宿主静态转发。</para>
 ///
-/// <para>⚠ 诊断日志里的"调用点"字段：宿主转发保留
-/// <c>CallerFilePath</c> / <c>CallerLineNumber</c> / <c>CallerMemberName</c>，
-/// 所以**本类之外**的调用点报进日志的文件与行号与搬家前一个字符都不差；
-/// 只有本类内那一处 <c>AppendLog</c> 的来源文件从 <c>…VolumeNameNormalizeStep.cs</c> 变成
-/// <c>…VolumeNameNormalizeHandler.cs</c>（成员名仍是 <c>SyncTasksAfterVolumeRename</c>，级别与文案不变）。</para>
+/// <para>⚠ 诊断日志里那一处 <c>AppendLog</c> 的来源文件是 <c>…VolumeNameNormalizeHandler.cs</c>
+/// （成员名仍是 <c>SyncTasksAfterVolumeRename</c>，级别与文案不变）。</para>
 /// </summary>
 internal sealed class VolumeNameNormalizeHandler
 {

@@ -105,7 +105,7 @@ internal sealed class ExtractionBatchEntry
             }
         }
 
-        return await _host.ConfirmBatchRemindersAsync(selectedTasks);
+        return await _host.BatchReminders.ConfirmBatchRemindersAsync(selectedTasks);
     }
 
     internal void BeginBatch(
@@ -116,7 +116,7 @@ internal sealed class ExtractionBatchEntry
         _host.IsBusy = true;
         _host.IsStopping = false;
         _host._isExtracting = true;
-        _host.RememberUserSourcePaths(selectedTasks);
+        _host.PieceAdoption.RememberUserSourcePaths(selectedTasks);
 
         // 本批的密码失败登记从零开始：上一批的残留不能让这一批多弹一次提示。
         _host.ClearPasswordFailures();
@@ -158,13 +158,13 @@ internal sealed class ExtractionBatchEntry
         }
 
         // 「完成后打开输出目录」整批只开一次；上一批开过不算这一批的（见 _outputFolderOpenedThisBatch）。
-        _host.ResetBatchOutputFolderState();
+        _host.BatchReminders.ResetBatchOutputFolderState();
 
         // 手动密码只对**本次运行**有效（不变量 5：绝不落盘）：批开始时重新问一次、重新记一次。
         _host.ResetManualBatchPassword();
 
         // 空间规划与本批记账清零（见 finally 里的说明：清在**批首**，自测才读得到这一批的证据）。
-        _host.ResetSpacePlanningState();
+        _host.Schedule.ResetSpacePlanningState();
 
         /*
          * 「缺卷留到最后再判」那份名单的清空点（用户 2026-10-05 口径 2）。
@@ -175,32 +175,32 @@ internal sealed class ExtractionBatchEntry
          */
         if (!continueDeferredVolumeDeficits)
         {
-            _host._volumeDeficitDeferred.Clear();
-            _host._triedVolumeGroupSignatures.Clear();
-            _host._gatheredUserSourcePieces.Clear();
-            _host._deferredVolumeGroupMember.Clear();
-            _host._byteBudgetLinkedSources.Clear();
-            _host._scoredSlotAttempts.Clear();
-            _host._scoredSlotLinks.Clear();
-            _host._scoredSlotAttempts.Clear();
-            _host._scoredSlotLinks.Clear();
-            _host._consumedVolumeSources.Clear();
-            _host._groupConsumerByName.Clear();
-            _host._volumeGroupUnits.Clear();
-            _host.ClearGroupPieceProducers();
-            _host._producerSourcesCollected.Clear();
-            _host._adoptedLandedPieces.Clear();
-            _host._groupLayerByBaseName.Clear();
-            _host._volumeGroupEntriesThisBatch.Clear();
-            _host._volumeGroupEntriesThisBatch.Clear();
-            _host._volumeDeficitFinalPass.Clear();
+            _host._volumeLedgerState.VolumeDeficitDeferred.Clear();
+            _host.VolumeHandoff.TriedVolumeGroupSignatures.Clear();
+            _host.VolumeHandoff.GatheredUserSourcePieces.Clear();
+            _host._volumeLedgerState.DeferredVolumeGroupMember.Clear();
+            _host._volumeLedgerState.ByteBudgetLinkedSources.Clear();
+            _host._volumeLedgerState.ScoredSlotAttempts.Clear();
+            _host._volumeLedgerState.ScoredSlotLinks.Clear();
+            _host._volumeLedgerState.ScoredSlotAttempts.Clear();
+            _host._volumeLedgerState.ScoredSlotLinks.Clear();
+            _host._volumeLedgerState.ConsumedVolumeSources.Clear();
+            _host._volumeLedgerState.GroupConsumerByName.Clear();
+            _host._volumeLedgerState.VolumeGroupUnits.Clear();
+            _host.PieceAdoption.ClearGroupPieceProducers();
+            _host._volumeLedgerState.ProducerSourcesCollected.Clear();
+            _host._volumeLedgerState.AdoptedLandedPieces.Clear();
+            _host._volumeLedgerState.GroupLayerByBaseName.Clear();
+            _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
+            _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
+            _host._volumeLedgerState.VolumeDeficitFinalPass.Clear();
 
             /*
              * 只留交接账（第一大步唯一允许的分卷动作 = **登记**）；
-             * `_volumeStepTasks` / `ResetVolumeStepGroupWork`（第二大步的任务位与收片账）已随第二大步停用，
+             * `_volumeLedgerState.VolumeStepTasks`（第二大步的任务位）已随第二大步停用，
              * 不再在第一大步批首清理。
              */
-            _host.ClearVolumeHandoffLedger();
+            _host.VolumeHandoff.Ledger.ClearVolumeHandoffLedger();
             _host.ResetVolumeGroupService();
         }
     }
@@ -301,8 +301,9 @@ internal sealed class ExtractionBatchEntry
          * 后面跟的工作区根正是产出链那一层（`…\in\111\111\.ArchiveFixer.work`），
          * 当年那个 `…\EEEE\111(4)\111\.ArchiveFixer.work` 没再现。
          */
+        ExtractionVolumeStepFacts volumeStepFacts = new(_host);
         _host._pathService.GroupProducerEntryResolver =
-            (task, options, archivePath) => _host.ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
+            (task, options, archivePath) => volumeStepFacts.ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
 
         _host._pathService.DiagnosticLog = message => _host.AppendLog("WARN", message);
 
@@ -318,9 +319,9 @@ internal sealed class ExtractionBatchEntry
          * 一键档的人常常已经走开，手动档他正坐在屏幕前看列表（任务状态会当场变红）。
          */
         _host._oneClickThisBatch = oneClickRun;
-        _host._spaceBlockedNoticeShown = false;
+        _host.Schedule.SpaceBlockedNoticeShown = false;
 
-        maxParallel = _host.ResolveMaxParallel(selectedTasks, out fullSpeed);
+        maxParallel = _host.BatchReminders.ResolveMaxParallel(selectedTasks, out fullSpeed);
 
         if (!_host._spaceTightPolicy.Enabled)
         {
@@ -403,7 +404,8 @@ internal sealed class ExtractionBatchEntry
                  * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
                  * 空间已经回来了，那个小包还在等"）。
                  */
-                _host._spaceLedger!.RefreshAvailable(_host.ProbeAvailableSpace(_host.ResolveSpaceProbePath(selectedTasks)));
+                _host.Schedule.SpaceLedger!.RefreshAvailable(
+                    _host.Schedule.ProbeAvailableSpace(_host.Schedule.ResolveSpaceProbePath(selectedTasks)));
 
                 for (int i = 0; i < spaceWaiting.Count;)
                 {
@@ -414,7 +416,7 @@ internal sealed class ExtractionBatchEntry
 
                     (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
 
-                    SpaceGateDecision retry = _host._spaceLedger.TryReserve(
+                    SpaceGateDecision retry = _host.Schedule.SpaceLedger.TryReserve(
                         waitingItem.RequiredBytes,
                         waitingItem.Estimate.ReclaimableBytes);
 
@@ -424,9 +426,9 @@ internal sealed class ExtractionBatchEntry
                         continue;
                     }
 
-                    ScheduledTaskRuntime waitingRuntime = _host.GetOrCreateRuntime(waitingTask);
+                    ScheduledTaskRuntime waitingRuntime = _host.Schedule.GetOrCreateRuntime(waitingTask);
                     waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
-                    waitingRuntime.AvailableBeforeStart = _host._spaceLedger.AvailableBytes;
+                    waitingRuntime.AvailableBeforeStart = _host.Schedule.SpaceLedger.AvailableBytes;
 
                     spaceWaiting.RemoveAt(i);
 

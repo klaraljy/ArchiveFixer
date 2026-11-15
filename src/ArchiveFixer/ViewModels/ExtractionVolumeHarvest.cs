@@ -45,8 +45,8 @@ internal sealed class ExtractionVolumeHarvest
     ///
     /// <para>门槛与执行体与 <see cref="PurgeGroupLandedPieces"/> **逐条同一套**：
     /// 删除档不是「不动」/ 未取消 / 这一单完成且校验通过 / 可证完整（L4 唯一出口）/ 没命中「内容物保留关键词」/
-    /// ⛔ **用户导入的原包**一个字节都不碰（红线出口 <see cref="_host.IsUserImportedSourcePath"/> ——
-    /// 这一档**不能**用宽尺子 <see cref="IsAnyTaskSourcePath"/>，理由见那个方法的说明）；
+    /// ⛔ **用户导入的原包**一个字节都不碰（红线出口 <see cref="PieceAdoptionHandler.IsUserImportedSourcePath"/> ——
+    /// 这一档**不能**用宽尺子 <see cref="PieceAdoptionHandler.IsAnyTaskSourcePath"/>，理由见那个方法的说明）；
     /// 删除动作仍只有 <see cref="Storage.RecycleBinService"/> 一个出口。</para>
     /// </summary>
     /// <param name="entryPath">这一组的**入口包**路径（`RoundProductClassifier.VolumeEntries` 里那一条）。</param>
@@ -65,13 +65,13 @@ internal sealed class ExtractionVolumeHarvest
             string directory = Path.GetDirectoryName(entryPath) ?? string.Empty;
 
             if (directory.Length > 0
-                && !_host._volumeGroupEntriesThisBatch.Any(
+                && !_host._volumeLedgerState.VolumeGroupEntriesThisBatch.Any(
                     item => string.Equals(item.Directory, directory, StringComparison.OrdinalIgnoreCase)
                             && LegacyVolumeNames.BelongsToSameGroup(
                                 item.ReferenceName,
                                 FileNameHelper.GetFileName(entryPath))))
             {
-                _host._volumeGroupEntriesThisBatch.Add((directory, FileNameHelper.GetFileName(entryPath)));
+                _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Add((directory, FileNameHelper.GetFileName(entryPath)));
             }
         }
 
@@ -96,7 +96,7 @@ internal sealed class ExtractionVolumeHarvest
     {
         var plans = new List<(ArchiveTask Consumer, List<string> Targets)>();
 
-        foreach ((string Directory, string ReferenceName) group in _host._volumeGroupEntriesThisBatch.ToList())
+        foreach ((string Directory, string ReferenceName) group in _host._volumeLedgerState.VolumeGroupEntriesThisBatch.ToList())
         {
             (ArchiveTask Consumer, List<string> Targets)? plan =
                 PlanHarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
@@ -131,7 +131,7 @@ internal sealed class ExtractionVolumeHarvest
                 }
             }
 
-            IReadOnlyList<string> roots = _host.EnumerateSplitGateArtifactRoots(consumer, targets);
+            IReadOnlyList<string> roots = _host.Source.EnumerateSplitGateArtifactRoots(consumer, targets);
 
             if (roots.Count == 0)
             {
@@ -203,7 +203,7 @@ internal sealed class ExtractionVolumeHarvest
         // 这一组此刻在那**一层**里的那几份（当场按族尺子重新认，⛔ 不用记下来的旧路径）。
         var members = new List<string>();
 
-        foreach (string member in ExtractionCoordinator.CollectVolumeFilesInDirectory(directory))
+        foreach (string member in VolumeRepairHandler.CollectVolumeFilesInDirectory(directory))
         {
             if (File.Exists(member)
                 && LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(member), referenceName))
@@ -222,7 +222,7 @@ internal sealed class ExtractionVolumeHarvest
 
         foreach (string member in members)
         {
-            ArchiveTask? owner = _host.FindTaskByPath(member);
+            ArchiveTask? owner = _host.VolumeGatherCollect.FindTaskByPath(member);
 
             if (owner != null
                 && owner.Outcome == TaskOutcome.Succeeded
@@ -267,7 +267,7 @@ internal sealed class ExtractionVolumeHarvest
         ContentKeepRules keepRules = ContentKeepRules.FromSettings(_host.Settings);
         var targets = new List<string>();
 
-        foreach (string path in ExtractionCoordinator.CollectVolumeFilesInDirectory(directory))
+        foreach (string path in VolumeRepairHandler.CollectVolumeFilesInDirectory(directory))
         {
             if (!File.Exists(path))
             {
@@ -292,7 +292,7 @@ internal sealed class ExtractionVolumeHarvest
                 continue;
             }
 
-            if (_host.IsUserImportedSourcePath(path))
+            if (_host.PieceAdoption.IsUserImportedSourcePath(path))
             {
                 // 「判不出 / 跳过」必须把判据输入写进日志：这一档原来全静默，正是它把 ③ 藏了两轮。
                 _host.AppendLog(
@@ -332,13 +332,13 @@ internal sealed class ExtractionVolumeHarvest
             return;
         }
 
-        // 并发写：见 `_host._groupPieceProducersGate` 的说明（这里就是那个栈顶）。
-        lock (_host._groupPieceProducersGate)
+        // 并发写：见 `_host._volumeLedgerState.GroupPieceProducersGate` 的说明（这里就是那个栈顶）。
+        lock (_host._volumeLedgerState.GroupPieceProducersGate)
         {
-            if (!_host._groupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? producers))
+            if (!_host._volumeLedgerState.GroupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? producers))
             {
                 producers = new List<(ArchiveTask Task, string PieceName)>();
-                _host._groupPieceProducers[baseName] = producers;
+                _host._volumeLedgerState.GroupPieceProducers[baseName] = producers;
             }
 
             if (!producers.Any(item => ReferenceEquals(item.Task, owner)))

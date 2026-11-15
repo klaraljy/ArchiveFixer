@@ -222,7 +222,7 @@ internal sealed class RecursiveLayerReclaimHandler
          *    被重复解出来**（残留出现 `pack111-L4.rarzz\pack111-L0\444(1).mp4`、`444(2).mp4`）
          *    ⇒ 逐层"搬"会让后续那一层的产物跟踪按路径找不到原件；
          * ③ 而"用完了就没了"（永久删）逐层做没问题 ⇒ 钩子的动作面**只有删**，
-         *    记账那一半（`_chainInnerLayerInputs`）交给链尾。
+         *    记账那一半（`Source.ChainInnerLayerInputs`）交给链尾。
          *
          * ⛔ 2026-10-15：这一位现在**不再跟档位联动**（成功链的过程物一律当场永久删，
          * 见 `PrepareRestHandlingForBatch`）。它仍然是"要不要挂钩子"的唯一判据：
@@ -272,8 +272,8 @@ internal sealed class RecursiveLayerReclaimHandler
             .Where(file => !string.IsNullOrWhiteSpace(file)
                 && !_host.IsAnyTaskOriginalPathForRecursiveLayerReclaim(file)
                 && !_host.IsAnyTaskOriginalIdentityForRecursiveLayerReclaim(file)
-                && !_host.IsUserImportedSourcePath(file)
-                && !_host._extractionContentGraph.IsLeased(file))
+                && !_host.PieceAdoption.IsUserImportedSourcePath(file)
+                && !_host.VolumeHandoff.ContentGraph.IsLeased(file))
             .ToList();
 
         int sourceCount = request.GroupFiles.Count - reclaimableFiles.Count;
@@ -314,12 +314,12 @@ internal sealed class RecursiveLayerReclaimHandler
             {
                 _host.AddChainInnerLayerInputForRecursiveLayerReclaim(used);
 
-                _host._cleanupLedger.Add(new CleanupItem
+                _host.Source.CleanupLedger.Add(new CleanupItem
                 {
                     Path = used,
                     Kind = CleanupItemKind.LayerInput,
                     ChainId = request.ChildLayerLabel ?? string.Empty,
-                    LayerIndex = _host._cleanupLedger.Items.Count
+                    LayerIndex = _host.Source.CleanupLedger.Items.Count
                 });
             }
         }
@@ -351,7 +351,7 @@ internal sealed class RecursiveLayerReclaimHandler
 
         var logEntries = new List<(string Level, string Message)>();
 
-        string? failure = _host.PurgeLayerSourcePackage(
+        string? failure = _host.Source.PurgeLayerSourcePackage(
             BuildInnerPackageReclaimTask(request),
             verification: null,
             commit: null,
@@ -491,15 +491,15 @@ internal sealed class RecursiveLayerReclaimHandler
              * 于是"我在设置里把总大小上限调大了"在完全递归路径下不生效 —— 又是一处"改了没反应"。
              * 文件数同理（预算那一档默认 20 万，递归那一档原来是 10 万）。
              */
-            MaxTotalSize = _host.BudgetLimits.MaxTotalSize,
-            MaxTotalFiles = _host.BudgetLimits.MaxFileCount,
-            MaxExpansionRatio = _host.BudgetLimits.MaxExpansionRatio,
+            MaxTotalSize = _host.Schedule.BudgetLimits.MaxTotalSize,
+            MaxTotalFiles = _host.Schedule.BudgetLimits.MaxFileCount,
+            MaxExpansionRatio = _host.Schedule.BudgetLimits.MaxExpansionRatio,
 
             /*
              * 单文件那一条（2026-10-05 只读审计）：递归核心过去**一处都没映** ——
              * 出厂默认档（展开所有分支）下，一个含 200 GiB 单文件的包不会被这道闸门拦下。
              * 上限只有 BudgetLimits 这一个出口（与上面三条同一个理由：改了设置不重启也要生效）。
              */
-            MaxSingleFileSize = _host.BudgetLimits.MaxSingleFileSize
+            MaxSingleFileSize = _host.Schedule.BudgetLimits.MaxSingleFileSize
         };
 }

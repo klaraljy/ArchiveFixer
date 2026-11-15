@@ -18,7 +18,7 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 分卷候选路径收集（从 `ExtractionCoordinator.VolumeGatherCollectStep.cs` 搬出）：
+/// 分卷候选路径收集（M5：原 `ExtractionCoordinator.VolumeGatherCollectStep.cs` 已整份删除；入口 = `ExtractionCoordinator.VolumeCandidateCollector`）：
 /// 在入口层/同基名/组目录里按事实收集候选片，判据与日志文案沿用原实现。
 /// </summary>
 internal sealed class ExtractionVolumeCandidateCollector
@@ -43,7 +43,7 @@ internal sealed class ExtractionVolumeCandidateCollector
         }
 
         string observed = _host.ResolveDeferredGroupMemberPath(task);
-        string reference = ExtractionCoordinator.ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(observed), observed);
+        string reference = VolumeGatherCollectHandler.ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(observed), observed);
 
         referenceName = reference;
 
@@ -69,7 +69,7 @@ internal sealed class ExtractionVolumeCandidateCollector
                 return;
             }
 
-            foreach (string file in ExtractionCoordinator.CollectVolumeFilesInDirectory(directory!))
+            foreach (string file in VolumeRepairHandler.CollectVolumeFilesInDirectory(directory!))
             {
                 if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -89,7 +89,7 @@ internal sealed class ExtractionVolumeCandidateCollector
                 return;
             }
 
-            foreach (string file in ExtractionCoordinator.SafeEnumerateFiles(directory!))
+            foreach (string file in VolumeGatherCollectHandler.SafeEnumerateFiles(directory!))
             {
                 if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -321,7 +321,7 @@ internal sealed class ExtractionVolumeCandidateCollector
                              * ⇒ 补扫改枚举**整层所有文件**，由唯一出口 `AcceptsAsGroupPiece`（内容先行）来收/挡；
                              * 文件预算 400 只当上限用，⛔ 不再用后缀当前置筛子。
                              */
-                            foreach (string file in ExtractionCoordinator.SafeEnumerateFiles(directory))
+                            foreach (string file in VolumeGatherCollectHandler.SafeEnumerateFiles(directory))
                             {
                                 if (++files > 400)
                                 {
@@ -400,7 +400,7 @@ internal sealed class ExtractionVolumeCandidateCollector
             }
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null)
             {

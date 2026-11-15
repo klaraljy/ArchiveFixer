@@ -27,7 +27,9 @@ namespace ArchiveFixer.ViewModels;
 ///
 /// <para>从 <see cref="ExtractionCoordinator"/> 按职责搬出的协作类，只持有宿主
 /// <see cref="ExtractionCoordinator"/>。⛔ 判据、日志顺序、调用顺序与搬出前逐字一致；
-/// 宿主那一分片只留同签名薄转发与最小 internal 访问器。</para>
+/// 宿主那一分片已删除，只剩 <c>ExtractionCoordinator.Recursion.cs</c> 里的懒建属性
+/// <see cref="ExtractionCoordinator.RecursionOutcome"/> 与最小访问器
+/// <c>ApplyLandingViolationNoteForRecursionOutcome</c>。</para>
 /// </summary>
 internal sealed class RecursionOutcomeHandler
 {
@@ -315,7 +317,7 @@ internal sealed class RecursionOutcomeHandler
             {
                 if (!string.IsNullOrWhiteSpace(consumed))
                 {
-                    _host._consumedVolumeSources[consumed] = task.FileName;
+                    _host._volumeLedgerState.ConsumedVolumeSources[consumed] = task.FileName;
                 }
             }
         }

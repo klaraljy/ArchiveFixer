@@ -19,19 +19,26 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using BatchReminderFacts = ArchiveFixer.ViewModels.ExtractionCoordinator.BatchReminderFacts;
-using ReminderAnswer = ArchiveFixer.ViewModels.ExtractionCoordinator.ReminderAnswer;
 
 
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 批前提醒 / 确认框 / 并行与输出目录（第 11 块，从 <c>ExtractionCoordinator.BatchReminderStep</c> 按职责搬出的实现）。
+/// 批前提醒 / 确认框 / 并行与输出目录（第 11 块）——**唯一落点**。
 ///
-/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、文案、日志顺序与原来逐字一致；
-/// 宿主那一侧现在只留同签名薄转发（partial 分片），调用点一处未改。
-/// <c>ReminderAnswer</c> / <c>BatchReminderFacts</c> 仍是宿主的嵌套类型（测试按
-/// <c>ExtractionCoordinator.ReminderAnswer</c> 引用），这里用 using 别名指向同一份类型，不另建副本。</para>
+/// <para>M5 类型总行数治理：协调器那一分片（原 <c>ExtractionCoordinator.BatchReminderStep.cs</c>）已**删除**，
+/// 不再留同签名薄转发。宿主现在只剩
+/// ① 唯一实例 <c>ExtractionCoordinator.BatchReminders</c>（懒建一次，见那里的说明）
+/// ② 跨 partial 的两个入口 <c>DispatcherSafeConfirmAsync</c> / <c>ShowFolderBrowserOnUiThreadAsync</c>
+/// ③ 常量 <c>ThrottleNoticeThresholdSeconds</c>（读者是入口步骤的 <c>ThrottleNoticeThresholdSecondsForEntry</c>）。
+/// 其余调用点一律直接走本类（<c>_host.BatchReminders.Xxx</c> / 测试的 <c>Coordinator.BatchReminders.Xxx</c>）。</para>
+///
+/// <para>提醒答案与扫描结论（<see cref="ReminderAnswer"/> / <see cref="BatchReminderFacts"/>）也随实现归本类持有；
+/// 它们是本子系统的类型，宿主不再需要知道。</para>
+///
+/// <para>⚠ 本类有**实例状态**（本次运行不再提醒、批记账、预扫结论、输出目录只开一次），
+/// 宿主只有一个实例 ⇒ 懒建的那一个全类共用，生命周期与搬家前完全一致。
+/// ⛔ 任何调用方都**不得**自己 <c>new BatchReminderHandler(host)</c> —— 那会造出第二套餐/两个"只开一次"。</para>
 /// </summary>
 internal sealed class BatchReminderHandler
 {
@@ -215,7 +222,7 @@ internal sealed class BatchReminderHandler
     /// <summary>
     /// 这一批的「解压前提醒」已经并进调用方的确认框了（用户 2026-09-24 第 17 条）。
     ///
-    /// <para>置上之后 <c>ExtractionCoordinator.ConfirmBatchRemindersAsync</c> **只写日志、不再弹第二个框**。
+    /// <para>置上之后 <see cref="ConfirmBatchRemindersAsync"/> **只写日志、不再弹第二个框**。
     /// 由 <c>OneClickCoordinator</c> 在问它那一个确认框前后设置，整条一键处理**全程有效**
     /// （续解的第 2/3 轮也不再弹 —— 那正是"弹窗太多"的来源之一），跑完由它复位
     /// （<c>EndCallerHandledReminderBatch</c>）。手动「只解压」不设它 —— 那条路本来就只有这一个框。</para>
@@ -276,7 +283,7 @@ internal sealed class BatchReminderHandler
         return new BatchReminderFacts
         {
             Junk = junk,
-            NoUsablePassword = _host.FindReminderTasksWithoutUsablePassword(selectedTasks)
+            NoUsablePassword = _host.FindTasksWithoutUsablePassword(selectedTasks)
         };
     }
 
@@ -358,10 +365,10 @@ internal sealed class BatchReminderHandler
          * 花的是 stat 文件 + 探一次盘，几十到几百个包也只是毫秒级，所以放后台线程跑。
          */
         MultiLayerSpaceRisk spaceRisk = await Task.Run(
-            () => _host.EvaluateMultiLayerSpaceRisk(_host.BuildSpaceAdvice(targets)),
+            () => _host.Schedule.EvaluateMultiLayerSpaceRisk(_host.Schedule.BuildSpaceAdvice(targets)),
             cancellationToken).ConfigureAwait(false);
 
-        string spaceRiskEcho = spaceRisk.Applies ? ExtractionCoordinator.DescribeMultiLayerSpaceRisk(spaceRisk) : string.Empty;
+        string spaceRiskEcho = spaceRisk.Applies ? ExtractionMultiLayerSpaceRiskReporter.DescribeMultiLayerSpaceRisk(spaceRisk) : string.Empty;
 
         return new OneClickConfirmFacts
         {
@@ -637,6 +644,17 @@ internal sealed class BatchReminderHandler
         string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName;
 
     /// <summary>
+    /// 解压前提醒的"用户答案"（可注入；单测用它模拟"点了继续 / 点了先不处理 / 勾了不再提示"）。
+    ///
+    /// <para>为什么需要它：无界面宿主里那个框根本不会显示，而"勾了不再提示之后到底还会不会再弹"
+    /// 只有让调用方答一次才测得出来。正式路径永远是 null（走真弹窗）。</para>
+    ///
+    /// <para>它是宿主级的**测试缝**：调用方按 <c>ExtractionCoordinator.BatchReminders.ReminderAnswerOverride</c>
+    /// 读写（原来直接挂在 <c>ExtractionCoordinator</c> 上；M5 随实现搬到这里）。</para>
+    /// </summary>
+    internal Func<string, ReminderAnswer>? ReminderAnswerOverride { get; set; }
+
+    /// <summary>
     /// 拿用户的答案。
     ///
     /// <para><b>无界面宿主（单测 / 控制台宿主）在这里按「继续处理」返回</b>，而且**连弹窗都不尝试**：
@@ -645,7 +663,7 @@ internal sealed class BatchReminderHandler
     /// </summary>
     private async Task<ReminderAnswer> AskReminderAsync(string message)
     {
-        Func<string, ReminderAnswer>? overrideAnswer = _host.ReminderAnswerOverride;
+        Func<string, ReminderAnswer>? overrideAnswer = ReminderAnswerOverride;
 
         if (overrideAnswer != null)
         {
@@ -713,4 +731,40 @@ internal sealed class BatchReminderHandler
 
     private ExtractionBatchReminderMessages BatchReminderMessages =>
         _batchReminderMessages ??= new ExtractionBatchReminderMessages(_host);
+
+
+    // ================================================================
+    // 提醒答案 / 扫描结论（M5：原 ExtractionCoordinator 的嵌套类型，随实现归本类）
+    // ================================================================
+
+    /// <summary>一次"解压前的提醒"的用户答案。</summary>
+    internal sealed class ReminderAnswer
+    {
+        /// <summary>true = 继续处理；false = 先不处理（这一批不开始，一个字节都不动）。</summary>
+        public bool Confirmed { get; init; }
+
+        /// <summary>是否勾了「本次运行不再提示这类提醒」。</summary>
+        public bool OptionChecked { get; init; }
+    }
+
+    /// <summary>
+    /// 一次「解压前的提醒」扫描的结论（A 段无用物 + B 段无可用密码）。
+    ///
+    /// <para>为什么把"扫出事实"和"弹框问人"拆开（用户 2026-09-24 第 17 条）：一键处理那条路
+    /// 只允许有**一个**弹窗，所以它得在**动手之前**先拿到这两段事实、写进自己的确认框；
+    /// 手动「只解压」那条路仍然用同一个扫描结果去弹原来那个提醒框。两段判据因此只有一份实现
+    /// （<see cref="SourceJunkScanner"/> + 宿主转发的密码候选判据），
+    /// 不会出现"确认框里说没有、解压时又提醒有"这种自相矛盾。</para>
+    /// </summary>
+    internal sealed class BatchReminderFacts
+    {
+        /// <summary>A 段：源目录里疑似打包者附带的文件。</summary>
+        public SourceJunkScanResult Junk { get; init; } = new();
+
+        /// <summary>B 段：需要密码但当前一个可用候选都没有的包。</summary>
+        public IReadOnlyList<ArchiveTask> NoUsablePassword { get; init; } = Array.Empty<ArchiveTask>();
+
+        /// <summary>两段都空 = 没什么可提醒的（既不弹框、也不写日志）。</summary>
+        public bool HasAnything => Junk.HasAnything || NoUsablePassword.Count > 0;
+    }
 }

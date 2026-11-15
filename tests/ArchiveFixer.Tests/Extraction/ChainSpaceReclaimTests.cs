@@ -244,7 +244,7 @@ public class ChainSpaceReclaimTests : IDisposable
         var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
 
         var deleteFileSystem = new RecordingDeleteFileSystem(_root);
-        extraction.SourcePackageDeleteFileSystem = deleteFileSystem;
+        extraction.Source.SourcePackageDeleteFileSystem = deleteFileSystem;
 
         /*
          * 默认档下**成功的任务在日志里只留一行**（用户 2026-09-25 第 44/45 条：一批几十个包时

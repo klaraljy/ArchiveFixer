@@ -1,30 +1,25 @@
 using ArchiveFixer.BindingModels;
 using ArchiveFixer.Detection;
-using ArchiveFixer.Engines;
-using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
-using ArchiveFixer.Security;
-using ArchiveFixer.Services;
-using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 
 
 namespace ArchiveFixer.ViewModels;
 
-/// <summary>停在中途那一组的自证与缺名描述（第 9 块，从 Volume 大杂烩搬出；同一 partial 类）。</summary>
-internal sealed partial class ExtractionCoordinator
+/// <summary>
+/// 停在中途那一组的自证与缺名描述（从 `ExtractionCoordinator.StalledGroupStep.cs` 整块搬出，第 9 块）：
+/// 过路层其余物放行前的前置闸门、缺卷清单那一句话、"停下来的那一组就是这一单自己这一组吗"、
+/// 这一趟停下来的那一片当参照物。
+///
+/// <para>M5 类型总行数治理：协调器那一分片已删除，本类是这些入口的**唯一落点**，调用点直接
+/// <c>StalledGroupHandler.Xxx(...)</c>（测试同样）；⛔ 协调器不再保留同名薄转发。</para>
+///
+/// <para>⛔ 判据、签名与文案逐字沿用原实现；本类没有实例状态，四个入口都是静态纯判据。</para>
+/// </summary>
+internal static class StalledGroupHandler
 {
     /// <summary>
     /// **这一层里的东西是不是都属于这一组**（"过路层"其余物放行前的**前置闸门**，唯一出口）。
@@ -34,7 +29,8 @@ internal sealed partial class ExtractionCoordinator
     /// `BelongsToSameGroup(组内成员, "X.zip")` **恒为 false** ⇒ 闸门永远判"里面有不属于这一组的东西"
     /// ⇒ **那一层其余物永远删不掉**（用户选了「其余物：彻底删除」也不动），
     /// 而 ZIP 族恰好能过 —— 同一个设置两种结果。
-    /// 引用名改走唯一出口 <see cref="ResolveGroupReferenceName"/>（= 这一单自己的文件名，它就在这一组里）。</para>
+    /// 引用名改走唯一出口 <see cref="VolumeGatherCollectHandler.ResolveGroupReferenceName"/>
+    /// （= 这一单自己的文件名，它就在这一组里）。</para>
     ///
     /// <para>⛔ 判据只转调既有尺子；**一个文件都不属于 / 读不到 ⇒ false**（判不出就不删，红线不动）。</para>
     /// </summary>
@@ -48,7 +44,7 @@ internal sealed partial class ExtractionCoordinator
             return false;
         }
 
-        string reference = ResolveGroupReferenceName(task, groupBaseName);
+        string reference = VolumeGatherCollectHandler.ResolveGroupReferenceName(task, groupBaseName);
 
         foreach (string file in fileNames)
         {
@@ -75,8 +71,8 @@ internal sealed partial class ExtractionCoordinator
     /// <summary>
     /// **链停下来的那一组，就是这一单自己这一组吗** —— 中途撞缺卷那一档**进批末名单**的前提（2026-10-10）。
     ///
-    /// <para>为什么必须问这一句：批末那一站（<see cref="RecheckDeferredVolumeDeficits"/>）问"这一组齐了没"
-    /// 用的是**这一单自己的包基名**（<see cref="ResolveBatchGroupDirectory"/> 与
+    /// <para>为什么必须问这一句：批末那一站（<see cref="ExtractionDeferredVolumeRechecker.RecheckDeferredVolumeDeficitsAsync"/>）问"这一组齐了没"
+    /// 用的是**这一单自己的包基名**（<see cref="ExtractionCoordinator.ResolveBatchGroupDirectory"/> 与
     /// <see cref="DescribeMissingVolumeNames"/> 读的都是它）⇒ 把"自己名字跟那一组无关、只是恰好解出了
     /// 那一组一片"的单塞进名单，批末就会拿它的名字去问一个不相干的组，然后如实落一句
     /// 「分卷缺失，未开始解压」。</para>
@@ -183,5 +179,4 @@ internal sealed partial class ExtractionCoordinator
 
         return string.Empty;
     }
-
 }

@@ -43,7 +43,7 @@ internal sealed class ExtractionConsumedPieceSettler
             return;
         }
 
-        var service = new RecycleBinService(_host.RestDeleteExecutor, null, null);
+        var service = new RecycleBinService(_host.Source.RestDeleteExecutor, null, null);
         int deleted = 0;
 
         foreach (string path in targets)
@@ -126,7 +126,7 @@ internal sealed class ExtractionConsumedPieceSettler
         var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var adoptedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in _host._adoptedLandedPieces)
+        foreach (var item in _host._volumeLedgerState.AdoptedLandedPieces)
         {
             if (!string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
             {
@@ -180,7 +180,7 @@ internal sealed class ExtractionConsumedPieceSettler
 
                 if (!identities.Contains(identity)
                     || ProcessArtifactLayout.IsInsideDeletableProcessFolders(file)
-                    || _host.IsAnyTaskSourcePath(file)
+                    || _host.PieceAdoption.IsAnyTaskSourcePath(file)
                     || adoptedPaths.Contains(SafePathHelper.GetFullPathSafe(file))
                     || !FileIdentity.TryGetLinkCount(file, out uint linkCount)
                     || linkCount <= 1)
@@ -250,7 +250,7 @@ internal sealed class ExtractionConsumedPieceSettler
             /*
              * ⛔ **族必须对得上**（2026-10-11 真机 EEE 定案，调试器 + 程序判据输入 + 引擎三方取证）：
              *
-             * 「谁吐出过哪一组的片」这本账的键是**基名**（`_groupPieceProducers`），而同一个基名底下
+             * 「谁吐出过哪一组的片」这本账的键是**基名**（`_volumeLedgerState.GroupPieceProducers`），而同一个基名底下
              * 可能同时存在**两族**：EEE 的跨盘 ZIP 组 `111.z01/z02/z03/111.zip`，与它解开之后得到的
              * RAR 对 `111.parts1.racr` / `111.partɾ2.ra??r`（引擎证实这一对含 5 个 mp4）——
              * 两族都叫 `111`。缺这一道闸门时，RAR 那两卷被记成"ZIP 组的片"⇒ 在这里被**静默**
@@ -385,11 +385,11 @@ internal sealed class ExtractionConsumedPieceSettler
          */
         if (!string.IsNullOrWhiteSpace(piece.RestDirectoryPath) && Directory.Exists(piece.RestDirectoryPath))
         {
-            _host._passThroughRestHandled.Remove(piece);
-            _host.RememberPendingPassThroughRest(piece, consumer, groupBaseName);
+            _host._volumeLedgerState.PassThroughRestHandled.Remove(piece);
+            _host.VolumeLedger.RememberPendingPassThroughRest(piece, consumer, groupBaseName);
         }
 
-        if (!moveSources || !_host._producerSourcesCollected.Add(piece))
+        if (!moveSources || !_host._volumeLedgerState.ProducerSourcesCollected.Add(piece))
         {
             return;
         }
@@ -442,7 +442,7 @@ internal sealed class ExtractionConsumedPieceSettler
          * 这正是用户 2026-10-18 拍板的 `&&`：第一大步成功 + 第二大步（组）可证完整且内容校验通过，
          * 才允许按「彻底删除」删这个原包；判不出 / 第二大步没成 ⇒ `_host.PurgeLayerSourcePackage` 一个字节都不动。
          */
-        _host.PurgeLayerSourcePackage(
+        _host.Source.PurgeLayerSourcePackage(
             piece,
             verification: null,
             commit: null,
@@ -462,13 +462,13 @@ internal sealed class ExtractionConsumedPieceSettler
     /// —— 它们整组由别人解开，按跟班卷收场，可源片一直没人处理。</para>
     ///
     /// <para>判据只有两条事实位（<see cref="_host.TryResolveConsumedByAnotherTask"/> 用的**同一对**）：
-    /// ① 这一单的路径在既有那份"借来用过的源片"账 <see cref="_host._consumedVolumeSources"/> 里；
+    /// ① 这一单的路径在既有那份"借来用过的源片"账 <see cref="_host._volumeLedgerState.ConsumedVolumeSources"/> 里；
     /// ② 那位消费方**真的成功了**（机器终态）。⛔ 不碰消费方自己、⛔ 幂等、⛔ 搬运仍只有既有出口。</para>
     /// </summary>
     /// <param name="logEntries">非空 ⇒ 日志先攒起来交给调用方统一落（批内并发路径要回 UI 线程）；空 ⇒ 这里直接落。</param>
     internal void SettleConsumedGroupVolumeSources(List<(string Level, string Message)>? logEntries)
     {
-        if (_host._consumedVolumeSources.Count == 0)
+        if (_host._volumeLedgerState.ConsumedVolumeSources.Count == 0)
         {
             return;
         }
@@ -508,12 +508,12 @@ internal sealed class ExtractionConsumedPieceSettler
                 // 记账与收场一起补（唯一不变量：两边同时写，⛔ 不留下写了一半的账）。
                 // 记的是**它自己那一片**的路径（`OriginalPath` 优先）—— 批末补判可能已经把
                 // `CurrentPath` 改到入口包上了（真机实测），记错了下一步就会去搬入口包。
-                _host.RememberOneConsumedVolumeSource(ResolveOwnPiecePath(task), owner);
+                _host.VolumeLedger.RememberOneConsumedVolumeSource(ResolveOwnPiecePath(task), owner);
             }
 
             ArchiveTask? consumer = null;
 
-            foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+            foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
             {
                 if (candidate != null && string.Equals(candidate.FileName, consumerName, StringComparison.Ordinal))
                 {
@@ -538,8 +538,8 @@ internal sealed class ExtractionConsumedPieceSettler
 
             if (task.IsVolumeGroupFollower)
             {
-                _host._volumeDeficitDeferred.Remove(task);
-                _host._volumeDeficitFinalPass.Add(task);
+                _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
+                _host._volumeLedgerState.VolumeDeficitFinalPass.Add(task);
             }
         }
 
@@ -585,7 +585,7 @@ internal sealed class ExtractionConsumedPieceSettler
     }
 
     /// <summary>
-    /// **这一单所在那一组的消费方是谁**（只读既有那份"谁在解"的账 `_host._groupConsumerByName`），
+    /// **这一单所在那一组的消费方是谁**（只读既有那份"谁在解"的账 `_host._volumeLedgerState.GroupConsumerByName`），
     /// 而且那位消费方**真的成功了**（机器终态）。判不出 / 还没成功 ⇒ 空串 ⇒ 调用方什么都不做。
     /// </summary>
     internal string ResolveSuccessfulGroupConsumerName(ArchiveTask task)
@@ -593,13 +593,13 @@ internal sealed class ExtractionConsumedPieceSettler
         string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
 
         if (baseName.Length == 0
-            || !_host._groupConsumerByName.TryGetValue(baseName, out string? name)
+            || !_host._volumeLedgerState.GroupConsumerByName.TryGetValue(baseName, out string? name)
             || string.IsNullOrWhiteSpace(name))
         {
             return string.Empty;
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null || !string.Equals(candidate.FileName, name, StringComparison.Ordinal))
             {
@@ -631,13 +631,13 @@ internal sealed class ExtractionConsumedPieceSettler
     /// <para>为什么要有"全表"那一档：真机那一批里那两单在批末已经是「跟班卷 + 跳过」了
     /// （`_host.TryResolveConsumedByAnotherTask` 那条路给它们落的），既不在延迟名单里、也从没吐过片
     /// —— 只有"全表"才扫得到它们。代价可控：真正的判据是"这一单的路径在不在这份借片账里"，
-    /// 绝大多数单第一条就 false；搬过的由 <c>_host._producerSourcesCollected</c> 挡住，不会搬第二遍。</para>
+    /// 绝大多数单第一条就 false；搬过的由 <c>_host._volumeLedgerState.ProducerSourcesCollected</c> 挡住，不会搬第二遍。</para>
     /// </summary>
     internal IEnumerable<ArchiveTask> EnumerateCandidateTasksForConsumedSettle()
     {
         var seen = new HashSet<ArchiveTask>();
 
-        foreach (ArchiveTask task in _host._volumeDeficitDeferred.ToList())
+        foreach (ArchiveTask task in _host._volumeLedgerState.VolumeDeficitDeferred.ToList())
         {
             if (task != null && seen.Add(task))
             {
@@ -645,7 +645,7 @@ internal sealed class ExtractionConsumedPieceSettler
             }
         }
 
-        foreach (List<(ArchiveTask Task, string PieceName)> producers in _host.SnapshotGroupPieceProducerLists())
+        foreach (List<(ArchiveTask Task, string PieceName)> producers in _host.PieceAdoption.SnapshotGroupPieceProducerLists())
         {
             foreach ((ArchiveTask producer, string _) in producers.ToList())
             {
@@ -656,7 +656,7 @@ internal sealed class ExtractionConsumedPieceSettler
             }
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task != null && seen.Add(task))
             {
@@ -671,9 +671,9 @@ internal sealed class ExtractionConsumedPieceSettler
          * 延迟名单里（已经被别的分支收场过了）、也没吐过片 ⇒ 上面三处一处都覆盖不到它
          * ⇒ 源片留在盘上（实测：同组的 `111.z0删除3` 被处理了，它没有）。
          */
-        foreach (string piecePath in _host._consumedVolumeSources.Keys.ToList())
+        foreach (string piecePath in _host._volumeLedgerState.ConsumedVolumeSources.Keys.ToList())
         {
-            foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+            foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
             {
                 if (task == null || seen.Contains(task))
                 {

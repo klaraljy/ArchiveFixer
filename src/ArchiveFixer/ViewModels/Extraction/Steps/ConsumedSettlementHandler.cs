@@ -49,7 +49,7 @@ internal sealed class ConsumedSettlementHandler
             return false;
         }
 
-        foreach (ArchiveTask? candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask? candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             string name = FileNameHelper.GetFileName(candidate?.CurrentPath ?? string.Empty);
 
@@ -218,7 +218,7 @@ internal sealed class ConsumedSettlementHandler
 
     /// <summary>
     /// 这一单现在**能不能**凑出完整的一组（只读盘上事实）：候选 = 账上那几卷 + 自己那一层 +
-    /// 找卷窗口，交给既有出口 <see cref="RebuildVolumeGroup"/> 归组；补齐且第 1 卷真的在盘上 ⇒ 返回那一组。
+    /// 找卷窗口，交给既有出口 <see cref="VolumeRepairHandler.RebuildVolumeGroup"/> 归组；补齐且第 1 卷真的在盘上 ⇒ 返回那一组。
     /// 判不出（归不出组 / 仍然不完整 / 第 1 卷不在）⇒ null（⛔ 什么都不做）。
     /// </summary>
     /// <param name="preferDirectory">
@@ -238,12 +238,12 @@ internal sealed class ConsumedSettlementHandler
 
             if (!string.IsNullOrWhiteSpace(directory))
             {
-                extra.AddRange(ExtractionCoordinator.CollectVolumeFilesInDirectory(directory));
+                extra.AddRange(VolumeRepairHandler.CollectVolumeFilesInDirectory(directory));
             }
 
             if (!string.IsNullOrWhiteSpace(preferDirectory) && Directory.Exists(preferDirectory))
             {
-                extra.AddRange(ExtractionCoordinator.CollectVolumeFilesInDirectory(preferDirectory));
+                extra.AddRange(VolumeRepairHandler.CollectVolumeFilesInDirectory(preferDirectory));
             }
 
             foreach (VolumeCandidate candidate in VolumeNameRepair.EnumerateVolumeCandidatesNearby(task.CurrentPath))

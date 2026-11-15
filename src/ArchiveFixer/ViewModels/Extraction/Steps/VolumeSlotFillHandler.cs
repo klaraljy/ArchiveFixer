@@ -331,7 +331,7 @@ internal sealed class VolumeSlotFillHandler
             return;
         }
 
-        string tailName = ExtractionCoordinator.ResolveGroupReferenceName(
+        string tailName = VolumeGatherCollectHandler.ResolveGroupReferenceName(
             task,
             FileNameHelper.GetArchiveBaseName(
                 ExtractionCoordinator.ResolveObservedPiecePathForSlotFill(task, memberPath)),
@@ -340,7 +340,7 @@ internal sealed class VolumeSlotFillHandler
         var present = new SortedDictionary<int, string>(Comparer<int>.Default);
         long largest = 0;
 
-        foreach (string path in ExtractionCoordinator.CollectVolumeFilesInDirectory(entryLayer))
+        foreach (string path in VolumeRepairHandler.CollectVolumeFilesInDirectory(entryLayer))
         {
             if (!File.Exists(path) || !LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
             {
@@ -349,11 +349,11 @@ internal sealed class VolumeSlotFillHandler
 
             /*
              * ⚠ 2026-10-14（用户口径「专属算法不就是靠识别的吗」）：槽位号**先问底层识别卡**
-             * （唯一出口 <see cref="ExtractionCoordinator.ResolveVolumeSlotIndexForPiece"/>），卡上没有才问名字。
+             * （唯一出口 <see cref="VolumeGatherCollectHandler.ResolveVolumeSlotIndexForPiece"/>），卡上没有才问名字。
              * 现场 `10101010`：三片里第 1 片与第 3 片**名字一模一样**（都读成 1），
              * 只有卡分得开（`VolumeFirstPiece` vs `VolumePiece`）。
              */
-            int? index = ExtractionCoordinator.ResolveVolumeSlotIndexForPiece(path, FileNature.Inspect(path));
+            int? index = VolumeGatherCollectHandler.ResolveVolumeSlotIndexForPiece(path, FileNature.Inspect(path));
 
             if (!index.HasValue || present.ContainsKey(index.Value))
             {
@@ -441,7 +441,7 @@ internal sealed class VolumeSlotFillHandler
         string scanGroupBaseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(firstVolume));
 
         foreach ((string scanRoot, ArchiveTask? scanOwner, bool scanRequiresBaseNameRelation)
-                 in CollectCandidateRoots(ExtractionCoordinator.SnapshotTaskTable(_host.Tasks), entryLayer))
+                 in CollectCandidateRoots(VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks), entryLayer))
         {
             string[] found;
 
@@ -650,25 +650,25 @@ internal sealed class VolumeSlotFillHandler
             linked.Add(target);
 
             /*
-             * ⚠ 记下"**我亲手从这一棵树里把它链接成了槽位名**"（见 <see cref="_byteBudgetLinkedSources"/>）：
+             * ⚠ 记下"**我亲手从这一棵树里把它链接成了槽位名**"（见 <see cref="_volumeLedgerState.ByteBudgetLinkedSources"/>）：
              * 收场那一档据此按档处理它自己那一份（名字读不出卷号的片子，任何按名字的筛子都认不出它）。
              */
-            _host._byteBudgetLinkedSources.Add((chosen[i].Owner, groupBaseName, chosen[i].Path));
+            _host._volumeLedgerState.ByteBudgetLinkedSources.Add((chosen[i].Owner, groupBaseName, chosen[i].Path));
 
             /*
              * ⚠ 2026-10-13（困难批 `1111` 判据 ③，运行期定案）：**同一件事写进既有那唯一一本账**。
              *
              * <para>现场（断点 + 插桩实测，`dbg-b6a4ee4a` 夹具那一轮）：这一档按内容把
              * `111-L2.7z` / `111-L2.7z-924` 链接成 `111-L2.002` / `111-L2.003` 之后，
-             * `_adoptedLandedPieces`（`PurgeGroupLandedPieces` 用来找"产出方那一份"的那本账）**0 条**
+             * `_volumeLedgerState.AdoptedLandedPieces`（`PurgeGroupLandedPieces` 用来找"产出方那一份"的那本账）**0 条**
              * ⇒ 收场那一档的 `targets.Count == 0` ⇒ 两份落地副本留在
              * `111(2)\…\111-W1-0\` / `111(3)\111-W2-0\` 里 ⇒ 判据 ③ 红。</para>
              *
              * <para>⛔ 不另造第二套判据：这一调走的就是"接片那一档"记那一份的**同一个出口**
-             * （<see cref="ExtractionCoordinator.RememberAdoptedLandedPiece"/>），它自己会把"产出方是谁、落点根在哪、
+             * （<see cref="PieceAdoptionHandler.RememberAdoptedLandedPiece"/>），它自己会把"产出方是谁、落点根在哪、
              * 是不是某一单自己的源"逐条问清；判不出 ⇒ 它什么都不记（照旧红，如实暴露）。</para>
              */
-            _host.RememberAdoptedLandedPiece(chosen[i].Path, chosen[i].Owner, groupBaseName, renamedInPlace: false);
+            _host.PieceAdoption.RememberAdoptedLandedPiece(chosen[i].Path, chosen[i].Owner, groupBaseName, renamedInPlace: false);
 
             /*
              * ⛔ **补片这一档也要记进"谁吐过这一组的片"那本账**（2026-10-18 用户 `&&` 口径）：

@@ -328,7 +328,7 @@ internal sealed class ExtractionCandidateLoop
              * 修法：每个候选都从**空目录**开始。宁可每次多删一次（暂存目录本来就是我们的、内容都是垃圾），
              * 也不能让上一次的桩文件把这一次的正确密码判成废票。
              */
-            await host.DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
+            await new EngineFallbackHandler(host).DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
 
             ArchiveOperationResult extractResult = await host.ArchiveEngine.ExtractAsync(
 host.ProgressHeartbeat.BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
@@ -380,7 +380,7 @@ cancellationToken);
                  * 只有真的校验通过，才落成功；无论哪种情况，收尾都走同一个 PostProcessSuccessAsync
                  * （校验未通过时它会**顶掉成功结论**、不动源包、也不会把 0 字节产物搬出去）。
                  */
-                var stage = await host.VerifyStageProductsAsync(
+                var stage = await new EngineFallbackHandler(host).VerifyStageProductsAsync(
                     task,
                     engineArchivePath,
                     selectedPassword,
@@ -487,7 +487,7 @@ cancellationToken);
                             $"{task.LogName}：结果校验 —— {stage.Verification.Message}" +
                             "（这个候选不算数，继续尝试下一个候选密码）");
 
-                        await host.DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
+                        await new EngineFallbackHandler(host).DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
                         continue;
                     }
 
@@ -516,7 +516,7 @@ cancellationToken);
 
                 // 收尾否掉结论（越界 / 超预算 / 定稿失败 / 校验未通过 / 源包没有搬成）时不许写"解压成功"。
                 // knownList 传刚校验过的那份清单：定稿那一步用**同一份**再校验，两条路不许各列一次目录。
-                bool conclusionStands = await host.PostProcessSuccessAsync(
+                bool conclusionStands = await new PostProcessSuccessHandler(host).PostProcessSuccessAsync(
                     task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken, stage.List);
 
                 if (conclusionStands && task.Status == StatusText.ExtractSuccess)
@@ -546,7 +546,7 @@ cancellationToken);
                  * 后者再往下试密码**没有任何意义**（密码已经被这天趟解压本身证明了）。
                  */
                 bool wrongPwProvenByThisAttempt =
-                    ExtractionCoordinator.TryMeasureProducedContent(engineOutputPath, extractResult, out int wrongPwFiles, out long wrongPwBytes);
+                    VolumeNameNormalizeHandler.TryMeasureProducedContent(engineOutputPath, extractResult, out int wrongPwFiles, out long wrongPwBytes);
 
                 // 同一件事的事实位（换引擎兜底那条判据要它）：这一趟盘上留下了**非零字节** ⇒
                 // 引擎进得去这一份的数据流（0 字节桩不算，见上面 `anyCandidateWroteBytes` 的说明）。
@@ -580,7 +580,7 @@ cancellationToken);
             {
                 // 与上面"密码错误"那一支同一条判据：**真解出了东西** ⇒ 密码已经证实，别再试候选。
                 bool ambiguousProvenByThisAttempt =
-                    ExtractionCoordinator.TryMeasureProducedContent(engineOutputPath, extractResult, out int ambiguousFiles, out long ambiguousBytes);
+                    VolumeNameNormalizeHandler.TryMeasureProducedContent(engineOutputPath, extractResult, out int ambiguousFiles, out long ambiguousBytes);
 
                 // 同上：这也是"引擎写出过非零字节"的一次。
                 anyCandidateWroteBytes |= ambiguousBytes > 0;

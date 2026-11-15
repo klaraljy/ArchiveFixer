@@ -66,7 +66,7 @@ public class DeferredVolumeStatusTests : IDisposable
 
         var coordinator = CreateCoordinator();
 
-        coordinator.RecordDeferredVolumeDeficitForTests(task);
+        coordinator.VolumeLedger.RecordDeferredVolumeDeficitForTests(task);
 
         Assert.Equal(StatusText.WaitingExtract, task.Status);
         Assert.False(TaskOutcomeClassifier.IsFailureStatus(task.Status), "批首记缺口不许算失败");
@@ -170,7 +170,7 @@ public class DeferredVolumeStatusTests : IDisposable
 
         var coordinator = CreateCoordinator();
 
-        coordinator.RecordDeferredVolumeDeficitForTests(task);
+        coordinator.VolumeLedger.RecordDeferredVolumeDeficitForTests(task);
 
         Assert.True(task.IsVolumeDeficitDeferred, "这一单应当先挂在「缺卷留到最后再判」那份名单上");
 

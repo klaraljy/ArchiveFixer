@@ -256,8 +256,8 @@ internal static class Batch120Operation
 
             if (spaceTight)
             {
-                extraction.SpaceProbeOverride = _ => spaceFreeBytes;
-                extraction.SpaceReserveOverride = spaceReserveBytes;
+                extraction.Schedule.SpaceProbeOverride = _ => spaceFreeBytes;
+                extraction.Schedule.SpaceReserveOverride = spaceReserveBytes;
                 vm.SpaceTightMode = true;
                 vm.SpaceTightKeepSource = true;
             }
@@ -284,7 +284,7 @@ internal static class Batch120Operation
                 ProducedFiles = t.ProducedFiles.ToArray()
             }).ToArray();
 
-            record.FirstStepLedger = extraction.FirstStepLedger;
+            record.FirstStepLedger = extraction.VolumeHandoff.FirstStepLedger;
         }
         catch (Exception ex)
         {

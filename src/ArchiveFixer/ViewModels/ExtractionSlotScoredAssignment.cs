@@ -116,7 +116,7 @@ internal sealed class ExtractionSlotScoredAssignment
          * 从**用户源树**里选出来的候选额外要求"基名与这一组有关系"（那道弱证据闸）。
          */
         foreach ((string root, ArchiveTask? rootOwner, bool requiresBaseNameRelation)
-                 in _host.CollectCandidateRoots(ExtractionCoordinator.SnapshotTaskTable(_host.Tasks), entryLayer))
+                 in _host.CollectCandidateRoots(VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks), entryLayer))
         {
             _ = rootOwner;
 
@@ -198,7 +198,7 @@ internal sealed class ExtractionSlotScoredAssignment
                  */
                 /*
                  * ⚠ 2026-10-14（用户口径「专属算法不就是靠识别的吗」）：这里也**先问卡**
-                 * （同一个唯一出口 `ExtractionCoordinator.ResolveVolumeSlotIndexForPiece`）——
+                 * （同一个唯一出口 `VolumeGatherCollectHandler.ResolveVolumeSlotIndexForPiece`）——
                  * 卡说"我不是第一片"而名字读出 1 的那一份，**不当成"已占住 1 号槽"**，
                  * 而是按"判不出号"进候选池，由"缺口 + 体积"去定（⛔ 不再拿假锚点补片）。
                  */
@@ -211,7 +211,7 @@ internal sealed class ExtractionSlotScoredAssignment
                  * ⇒ 用**入口那一份**（主头自报第 1 卷、它的原始字段就是基数）锚定，把绝对卷号翻出来；
                  * 唯一出口 = `VolumePieceFacts.ResolveRar4SlotIndex`（判不出返回 null，照旧什么都不做）。
                  */
-                int? nameIndex = ExtractionCoordinator.ResolveVolumeSlotIndexForPiece(path, card)
+                int? nameIndex = VolumeGatherCollectHandler.ResolveVolumeSlotIndexForPiece(path, card)
                     ?? VolumePieceFacts.ResolveRar4SlotIndex(card, entryCard);
 
                 /*
@@ -338,7 +338,7 @@ internal sealed class ExtractionSlotScoredAssignment
             return;
         }
 
-        int attempt = _host._scoredSlotAttempts.TryGetValue(attemptKey, out int done) ? done : 0;
+        int attempt = _host._volumeLedgerState.ScoredSlotAttempts.TryGetValue(attemptKey, out int done) ? done : 0;
 
         if (attempt >= ranked.Count)
         {
@@ -351,7 +351,7 @@ internal sealed class ExtractionSlotScoredAssignment
         }
 
         // 回滚上一版：只删**我们自己建的**那几个槽位链接（零字节硬链接 ⇒ 删掉 = 回到原样）
-        if (_host._scoredSlotLinks.TryGetValue(attemptKey, out List<string>? previous))
+        if (_host._volumeLedgerState.ScoredSlotLinks.TryGetValue(attemptKey, out List<string>? previous))
         {
             foreach (string link in previous)
             {
@@ -406,15 +406,15 @@ internal sealed class ExtractionSlotScoredAssignment
             linkedPairs.Add((candidate.Path, target));
         }
 
-        _host._scoredSlotAttempts[attemptKey] = attempt + 1;
-        _host._scoredSlotLinks[attemptKey] = created;
+        _host._volumeLedgerState.ScoredSlotAttempts[attemptKey] = attempt + 1;
+        _host._volumeLedgerState.ScoredSlotLinks[attemptKey] = created;
 
         foreach ((string source, string target) in linkedPairs)
         {
             string sourceName = FileNameHelper.GetFileName(source);
 
-            _host._byteBudgetLinkedSources.Add((task, groupBaseName, source));
-            _host.RememberAdoptedLandedPiece(source, task, groupBaseName, renamedInPlace: false);
+            _host._volumeLedgerState.ByteBudgetLinkedSources.Add((task, groupBaseName, source));
+            _host.PieceAdoption.RememberAdoptedLandedPiece(source, task, groupBaseName, renamedInPlace: false);
 
             _host.AppendLog(
                 "INFO",

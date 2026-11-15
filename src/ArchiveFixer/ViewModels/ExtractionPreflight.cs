@@ -61,7 +61,11 @@ internal sealed class ExtractionPreflight
             && ExtractionCoordinator.IsVolumeMissingErrorType(lastListErrorType))
         {
             (string? assembledFirstVolume, ArchiveListResult? assembledList) =
-                await host.TryAssembleSplitVolumesAsync(task, engineArchivePath, candidates, cancellationToken);
+                await new SplitVolumeAssembleHandler(host).TryAssembleSplitVolumesAsync(
+                    task,
+                    engineArchivePath,
+                    candidates,
+                    cancellationToken);
 
             if (assembledFirstVolume != null && assembledList != null)
             {
@@ -140,7 +144,7 @@ internal sealed class ExtractionPreflight
                  */
                 VolumeNameRepairPlan repair = VolumeNameRepair.Plan(
                     task.CurrentPath,
-                    ExtractionCoordinator.CollectVolumeFilesInDirectory(volumeDirectory).Select(Path.GetFileName));
+                    VolumeRepairHandler.CollectVolumeFilesInDirectory(volumeDirectory).Select(Path.GetFileName));
 
                 task.VolumeRenameSuggestion = repair.CanRepair ? repair.SuggestedFileName : string.Empty;
 
@@ -233,7 +237,7 @@ internal sealed class ExtractionPreflight
 
             // 预算里的"落点"用暂存目录：引擎真正写盘的地方是它，最终目录此时还不存在。
             // 上限取用户设置（第 36 条）：四条上限只有 BudgetLimits 这一个出口。
-            BudgetCheckResult budget = new ResourceBudget(host.BudgetLimits)
+            BudgetCheckResult budget = new ResourceBudget(host.Schedule.BudgetLimits)
                 .CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
 
             /*
@@ -247,11 +251,11 @@ internal sealed class ExtractionPreflight
              * （判据是 FreeSpaceDemandBytes = 内容物 + 过程物；见 TaskSpaceEstimate 里的说明）。
              */
             TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
-                SpaceEstimator.FromSourceFiles(task, host.DirectReadAppliesTo(task), host.PartialPublishActive),
+                SpaceEstimator.FromSourceFiles(task, host.Schedule.DirectReadAppliesTo(task), host.PartialPublishActive),
                 preflightList,
                 directZip != null ? 0 : SpaceEstimator.EstimateCarvedBytes(task, archiveSize),
                 carvedBytesNotNeeded: directZip != null)
-                .WithVolumeLayout(host.ResolveWorkspaceVolumeShare(outputPath));
+                .WithVolumeLayout(host.Schedule.ResolveWorkspaceVolumeShare(outputPath));
 
             if (!budget.Allowed)
             {
@@ -263,10 +267,10 @@ internal sealed class ExtractionPreflight
                      * （含"差多少"与三条建议）；万一它反而放行（两边估算口径不同），
                      * 就退回预算那句话，绝不把"放行"当结论（宁可保守）。
                      */
-                    SpaceGateDecision spaceGate = host.ReconcileReservation(task, refined);
+                    SpaceGateDecision spaceGate = host.Schedule.ReconcileReservation(task, refined);
                     string spaceReason = spaceGate.Allowed ? budget.Reason : spaceGate.ToLogLine();
 
-                    host.MarkSpaceBlockedCore(
+                    host.Schedule.MarkSpaceBlockedCore(
                         task,
                         spaceReason + $"（{refined.Describe()}；依据：{refined.Basis}）",
                         refined.FreeSpaceDemandBytes,
@@ -299,11 +303,11 @@ internal sealed class ExtractionPreflight
              * 它同时把本任务的预留从"粗估"调整成精确峰值 —— 并发下这一步很关键：
              * 估小了会让几个任务一起把盘写满，估大了会白白拦下本来能跑的任务。
              */
-            SpaceGateDecision preciseGate = host.ReconcileReservation(task, refined);
+            SpaceGateDecision preciseGate = host.Schedule.ReconcileReservation(task, refined);
 
             if (!preciseGate.Allowed)
             {
-                host.MarkSpaceBlockedCore(
+                host.Schedule.MarkSpaceBlockedCore(
                     task,
                     preciseGate.ToLogLine() + $"（{refined.Describe()}；依据：{refined.Basis}）",
                     refined.FreeSpaceDemandBytes,
@@ -326,7 +330,7 @@ internal sealed class ExtractionPreflight
                  * 可源包选的是「留在原地」时它一个字节都不会被碰 —— 报 6.8 MiB 就是在骗人
                  * （日志里那个 6.8 MiB 正是源包自己的大小）。
                  */
-                SourceHandlingMode sourceMode = host.EffectiveSourceHandling;
+                SourceHandlingMode sourceMode = host.Source.EffectiveSourceHandling;
 
                 long reclaimable = sourceMode == SourceHandlingMode.KeepInPlace
                     ? refined.ProcessArtifactBytes

@@ -247,13 +247,13 @@ public class RecursionLogAndProbePathFixesTests : IDisposable
     [Fact]
     public void 单层工作区白名单要把探针目录算成我们自己的()
     {
-        Assert.True(ExtractionCoordinator.IsOurWorkspaceSubdirectory(RecursiveExtractor.ProbeDirectoryName));
-        Assert.True(ExtractionCoordinator.IsOurWorkspaceSubdirectory(PathService.StageDirectoryName));
-        Assert.True(ExtractionCoordinator.IsOurWorkspaceSubdirectory(SplitVolumeAssembler.AssemblyDirectoryName));
+        Assert.True(SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory(RecursiveExtractor.ProbeDirectoryName));
+        Assert.True(SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory(PathService.StageDirectoryName));
+        Assert.True(SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory(SplitVolumeAssembler.AssemblyDirectoryName));
 
         // 别人的目录照旧一律拦下。
-        Assert.False(ExtractionCoordinator.IsOurWorkspaceSubdirectory("别人的目录"));
-        Assert.False(ExtractionCoordinator.IsOurWorkspaceSubdirectory("recursive"));
+        Assert.False(SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory("别人的目录"));
+        Assert.False(SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory("recursive"));
     }
 
     // ================================================================ 夹具

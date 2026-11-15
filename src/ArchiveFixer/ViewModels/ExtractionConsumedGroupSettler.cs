@@ -30,16 +30,16 @@ internal sealed class ExtractionConsumedGroupSettler
     /// <summary>遍历"谁在解"的账：消费方**已经成功**的那几组，给它们的生产者收场（幂等；见 <see cref="_host.SettleGroupPieceProducers"/>）。</summary>
     internal void SettleSucceededGroupPieceProducers()
     {
-        if (_host._groupConsumerByName.Count == 0 || _host.GroupPieceProducerCount == 0)
+        if (_host._volumeLedgerState.GroupConsumerByName.Count == 0 || _host.VolumeLedger.GroupPieceProducerCount == 0)
         {
             return;
         }
 
         var logEntries = new List<(string Level, string Message)>();
 
-        foreach (string consumerName in _host._groupConsumerByName.Values.ToList())
+        foreach (string consumerName in _host._volumeLedgerState.GroupConsumerByName.Values.ToList())
         {
-            ArchiveTask? consumer = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(
+            ArchiveTask? consumer = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(
                 candidate => candidate != null && string.Equals(candidate.FileName, consumerName, StringComparison.Ordinal));
 
             if (consumer == null || consumer.Outcome != TaskOutcome.Succeeded)
@@ -70,7 +70,7 @@ internal sealed class ExtractionConsumedGroupSettler
 
     internal void SettleParentOfSucceededVolumeGroup()
     {
-        foreach (ArchiveTask consumer in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask consumer in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (consumer == null
                 || consumer.Outcome != TaskOutcome.Succeeded
@@ -87,7 +87,7 @@ internal sealed class ExtractionConsumedGroupSettler
                 continue;
             }
 
-            ArchiveTask[] tasks = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks);
+            ArchiveTask[] tasks = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks);
 
             ArchiveTask? parent = tasks.FirstOrDefault(
                 candidate => candidate != null
@@ -131,8 +131,8 @@ internal sealed class ExtractionConsumedGroupSettler
              * 父任务有没有产物证据，由它自己的收尾阶段决定。
              */
             parent.IsVolumeDeficitDeferred = false;
-            _host._volumeDeficitDeferred.Remove(parent);
-            _host._volumeDeficitFinalPass.Remove(parent);
+            _host._volumeLedgerState.VolumeDeficitDeferred.Remove(parent);
+            _host._volumeLedgerState.VolumeDeficitFinalPass.Remove(parent);
 
             _host.AppendLog(
                 "INFO",
@@ -162,7 +162,7 @@ internal sealed class ExtractionConsumedGroupSettler
         }
 
         var logEntries = new List<(string Level, string Message)>();
-        ArchiveTask[] tasks = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks);
+        ArchiveTask[] tasks = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks);
 
         foreach (ArchiveTask task in tasks)
         {
@@ -264,7 +264,7 @@ internal sealed class ExtractionConsumedGroupSettler
                 };
             }
 
-            _host.PurgeLayerSourcePackage(
+            _host.Source.PurgeLayerSourcePackage(
                 purgeTask,
                 verification: null,
                 commit: null,
@@ -299,7 +299,7 @@ internal sealed class ExtractionConsumedGroupSettler
         string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
 
         if (baseName.Length == 0
-            || !_host._groupConsumerByName.TryGetValue(baseName, out string? name)
+            || !_host._volumeLedgerState.GroupConsumerByName.TryGetValue(baseName, out string? name)
             || string.IsNullOrWhiteSpace(name))
         {
             return false;
@@ -310,7 +310,7 @@ internal sealed class ExtractionConsumedGroupSettler
             return false;   // 自己就是那个消费方
         }
 
-        ArchiveTask? owner = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(
+        ArchiveTask? owner = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(
             candidate => candidate != null && string.Equals(candidate.FileName, name, StringComparison.Ordinal));
 
         bool unfinished = owner == null
@@ -337,14 +337,14 @@ internal sealed class ExtractionConsumedGroupSettler
     /// （用户按这条去搬，只会白忙一场：内容已经在出来了）。</para>
     ///
     /// <para>判据只有两件事，都是**事实位**：① 这一单自己（或账上那几卷）出现在
-    /// <see cref="_host._consumedVolumeSources"/> 里（写入点唯一 = 递归结果带回来的那份名单）；
+    /// <see cref="_host._volumeLedgerState.ConsumedVolumeSources"/> 里（写入点唯一 = 递归结果带回来的那份名单）；
     /// ② 那个消费方这一批**真的成功了**（机器终态）。两条都成立 ⇒ 按跟班卷处理。</para>
     /// </summary>
     internal bool TryResolveConsumedByAnotherTask(ArchiveTask task, out string consumerName)
     {
         consumerName = string.Empty;
 
-        if (task == null || _host._consumedVolumeSources.Count == 0)
+        if (task == null || _host._volumeLedgerState.ConsumedVolumeSources.Count == 0)
         {
             return false;
         }
@@ -366,7 +366,7 @@ internal sealed class ExtractionConsumedGroupSettler
             ownPaths.Add(ownOnDisk);
         }
 
-        foreach ((string piecePath, string ownerName) in _host._consumedVolumeSources.ToList())
+        foreach ((string piecePath, string ownerName) in _host._volumeLedgerState.ConsumedVolumeSources.ToList())
         {
             bool mine = false;
 
@@ -403,7 +403,7 @@ internal sealed class ExtractionConsumedGroupSettler
 
             ArchiveTask? owner = null;
 
-            foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+            foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
             {
                 if (candidate == null || !string.Equals(candidate.FileName, ownerName, StringComparison.Ordinal))
                 {
@@ -443,7 +443,7 @@ internal sealed class ExtractionConsumedGroupSettler
     /// </summary>
     internal bool IsBorrowedPieceTask(ArchiveTask task)
     {
-        if (task == null || _host._consumedVolumeSources.Count == 0)
+        if (task == null || _host._volumeLedgerState.ConsumedVolumeSources.Count == 0)
         {
             return false;
         }
@@ -456,7 +456,7 @@ internal sealed class ExtractionConsumedGroupSettler
          */
         foreach (string path in ExtractionCoordinator.EnumerateOwnPaths(task))
         {
-            if (!string.IsNullOrWhiteSpace(path) && _host._consumedVolumeSources.ContainsKey(path))
+            if (!string.IsNullOrWhiteSpace(path) && _host._volumeLedgerState.ConsumedVolumeSources.ContainsKey(path))
             {
                 return true;
             }

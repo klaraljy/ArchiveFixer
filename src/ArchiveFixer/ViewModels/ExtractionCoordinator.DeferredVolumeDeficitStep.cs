@@ -62,7 +62,7 @@ internal sealed partial class ExtractionCoordinator
     // ===== 搬出去的那一块要用的私有成员：只在这里加最小 internal 访问器（⛔ 判据一个字不改）=====
 
     /// <summary>访问器：给 <see cref="DeferredVolumeDeficitHandler"/> 补一份"整批跑完之后"的行快照。</summary>
-    internal void AppendTaskRowSnapshotForDeferredVolumeDeficit() => AppendTaskRowSnapshot();
+    internal void AppendTaskRowSnapshotForDeferredVolumeDeficit() => LogCapture.AppendTaskRowSnapshot();
 
     // ===== 试开那一段的结论（把 9 个被改写的局部量一次交回调用方）=====
     private ExtractionDeferredVolumeRechecker? _deferredVolumeRechecker;

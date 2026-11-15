@@ -66,7 +66,7 @@ internal sealed partial class ExtractionCoordinator
     /// **批末补判**：把名单里那几个任务逐条重判一次（用户口径 2 的后半句）。
     ///
     /// <para>三步，全部读**盘上事实**：① 再收一次卷（<see cref="TryGatherVolumesBeforeExtract"/>）；
-    /// ② 现归一次组（<see cref="RebuildVolumeGroup"/>，既有出口）—— 看这一组现在齐不齐；
+    /// ② 现归一次组（<see cref="VolumeRepairHandler.RebuildVolumeGroup"/>，既有出口）—— 看这一组现在齐不齐；
     /// ③ 齐了 ⇒ 把这一单的起点改到第 1 卷、返回给调用方**照常跑这一组**；
     /// 仍然缺 ⇒ <paramref name="finalPass"/> 为 true 才如实报缺卷，否则继续留在名单里。</para>
     ///

@@ -53,7 +53,7 @@ public sealed class SplitGateScanBoundaryTests : IDisposable
 
         Assert.Equal(
             Path.GetFullPath(selected).TrimEnd(Path.DirectorySeparatorChar),
-            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
+            ExtractionSplitGateScanner.ResolveSplitGateScanBoundary(task, settings));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class SplitGateScanBoundaryTests : IDisposable
 
         Assert.Equal(
             Path.GetFullPath(Path.Combine(selected, "pack")).TrimEnd(Path.DirectorySeparatorChar),
-            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
+            ExtractionSplitGateScanner.ResolveSplitGateScanBoundary(task, settings));
     }
 
     [Fact]
@@ -94,6 +94,6 @@ public sealed class SplitGateScanBoundaryTests : IDisposable
 
         Assert.Equal(
             Path.GetFullPath(Path.Combine(outputRoot, "pack")).TrimEnd(Path.DirectorySeparatorChar),
-            ExtractionCoordinator.ResolveSplitGateScanBoundary(task, settings));
+            ExtractionSplitGateScanner.ResolveSplitGateScanBoundary(task, settings));
     }
 }

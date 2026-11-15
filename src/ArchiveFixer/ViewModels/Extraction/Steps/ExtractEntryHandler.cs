@@ -7,13 +7,16 @@ using ArchiveFixer.Storage;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 批量解压入口（手动「只解压」/「一键处理」）与批流程本体 —— 从
-/// <c>ExtractionCoordinator.ExtractEntryStep.cs</c> 整段搬出的真实现，判据、日志顺序、终态、
+/// 批量解压入口（手动「只解压」/「一键处理」）与批流程本体 —— 原
+/// <c>ViewModels/ExtractionCoordinator.ExtractEntryStep.cs</c> 的真实现（该分片已删除，现只剩
+/// <c>ViewModels/ExtractionCoordinator.Entries.cs</c> 的宿主门面），判据、日志顺序、终态、
 /// 源包处理口径与空间/并发记账逐字沿用原实现。
 ///
 /// <para>宿主 <see cref="ExtractionCoordinator"/> 仍是这条链上所有状态与步骤的拥有者：
-/// 本类只做编排 —— 宿主侧对每个公开入口只留一个同签名的薄转发，私有成员一律经
-/// 宿主那一侧的「最少 internal 访问器」（`ForEntry` 后缀那组）调用，⛔ 不改任何既有判据。</para>
+/// 本类只做编排 —— 宿主侧对每个公开入口只留一个同签名的薄转发（宿主门面见
+/// <c>ExtractionCoordinator.Entries.cs</c>）；协作类实例一律走宿主那一个实例
+/// （`_host.Schedule` / `_host.LogCapture` / `_host.VolumeLedger` / `_host.BatchReminders` …），
+/// 只有目标仍是别的分片私有成员的那几个口子走宿主访问器，⛔ 不改任何既有判据。</para>
 /// </summary>
 internal sealed class ExtractEntryHandler
 {
@@ -107,7 +110,7 @@ internal sealed class ExtractEntryHandler
              * 源根先于任何解压登记：账本项/产出物后面都要挂到这条稳定身份上。
              * 后续轮次会重复调用，登记是幂等的；⛔ 不在这里判组。
              */
-            _host.RegisterSourceRoots(selectedTasks, runOptions);
+            _host.VolumeHandoff.RegisterSourceRoots(selectedTasks, runOptions);
 
             try
             {
@@ -175,7 +178,7 @@ internal sealed class ExtractEntryHandler
              */
             if (oneClickRun && !continueDeferredVolumeDeficits)
             {
-                _host.BeginKeepInPlaceSourceProtection(selectedTasks);
+                _host.SourceProtection.BeginKeepInPlaceSourceProtection(selectedTasks);
             }
 
             /*
@@ -191,15 +194,15 @@ internal sealed class ExtractEntryHandler
              * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
              */
             int userParallel = Math.Max(1, maxParallel);
-            ExtractionSchedulePlan plan = _host.BuildSchedulePlanForEntry(selectedTasks, userParallel, _host._spaceTightPolicy.Enabled);
+            ExtractionSchedulePlan plan = _host.Schedule.BuildSchedulePlan(selectedTasks, userParallel, _host._spaceTightPolicy.Enabled);
 
             if (_host._spaceTightPolicy.Enabled)
             {
-                _host.SpaceLimit = _host.SpaceTightParallelForEntry(plan);
-                maxParallel = Math.Min(_host.SpaceLimit, userParallel);
+                _host.Schedule.SpaceLimit = _host.BatchReminders.ResolveSpaceTightParallelForBatch(plan);
+                maxParallel = Math.Min(_host.Schedule.SpaceLimit, userParallel);
             }
 
-            _host._cleanupLedger.Clear();
+            _host.Source.CleanupLedger.Clear();
             _host.PrepareRestHandlingForEntry();
 
             foreach (string line in plan.DescribeLines())
@@ -209,26 +212,26 @@ internal sealed class ExtractEntryHandler
 
             _host.LogRestHandlingForEntry();
 
-            _host.LogExtractionLimitsForEntry();
+            _host.Schedule.LogExtractionLimitsForBatch();
 
             /*
              * 「多层 + 空间小 ⇒ 中途才报空间不足」那句提醒（用户 2026-09-29 第 2 条）：
              * 必须在**动手之前**说，而且与确认框里那句用**同一份判据、同一段文案**
              * （见 EvaluateMultiLayerSpaceRisk / StatusText.MultiLayerSpaceRiskFormat）。
              */
-            _host.MultiLayerSpaceRiskReporterForEntry.LogMultiLayerSpaceRisk(plan);
+            _host.Schedule.MultiLayerSpaceRiskReporter.LogMultiLayerSpaceRisk(plan);
 
-            _host._spaceLedger = new SpaceReservationLedger(
-                _host.ProbeAvailableSpace(_host.ResolveSpaceProbePath(selectedTasks)),
-                _host.ReserveSpaceBytesForEntry);
+            _host.Schedule.SpaceLedger = new SpaceReservationLedger(
+                _host.Schedule.ProbeAvailableSpace(_host.Schedule.ResolveSpaceProbePath(selectedTasks)),
+                _host.Schedule.ReserveSpaceBytes);
 
-            _host.AppendLog("INFO", "空间账面：" + _host._spaceLedger!.Describe());
+            _host.AppendLog("INFO", "空间账面：" + _host.Schedule.SpaceLedger!.Describe());
 
             /*
              * 空间侦察：从这一刻起"时刻"看着这块盘（每 5 秒一针 + 每个任务开工 / 收尾各一针），
              * 批末写一条空间曲线。位置在账面之后、第一个任务之前 —— 起点的数字就是"开工前还剩多少"。
              */
-            _host.StartSpaceTrendMonitorForEntry(_host.ResolveSpaceProbePath(selectedTasks));
+            _host.Schedule.StartSpaceTrendMonitor(_host.Schedule.ResolveSpaceProbePath(selectedTasks));
 
             var runningTasks = new List<Task>();
             var runningTaskMap = new Dictionary<Task, ArchiveTask>();
@@ -236,11 +239,11 @@ internal sealed class ExtractEntryHandler
 
             if (_host._spaceTightPolicy.Enabled)
             {
-                _host.SpaceLimit = _host.ResolveDynamicSpaceParallelForEntry(plan.Ordered, runningCount: 0);
-                maxParallel = Math.Min(_host.SpaceLimit, userParallel);
+                _host.Schedule.SpaceLimit = _host.Schedule.ResolveDynamicSpaceParallel(plan.Ordered, runningCount: 0);
+                maxParallel = Math.Min(_host.Schedule.SpaceLimit, userParallel);
                 _host.AppendLog(
                     "INFO",
-                    $"空间不足动态并发：空间上限 {_host.SpaceLimit} 个，用户上限 {userParallel} 个 ⇒ 批首实际 {maxParallel} 个");
+                    $"空间不足动态并发：空间上限 {_host.Schedule.SpaceLimit} 个，用户上限 {userParallel} 个 ⇒ 批首实际 {maxParallel} 个");
             }
 
             /*
@@ -282,7 +285,7 @@ internal sealed class ExtractEntryHandler
             {
                 if (_host.IsStopping || _host._operationCts!.IsCancellationRequested)
                 {
-                    _host.LogStopRequestOnceForEntry();
+                    _host.LogCapture.LogStopRequestOnce();
                     break;
                 }
 
@@ -336,14 +339,14 @@ internal sealed class ExtractEntryHandler
                             .Where(candidate => !startedTasks.Contains(candidate.Task))
                             .ToList();
 
-                        _host.SpaceLimit = _host.ResolveDynamicSpaceParallelForEntry(pending, runningTasks.Count);
-                        int combined = Math.Min(_host.SpaceLimit, userParallel);
+                        _host.Schedule.SpaceLimit = _host.Schedule.ResolveDynamicSpaceParallel(pending, runningTasks.Count);
+                        int combined = Math.Min(_host.Schedule.SpaceLimit, userParallel);
 
                         if (combined != maxParallel)
                         {
                             _host.AppendLog(
                                 "INFO",
-                                $"空间不足动态并发：空间上限 {_host.SpaceLimit} 个，用户上限 {userParallel} 个 ⇒ 实际 {combined} 个（正在跑 {runningTasks.Count} 个）");
+                                $"空间不足动态并发：空间上限 {_host.Schedule.SpaceLimit} 个，用户上限 {userParallel} 个 ⇒ 实际 {combined} 个（正在跑 {runningTasks.Count} 个）");
                             maxParallel = combined;
                             scheduler.SetCapacity(maxParallel);
                         }
@@ -369,7 +372,7 @@ internal sealed class ExtractEntryHandler
                  */
                 if (_host.IsStopping || _host._operationCts!.IsCancellationRequested)
                 {
-                    _host.LogStopRequestOnceForEntry();
+                    _host.LogCapture.LogStopRequestOnce();
                     break;
                 }
 
@@ -400,9 +403,9 @@ internal sealed class ExtractEntryHandler
                  * **不是峰值**：源包已经在盘上、不在可用空间里，拿峰值比就是把源包算两遍
                  * （2026-09-29 真机：17.7 GiB 的三卷包在 33.45 GiB 可用的盘上被判"整盘都放不下"）。
                  */
-                ScheduledTaskRuntime runtime = _host.GetOrCreateRuntime(task);
+                ScheduledTaskRuntime runtime = _host.Schedule.GetOrCreateRuntime(task);
 
-                SpaceGateDecision gate = _host._spaceLedger!.TryReserve(
+                SpaceGateDecision gate = _host.Schedule.SpaceLedger!.TryReserve(
                     item.RequiredBytes,
                     item.Estimate.ReclaimableBytes);
 
@@ -415,7 +418,7 @@ internal sealed class ExtractEntryHandler
                      */
                     if (_host._spaceTightPolicy.Enabled)
                     {
-                        _host.MarkSpaceBlockedForEntry(task, item, gate);
+                        _host.Schedule.MarkSpaceBlocked(task, item, gate);
                         scheduler.MarkCompleted(scheduledWork);
                         continue;
                     }
@@ -440,13 +443,13 @@ internal sealed class ExtractEntryHandler
                      * 用户坐在屏幕前等着的时候**什么都不知道** —— 而这条提示的全部意义就是
                      * "现在告诉你一声，别干等"。排队不等于没空间不足，这一条该说还得说。
                      */
-                    _host.NotifySpaceBlockedOnceForEntry(task, item.RequiredBytes, gate.AvailableBytes, gate.ShortfallBytes);
+                    _host.Schedule.NotifySpaceBlockedOnce(task, item.RequiredBytes, gate.AvailableBytes, gate.ShortfallBytes);
 
                     continue;
                 }
 
                 runtime.ReservedBytes = gate.ProbeFailed ? 0L : item.RequiredBytes;
-                runtime.AvailableBeforeStart = _host._spaceLedger!.AvailableBytes;
+                runtime.AvailableBeforeStart = _host.Schedule.SpaceLedger!.AvailableBytes;
                 startedTasks.Add(task);
                 Task runningTask = _host.TaskRunner.RunScheduledTaskAsync(task, oneClickRun, runtime);
                 runningTaskMap[runningTask] = task;
@@ -460,11 +463,11 @@ internal sealed class ExtractEntryHandler
              * **目标 ④ 的范围记录**（用户 2026-10-24）：手动「只解压」没有轮循环，本批**不自动接手**
              * 分卷组（交接单照常登记、文件原地不动）。这里如实写一行，别让用户以为第二大步也跑了。
              */
-            if (!oneClickRun && _host.VolumeHandoffEntries.Count > 0)
+            if (!oneClickRun && _host.VolumeHandoff.Entries.Count > 0)
             {
                 _host.AppendLog(
                     "WARN",
-                    $"[第二大步] 手动「只解压」不自动接手分卷组：本批交接 {_host.VolumeHandoffEntries.Count} 份"
+                    $"[第二大步] 手动「只解压」不自动接手分卷组：本批交接 {_host.VolumeHandoff.Entries.Count} 份"
                     + "（文件原地没动）。要解这几组请用「一键处理」；这条路径不做建组 / 搬片。");
             }
 
@@ -474,7 +477,7 @@ internal sealed class ExtractEntryHandler
              */
             foreach ((ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) in spaceWaiting)
             {
-                _host.MarkSpaceBlockedForEntry(waitingTask, waitingItem, waitingGate);
+                _host.Schedule.MarkSpaceBlocked(waitingTask, waitingItem, waitingGate);
             }
 
             _host.AppendLog("INFO", "批量解压完成");
@@ -516,20 +519,20 @@ internal sealed class ExtractEntryHandler
              * 状态 ⇒ 导出的日志里最后一份快照停在批首的中性档（真机那两行写着「等待解压」，
              * 用户据此判定"显示不对"）。⇒ 收成唯一出口 `AppendTaskRowSnapshot`，两处都调它。
              */
-            _host.AppendTaskRowSnapshotForEntry();
+            _host.LogCapture.AppendTaskRowSnapshot();
 
 
-            _host.AppendBatchSummaryForEntry(selectedTasks);
+            _host.BatchSummary.AppendBatchSummary(selectedTasks);
 
             /*
              * ⛔ **批末重试"过路层其余物按档删"**（真机 2026-10-06 20:07 的 48.35 MB）：
              * 收场那一刻半套分卷闸门拦得对（同组的片还在成品树里），可那一组随后就解完了
              * ⇒ 到这里障碍已经消失；不补这一次，那份其余物就永远没人再看一眼。
              */
-            _host.RetryPendingPassThroughRestPurgesForEntry();
+            _host.VolumeLedger.RetryPendingPassThroughRestPurges();
 
             // 其余物处理的批末汇总（第 44 条：逐任务一行 + 这里一条，替掉以前几十行长文案）。
-            (int purgedTasks, long purgedBytes, bool purgedPermanently) = _host.ReadBatchPurgeForEntry();
+            (int purgedTasks, long purgedBytes, bool purgedPermanently) = _host.LogCapture.ReadBatchPurge();
 
             if (purgedTasks > 0)
             {
@@ -551,7 +554,7 @@ internal sealed class ExtractEntryHandler
              *
              * 每一条都带具体数字与建议动作 —— 这一行往往是用户唯一能拿到的行动线索。
              */
-            _host.ReportSpaceBlockedTasksForEntry();
+            _host.Schedule.ReportSpaceBlockedTasks();
 
             /*
              * 询问次数写进日志：决策 D-4 要求"本批只问一次"，这一行就是它的证据 ——
@@ -611,7 +614,7 @@ internal sealed class ExtractEntryHandler
              * 空间规划与本批记账同样"只活这一批"：
              * 上一批的账本必须丢掉（下一批的可用空间与任务集都变了）。
              */
-            _host._spaceLedger = null;
+            _host.Schedule.SpaceLedger = null;
 
             /*
              * ⚠ 这里**刻意不**把 `RestHandlingThisBatch` 落回 Keep（2026-09-25 第 32 条被测试逮住）。
@@ -643,7 +646,7 @@ internal sealed class ExtractEntryHandler
             _host._oneClickThisBatch = false;
 
             // 空间侦察：停循环 + 把这一批的空间曲线写进日志（用户 2026-09-27 要求"时刻侦察空间变化"）。
-            _host.StopSpaceTrendMonitorForEntry();
+            _host.Schedule.StopSpaceTrendMonitor();
 
             /*
              * 顺手把**空的工作区壳**收掉（用户 2026-09-27：真机跑完 `…\.ArchiveFixer.work\recursive`

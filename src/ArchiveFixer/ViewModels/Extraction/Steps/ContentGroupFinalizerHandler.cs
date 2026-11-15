@@ -2,6 +2,7 @@ using ArchiveFixer.BindingModels;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,15 +15,26 @@ namespace ArchiveFixer.ViewModels;
 /// 内容组最终内容判决（从 `ExtractionCoordinator.ContentGroupFinalizerStep.cs` 搬出）：
 /// 从当前任务表回填每组最终内容、登记最终组失败、收掉过程物的空输出壳
 /// —— 任务级成功不代替组级最终内容。
-/// ⛔ 判据、日志顺序、写入点逐字沿用原实现；协调器只保留同名薄转发与一处最小 internal 访问器。
+/// ⛔ 判据、日志顺序、写入点逐字沿用原实现。
+///
+/// <para>本类就是组级入口的**唯一落点**（M5：协调器那两个分片
+/// <c>ExtractionCoordinator.ContentGroupFinalizerStep.cs</c> 与
+/// <c>ExtractionCoordinator.ContentGroupSettlementStep.cs</c> 均已删除，不再留薄转发）：
+/// 调用点直接 <c>new ContentGroupFinalizerHandler(coordinator)</c>。过程物保留仍只有
+/// <see cref="ProcessArtifactPreserver.PreserveCurrentProcessArtifacts"/> 一个实现，
+/// 这里只是按宿主同一档口径直接持有它（该协作类无自身状态，只有宿主引用）。</para>
+/// <para>组级源包结算 <see cref="SettleVerifiedContentGroupSources"/> 与最终内容判决同住一类：
+/// 前者只认后者写下的 <see cref="ContentGroup.FinalContentVerified"/>，两者是同一件事的判定与执行。</para>
 /// </summary>
 internal sealed class ContentGroupFinalizerHandler
 {
     private readonly ExtractionCoordinator _host;
+    private readonly ProcessArtifactPreserver _processArtifactPreserver;
 
     internal ContentGroupFinalizerHandler(ExtractionCoordinator host)
     {
         _host = host;
+        _processArtifactPreserver = new(host);
     }
 
     /// <summary>
@@ -41,7 +53,7 @@ internal sealed class ContentGroupFinalizerHandler
     {
         if (unit == null
             || kind == FinalGroupFailureKind.None
-            || !_host._extractionContentGraph.TryGetContentGroup(
+            || !_host.VolumeHandoff.ContentGraph.TryGetContentGroup(
                 unit.BaseName,
                 unit.Family,
                 unit.SourceLayer,
@@ -70,7 +82,7 @@ internal sealed class ContentGroupFinalizerHandler
             }
 
             bool isSource = string.IsNullOrWhiteSpace(producer.CurrentPath)
-                || _host.IsUserImportedSourcePath(producer.CurrentPath)
+                || _host.PieceAdoption.IsUserImportedSourcePath(producer.CurrentPath)
                 || SafePathHelper.PathEquals(producer.CurrentPath, producer.OriginalPath);
 
             group.RecordFinalLayerProducer(producer.FileName, producer.CurrentPath, isSource);
@@ -105,7 +117,7 @@ internal sealed class ContentGroupFinalizerHandler
         if (processOwner != null
             && !string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
         {
-            _host.PreserveCurrentProcessArtifactsForContentGroupFinalizer(
+            _processArtifactPreserver.PreserveCurrentProcessArtifacts(
                 processOwner,
                 group.CurrentProcessArtifactPaths,
                 group.CurrentProcessArtifactPath);
@@ -123,7 +135,7 @@ internal sealed class ContentGroupFinalizerHandler
 
         int changedCount = 0;
 
-        foreach (ContentGroup group in _host._extractionContentGraph.ContentGroups.ToList())
+        foreach (ContentGroup group in _host.VolumeHandoff.ContentGraph.ContentGroups.ToList())
         {
             ArchiveTask? owner = FindContentGroupOwner(group, tasks);
 
@@ -186,7 +198,7 @@ internal sealed class ContentGroupFinalizerHandler
 
                 if (!string.IsNullOrWhiteSpace(group.CurrentProcessArtifactPath))
                 {
-                    _host.PreserveCurrentProcessArtifactsForContentGroupFinalizer(
+                    _processArtifactPreserver.PreserveCurrentProcessArtifacts(
                         owner,
                         group.CurrentProcessArtifactPaths,
                         group.CurrentProcessArtifactPath);
@@ -493,6 +505,130 @@ internal sealed class ContentGroupFinalizerHandler
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 组级源包处理（M5：从 <c>ExtractionCoordinator.ContentGroupSettlementStep.cs</c> 整份并入，
+    /// 协调器那一分片已删除；判据、日志顺序、写入点逐字沿用原实现）。
+    /// 和旧的“逐 rootTask 看 OutputPath”不同：
+    /// 组里任何一个贡献源根都只在**组最终内容已证**时删；组未证/部分/判不出 ⇒ 一个字节不动。
+    /// </summary>
+    internal int SettleVerifiedContentGroupSources(OneClickRunOptions? runOptions)
+    {
+        SourceHandlingMode handling = runOptions?.SourceHandling
+            ?? AppSettings.ParseSourceHandling(_host.Settings.SourceHandling);
+
+        if (handling != SourceHandlingMode.DeleteInPlace)
+        {
+            return 0;
+        }
+
+        int deleted = 0;
+
+        foreach (ContentGroup group in _host.VolumeHandoff.ContentGraph.ContentGroups.ToList())
+        {
+            if (!group.FinalContentVerified)
+            {
+                continue;
+            }
+
+            var verdict = new ResultCompletenessVerdict
+            {
+                State = ResultCompleteness.Complete,
+                Evidence = "ContentGroup=" + group.GroupId,
+                Message = "组最终内容已证完整",
+                Blocker = string.Empty
+            };
+
+            var logEntries = new List<(string Level, string Message)>();
+            var handled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int groupDeleted = 0;
+
+            foreach (string rootId in group.SourceRootIds)
+            {
+                ArchiveTask? task = FindSourceRootTask(rootId);
+
+                if (task == null
+                    || string.IsNullOrWhiteSpace(task.CurrentPath)
+                    || !handled.Add(task.CurrentPath))
+                {
+                    continue;
+                }
+
+                string? failure = _host.Source.PurgeLayerSourcePackage(
+                    task,
+                    verification: null,
+                    commit: null,
+                    logEntries,
+                    LayerPurgeTrigger.SourceHandlingDelete,
+                    reclaimVerdict: verdict,
+                    reclaimLabel: group.BaseName + "（组源包）");
+
+                if (failure == null && task.SourcePackageMove == SourcePackageMoveState.Done)
+                {
+                    deleted++;
+                    groupDeleted++;
+                }
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                _host.AppendLog(level, message);
+            }
+
+            if (groupDeleted > 0)
+            {
+                _host.AppendLog(
+                    "INFO",
+                    $"[内容组·源包] {group.BaseName}：组最终内容已证，按「彻底删除」处理来源根"
+                    + $"（本次成功 {groupDeleted} 个；来源根 {group.SourceRootIds.Count} 个）。");
+            }
+        }
+
+        return deleted;
+    }
+
+    private ArchiveTask? FindSourceRootTask(string rootId)
+    {
+        string wanted = NormalizeSourceRootPath(rootId);
+
+        if (wanted.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
+        {
+            if (task == null)
+            {
+                continue;
+            }
+
+            if (string.Equals(NormalizeSourceRootPath(task.OriginalPath), wanted, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeSourceRootPath(task.CurrentPath), wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                return task;
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeSourceRootPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path.Trim();
         }
     }
 }

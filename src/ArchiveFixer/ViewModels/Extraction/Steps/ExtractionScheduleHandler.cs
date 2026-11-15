@@ -25,14 +25,14 @@ namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 空间体检/趋势/调度计划/空间闸门/多层风险/批级上限（第 12 块，M5 从
-/// <c>ExtractionCoordinator.ExtractionScheduleStep</c> 按职责搬出的执行体）。
+/// <c>ExtractionCoordinator.ExtractionScheduleStep.cs</c> 按职责搬出的执行体；那一分片已删除）。
 ///
-/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：调度判据、文案、日志顺序与原来逐字一致；
-/// 宿主那一侧只留同签名薄转发与仍被其他分片直接读写的本批状态，调用点一处未改。</para>
+/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：调度判据、文案、日志顺序与原来逐字一致。
+/// 入口是宿主上的 <c>ExtractionCoordinator.Schedule</c>（懒建一次、全批共用同一个实例），调用点直接走它 ——
+/// 宿主那一侧不再留同签名薄转发。</para>
 ///
-/// <para>本批的可变记账（探测路径、空间侦察器、逐任务运行期预留、被空间门拦下的清单）随之归本类持有：
-/// 宿主上只有一个实例，且在 partial 里用 <c>??=</c> 懒建一次（与 <c>ExtractionBatchEntry</c> /
-/// <c>BatchReminderHandler</c> 同一寿命口径）⇒「这一批只认这一份」的口径与原来完全一致。
+/// <para>本批的状态（两个注入点、覆盖余量、预留账本、并发上限、被空间门拦下的清单、空间侦察器）
+/// 也归本类持有：生命周期与原来完全一致（宿主上只有这一个实例）⇒「这一批只认这一份」的口径不变。
 /// ⛔ 不用反射、不新增第二套判断。</para>
 /// </summary>
 internal sealed class ExtractionScheduleHandler
@@ -43,6 +43,48 @@ internal sealed class ExtractionScheduleHandler
     {
         _host = host;
     }
+
+    /*
+     * ===== 本块的状态（原 ExtractionCoordinator.ExtractionScheduleStep.cs 已删除，随实现一起搬到本类）=====
+     *
+     * 两个覆盖点是"假盘"出口：真机上没法把盘写成只剩 3 MiB，而"空间不足就不启动"是本批最核心的
+     * 行为之一 —— 只靠读代码是证明不了的，单测用它造一块假盘。其余全是"只活这一批"的记账。
+     */
+
+    /// <summary>可用空间探测（可注入；单测用它造一块假盘）。</summary>
+    internal Func<string, long?>? SpaceProbeOverride { get; set; }
+
+    /// <summary>
+    /// 要保留的余量（可注入）。默认取 <see cref="SpaceGate.DefaultReserveBytes"/>（512 MiB）：
+    /// 单测里不调小它，任何几十字节的样本都会被它拦下 —— 那样测的就不是被测逻辑了。
+    /// </summary>
+    internal long? SpaceReserveOverride { get; set; }
+
+    internal long ReserveSpaceBytes => SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes;
+
+    /// <summary>本批的空间预留账本（串行时也建，只是永远只有一个任务在账上）。</summary>
+    internal SpaceReservationLedger? SpaceLedger { get; set; }
+
+    /// <summary>
+    /// 本批那条"中途空间不足"的纯提示**弹过没有**（用户 2026-09-29 第 2 条：同一批只弹一次）：
+    /// 后面的同类情况只写日志 —— 一批几十个包时逐个弹等于把批卡死在他面前。
+    /// </summary>
+    internal bool SpaceBlockedNoticeShown { get; set; }
+
+    /// <summary>空间不足模式下的并发上限（批首定一次；动态重算时更新）。</summary>
+    internal int SpaceLimit { get; set; } = int.MaxValue;
+
+    /// <summary>
+    /// 解压前的资源预算上限（不变量 8），四条全部来自设置：解压前预检 / 产物事后核算 /
+    /// 内嵌 ZIP 直读 / 递归累计上限都读这一个出口，口径不可能再分叉。
+    /// </summary>
+    internal ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(_host.Settings);
+
+    private ExtractionMultiLayerSpaceRiskReporter? _multiLayerSpaceRiskReporter;
+
+    /// <summary>多层展开的空间风险报表器（懒建一次；宿主就是本协调器）。</summary>
+    internal ExtractionMultiLayerSpaceRiskReporter MultiLayerSpaceRiskReporter =>
+        _multiLayerSpaceRiskReporter ??= new ExtractionMultiLayerSpaceRiskReporter(_host);
 
     /// <summary>
     /// 给界面算一次"按当前可用空间，最多能并行几个"（用户 2026-09-22 需求第 2 条）。
@@ -87,8 +129,8 @@ internal sealed class ExtractionScheduleHandler
 
     internal long? ProbeAvailableSpace(string path)
     {
-        return _host.SpaceProbeOverride != null
-            ? _host.SpaceProbeOverride(path)
+        return SpaceProbeOverride != null
+            ? SpaceProbeOverride(path)
             : SpaceChecker.GetAvailableFreeSpace(path);
     }
 
@@ -243,7 +285,7 @@ internal sealed class ExtractionScheduleHandler
     /// </summary>
     internal void ResetSpacePlanningState()
     {
-        _host._spaceLedger = null;
+        SpaceLedger = null;
         _spaceProbePath = string.Empty;
 
         lock (_spaceRuntimeLock)
@@ -252,10 +294,10 @@ internal sealed class ExtractionScheduleHandler
         }
 
         _spaceBlockedTasks.Clear();
-        _host._unrecognizedMaybePiece.Clear();
+        _host._volumeLedgerState.UnrecognizedMaybePiece.Clear();
 
         // 那一次"中途空间不足"的纯提示也跟着本批记账一起清零：下一批该弹还得弹。
-        _host._spaceBlockedNoticeShown = false;
+        SpaceBlockedNoticeShown = false;
     }
 
     internal ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
@@ -301,7 +343,7 @@ internal sealed class ExtractionScheduleHandler
             task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task), _host.PartialPublishActive)
                 .WithVolumeLayout(ResolveWorkspaceVolumeShare(ResolveSpaceProbePathOrBatch(task))),
             ProbeAvailableSpace(_spaceProbePath),
-            _host.ReserveSpaceBytesForSchedule,
+            ReserveSpaceBytes,
             requestedParallel,
             sortKey,
             spaceTightOrdering ? ExtractionSchedulePlan.SourceSizeDescendingOrderBasis : ExtractionSchedulePlan.DurationDescendingOrderBasis
@@ -322,10 +364,10 @@ internal sealed class ExtractionScheduleHandler
             return Math.Max(1, runningCount);
         }
 
-        long remaining = _host._spaceLedger != null && _host._spaceLedger.AvailableBytes >= 0
-            ? _host._spaceLedger.RemainingBytes
+        long remaining = SpaceLedger != null && SpaceLedger.AvailableBytes >= 0
+            ? SpaceLedger.RemainingBytes
             : ProbeAvailableSpace(_spaceProbePath) is long available
-                ? Math.Max(0, available - _host.ReserveSpaceBytesForSchedule)
+                ? Math.Max(0, available - ReserveSpaceBytes)
                 : -1;
 
         if (remaining < 0)
@@ -425,7 +467,7 @@ internal sealed class ExtractionScheduleHandler
             return false;
         }
 
-        return !_host.IsSecondStepTask(task);
+        return !new ExtractionVolumeStepFacts(_host).IsSecondStepTask(task);
     }
 
     /// <summary>
@@ -565,12 +607,12 @@ internal sealed class ExtractionScheduleHandler
     /// </summary>
     internal void NotifySpaceBlockedOnce(ArchiveTask task, long requiredBytes, long availableBytes, long shortfallBytes)
     {
-        if (!_host._oneClickThisBatch || _host._spaceBlockedNoticeShown)
+        if (!_host._oneClickThisBatch || SpaceBlockedNoticeShown)
         {
             return;
         }
 
-        _host._spaceBlockedNoticeShown = true;
+        SpaceBlockedNoticeShown = true;
 
         string name = string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName;
 
@@ -627,7 +669,7 @@ internal sealed class ExtractionScheduleHandler
     {
         _host.AppendLog(
             "INFO",
-            "安全上限（解压前预算）：" + _host.BudgetLimits.Describe()
+            "安全上限（解压前预算）：" + BudgetLimits.Describe()
             + "。超过就不解这个包（预检拒绝，一个字节都不写）；"
             + "可在⑧设置 →「安全上限」里按自己的盘与资源改。");
     }
@@ -685,7 +727,7 @@ internal sealed class ExtractionScheduleHandler
     /// </summary>
     internal SpaceGateDecision ReconcileReservation(ArchiveTask task, TaskSpaceEstimate refined)
     {
-        SpaceReservationLedger? ledger = _host._spaceLedger;
+        SpaceReservationLedger? ledger = SpaceLedger;
 
         if (ledger == null)
         {
@@ -693,7 +735,7 @@ internal sealed class ExtractionScheduleHandler
             return SpaceGate.Check(
                 refined.FreeSpaceDemandBytes,
                 ProbeAvailableSpace(ResolveSpaceProbePathOrBatch(task)),
-                _host.ReserveSpaceBytesForSchedule,
+                ReserveSpaceBytes,
                 0,
                 refined.ReclaimableBytes);
         }

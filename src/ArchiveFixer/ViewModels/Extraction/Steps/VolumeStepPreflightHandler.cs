@@ -14,12 +14,13 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 第二大步开工前检查 + 组收片账（从 `ExtractionCoordinator.VolumeStepPreflightStep.cs` 整块搬出）：
-/// 缺卷不开工 / 缺卷不在批首判死 / 最后一遍仍缺才如实报缺卷；组收片账（基名 + 入口层 + 片清单）的
-/// 登记与清空、入口层临时标准名目录与遗留壳的删除、成功收片失败留片。
+/// 第二大步开工前检查 + 组收片账（M5：原 <c>ExtractionCoordinator.VolumeStepPreflightStep.cs</c>
+/// 已整份删除，成员全部并进本类）：缺卷不开工 / 缺卷不在批首判死 / 最后一遍仍缺才如实报缺卷；
+/// 组收片账（基名 + 入口层 + 片清单）的登记与清空、入口层临时标准名目录与遗留壳的删除、
+/// 成功收片失败留片；缺卷补救子系统 <see cref="VolumeRepairHandler"/> 的唯一持有者。
 ///
 /// <para>⛔ 判据、文案、日志顺序、删除路径一个字没改；本类只持有宿主
-/// <see cref="ExtractionCoordinator"/>，两本账仍落在宿主字段上（状态只有一份，实现只有一处）。</para>
+/// <see cref="ExtractionCoordinator"/>，两本账与缺卷补救子系统都在本类里（宿主不再留同名薄转发）。</para>
 /// </summary>
 internal sealed class VolumeStepPreflightHandler
 {
@@ -29,6 +30,31 @@ internal sealed class VolumeStepPreflightHandler
     {
         _host = host;
     }
+
+    /*
+     * ⚠ 本类由宿主**构造时建一次**（`ExtractionCoordinator` 的 `_volumeStepPreflight`），⛔ 不懒建：
+     * 下面两本账是无锁字典，批内任务线程会同时读写；无锁懒建一旦造出第二个实例，账就会分成两半。
+     */
+
+    /// <summary>第二大步入口任务 ⇒ 它这一组的基名/入口层/片清单（成功后收片与回写用；批首清空）。</summary>
+    private readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _groupWork = new();
+
+    /// <summary>第二大步每组一句话结论（批末回写读它；⛔ 不从日志反推）。</summary>
+    private readonly Dictionary<string, string> _groupVerdicts = new(StringComparer.OrdinalIgnoreCase);
+
+    private VolumeRepairHandler? _volumeRepairHandler;
+
+    /// <summary>缺卷补救与批前收卷的唯一实例（本类是它唯一的调用方；实现见 <see cref="VolumeRepairHandler"/>）。</summary>
+    private VolumeRepairHandler VolumeRepair => _volumeRepairHandler ??= new VolumeRepairHandler(_host);
+
+    /// <summary>组收片账（别的协调类读）：入口任务 ⇒ 基名/入口层/片清单。</summary>
+    internal IReadOnlyDictionary<ArchiveTask, VolumeStepGroupWork> GroupWork => _groupWork;
+
+    /// <summary>第二大步每组一句话结论（别的协调类读；⛔ 不从日志反推）。</summary>
+    internal IReadOnlyDictionary<string, string> GroupVerdicts => _groupVerdicts;
+
+    /// <summary>组收片账的一条：基名 + 入口层 + 片清单。</summary>
+    internal sealed record VolumeStepGroupWork(string BaseName, string EntryLayer, IReadOnlyList<string> Pieces);
 
     /// <summary>
     /// 第二大步开工前的唯一出口：返回 <c>true</c> = 这一单**这一次不开工**（调用方直接 return）。
@@ -50,7 +76,7 @@ internal sealed class VolumeStepPreflightHandler
          * ⚠ 但结论**不再当场落死**了，见下面那两段（用户 2026-10-05 口径 2）。
          */
         bool repaired = !oneClickRun
-            && await _host.TryRepairMissingVolumesForVolumeStepPreflightAsync(task, cancellationToken);
+            && await VolumeRepair.TryRepairMissingVolumesAsync(task, cancellationToken);
 
         if (!repaired)
         {
@@ -76,9 +102,9 @@ internal sealed class VolumeStepPreflightHandler
              * 唯一"没有结论"的出口是"整条链跑到一半被用户停下 / 撞上轮数上限" —— 那时它留在
              * 「未处理」那一档，如实反映"这一批没轮到它"。
              */
-            if (!_host._volumeDeficitFinalPass.Contains(task))
+            if (!_host._volumeLedgerState.VolumeDeficitFinalPass.Contains(task))
             {
-                _host.RecordDeferredVolumeDeficitForVolumeStepPreflight(task, ExtractionCoordinator.DescribeMissingVolumeNames(task));
+                _host.VolumeLedger.RecordDeferredVolumeDeficit(task, StalledGroupHandler.DescribeMissingVolumeNames(task));
                 return true;
             }
 
@@ -143,21 +169,14 @@ internal sealed class VolumeStepPreflightHandler
             return;
         }
 
-        _host._volumeStepGroupWork[task] = new ExtractionCoordinator.VolumeStepGroupWork(baseName, entryLayer, pieces);
-    }
-
-    /// <summary>批首清空（与交接账同一处调用）：⛔ 不许把上一批的收片账带进下一批。</summary>
-    internal void ResetVolumeStepGroupWork()
-    {
-        _host._volumeStepGroupWork.Clear();
-        _host._volumeStepGroupVerdicts.Clear();
+        _groupWork[task] = new VolumeStepGroupWork(baseName, entryLayer, pieces);
     }
 
     /// <summary>
     /// **P3b 第二步：成功收片 / 失败留片**（用户 2026-10-21 口径）。
     ///
     /// <para>成功（校验通过）⇒ 入口层里这一组的片按过程物删掉，**用户导入的原件不删**（唯一判据
-    /// <see cref="IsUserImportedSourcePath"/>）；失败 / 密码错 / 缺卷 ⇒ 调用方**不调**本方法，
+    /// <see cref="PieceAdoptionHandler.IsUserImportedSourcePath"/>）；失败 / 密码错 / 缺卷 ⇒ 调用方**不调**本方法，
     /// 片全部留在入口层等补密码（这里也留一道保险：没成功只写一行、一个字节不动）。</para>
     /// </summary>
     /// <summary>
@@ -166,24 +185,24 @@ internal sealed class VolumeStepPreflightHandler
     /// </summary>
     internal void CleanupVolumeStepGroupEntry(ArchiveTask task)
     {
-        if (task == null || !_host._volumeStepGroupWork.TryGetValue(task, out ExtractionCoordinator.VolumeStepGroupWork? work))
+        if (task == null || !_groupWork.TryGetValue(task, out VolumeStepGroupWork? work))
         {
             return;
         }
 
         ArchiveFixer.Extraction.VolumeStep.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
-        _host._volumeStepGroupWork.Remove(task);
+        _groupWork.Remove(task);
     }
 
     /// <summary>批末清理所有临时标准名入口目录；只删 group-entry 壳，源片不动。</summary>
     internal void CleanupAllVolumeStepEntryDirectories()
     {
-        foreach (ExtractionCoordinator.VolumeStepGroupWork work in _host._volumeStepGroupWork.Values)
+        foreach (VolumeStepGroupWork work in _groupWork.Values)
         {
             ArchiveFixer.Extraction.VolumeStep.VolumeGroupEntryDirectory.TryDelete(work.EntryLayer);
         }
 
-        _host._volumeStepGroupWork.Clear();
+        _groupWork.Clear();
     }
 
     /// <summary>
@@ -229,7 +248,7 @@ internal sealed class VolumeStepPreflightHandler
 
     internal void TryPurgeSolvedVolumeStepPieces(ArchiveTask task)
     {
-        if (task == null || !_host._volumeStepGroupWork.TryGetValue(task, out ExtractionCoordinator.VolumeStepGroupWork? work))
+        if (task == null || !_groupWork.TryGetValue(task, out VolumeStepGroupWork? work))
         {
             return;
         }
@@ -246,11 +265,11 @@ internal sealed class VolumeStepPreflightHandler
                 $"[第二大步·收片] {task.LogName}：本次没成功 ⇒ 入口层里的片全部留着"
                 + "（失败 / 密码错 / 缺卷不删，等补密码）。");
 
-            _host.MarkVolumeHandoffVerdict(
+            _host.VolumeHandoff.Ledger.MarkVolumeHandoffVerdict(
                 work.Pieces,
                 "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
 
-            _host._volumeStepGroupVerdicts[work.BaseName] = "没成功（密码错 / 缺卷 / 失败），片全部留在入口层";
+            _groupVerdicts[work.BaseName] = "没成功（密码错 / 缺卷 / 失败），片全部留在入口层";
 
             return;
         }
@@ -258,7 +277,7 @@ internal sealed class VolumeStepPreflightHandler
         int deleted = ArchiveFixer.Extraction.VolumeGroupEntryLayer.PurgeSolvedGroupPiecesInEntryLayer(
             work.Pieces,
             work.EntryLayer,
-            path => _host.IsUserImportedSourcePath(path),
+            path => _host.PieceAdoption.IsUserImportedSourcePath(path),
             (level, message) => _host.AppendLog(level, $"[第二大步·收片] {message}"));
 
         /*
@@ -277,7 +296,7 @@ internal sealed class VolumeStepPreflightHandler
         {
             if (string.IsNullOrWhiteSpace(piecePath)
                 || !File.Exists(piecePath)
-                || _host.IsUserImportedSourcePath(piecePath))
+                || _host.PieceAdoption.IsUserImportedSourcePath(piecePath))
             {
                 continue;
             }
@@ -304,12 +323,12 @@ internal sealed class VolumeStepPreflightHandler
 
         _host.MarkVolumeGroupPiecesConsumed(work.Pieces);
 
-        _host.MarkVolumeHandoffVerdict(
+        _host.VolumeHandoff.Ledger.MarkVolumeHandoffVerdict(
             work.Pieces,
             $"解压成功，入口层收片 {deleted} 片（用户原件不删）");
 
-        _host._volumeStepGroupVerdicts[work.BaseName] = $"解压成功，入口层收片 {deleted} 片（用户原件不删）";
+        _groupVerdicts[work.BaseName] = $"解压成功，入口层收片 {deleted} 片（用户原件不删）";
 
-        _host._volumeStepGroupWork.Remove(task);
+        _groupWork.Remove(task);
     }
 }

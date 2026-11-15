@@ -27,7 +27,7 @@ namespace ArchiveFixer.Detection;
 /// <item><description><b>产物落在入口包所在的那一层</b>（⛔ 不是"任务表里这一组第一单所在目录" ——
 /// 那是导入顺序，真机 `CCCC` 就因为它在 `111(4)` 而把产物带到了 `111(4)\111`）。
 /// 入口包还没解出来（正压在某个包里）时，它该落在**产出它的那个包自己那条链**里，
-/// 这件事由调用方（<c>ExtractionCoordinator.ResolveOwnerChainDirectory</c>）回答，⛔ 不在这里猜。</description></item>
+/// 这件事由调用方（<c>PieceAdoptionHandler.ResolveOwnerChainDirectory</c>）回答，⛔ 不在这里猜。</description></item>
 /// </list>
 ///
 /// <para>三族只用一个判据：<see cref="LegacyVolumeNames.TryGetIndex"/> 返回 <c>1</c> 的那一份

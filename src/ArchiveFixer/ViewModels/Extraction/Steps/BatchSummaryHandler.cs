@@ -23,12 +23,30 @@ using System.Windows;
 
 namespace ArchiveFixer.ViewModels;
 
-/// <summary>批末一条汇总（任务数/成功/失败/跳过/用时 + 失败逐条；第 8 块，同一 partial 类）。</summary>
-internal sealed partial class ExtractionCoordinator
+/// <summary>
+/// 批末一条汇总（任务数/成功/失败/跳过/用时 + 失败逐条；第 8 块）。
+///
+/// <para>M5：实现整块从 <c>ExtractionCoordinator.BatchSummaryStep.cs</c> 搬进本协作类，
+/// 协调器那一分片已整份删除、⛔ 不再留同名薄转发；入口是宿主上的
+/// <c>ExtractionCoordinator.BatchSummary</c>。搬的只是代码位置：判据、文案、日志顺序与
+/// 数字口径一个字都没改，数字仍只来自 <see cref="BatchOutcomeTally"/> 那一个出口。</para>
+///
+/// <para>⚠ 诊断日志归属：两处 <c>AppendLog</c> 的 <c>CallerFilePath/CallerLineNumber</c>
+/// 从分片文件变成本文件（与 <c>LogCaptureHandler</c> / <c>RecursionHandler</c> 迁移同口径）；
+/// 级别、文案、errorCode、component 不变。</para>
+/// </summary>
+internal sealed class BatchSummaryHandler
 {
-    private void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
+    private readonly ExtractionCoordinator _host;
+
+    internal BatchSummaryHandler(ExtractionCoordinator host)
     {
-        CleanupConfirmedOrderStagingDirectories();
+        _host = host;
+    }
+
+    internal void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
+    {
+        _host.PieceAdoption.CleanupConfirmedOrderStagingDirectories();
 
         if (tasks == null || tasks.Count == 0)
         {
@@ -63,7 +81,7 @@ internal sealed partial class ExtractionCoordinator
             parts.Add("用时 " + elapsed);
         }
 
-        AppendLog(
+        _host.AppendLog(
             tally.Failed > 0 ? "WARN" : "INFO",
             $"本批汇总：{tally.Total} 个任务 —— {string.Join(" / ", parts)}。"
             + (tally.FollowerSkipped > 0 ? " " + tally.DescribeFollowerNote() : string.Empty)
@@ -87,7 +105,7 @@ internal sealed partial class ExtractionCoordinator
 
         if (volumePieces.Count > 0)
         {
-            AppendLog(
+            _host.AppendLog(
                 "INFO",
                 string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
@@ -113,7 +131,7 @@ internal sealed partial class ExtractionCoordinator
 
         if (passwordSuspects.Count > 0)
         {
-            AppendLog(
+            _host.AppendLog(
                 "ERROR",
                 string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
@@ -136,12 +154,12 @@ internal sealed partial class ExtractionCoordinator
          */
         foreach (ArchiveTask task in tasks.Where(BatchOutcomeTally.IsCountedAsFailure).Take(MaxBatchSummaryFailures))
         {
-            AppendLog("WARN", $"  失败：{task.FileName} —— {task.Status}");
+            _host.AppendLog("WARN", $"  失败：{task.FileName} —— {task.Status}");
         }
 
         if (tally.Failed > MaxBatchSummaryFailures)
         {
-            AppendLog("WARN", $"  …还有 {tally.Failed - MaxBatchSummaryFailures} 个失败没列出来（完整清单见「导出失败清单」）");
+            _host.AppendLog("WARN", $"  …还有 {tally.Failed - MaxBatchSummaryFailures} 个失败没列出来（完整清单见「导出失败清单」）");
         }
     }
 

@@ -65,21 +65,21 @@ internal sealed class OneClickConfirmFlow
              * （<see cref="AppSettings.RemindBeforeExtract"/>，用户 2026-09-24 第 15 条要求可关）。
              * 关掉它的人不该在确认框里再被念一遍，也不该为那次扫描（最坏十万条目录项）付代价。
              */
-            ExtractionCoordinator.BatchReminderFacts? reminders = null;
+            BatchReminderHandler.BatchReminderFacts? reminders = null;
 
             if (Settings.RemindBeforeExtract)
             {
-                reminders = await _extractionCoordinator
+                reminders = await _extractionCoordinator.BatchReminders
                     .PrepareBatchReminderForCallerAsync(targets)
                     .ConfigureAwait(true);
             }
             else
             {
-                _extractionCoordinator.SuppressBatchReminderDialogForThisRun();
+                _extractionCoordinator.BatchReminders.SuppressBatchReminderDialogForThisRun();
                 AppendLog("INFO", StatusText.RemindBeforeExtractDisabledLog);
             }
 
-            OneClickConfirmFacts facts = await _extractionCoordinator
+            OneClickConfirmFacts facts = await _extractionCoordinator.BatchReminders
                 .BuildConfirmFactsAsync(targets, seed, reminders, confirmSnapshot)
                 .ConfigureAwait(true);
 
@@ -156,7 +156,7 @@ internal sealed class OneClickConfirmFlow
              * 这里同时把解压前那个提醒也压掉（SuppressBatchReminderDialogForThisRun）——
              * 用户勾的是"直接开始"，只留日志。判定与日志一条都没少，少的只是弹窗。
              */
-            _extractionCoordinator.SuppressBatchReminderDialogForThisRun();
+            _extractionCoordinator.BatchReminders.SuppressBatchReminderDialogForThisRun();
 
             AppendLog("INFO", "一键处理：已勾「以后不再询问」，本次直接按设置开始：" + seed.Describe());
         }

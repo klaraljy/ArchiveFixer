@@ -82,7 +82,7 @@ public class GroupVolumeDirectoryTests : IDisposable
     /// <summary>
     /// **入口包不在盘上时如实返回空**：本体正压在 `111.rar` 里、盘上只剩散着的续卷 ⇒
     /// ⛔ 不许拿"散着的那一片"冒充入口（那正是旧口径把落点带到 `111(4)` 的机制），
-    /// 由调用方退回"产出它的那条链"（见 `ExtractionCoordinator.ResolveOwnerChainDirectory`）。
+    /// 由调用方退回"产出它的那条链"（见 `PieceAdoptionHandler.ResolveOwnerChainDirectory`）。
     /// </summary>
     [Fact]
     public void 入口包不在盘上_如实返回空()

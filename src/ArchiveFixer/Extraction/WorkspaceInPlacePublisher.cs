@@ -40,7 +40,7 @@ internal sealed class WorkspaceInPlacePublisher
     /// <param name="alreadyReclaimedPaths">
     /// **已经被"逐层回收"当场删掉的那些内层包**（默认 null = 没有这一档，行为与以前逐字相同）。
     ///
-    /// <para>判据与执行体都在协调器那一个出口里（<c>ExtractionCoordinator.PurgeLayerSourcePackage</c>），
+    /// <para>判据与执行体都在协调器那一个出口里（<c>SourceHandler.PurgeLayerSourcePackage</c>），
     /// 本类只把这一份事实用在**一处**：<see cref="WorkspaceConsumedCleanup.TryDeleteConsumedPackage"/>
     /// 里那句"它已经被解开，但这一步没能把它搬进产物" —— 那一份是**我们自己按口径删掉的**，
     /// 不是搬运失败，照旧写那条 WARN 就是一句假话（用户在日志里会去找一个根本没发生的失败）。</para>

@@ -258,18 +258,18 @@ internal sealed class VolumeStepHandler
          */
         foreach (VolumeFacts piece in unit.Pieces)
         {
-            _host._firstStepFileLedger.MarkConsumedByIdentity(piece.Path);
+            _host.VolumeHandoff.FirstStepLedger.MarkConsumedByIdentity(piece.Path);
         }
 
         var consumed = unit.Pieces
             .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
             .Select(piece => piece.Path)
-            .Where(path => !_host.IsUserImportedSourcePath(path))
+            .Where(path => !_host.PieceAdoption.IsUserImportedSourcePath(path))
             .ToList();
 
         int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
             unit.LinkedNames.Concat(consumed).Distinct(StringComparer.OrdinalIgnoreCase),
-            path => _host.IsUserImportedSourcePath(path),
+            path => _host.PieceAdoption.IsUserImportedSourcePath(path),
             (level, message) => _host.AppendLog(level, $"[第二大步·收片] {message}"));
 
         _host._volumeGroupService.MarkState(
@@ -324,7 +324,7 @@ internal sealed class VolumeStepHandler
             if (task.Status == StatusText.Corrupted
                 || (groupWasComplete && task.Status == StatusText.VolumeMissing))
             {
-                _host.RecordFinalGroupFailure(
+                new ContentGroupFinalizerHandler(_host).RecordFinalGroupFailure(
                     unit,
                     FinalGroupFailureKind.Corrupted,
                     groupWasComplete
@@ -338,7 +338,7 @@ internal sealed class VolumeStepHandler
                 VolumeGroupState.Failed,
                 "没成功（密码错 / 缺卷 / 失败），片全部留在入口层");
             _host.MarkFollowerTasksGroupFailed(unit, task);
-            _host.MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
+            _host.VolumeHandoff.Ledger.MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
             _host.AppendLog(
                 "WARN",
                 $"[第二大步·收片] {unit.BaseName}：没成功 ⇒ 入口层里的片全部留着（一个字节没动）");
@@ -356,13 +356,13 @@ internal sealed class VolumeStepHandler
         consumed.AddRange(unit.Pieces
             .Where(piece => piece.Source != VolumeHandoffSource.UserImported)
             .Select(piece => piece.Path)
-            .Where(path => !_host.IsUserImportedSourcePath(path)));
+            .Where(path => !_host.PieceAdoption.IsUserImportedSourcePath(path)));
 
         if (unit.NamePlan != null)
         {
             foreach (CanonicalNamePlanItem item in unit.NamePlan.Items)
             {
-                if (item.Conflict.Length > 0 || _host.IsUserImportedSourcePath(item.PiecePath))
+                if (item.Conflict.Length > 0 || _host.PieceAdoption.IsUserImportedSourcePath(item.PiecePath))
                 {
                     continue;
                 }
@@ -415,7 +415,7 @@ internal sealed class VolumeStepHandler
 
             foreach (string sibling in siblings)
             {
-                if (_host.IsUserImportedSourcePath(sibling)
+                if (_host.PieceAdoption.IsUserImportedSourcePath(sibling)
                     || purgeSeeds.Contains(sibling, StringComparer.OrdinalIgnoreCase))
                 {
                     continue;
@@ -430,7 +430,7 @@ internal sealed class VolumeStepHandler
 
         int deleted = VolumeGroupEntryLayer.PurgeLinkedNames(
             unit.LinkedNames.Concat(consumed).Distinct(StringComparer.OrdinalIgnoreCase),
-            path => _host.IsUserImportedSourcePath(path),
+            path => _host.PieceAdoption.IsUserImportedSourcePath(path),
             (level, message) => _host.AppendLog(level, $"[第二大步·收片] {message}"));
 
         _host._volumeGroupService.MarkState(
@@ -461,7 +461,7 @@ internal sealed class VolumeStepHandler
          * ⛔ 不新造删除判据、⛔ 不直接 File.Delete。
          */
         var pieceSettleLogs = new List<(string Level, string Message)>();
-        IReadOnlyList<ArchiveTask> taskSnapshot = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks);
+        IReadOnlyList<ArchiveTask> taskSnapshot = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks);
 
         foreach (VolumeFacts piece in unit.Pieces)
         {
@@ -491,7 +491,7 @@ internal sealed class VolumeStepHandler
             _host.AppendLog(level, message);
         }
 
-        _host.MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
+        _host.VolumeHandoff.Ledger.MarkVolumeHandoffVerdict(unit.Pieces.Select(piece => piece.Path), unit.Verdict);
         _host.AppendLog("INFO", $"[第二大步·结论] {unit.BaseName}：{unit.Verdict}");
 
         _host.ReclaimSucceededGroupSources(unit, task);
@@ -512,7 +512,7 @@ internal sealed class VolumeStepHandler
     ///
     /// <para>包装壳（产出片被本组接手的那几单）也在这里按同一档收：它们的"内容"就是入口包树里
     /// 那些内容物 —— ⛔ 不按包名猜，按「谁产出的这一片」这条事实认（<see cref="ArchiveTask.ProducedFiles"/>，
-    /// 认不出再按落点树），⛔ 不放宽半套分卷闸门（走既有 <see cref="ExtractionCoordinator.PurgeLayerSourcePackage"/> 唯一出口）。</para>
+    /// 认不出再按落点树），⛔ 不放宽半套分卷闸门（走既有 <see cref="SourceHandler.PurgeLayerSourcePackage"/> 唯一出口）。</para>
     /// </summary>
     internal void SettleSucceededGroupSourcesAtChainEnd(OneClickRunOptions? runOptions)
     {
@@ -531,7 +531,7 @@ internal sealed class VolumeStepHandler
         }
 
         var logEntries = new List<(string Level, string Message)>();
-        ArchiveTask[] tasks = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks);
+        ArchiveTask[] tasks = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks);
 
         foreach (VolumeGroupUnit unit in _host._volumeGroupService.Units.ToList())
         {
@@ -607,7 +607,7 @@ internal sealed class VolumeStepHandler
                     continue;
                 }
 
-                _host.PurgeLayerSourcePackage(
+                _host.Source.PurgeLayerSourcePackage(
                     producer,
                     verification: null,
                     commit: null,

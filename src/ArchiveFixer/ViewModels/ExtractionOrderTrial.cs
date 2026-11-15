@@ -119,8 +119,8 @@ internal sealed class ExtractionOrderTrial
                 gatherCardEvidence = stagedReading;
                 groupResolutionLayer = stagingDirectory;
                 stagedOrderGroup = true;
-                _host._confirmedOrderStagingDirectories.Add(stagingDirectory);
-                _host._stagedGroupOutputPaths[task] = taskOutputPathBeforeRecheck;
+                _host._volumeLedgerState.ConfirmedOrderStagingDirectories.Add(stagingDirectory);
+                _host._volumeLedgerState.StagedGroupOutputPaths[task] = taskOutputPathBeforeRecheck;
 
                 /*
                  * 这一组用的那几片里，来自**包装壳产出**的（`333-W1-0\333-L2.pdf`）
@@ -129,7 +129,7 @@ internal sealed class ExtractionOrderTrial
                  */
                 foreach (string orderedPiece in probe.OrderedPieces)
                 {
-                    _host.RememberAdoptedLandedPiece(
+                    _host.PieceAdoption.RememberAdoptedLandedPiece(
                         orderedPiece,
                         task,
                         probe.Stem,
@@ -219,7 +219,7 @@ internal sealed class ExtractionOrderTrial
             _host.TryLinkMissingPiecesByByteBudget(
                 task,
                 entryLayer,
-                _host._deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null,
+                _host._volumeLedgerState.DeferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null,
                 cardEntryPath: cardReading.EntryPath);
         }
 

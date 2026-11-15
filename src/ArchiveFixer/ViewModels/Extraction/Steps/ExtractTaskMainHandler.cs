@@ -27,9 +27,11 @@ namespace ArchiveFixer.ViewModels;
 /// 开工清理 → 未知格式先让引擎试列一次 → 本次选项与落点准备 → 内嵌归档直读或抠取 → 预检（路径/预算）
 /// → 递归核心或密码候选循环 → 结论收尾。
 ///
-/// <para>为什么单独成类：这一段只编排"一份包从开工到交给引擎"，与协调器的调度/批次/分卷事实无关。
-/// ⛔ 判据、日志顺序、终态写点一个字节没改：跨类只走 <see cref="_host"/> 的既有 internal 出口
-/// 与 <c>ExtractionCoordinator.ExtractTaskMainStep</c> 里那几个最小访问器，本类不新增任何判断。</para>
+/// <para>本类就是这一段的**唯一落点**（M5：原 <c>ExtractionCoordinator.ExtractTaskMainStep.cs</c>
+/// 分片已删除，不再留薄转发/访问器）—— 调用点直接 <c>new ExtractTaskMainHandler(coordinator)</c>。
+/// ⛔ 判据、日志顺序、终态写点一个字节没改：跨类只走 <see cref="_host"/> 的既有 internal 出口；
+/// 需要的协作类（内嵌归档 / 引擎回退 / 交接账本 / 密码候选）都是无状态类，按**唯一实现**直接建，
+/// 常量走 <see cref="ExtractionCoordinator.MaxPreflightPasswordAttempts"/>，⛔ 不复制判据。</para>
 /// </summary>
 internal sealed class ExtractTaskMainHandler
 {
@@ -49,7 +51,8 @@ internal sealed class ExtractTaskMainHandler
     /// </summary>
     ///
     /// <para>本方法由 <c>ExtractionCoordinator.ExtractTaskMainStep</c> 原样搬入：跨类调用只多了
-    /// <c>_host.</c> 前缀与那几个最小访问器，其余逐字不动。</para>
+    /// <c>_host.</c> 前缀，其余逐字不动；删掉那一分片后，协作类按**唯一实现**直接调（见类注释），
+    /// ⛔ 判据/文案/终态一个字节没改。</para>
     internal async Task RunAsync(ArchiveTask task, CancellationToken cancellationToken, bool oneClickRun)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -62,7 +65,7 @@ internal sealed class ExtractTaskMainHandler
         /*
          * ===== 分卷开工前检查：已停用（用户 2026-10-24 拍板）=====
          * 原来这里对第二大步入口单调 `TryStopVolumeStepBeforeStartAsync`（缺卷不开工 / 现读盘 / 延期账）。
-         * 第一大步不再碰分卷；实现仍在 `SecondStepResidue/ExtractionCoordinator.VolumeStepPreflightStep.cs`。
+         * 第一大步不再碰分卷；实现仍在 `ViewModels/Extraction/Steps/VolumeStepPreflightHandler.cs`。
          */
 
         bool tryExtractUnknown = _host.Settings.UnknownFormatAction == "TryExtract";
@@ -114,7 +117,7 @@ internal sealed class ExtractTaskMainHandler
                      * （`RegisterUnrecognizedSuspect` / `UpgradeUnrecognizedMaybePieceVerdicts`），
                      * 判据 = 同族第 1 卷 + 基名相同或互为前缀 + 体积 ≤ 满片。
                      */
-                    _host.RegisterUnrecognizedSuspectForExtractMain(task);
+                    _host.VolumeHandoff.Ledger.RegisterUnrecognizedSuspect(task);
 
                     task.Status = StatusText.Skipped;
                     task.Operation = StatusText.OpSkip;
@@ -195,7 +198,7 @@ internal sealed class ExtractTaskMainHandler
         task.LastUpdatedTime = ArchiveFixer.Helpers.Clock.Now;
 
         // 选项构造收口在 BuildExtractOptions：确认框的"内容物会生成在…"必须与这里用**同一份字段**算。
-        ExtractOptions extractOptions = _host.BuildExtractOptions(tryExtractUnknown);
+        ExtractOptions extractOptions = _host.BatchReminders.BuildExtractOptions(tryExtractUnknown);
 
         /*
          * 「本次选项」的运行期覆盖（规格 §9.2 硬要求①/⑥）。
@@ -255,10 +258,10 @@ internal sealed class ExtractTaskMainHandler
          * ⚠ 2026-10-16（困难批 `21212121`，运行期实测）：**交给引擎的那一份，名字得是它自己的规范名**。
          *
          * <para>位置说明（⚠ 用词：这一档**不是**用户可选的档位 —— 那三个"递归模式"档位
-         * 用户 2026-10-14 已拍板删除，产品只有完全递归。这里是 <c>ExtractSingleTaskAsync</c>：
+         * 用户 2026-10-14 已拍板删除，产品只有完全递归。这里是 <c>ExtractTaskMainHandler.RunAsync</c>：
          * **把一份包交给引擎解**那一段；第一大步解完接着走递归核心（下面那两处
          * `IsSecondStepTask(task)` 闸门），而"第二大步"（分卷组只解一层）是**任务级事实位**
-         * `_volumeStepTasks` 让它只解这一层。）</para>
+         * `_volumeLedgerState.VolumeStepTasks` 让它只解这一层。）</para>
          *
          * <para>现场逐字（那一批日志）：批末补判已经判出「这一组现在齐了（共 3 卷）」并把这一单重跑，
          * 可引擎拿到的仍是伪装名 ⇒ `7z x … aaa-L2.part0788839中文1.rar` ⇒ 引擎原话
@@ -293,7 +296,7 @@ internal sealed class ExtractTaskMainHandler
          */
         List<PasswordItem> candidates = _host._passwordService.GetPasswordCandidates(
             task,
-            _host.Settings.UseGlobalPasswordForAllTasks ? _host.GlobalPasswordForExtractMain : string.Empty,
+            _host.Settings.UseGlobalPasswordForAllTasks ? _host._vm.GlobalPassword : string.Empty,
             _host._passwordService.Passwords,
             _host.Settings.TryEmptyPasswordFirst,
             _host.Settings.EnableSidecarPassword);
@@ -315,7 +318,7 @@ internal sealed class ExtractTaskMainHandler
          * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
          * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
          */
-        _host.InsertManualPasswordCandidatesForExtractMain(candidates);
+        PasswordCandidatesStep.InsertManualPasswordCandidates(candidates, _host._manualBatchPasswords);
 
         /*
          * 直读/抠取两条路共用的候选值表。⛔ 只活在内存里：日志里只说"第 N 个候选 + 哪种字节编码"，
@@ -346,7 +349,7 @@ internal sealed class ExtractTaskMainHandler
                 // 量不出大小不影响能不能抠，只是日志与空间预检里少个数字。
             }
 
-            if (_host.IsSecondStepTask(task))
+            if (new ExtractionVolumeStepFacts(_host).IsSecondStepTask(task))
             {
                 /*
                  * 第二大步（分卷组）只解一层：直读是**第一大步**的动作，这里不做。
@@ -379,7 +382,7 @@ internal sealed class ExtractTaskMainHandler
                 if (directZip.Supported)
                 {
                     // 上一次回落留下的抠取副本：本次直读用不到它，先清掉（见方法说明）。
-                    _host.DiscardStaleCarvedArtifactForExtractMain(task);
+                    new EngineFallbackHandler(_host).DiscardStaleCarvedArtifact(task);
 
                     if (directZip.ResolvedPasswordIndex > 0)
                     {
@@ -453,7 +456,7 @@ internal sealed class ExtractTaskMainHandler
              */
             if (directZip == null)
             {
-                string carveTarget = _host.BuildEmbeddedArchivePathForExtractMain(task);
+                string carveTarget = new EmbeddedZipHandler(_host).BuildEmbeddedArchivePath(task);
 
                 /*
                  * 临时空间预检：抠出来的中间文件落在工作区（<c>&lt;程序目录&gt;\data\work</c>，即程序所在的那个盘）。
@@ -529,7 +532,7 @@ internal sealed class ExtractTaskMainHandler
                  * （退出码 2、产物 0 个），上层还会把这次失败归到「分卷缺失」⇒ 整单跳过。
                  * 判据与唯一写点都在 AlignCarvedArchiveExtension 里（⛔ 不看后缀、⛔ 不猜）。
                  */
-                engineArchivePath = _host.AlignCarvedArchiveExtensionForExtractMain(task, engineArchivePath);
+                engineArchivePath = new EmbeddedZipHandler(_host).AlignCarvedArchiveExtension(task, engineArchivePath);
 
                 _host.AppendLog(
                     "INFO",
@@ -548,7 +551,7 @@ internal sealed class ExtractTaskMainHandler
          * 包可能完全没问题，只是密码不在这批候选里。
          */
         // 上限读一次就定住：设置是用户随时可改的，同一单任务里不许"前半段按一个上限、后半段按另一个"。
-        int attemptLimit = _host.MaxPasswordAttemptsPerLayerForExtractMain;
+        int attemptLimit = new PasswordCandidatesStep(_host).MaxPasswordAttemptsPerLayer;
         int maxPasswordAttempts = Math.Min(candidates.Count, attemptLimit);
         bool candidatesTruncated = candidates.Count > maxPasswordAttempts;
 
@@ -597,7 +600,7 @@ internal sealed class ExtractTaskMainHandler
         }
         else
         {
-            foreach (PasswordItem candidate in candidates.Take(_host.MaxPreflightPasswordAttemptsForExtractMain))
+            foreach (PasswordItem candidate in candidates.Take(ExtractionCoordinator.MaxPreflightPasswordAttempts))
             {
                 ArchiveListResult attempt = await _host._archiveEngine.ListAsync(
                     ArchiveRequest.For(engineArchivePath, candidate.Value),
@@ -655,12 +658,12 @@ internal sealed class ExtractTaskMainHandler
         /*
          * ===== 不变量 11 的**第二道**：就在引擎真正开工之前再比一次 =====
          */
-        if (_host.StopIfSourceChanged(task))
+        if (_host.Source.StopIfSourceChanged(task))
         {
             return;
         }
 
-        if (!_host.IsSecondStepTask(task))
+        if (!new ExtractionVolumeStepFacts(_host).IsSecondStepTask(task))
         {
             await new ExtractionRecursiveStep()
                 .RunAsync(_host, task, engineArchivePath, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken)

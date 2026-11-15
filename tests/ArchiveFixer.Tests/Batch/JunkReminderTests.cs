@@ -265,10 +265,10 @@ public class JunkReminderTests : IDisposable
                     item.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
 
         string? message = null;
-        harness.Coordinator.ReminderAnswerOverride = text =>
+        harness.Coordinator.BatchReminders.ReminderAnswerOverride = text =>
         {
             message = text;
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = false };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = false };
         };
 
         await harness.Coordinator.StartExtractAsync();
@@ -405,11 +405,11 @@ public class JunkReminderTests : IDisposable
         Assert.False(SourceJunkScanner.HasUsablePasswordCandidate(Array.Empty<PasswordItem>()));
 
         string? message = null;
-        harness.Coordinator.ReminderAnswerOverride = text =>
+        harness.Coordinator.BatchReminders.ReminderAnswerOverride = text =>
         {
             message = text;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = false };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = false };
         };
 
         await harness.Coordinator.StartExtractAsync();
@@ -446,11 +446,11 @@ public class JunkReminderTests : IDisposable
         WireSuccessfulExtraction(byBook, "payload.mp4", "内容物");
 
         string? bookMessage = null;
-        byBook.Coordinator.ReminderAnswerOverride = text =>
+        byBook.Coordinator.BatchReminders.ReminderAnswerOverride = text =>
         {
             bookMessage = text;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = false };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = false };
         };
 
         await byBook.Coordinator.StartExtractAsync();
@@ -470,11 +470,11 @@ public class JunkReminderTests : IDisposable
         WireSuccessfulExtraction(byGlobal, "payload.mp4", "内容物");
 
         string? globalMessage = null;
-        byGlobal.Coordinator.ReminderAnswerOverride = text =>
+        byGlobal.Coordinator.BatchReminders.ReminderAnswerOverride = text =>
         {
             globalMessage = text;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = false };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = false };
         };
 
         await byGlobal.Coordinator.StartExtractAsync();
@@ -549,11 +549,11 @@ public class JunkReminderTests : IDisposable
         WireSuccessfulExtraction(first, "payload.mp4", "内容物");
 
         int calls = 0;
-        first.Coordinator.ReminderAnswerOverride = _ =>
+        first.Coordinator.BatchReminders.ReminderAnswerOverride = _ =>
         {
             calls++;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = true, OptionChecked = true };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = true, OptionChecked = true };
         };
 
         string settingsPath = Path.Combine(first.DataRoot, "appsettings.json");
@@ -585,11 +585,11 @@ public class JunkReminderTests : IDisposable
         WireSuccessfulExtraction(second, "payload.mp4", "内容物");
 
         int secondCalls = 0;
-        second.Coordinator.ReminderAnswerOverride = _ =>
+        second.Coordinator.BatchReminders.ReminderAnswerOverride = _ =>
         {
             secondCalls++;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = true };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = true };
         };
 
         await second.Coordinator.StartExtractAsync();
@@ -617,10 +617,10 @@ public class JunkReminderTests : IDisposable
         harness.Vm.Settings.RemindBeforeExtract = false;
 
         int calls = 0;
-        harness.Coordinator.ReminderAnswerOverride = _ =>
+        harness.Coordinator.BatchReminders.ReminderAnswerOverride = _ =>
         {
             calls++;
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = true };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = true };
         };
 
         await harness.Coordinator.StartExtractAsync();

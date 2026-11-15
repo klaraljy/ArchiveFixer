@@ -134,7 +134,7 @@ public sealed class PerfFixtureProbeTests
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
         oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.NotShown();
 
-        ExtractionCoordinator.ResetProducedCardDiagnostics();
+        ExtractionProducedVolumeGate.ResetProducedCardDiagnostics();
 
         var total = Stopwatch.StartNew();
         await vm.AddPathsAsync(new[] { fixture }, ImportMode.Replace);
@@ -150,7 +150,7 @@ public sealed class PerfFixtureProbeTests
         int skipped = vm.Tasks.Count(t => t.Outcome == TaskOutcome.Skipped);
 
         (long lookups, long hits, long misses, long fileInfoCalls, long remembered) =
-            ExtractionCoordinator.ProducedCardDiagnostics;
+            ExtractionProducedVolumeGate.ProducedCardDiagnostics;
         string resultPath = Environment.GetEnvironmentVariable("ARCHIVEFIXER_PERF_RESULT") ?? string.Empty;
 
         if (resultPath.Length > 0)

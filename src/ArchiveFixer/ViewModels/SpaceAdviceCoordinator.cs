@@ -41,7 +41,7 @@ internal sealed class SpaceAdviceCoordinator
         try
         {
             ExtractionSchedulePlan plan = await Task.Run(
-                () => _vm.ExtractionCoordinator.BuildSpaceAdvice(selected));
+                () => _vm.ExtractionCoordinator.Schedule.BuildSpaceAdvice(selected));
 
             /*
              * 建议只显示设备侧结论，不自动应用：
@@ -83,7 +83,7 @@ internal sealed class SpaceAdviceCoordinator
 
         try
         {
-            ExtractionSchedulePlan plan = await Task.Run(() => _vm.ExtractionCoordinator.BuildSpaceAdvice(tasks))
+            ExtractionSchedulePlan plan = await Task.Run(() => _vm.ExtractionCoordinator.Schedule.BuildSpaceAdvice(tasks))
                 .ConfigureAwait(true);
 
             ReportSpaceCheck(plan, tasks.Count, trigger);

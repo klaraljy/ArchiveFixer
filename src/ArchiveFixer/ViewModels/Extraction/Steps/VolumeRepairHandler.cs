@@ -27,7 +27,13 @@ namespace ArchiveFixer.ViewModels;
 /// 缺卷补救与批前收卷（第 8 块，从 `ExtractionCoordinator.VolumeRepairStep.cs` 搬出）：
 /// 「我手动指定缺失卷所在目录」、指定目录里的候选分卷枚举、按既有归组出口重建分卷组、
 /// 账上用户源包收集、任务表首卷计数与删除闸门兼容出口。
-/// ⛔ 判据与日志顺序逐字沿用原实现；协调器只保留同名薄转发与最少 internal 访问器。
+/// ⛔ 判据与日志顺序逐字沿用原实现。
+///
+/// <para>M5 类型总行数治理：协调器那一分片已删除，不再留薄转发 —— 本类就是缺卷补救与批前收卷的
+/// **唯一落点**，调用点直接调本类同名静态成员。宿主那一侧只剩三处最小访问器
+/// （住在 <c>ExtractionCoordinator.cs</c> 的「第二大步开工前检查 + 组收片账」那一节），
+/// 懒建属性住在唯一调用方 <c>VolumeStepPreflightHandler</c> 里（同一文件放不下第 2 个顶层类型，
+/// 结构守卫「一类型一文件」会当场变红）。</para>
 /// </summary>
 internal sealed class VolumeRepairHandler
 {
@@ -326,7 +332,7 @@ internal sealed class VolumeRepairHandler
     {
         int count = 0;
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             string path = task?.CurrentPath ?? string.Empty;
 

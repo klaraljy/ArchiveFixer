@@ -631,19 +631,20 @@ public class RealMachine20261002FixesTests : IDisposable
 
         var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, dialog)
         {
-            SpaceReserveOverride = 0,
-            SpaceProbeOverride = _ =>
-            {
-                // 每次探测都返回一个**不一样**的数（10 GiB、10 GiB+1 MiB、…）：
-                // "这一行报的是不是现采的"因此可以被钉死。
-                lock (probeValues)
-                {
-                    long value = (10L * Gib) + (probeValues.Count + 1) * (1024L * 1024);
-                    probeValues.Add(value);
-                    return value;
-                }
-            },
             KeepTaskDetailInLog = true
+        };
+
+        coordinator.Schedule.SpaceReserveOverride = 0;
+        coordinator.Schedule.SpaceProbeOverride = _ =>
+        {
+            // 每次探测都返回一个**不一样**的数（10 GiB、10 GiB+1 MiB、…）：
+            // "这一行报的是不是现采的"因此可以被钉死。
+            lock (probeValues)
+            {
+                long value = (10L * Gib) + (probeValues.Count + 1) * (1024L * 1024);
+                probeValues.Add(value);
+                return value;
+            }
         };
 
         var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), dialog);

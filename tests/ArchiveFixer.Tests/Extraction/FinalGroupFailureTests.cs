@@ -68,7 +68,7 @@ public sealed class FinalGroupFailureTests
             new ClipboardService(), new DialogService(), useTextStore: true, encryptTextStore: false);
         var coordinator = new ExtractionCoordinator(vm, engine, pw, ps, new DialogService());
         vm.SpaceTightMode = spaceTight;
-        if (spaceTight) { coordinator.SpaceProbeOverride = _ => 40L * 1024 * 1024 * 1024; coordinator.SpaceReserveOverride = 64L * 1024 * 1024; }
+        if (spaceTight) { coordinator.Schedule.SpaceProbeOverride = _ => 40L * 1024 * 1024 * 1024; coordinator.Schedule.SpaceReserveOverride = 64L * 1024 * 1024; }
         var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
         var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
         var one = new OneClickCoordinator(vm, scan, rename, coordinator, new DialogService());

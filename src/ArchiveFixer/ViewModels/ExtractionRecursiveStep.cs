@@ -73,7 +73,7 @@ internal sealed class ExtractionRecursiveStep
         if (task.Outcome == TaskOutcome.Succeeded || hasPublishableProducts)
         {
             // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
-            bool recursionConclusionStands = await host.PostProcessSuccessAsync(
+            bool recursionConclusionStands = await new PostProcessSuccessHandler(host).PostProcessSuccessAsync(
                 task,
                 engineArchivePath,
                 string.Empty,

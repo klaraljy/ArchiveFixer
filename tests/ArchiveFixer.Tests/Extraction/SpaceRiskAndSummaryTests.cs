@@ -292,7 +292,7 @@ public class SpaceRiskAndSummaryTests : IDisposable
 
         await harness.AddTasksAsync(sources);
 
-        OneClickConfirmFacts facts = await harness.Coordinator.BuildConfirmFactsAsync(
+        OneClickConfirmFacts facts = await harness.Coordinator.BatchReminders.BuildConfirmFactsAsync(
             harness.Vm.Tasks.ToList(),
             pendingOptions: null,
             reminders: null,
@@ -459,12 +459,11 @@ public class SpaceRiskAndSummaryTests : IDisposable
 
         RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
 
-        var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, dialog)
-        {
-            // 假盘：可用空间由用例给定，余量取 0（这一组要算的是"需求之和 vs 可用"）。
-            SpaceProbeOverride = _ => availableBytes,
-            SpaceReserveOverride = 0
-        };
+        var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, dialog);
+
+        // 假盘：可用空间由用例给定，余量取 0（这一组要算的是"需求之和 vs 可用"）。
+        coordinator.Schedule.SpaceProbeOverride = _ => availableBytes;
+        coordinator.Schedule.SpaceReserveOverride = 0;
 
         var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), dialog);
         var rename = new RenameCoordinator(vm, scan, new RenameService(), dialog);

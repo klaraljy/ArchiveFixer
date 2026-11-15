@@ -30,8 +30,9 @@ namespace ArchiveFixer.ViewModels;
 /// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、日志顺序、终态写点与原来逐字一致；
 /// 宿主那一侧只留同签名薄转发（partial 分片），调用点一处未改。跨类只走宿主既有的 internal 出口
 /// （<c>AppendLog</c> / <c>CriterionLog</c> / <c>PostProcessSuccessAsync</c> / <c>BudgetLimits</c> /
-/// <c>Settings</c> / <c>_pathService</c> / <c>CollectVolumeFilesInDirectory</c> /
-/// <c>DescribeThroughput</c> / <c>IsVolumeMissingErrorType</c>），⛔ 不新增判据、不复制私有状态。</para>
+/// <c>Settings</c> / <c>_pathService</c> / <c>DescribeThroughput</c> / <c>IsVolumeMissingErrorType</c>），
+/// 分卷枚举直接走 <see cref="VolumeRepairHandler.CollectVolumeFilesInDirectory"/>（原 VolumeRepairStep
+/// 分片已删除），⛔ 不新增判据、不复制私有状态。</para>
 ///
 /// <para>无状态：<c>_host</c> 是唯一的持有物，进度桥 <c>DirectReadProgressBridge</c> 是这里唯一的
 /// 嵌套类型（只被直读那一步用，仍是 private）—— 并发跑多个任务时各用各的实例，不共享中间结论。</para>
@@ -49,7 +50,7 @@ internal sealed class EmbeddedZipHandler
     /// 内嵌 ZIP 直读的**执行**那一步（用户 2026-09-24 需求第 6 条）。
     ///
     /// <para>只做三件事：把状态标成"解压中"、在后台线程流式解出条目、把结论交给
-    /// <see cref="ExtractionCoordinator.PostProcessSuccessAsync"/>（**同一个**收尾：校验 / 定稿 / 归集 / 其余物 / 源包处理）。
+    /// <see cref="PostProcessSuccessHandler.PostProcessSuccessAsync"/>（**同一个**收尾：校验 / 定稿 / 归集 / 其余物 / 源包处理）。
     /// 所以直读与"抠取 + 7z"两条路在用户眼里是同一套状态与同一套结论。</para>
     ///
     /// <para>取消原样抛出去：<c>ProcessExtractTaskAsync</c> 会落成「已取消」（不变量 6），
@@ -99,7 +100,7 @@ internal sealed class EmbeddedZipHandler
                 cancellationToken,
                 // 直读与 7z 两条路共用同一套上限（AGENTS.md §9.6"口径不许分叉"）：
                 // 传 null 会让直读退回硬编码那一份，用户在设置里调大的值就只对 7z 生效。
-                budgetOptions: _host.BudgetLimits,
+                budgetOptions: _host.Schedule.BudgetLimits,
                 passwords: passwordCandidates),
             cancellationToken);
 
@@ -155,7 +156,7 @@ internal sealed class EmbeddedZipHandler
                 ? $"；密码：第 {extract.ResolvedPasswordIndex} 个候选用{ZipAesCrypto.DescribeEncoding(extract.ResolvedPasswordEncoding)}解开"
                 : string.Empty);
 
-        bool conclusionStands = await _host.PostProcessSuccessAsync(
+        bool conclusionStands = await new PostProcessSuccessHandler(_host).PostProcessSuccessAsync(
             task,
             task.CurrentPath,
             string.Empty,
@@ -341,7 +342,7 @@ internal sealed class EmbeddedZipHandler
             }
 
             IReadOnlyList<OrphanVolumeSet> orphans = OrphanVolumeSetDetector.Find(
-                ExtractionCoordinator.CollectVolumeFilesInDirectory(directory).Select(Path.GetFileName));
+                VolumeRepairHandler.CollectVolumeFilesInDirectory(directory).Select(Path.GetFileName));
 
             if (orphans.Count == 0)
             {

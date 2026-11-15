@@ -1059,7 +1059,7 @@ public class ArchiveTask : INotifyPropertyChanged
     /// <summary>
     /// 被**空间门**拦下时那一刻的三个数（需求 / 可用 / 差多少）；<c>null</c> = 这一单不是被空间门拦下的。
     ///
-    /// <para>写入点只有一处：<c>ExtractionCoordinator.MarkSpaceBlockedCore</c>（启动前那道门与解压前
+    /// <para>写入点只有一处：<c>ExtractionScheduleHandler.MarkSpaceBlockedCore</c>（启动前那道门与解压前
     /// 预检共用的落点）。批末诊断清单读它来"点名差多少"—— ⛔ 谁都不许重算这三个数
     /// （重算就是第二套口径，见 <see cref="SpaceBlockedFacts"/> 的说明）。</para>
     /// </summary>
@@ -1107,7 +1107,7 @@ public class ArchiveTask : INotifyPropertyChanged
     /// 老口径下两者在任务上长得一模一样，删源包那道不可逆的闸门分不开它们 ——
     /// 用户 2026-09-30 定的红线是"判不出 ⇒ 一律不删源"，所以这个事实必须落在任务上。</para>
     ///
-    /// <para>唯一写入点：<c>ExtractionCoordinator.RunPostProcessWork</c> 里从
+    /// <para>唯一写入点：<c>SourceHandler.RunPostProcessWork</c> 里从
     /// <c>OutputVerificationResult.ManifestCrossChecked</c> 抄下来的那一行。</para>
     /// </summary>
     public bool OutputManifestCrossChecked { get; set; }

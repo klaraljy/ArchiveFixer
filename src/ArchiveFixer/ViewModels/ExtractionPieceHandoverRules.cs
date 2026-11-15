@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 接片判据/落点说明（从 `ExtractionCoordinator.PieceAdoptionStep.cs` 搬出）：
+/// 接片判据/落点说明（从已删除的 `ExtractionCoordinator.PieceAdoptionStep.cs` 搬出）：
 /// 接片没接上那句话的唯一出口、判据输入落日志、用户自己那份文件的查找、能否搬进组、
 /// 本单暂存/链目录解析；⛔ 判据与行为沿用原实现。
 /// </summary>
@@ -239,7 +239,7 @@ internal sealed class ExtractionPieceHandoverRules
     {
         var directories = new List<string>();
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task == null || task.Outcome != TaskOutcome.Pending)
             {
@@ -332,7 +332,7 @@ internal sealed class ExtractionPieceHandoverRules
         {
             OutputPlacementResult placement = _host._pathService.ResolveOutputPlacement(
                 owner,
-                _host.BuildExtractOptions(tryExtractUnknownFormat: false));
+                _host.BatchReminders.BuildExtractOptions(tryExtractUnknownFormat: false));
 
             if (placement.Success && !string.IsNullOrWhiteSpace(placement.DestinationDirectory))
             {

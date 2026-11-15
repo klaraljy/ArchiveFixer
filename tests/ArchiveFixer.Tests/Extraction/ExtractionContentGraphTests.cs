@@ -275,7 +275,7 @@ public sealed class ExtractionContentGraphTests
                 attemptLimit: 1);
 
             string groupPiece = Path.Combine(ownerRoot, "piece.7z.001");
-            harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+            harness.Coordinator.VolumeHandoff.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
             {
                 Path = groupPiece,
                 BaseName = "A",
@@ -295,9 +295,9 @@ public sealed class ExtractionContentGraphTests
                 }
             };
 
-            ContentGroup group = harness.Coordinator.ContentGraph.RegisterContentGroup(
+            ContentGroup group = harness.Coordinator.VolumeHandoff.ContentGraph.RegisterContentGroup(
                 prepared,
-                harness.Coordinator.FirstStepLedger);
+                harness.Coordinator.VolumeHandoff.FirstStepLedger);
 
             var owner = new ArchiveTask(Path.Combine(root, "A.7z.001"), 1)
             {
@@ -330,7 +330,8 @@ public sealed class ExtractionContentGraphTests
 
             Assert.Equal(
                 1,
-                harness.Coordinator.FinalizeContentGroups(new[] { owner, finalTask, emptyProcess }));
+                new ContentGroupFinalizerHandler(harness.Coordinator)
+                    .FinalizeContentGroups(new[] { owner, finalTask, emptyProcess }));
             Assert.False(Directory.Exists(emptyProcessDirectory));
 
             Assert.Equal(FinalContentState.Verified, group.FinalState);
@@ -364,13 +365,14 @@ public sealed class ExtractionContentGraphTests
                 Pieces = Array.Empty<PreparedVolumePiece>()
             };
 
-            ContentGroup emptyGroup = harness.Coordinator.ContentGraph.RegisterContentGroup(
+            ContentGroup emptyGroup = harness.Coordinator.VolumeHandoff.ContentGraph.RegisterContentGroup(
                 emptyPrepared,
-                harness.Coordinator.FirstStepLedger);
+                harness.Coordinator.VolumeHandoff.FirstStepLedger);
 
             emptyGroup.AttachOwner(emptyOwner.FileName, emptyOwner.CurrentPath);
 
-            harness.Coordinator.FinalizeContentGroups(new[] { emptyOwner });
+            new ContentGroupFinalizerHandler(harness.Coordinator)
+                .FinalizeContentGroups(new[] { emptyOwner });
 
             Assert.Equal(FinalContentState.Missing, emptyGroup.FinalState);
             Assert.False(emptyGroup.FinalContentVerified);
@@ -423,14 +425,14 @@ public sealed class ExtractionContentGraphTests
             harness.Vm.Tasks.Add(taskA);
             harness.Vm.Tasks.Add(taskB);
 
-            harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+            harness.Coordinator.VolumeHandoff.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
             {
                 Path = sourceA,
                 BaseName = "A",
                 OriginRootId = sourceA,
                 PlacementKey = "placement-A"
             });
-            harness.Coordinator.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
+            harness.Coordinator.VolumeHandoff.FirstStepLedger.AddOrReplace(new FirstStepFileLedgerEntry
             {
                 Path = sourceB,
                 BaseName = "B",
@@ -438,7 +440,7 @@ public sealed class ExtractionContentGraphTests
                 PlacementKey = "placement-A"
             });
 
-            ContentGroup verified = harness.Coordinator.ContentGraph.RegisterContentGroup(
+            ContentGroup verified = harness.Coordinator.VolumeHandoff.ContentGraph.RegisterContentGroup(
                 new PreparedVolumeGroup
                 {
                     BaseName = "A",
@@ -450,11 +452,11 @@ public sealed class ExtractionContentGraphTests
                         new PreparedVolumePiece { CanonicalName = "A.7z.001", OriginalPath = sourceA }
                     }
                 },
-                harness.Coordinator.FirstStepLedger);
+                harness.Coordinator.VolumeHandoff.FirstStepLedger);
 
             verified.SetFinalOutput(root, root, FinalContentState.Verified, 1, 1, "test");
 
-            ContentGroup partial = harness.Coordinator.ContentGraph.RegisterContentGroup(
+            ContentGroup partial = harness.Coordinator.VolumeHandoff.ContentGraph.RegisterContentGroup(
                 new PreparedVolumeGroup
                 {
                     BaseName = "B",
@@ -466,11 +468,11 @@ public sealed class ExtractionContentGraphTests
                         new PreparedVolumePiece { CanonicalName = "B.7z.001", OriginalPath = sourceB }
                     }
                 },
-                harness.Coordinator.FirstStepLedger);
+                harness.Coordinator.VolumeHandoff.FirstStepLedger);
 
             partial.SetFinalOutput(root, root, FinalContentState.Partial, 0, 0, "test");
 
-            int deleted = harness.Coordinator.SettleVerifiedContentGroupSources(
+            int deleted = new ContentGroupFinalizerHandler(harness.Coordinator).SettleVerifiedContentGroupSources(
                 new OneClickRunOptions { SourceHandling = SourceHandlingMode.DeleteInPlace });
 
             Assert.True(
@@ -567,20 +569,20 @@ public sealed class ExtractionContentGraphTests
                 SourceSelectionRoot = root
             };
 
-            Assert.Equal(1, harness.Coordinator.RegisterSourceRoots(new[] { task }, runOptions: null));
+            Assert.Equal(1, harness.Coordinator.VolumeHandoff.RegisterSourceRoots(new[] { task }, runOptions: null));
 
-            FirstStepFileLedgerEntry entry = harness.Coordinator.RegisterFirstStepLedgerEntry(
+            FirstStepFileLedgerEntry entry = harness.Coordinator.VolumeHandoff.ProducedVolumeGate.RegisterFirstStepLedgerEntry(
                 task,
                 FileNature.Inspect(path));
 
-            Assert.True(harness.Coordinator.ContentGraph.TryGetSourceRoot(task, out SourceRootRecord sourceRoot));
+            Assert.True(harness.Coordinator.VolumeHandoff.ContentGraph.TryGetSourceRoot(task, out SourceRootRecord sourceRoot));
             Assert.Equal(sourceRoot.RootId, entry.OriginRootId);
             Assert.Equal(task.TaskId, entry.ProducedByTaskId);
             Assert.Equal(ArtifactRole.SourceRoot, entry.Role);
             Assert.False(entry.HasCandidateLease);
             Assert.Equal(sourceRoot.PlacementKey, entry.PlacementKey);
             Assert.NotEmpty(entry.PlacementKey);
-            Assert.Single(harness.Coordinator.FirstStepLedger.ByOriginRoot(sourceRoot.RootId));
+            Assert.Single(harness.Coordinator.VolumeHandoff.FirstStepLedger.ByOriginRoot(sourceRoot.RootId));
         }
         finally
         {

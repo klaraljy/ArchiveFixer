@@ -424,7 +424,7 @@ internal sealed class InnerLayerCollector
                  * 只对“卡上仍判不出格式且没有归档结构”的文件进入完整归档探测；
                  * 媒体前缀归档的卡是 ContentClass=Archive/EmbeddedOffset>0，不会被这里跳过。
                  */
-                FileNatureCard producedNature = _extractionCoordinator.TryGetProducedCard(file, out FileNatureCard cachedNature)
+                FileNatureCard producedNature = _extractionCoordinator.VolumeHandoff.ProducedVolumeGate.TryGetProducedCard(file, out FileNatureCard cachedNature)
                     ? cachedNature
                     : FileNature.Inspect(file);
                 bool isArchive;

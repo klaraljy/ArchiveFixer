@@ -44,7 +44,7 @@ internal sealed class ExtractionVolumeGroupSettlement
 
         foreach (VolumeFacts piece in unit.Pieces)
         {
-            ArchiveTask? pieceTask = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
+            ArchiveTask? pieceTask = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
                 candidate != null
                 && !ReferenceEquals(candidate, owner)
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
@@ -79,7 +79,7 @@ internal sealed class ExtractionVolumeGroupSettlement
                 continue;
             }
 
-            ArchiveTask? pieceTask = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
+            ArchiveTask? pieceTask = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
                 candidate != null
                 && !ReferenceEquals(candidate, owner)
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
@@ -105,7 +105,7 @@ internal sealed class ExtractionVolumeGroupSettlement
 
         foreach (VolumeFacts piece in unit.Pieces)
         {
-            ArchiveTask? pieceTask = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
+            ArchiveTask? pieceTask = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
                 candidate != null
                 && !ReferenceEquals(candidate, owner)
                 && candidate.IsVolumeGroupFollower
@@ -142,7 +142,7 @@ internal sealed class ExtractionVolumeGroupSettlement
     {
         foreach (string path in piecePaths ?? Enumerable.Empty<string>())
         {
-            _host._firstStepFileLedger.MarkConsumedByIdentity(path);
+            _host.VolumeHandoff.FirstStepLedger.MarkConsumedByIdentity(path);
         }
     }
     internal void ReclaimSucceededGroupSources(VolumeGroupUnit unit, ArchiveTask? ownerTask)
@@ -183,7 +183,7 @@ internal sealed class ExtractionVolumeGroupSettlement
                 return;
             }
 
-            _host.PurgeLayerSourcePackage(
+            _host.Source.PurgeLayerSourcePackage(
                 task,
                 verification: null,
                 commit: null,
@@ -197,12 +197,12 @@ internal sealed class ExtractionVolumeGroupSettlement
         foreach (VolumeFacts piece in unit.Pieces)
         {
             if (piece.Source != VolumeHandoffSource.UserImported
-                && !_host.IsUserImportedSourcePath(piece.Path))
+                && !_host.PieceAdoption.IsUserImportedSourcePath(piece.Path))
             {
                 continue;
             }
 
-            ArchiveTask? pieceTask = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
+            ArchiveTask? pieceTask = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).FirstOrDefault(candidate =>
                 candidate != null
                 && !string.IsNullOrWhiteSpace(candidate.CurrentPath)
                 && (SafePathHelper.PathEquals(candidate.CurrentPath, piece.Path)
@@ -229,7 +229,7 @@ internal sealed class ExtractionVolumeGroupSettlement
          * 只按文件名找 owner 会把两组的 owner 认成同一单 ⇒ 链接账/源包结算串组。
          * 先按**组的入口全路径/片路径**精确匹配，匹配不到才退回文件名（兼容入口被改名）。
          */
-        ArchiveTask[] snapshot = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks);
+        ArchiveTask[] snapshot = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks);
 
         /*
          * ⛔ 先认**入口**和**owner 文件名**，最后才允许按任意片路径兜底。

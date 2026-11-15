@@ -242,7 +242,7 @@ public class SourcePackageRestMoveTests : IDisposable
             $"实际 = {root.SourcePackageMove}；日志：\n" + string.Join("\n", harness.LogTexts));
 
         // 续解那一步没能产出内容物（第二层失败 / 没跑）→ 链尾补判时目录里只有过程物。
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { root }, new[] { root });
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(new[] { root }, new[] { root });
 
         Assert.True(File.Exists(source), "内容物没出来时源包必须原地不动（哪怕用户选了彻底删除）");
         Assert.False(File.Exists(Path.Combine(restDirectory, "outer.7z")));
@@ -295,7 +295,7 @@ public class SourcePackageRestMoveTests : IDisposable
         Assert.False(continuation.IsOutputVerified, "前提：第二层的输出校验应该没过");
         Assert.True(File.Exists(Path.Combine(destinationDirectory, "content.bin")));
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { root }, new[] { root, continuation });
 
         Assert.True(File.Exists(source), "校验没过时源包必须原地不动（哪怕用户选了彻底删除）");
@@ -332,7 +332,7 @@ public class SourcePackageRestMoveTests : IDisposable
         // 把"逐条核对过清单"这个事实抹掉 = 只剩非空底线校验那一档。
         chain.Root.OutputManifestCrossChecked = false;
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
 
         Assert.True(File.Exists(chain.Source), "判不出完整性时源包必须原地不动（哪怕用户选了彻底删除）");
@@ -368,7 +368,7 @@ public class SourcePackageRestMoveTests : IDisposable
         // 产出内容物的那一层判不出 ⇒ "内容物已定稿并校验通过"这个事实不成立。
         chain.Continuation.OutputManifestCrossChecked = false;
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
 
         Assert.True(File.Exists(chain.Source), "链上有判不出的层时源包必须原地不动（哪怕用户选了彻底删除）");
@@ -547,7 +547,7 @@ public class SourcePackageRestMoveTests : IDisposable
         ArchiveTask task = AddTask(harness, source);
 
         await harness.Coordinator.StartExtractForOneClickAsync();
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
 
         Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
@@ -674,7 +674,7 @@ public class SourcePackageRestMoveTests : IDisposable
         await harness.Coordinator.StartExtractForOneClickAsync();
 
         // 一键处理的源包处理延期到链尾 ⇒ 补上链尾那一步。
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
 
         string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
 

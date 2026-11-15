@@ -61,12 +61,12 @@ internal sealed partial class ExtractionCoordinator
         ConsumedSettlementHandler.ResolveCompleteGroupFromDisk(task, preferDirectory);
 
     /*
-     * 协作类要用、但定义在**别的 partial** 里的 private 成员（不改那个文件）：
-     * 这里只加**最小 internal 访问器**，⛔ 不复制判据、⛔ 不用反射（唯一实现仍在 VolumeRepairStep）。
+     * 协作类要用的归组出口（原 VolumeRepairStep 分片已删除，唯一实现 = VolumeRepairHandler）：
+     * 这里只留最小 internal 转发，⛔ 不复制判据、⛔ 不用反射。
      */
-    /// <summary>访问器：给 <see cref="ConsumedSettlementHandler"/> 重新归组（唯一实现 = VolumeRepairStep 的 RebuildVolumeGroup）。</summary>
+    /// <summary>访问器：给 <see cref="ConsumedSettlementHandler"/> 重新归组（唯一实现 = <see cref="VolumeRepairHandler.RebuildVolumeGroup"/>）。</summary>
     internal static VolumeGroup? RebuildVolumeGroupForConsumedSettlement(ArchiveTask task, IEnumerable<string> extraFiles) =>
-        RebuildVolumeGroup(task, extraFiles);
+        VolumeRepairHandler.RebuildVolumeGroup(task, extraFiles);
 
     internal void DeleteHarvestTargets(ArchiveTask consumer, List<string> targets) =>
         ConsumedPieceSettler.DeleteHarvestTargets(consumer, targets);

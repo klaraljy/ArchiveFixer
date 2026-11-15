@@ -23,7 +23,7 @@ namespace ArchiveFixer.Extraction;
 ///
 /// <para>⛔ 递归核心**不删任何东西**：它只把"哪几个文件 + 这一层的完整性结论"交给调用方
 /// （<see cref="RecursiveExtractor.LayerReclaim"/>），删除判据与执行体仍然只有既有那一套
-/// （<c>ExtractionCoordinator.PurgeLayerSourcePackage</c> → <c>SourceCleanupService</c>）。</para>
+/// （<c>SourceHandler.PurgeLayerSourcePackage</c> → <c>SourceCleanupService</c>）。</para>
 /// </summary>
 public sealed class RecursiveLayerReclaimRequest
 {

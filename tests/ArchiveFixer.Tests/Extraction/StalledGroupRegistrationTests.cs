@@ -9,7 +9,7 @@ using Xunit;
 namespace ArchiveFixer.Tests;
 
 /// <summary>
-/// **链停下来那一组"是不是这一单自己这一组"**（`ExtractionCoordinator.IsStalledGroupOwnGroup`）的守门用例。
+/// **链停下来那一组"是不是这一单自己这一组"**（`StalledGroupHandler.IsStalledGroupOwnGroup`）的守门用例。
 ///
 /// <para><b>真机现场（2026-10-10 EEEE）</b>：`111.rar`（**RarOld 族**）解出来的 `111.zip`
 /// 是**跨盘 ZIP 那一组 `111`（ZipSpanned 族）**的入口，可整组当时还缺 `.z01/.z02/.z03` ⇒
@@ -39,7 +39,7 @@ public class StalledGroupRegistrationTests
         };
 
         Assert.False(
-            ExtractionCoordinator.IsStalledGroupOwnGroup(task, result),
+            StalledGroupHandler.IsStalledGroupOwnGroup(task, result),
             "111.rar 是 RarOld 族、111.zip 是 ZipSpanned 族 —— 只比基名会把它误登记，批末就会扣它一句「分卷缺失」");
     }
 
@@ -57,7 +57,7 @@ public class StalledGroupRegistrationTests
         };
 
         Assert.True(
-            ExtractionCoordinator.IsStalledGroupOwnGroup(task, result),
+            StalledGroupHandler.IsStalledGroupOwnGroup(task, result),
             "111.z02 与 111.zip 同族同基名 ⇒ 它必须进名单（否则批末那一站根本不会去收片）");
     }
 
@@ -71,6 +71,6 @@ public class StalledGroupRegistrationTests
             UnresolvedVolumePieces = new List<string> { @"C:\t\in\111\111\111.zip" }
         };
 
-        Assert.False(ExtractionCoordinator.IsStalledGroupOwnGroup(task, result));
+        Assert.False(StalledGroupHandler.IsStalledGroupOwnGroup(task, result));
     }
 }

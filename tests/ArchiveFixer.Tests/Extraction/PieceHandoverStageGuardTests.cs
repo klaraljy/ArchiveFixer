@@ -18,7 +18,7 @@ namespace ArchiveFixer.Tests;
 /// 触发它是一段竞态：同一批另一单恰好在**两次接片调用之间**把这一组的入口包落到落点层
 /// ⇒ 第一次接片不认识那一层（什么都不做）、第二次认识 ⇒ 搬走的就是暂存目录里那一份。</para>
 ///
-/// <para><b>红检</b>：把 <see cref="ExtractionCoordinator.ShouldMovePieceIntoGroup"/> 里的
+/// <para><b>红检</b>：把 <see cref="PieceAdoptionHandler.ShouldMovePieceIntoGroup"/> 里的
 /// "暂存目录那一档不搬"撤掉（恢复成只看"是不是过程物目录"）⇒
 /// <c>暂存目录里的那一份_只建链接绝不搬走</c> 当场变红。</para>
 /// </summary>
@@ -62,19 +62,19 @@ public class PieceHandoverStageGuardTests : IDisposable
         File.WriteAllBytes(piece, new byte[64]);
 
         // ① 目标位就是这一片自己 ⇒ true（该走"已经在位"那一支）。
-        Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, piece));
+        Assert.True(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, piece));
 
         // ② 目标位上是**别人**的文件 ⇒ false（照旧"绝不覆盖"）。
         string other = Path.Combine(_root, "别处", "打包111.zip");
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
         File.WriteAllBytes(other, new byte[64]);
 
-        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+        Assert.False(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, other));
 
         // ③ 这一片**已经不在了**（被前一次接片搬走/改名）⇒ false（判不出 ⇒ 不认）。
         File.Delete(piece);
 
-        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+        Assert.False(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, other));
     }
 
     /// <summary>
@@ -87,10 +87,10 @@ public class PieceHandoverStageGuardTests : IDisposable
         string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
         string piece = Path.Combine(stage, "111.z01");
 
-        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, stage));
+        Assert.False(PieceAdoptionHandler.ShouldMovePieceIntoGroup(piece, stage));
 
         // 更深一层（暂存目录的子目录）也算暂存目录。
-        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.False(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             Path.Combine(stage, "111(2)_", "111.z01"),
             stage));
     }
@@ -106,7 +106,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         string recursive = Path.Combine(
             _root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output");
 
-        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.True(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             Path.Combine(recursive, "111.z01"),
             stage));
     }
@@ -120,11 +120,11 @@ public class PieceHandoverStageGuardTests : IDisposable
     {
         string stage = Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "111(2)_.zip-abc", "stage");
 
-        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.True(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             Path.Combine(_root, "111", "111", "其余物", "111.zip"),
             stage));
 
-        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.False(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             Path.Combine(_root, "111(4)", "111.z03"),
             stage));
     }
@@ -136,7 +136,7 @@ public class PieceHandoverStageGuardTests : IDisposable
     [Fact]
     public void 暂存目录算不出来_落回老口径()
     {
-        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.True(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output", "111.z01"),
             string.Empty));
     }
@@ -167,18 +167,18 @@ public class PieceHandoverStageGuardTests : IDisposable
         string target = Path.Combine(targetDirectory, "111.zip");
 
         // ① 目标位还空着 ⇒ 不是"早就在位"。
-        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+        Assert.False(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, target));
 
         // ② 同一份物理文件（硬链接）⇒ 就是这一片自己。
         Assert.True(HardLinkHelper.TryCreateHardLink(target, piece));
 
-        Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+        Assert.True(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, target));
 
         // ③ 目标位换成**另一个**文件 ⇒ 别人的 ⇒ 绝不覆盖。
         File.Delete(target);
         File.WriteAllBytes(target, new byte[2048]);
 
-        Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+        Assert.False(PieceAdoptionHandler.IsTargetSlotAlreadyThisPiece(piece, target));
     }
 
     /// <summary>
@@ -202,13 +202,13 @@ public class PieceHandoverStageGuardTests : IDisposable
         var task = new ArchiveTask(own, 1);
 
         // ① 那一层里全是这一组的成员（含坏名字的片）⇒ 放行。
-        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+        Assert.True(StalledGroupHandler.AllRestFilesBelongToGroup(
             task,
             "111_",
             new[] { "111_.part2.rar", "111_.par删t3.rcar" }));
 
         // ② 里混了别人的东西 ⇒ 判不出 ⇒ 不许删。
-        Assert.False(ExtractionCoordinator.AllRestFilesBelongToGroup(
+        Assert.False(StalledGroupHandler.AllRestFilesBelongToGroup(
             task,
             "111_",
             new[] { "111_.part2.rar", "别的.zip" }));
@@ -218,7 +218,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(numeric)!);
         File.WriteAllBytes(numeric, new byte[1024]);
 
-        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+        Assert.True(StalledGroupHandler.AllRestFilesBelongToGroup(
             new ArchiveTask(numeric, 2),
             "set.7z",
             new[] { "set.7z.002", "set.7z.003" }));
@@ -228,7 +228,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(tail)!);
         File.WriteAllBytes(tail, new byte[1024]);
 
-        Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+        Assert.True(StalledGroupHandler.AllRestFilesBelongToGroup(
             new ArchiveTask(tail, 3),
             "111",
             new[] { "111.z01", "111.z02" }));
@@ -256,16 +256,16 @@ public class PieceHandoverStageGuardTests : IDisposable
             otherChainWork, "recursive", "111___20261011_075556_xyz", "layer-000", "output", "111_.part1.rar");
 
         // 不喂"还在跑的链"⇒ 老口径：它在过程物目录里 ⇒ 搬（既有行为，⛔ 一个字没改）。
-        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, callerStage));
+        Assert.True(PieceAdoptionHandler.ShouldMovePieceIntoGroup(piece, callerStage));
 
         // 喂上"那条链还没收场"⇒ 只建链接：搬走 = 把那条链唯一的产物拿走。
-        Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.False(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             piece,
             callerStage,
             new[] { otherChainWork }));
 
         // 对照：别的链**已经收场**（不在清单里）⇒ 照旧按老口径搬。
-        Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+        Assert.True(PieceAdoptionHandler.ShouldMovePieceIntoGroup(
             piece,
             callerStage,
             new[] { Path.Combine(_root, "1113__", ".ArchiveFixer.work") }));

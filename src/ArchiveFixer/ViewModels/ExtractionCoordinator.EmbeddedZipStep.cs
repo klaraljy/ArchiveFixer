@@ -30,7 +30,7 @@ namespace ArchiveFixer.ViewModels;
 ///
 /// <para>⛔ 本分片不再放任何判据：搬走的是**实现**，调用点（<c>ExtractionFirstAttempt</c> /
 /// <c>ExtractionCandidateLoop</c> / <c>ExtractionTaskConclusionWriter</c> / <c>ExtractionPreflight</c> /
-/// <c>ExtractionCoordinator.EngineFallbackStep</c> / <c>ExtractionCoordinator.ServiceForwarding</c> /
+/// <c>Extraction/Steps/EngineFallbackHandler</c> / <c>ExtractionCoordinator.ServiceForwarding</c> /
 /// <c>ExtractionCoordinator.ExtractTaskMainStep</c>）一个字都没改。</para>
 ///
 /// <para>两个私有成员（<c>BuildEmbeddedArchivePath</c> / <c>AlignCarvedArchiveExtension</c>）保持

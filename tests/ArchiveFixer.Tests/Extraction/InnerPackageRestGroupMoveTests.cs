@@ -92,7 +92,7 @@ public class InnerPackageRestGroupMoveTests : IDisposable
 
         // 危险形态：没有分组信息（IsVolumeGroup=false）却要去搬第一卷 → 兜底必须拦下
         Assert.True(
-            ExtractionCoordinator.HasSiblingVolumeBeside(volumes[0]),
+            VolumeNameNormalizeHandler.HasSiblingVolumeBeside(volumes[0]),
             "同目录里躺着同组的 .002/.003/.004，兜底判据必须为真（否则就会只搬走第一卷）");
     }
 
@@ -103,12 +103,12 @@ public class InnerPackageRestGroupMoveTests : IDisposable
         File.WriteAllBytes(single, new byte[128]);
 
         Assert.False(
-            ExtractionCoordinator.HasSiblingVolumeBeside(single),
+            VolumeNameNormalizeHandler.HasSiblingVolumeBeside(single),
             "同目录没有同组的别的卷时不许拦（正常单文件照旧能搬）");
 
         string plain = Path.Combine(_root, "plain.7z");
         File.WriteAllBytes(plain, new byte[128]);
-        Assert.False(ExtractionCoordinator.HasSiblingVolumeBeside(plain), "不是分卷就更不该拦");
+        Assert.False(VolumeNameNormalizeHandler.HasSiblingVolumeBeside(plain), "不是分卷就更不该拦");
     }
 
     [Fact]
@@ -123,9 +123,9 @@ public class InnerPackageRestGroupMoveTests : IDisposable
         string onlyMine = Path.Combine(_root, "solo2.7z.001删除");
         File.WriteAllBytes(onlyMine, new byte[64]);
 
-        Assert.True(ExtractionCoordinator.HasSiblingVolumeBeside(mine[0]));
+        Assert.True(VolumeNameNormalizeHandler.HasSiblingVolumeBeside(mine[0]));
         Assert.False(
-            ExtractionCoordinator.HasSiblingVolumeBeside(onlyMine),
+            VolumeNameNormalizeHandler.HasSiblingVolumeBeside(onlyMine),
             "solo2 这一组只有一卷，别组的 other.* 不算它的兄弟");
     }
 }

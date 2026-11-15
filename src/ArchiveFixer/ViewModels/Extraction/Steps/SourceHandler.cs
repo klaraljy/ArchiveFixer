@@ -5,26 +5,32 @@ using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using PostProcessWorkResult = ArchiveFixer.ViewModels.ExtractionCoordinator.PostProcessWorkResult;
+using System.Threading.Tasks;
 
 
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 成功收尾里"碰盘那一大段"（校验 → 预算 → 定稿 → 归集 → 源包三档）—— 从
-/// <see cref="ExtractionCoordinator"/> 的 <c>Source</c> partial 整体搬出的协作类。
+/// 源包处理子系统的唯一实现处：成功收尾里"碰盘那一大段"（校验 → 预算 → 定稿 → 归集 → 源包三档），
+/// 加上源包清理 / 半套分卷闸门 / 链尾补搬 / 源文件快照的持有物与出口。
 ///
-/// <para>为什么单独成类：这段只编排"暂存区的产物怎么结案"，与协调器的调度/批次/任务表无关；
-/// 留在 <see cref="ExtractionCoordinator"/> 里只会让那个类型继续长（结构守卫按行数记账）。
-/// ⛔ 判据、终态、源包处理仍全部走协调器既有出口（<see cref="_host"/>）；需要碰的私有成员
-/// 只有定稿那一处，访问器（<c>ExecuteFinalLayoutForSourceHandler</c>）登记在
-/// <c>ExtractionCoordinator.Source.cs</c> 里，⛔ 不用反射、不复制判据。</para>
+/// <para>M5 类型总行数治理：<c>ExtractionCoordinator.Source.cs</c> 已整份并入本类（该 partial 已删除，
+/// ⛔ 不留空 partial、不留同签名薄转发）。协调器只留一个实例访问器 <c>ExtractionCoordinator.Source</c>；
+/// 其余类型（各步骤 Handler / 服务 / 用例）一律经它到达本类，签名与行为与搬家前逐字一致。</para>
 ///
-/// <para>无状态：<c>_host</c> 是唯一的持有物，所有中间结论都是方法内的局部变量 ——
-/// 多个任务并发收尾时各自一个实例，也不会有共享状态。</para>
+/// <para>为什么单独成类：这段只编排"暂存区的产物怎么结案"与"源包/其余物怎么处理"，
+/// 与协调器的调度/批次/任务表无关；留在 <see cref="ExtractionCoordinator"/> 里只会让那个类型继续长
+/// （结构守卫按行数记账）。⛔ 判据、终态、不可逆动作仍全部走协调器既有出口（<see cref="_host"/>）；
+/// 唯一需要碰的私有成员是定稿那一条出口 <c>ExtractionCoordinator.ExecuteFinalLayout</c>
+/// （M5 把可见性从 private 放开到 internal，实现仍在 ServiceForwarding，⛔ 不复制判据、不用反射）。</para>
+///
+/// <para>持有物：<c>_host</c> 与下面那几个协作类实例（每个协调器一份，惰性创建）。
+/// 中间结论一律是方法内的局部变量；并发收尾时同一实例只被不同任务的重活方法**读取**，
+/// 不写共享的可变状态（账本由协调器按批清理，仍与搬家前同一口径）。</para>
 /// </summary>
 internal sealed class SourceHandler
 {
@@ -35,13 +41,114 @@ internal sealed class SourceHandler
         _host = host;
     }
 
+    // ===== 原 ExtractionCoordinator.Source.cs 的持有物与出口（M5 并入；⛔ 判据不在这里）=====
+
+    /// <summary>本批清理账本；只记事实，链尾规划读取。</summary>
+    internal readonly CleanupLedger CleanupLedger = new();
+
+    /// <summary>
+    /// **链内每一层"被用掉的那几个输入文件"**（递归钩子每层报上来的 `GroupFiles`）——
+    /// 只记账、不动盘（用户 2026-10-12 口径：搬不能挂在"逐层"那一刻，链尾集中处理，
+    /// 唯一消费者是 <see cref="ExtractionRootSourceCompletion"/> 那一侧）。
+    /// 写入点唯一 = <c>OnRecursiveLayerReclaim</c>（<see cref="RecursiveLayerReclaimHandler"/>）；
+    /// 清空点 = 批首 <c>PrepareRestHandlingForBatch</c>。
+    /// </summary>
+    internal readonly List<string> ChainInnerLayerInputs = new();
+
+    /// <summary>本批（或本单）生效的「源包怎么处理」——RunOptions 优先，否则读设置。</summary>
+    internal SourceHandlingMode EffectiveSourceHandling =>
+        _host.RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(_host.Settings.SourceHandling);
+
+    /// <summary>
+    /// 删源包的执行体（<see cref="SourceCleanupService"/> 的实例持有者）。
+    ///
+    /// <para>可注入只为一件事：单测要能断言"该不删时一次都没被调用"（记账式假文件系统）。
+    /// 产品代码永远走真实的 <see cref="FileSystemSourceDeleteFileSystem"/>。</para>
+    /// </summary>
+    internal ISourceDeleteFileSystem SourcePackageDeleteFileSystem { get; set; } =
+        FileSystemSourceDeleteFileSystem.Instance;
+
+    /// <summary>
+    /// 其余物删除的**执行体**（可注入，只为一件事：单测要能断言"回收站档到底调了几次、
+    /// 有没有碰真回收站"）。与 <see cref="SourcePackageDeleteFileSystem"/> 同一条理由、同一个形态。
+    ///
+    /// <para>⛔ 产品代码永远走默认（<c>RestItemPurger</c> 自己 new 出来的 <c>ShellDeleteExecutor</c>）；
+    /// 换掉它**只换执行体**，<c>RestItemPurger</c> 的六道门槛与本批档位一个字都不改。
+    /// 为什么需要它：套件里绝不允许往**用户的系统回收站**里塞东西
+    /// （见 <c>RecycleBinServiceTests</c> 顶上那三条自我约束）。</para>
+    /// </summary>
+    internal IDeleteExecutor? RestDeleteExecutor { get; set; }
+
+    internal SourceCleanupService SourcePackageCleanup => new(SourcePackageDeleteFileSystem);
+
+    /// <summary>源包清理/逐层回收的实例（唯一实现 <see cref="ExtractionSourcePurge"/>）。</summary>
+    private ExtractionSourcePurge? _sourcePurge;
+    internal ExtractionSourcePurge SourcePurge => _sourcePurge ??= new ExtractionSourcePurge(_host);
+
+    /// <summary>「半套分卷」闸门的扫描根与边界（唯一实现 <see cref="ExtractionSplitGateScanner"/>）。</summary>
+    private ExtractionSplitGateScanner? _splitGate;
+    internal ExtractionSplitGateScanner SplitGate => _splitGate ??= new ExtractionSplitGateScanner(_host);
+
+    /// <summary>链结束后的根源包补搬/处理（唯一实现 <see cref="ExtractionRootSourceCompletion"/>）。</summary>
+    private ExtractionRootSourceCompletion? _rootCompletion;
+    internal ExtractionRootSourceCompletion RootCompletion => _rootCompletion ??= new ExtractionRootSourceCompletion(_host);
+
+    /// <summary>源文件快照与不变量 11 的检查口（唯一实现 <see cref="ExtractionSourceSnapshot"/>）。</summary>
+    private ExtractionSourceSnapshot? _sourceSnapshot;
+    internal ExtractionSourceSnapshot SourceSnapshot => _sourceSnapshot ??= new ExtractionSourceSnapshot(_host);
+
+    /// <summary>
+    /// 这一层跑完就删掉这一层的源（同签名出口；六道门槛、文案、半套分卷闸门全部在
+    /// <see cref="ExtractionSourcePurge.PurgeLayerSourcePackage"/>，⛔ 这里不复制任何一条判据）。
+    /// </summary>
+    internal string? PurgeLayerSourcePackage(
+        ArchiveTask task,
+        OutputVerificationResult? verification,
+        StageCommitResult? commit,
+        List<(string Level, string Message)> logEntries,
+        LayerPurgeTrigger trigger,
+        ResultCompletenessVerdict? reclaimVerdict = null,
+        bool reclaimRootSource = true,
+        string? reclaimLabel = null,
+        string? reclaimWorkspaceDirectory = null,
+        SourcePackageDonePolicy donePolicy = SourcePackageDonePolicy.Respect) =>
+        SourcePurge.PurgeLayerSourcePackage(
+            task, verification, commit, logEntries, trigger, reclaimVerdict, reclaimRootSource,
+            reclaimLabel, reclaimWorkspaceDirectory, donePolicy);
+
+    /// <summary>「半套分卷」闸门要扫的成品目录树根（口径与上溯规则见 <see cref="ExtractionSplitGateScanner"/>）。</summary>
+    internal IReadOnlyList<string> EnumerateSplitGateArtifactRoots(
+        ArchiveTask task,
+        IReadOnlyList<string> candidates) =>
+        SplitGate.EnumerateSplitGateArtifactRoots(task, candidates);
+
+    /// <summary>整条续解链跑完之后的根源包处理（判据与文案全部在 <see cref="ExtractionRootSourceCompletion"/>）。</summary>
+    internal async Task CompleteRootSourcePackagesAfterChainAsync(
+        IReadOnlyList<ArchiveTask>? rootTasks,
+        IReadOnlyList<ArchiveTask>? chainTasks,
+        CancellationToken cancellationToken = default,
+        OneClickRunOptions? runOptions = null) =>
+        await RootCompletion
+            .CompleteRootSourcePackagesAfterChainAsync(rootTasks, chainTasks, cancellationToken, runOptions)
+            .ConfigureAwait(true);
+
+    /// <summary>开工前补拍源文件快照（没有基准时；判据唯一实现在 <see cref="ExtractionSourceSnapshot"/>）。</summary>
+    public void EnsureSourceSnapshot(ArchiveTask task) => SourceSnapshot.EnsureSourceSnapshot(task);
+
+    /// <summary>真正调引擎之前比一次源文件（不变量 11；判据唯一实现在 <see cref="ExtractionSourceSnapshot"/>）。</summary>
+    internal bool StopIfSourceChanged(ArchiveTask task) => SourceSnapshot.StopIfSourceChanged(task);
+
+    /// <summary>递归核心那一侧的源文件检查口（只认第 0 层；见 <see cref="ExtractionSourceSnapshot"/>）。</summary>
+    internal Task<string?> CheckRootSourceUnchangedAsync(ArchiveTask task) =>
+        SourceSnapshot.CheckRootSourceUnchangedAsync(task);
+
     /// <summary>
     /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 处理源包。
     ///
     /// 校验与预算量的都是**暂存区**：那才是引擎真正写盘的地方（契约 §2.1）。
     /// 最终目录此时还是干净的，只有定稿那一步会往里面写东西。
     ///
-    /// **只允许在后台线程上跑**（见 <see cref="ExtractionCoordinator.PostProcessSuccessAsync"/> 的线程规则）：
+    /// **只允许在后台线程上跑**（见 <see cref="PostProcessSuccessHandler.PostProcessSuccessAsync"/> 的线程规则）：
     /// 这里只碰文件系统，不写任务状态、不写界面日志集合，要说的都放进 LogEntries 回传。
     /// </summary>
     /// <param name="oneClickRun">
@@ -181,7 +288,7 @@ internal sealed class SourceHandler
          * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
          */
         (int producedFiles, long producedSize) = OutputVerifier.Measure(stageDirectory);
-        ResourceBudgetOptions budgetLimits = _host.BudgetLimits;
+        ResourceBudgetOptions budgetLimits = _host.Schedule.BudgetLimits;
 
         if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
         {
@@ -234,7 +341,7 @@ internal sealed class SourceHandler
          * 搬运本身是**同步磁盘活**（几千个文件的 File.Move、跨盘还是拷贝），
          * 所以它跟着本方法一起跑在后台线程上（见 PostProcessSuccessAsync 的线程规则）。
          */
-        StageCommitResult? commit = _host.ExecuteFinalLayoutForSourceHandler(
+        StageCommitResult? commit = _host.ExecuteFinalLayout(
             task,
             stageDirectory,
             task.OutputPath,
@@ -387,7 +494,7 @@ internal sealed class SourceHandler
              * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
              * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
              */
-            sourceMoveFailure = _host.PurgeLayerSourcePackage(
+            sourceMoveFailure = PurgeLayerSourcePackage(
                 task, verification, commit, logEntries, LayerPurgeTrigger.SpaceTight);
         }
         else if (task.IsContinuationTask)
@@ -411,7 +518,7 @@ internal sealed class SourceHandler
              * 失败 / 部分完成 / 取消 ⇒ 那一层的过程物一个字节都不动（它就是"最后一层过程物"，
              * 默认留下；③页那一档要不要动它属于**下一刀**，见 `PrepareRestHandlingForBatch`）。
              */
-            sourceMoveFailure = _host.PurgeLayerSourcePackage(
+            sourceMoveFailure = PurgeLayerSourcePackage(
                 task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
         }
         else if (_host._spaceTightPolicy.Enabled && _host._spaceTightPolicy.KeepSource)
@@ -474,7 +581,7 @@ internal sealed class SourceHandler
             }
             else
             {
-                sourceMoveFailure = _host.PurgeLayerSourcePackage(
+                sourceMoveFailure = PurgeLayerSourcePackage(
                     task, verification, commit, logEntries, LayerPurgeTrigger.SourceHandlingDelete);
             }
         }

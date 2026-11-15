@@ -153,8 +153,8 @@ public sealed class SpaceTight20FixtureTests
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
         oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.NotShown();
 
-        extraction.SpaceProbeOverride = _ => freeBytes;
-        extraction.SpaceReserveOverride = Reserve;
+        extraction.Schedule.SpaceProbeOverride = _ => freeBytes;
+        extraction.Schedule.SpaceReserveOverride = Reserve;
         vm.SpaceTightMode = true;
         vm.SpaceTightKeepSource = false;
 

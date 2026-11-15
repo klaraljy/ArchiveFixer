@@ -121,7 +121,7 @@ internal sealed class ExtractionSourcePurge
          * 不能用 IsVolumeGroup 代替。
          */
         if (trigger == LayerPurgeTrigger.SpaceTight
-            && _host._volumeStepGroupWork.TryGetValue(task, out ExtractionCoordinator.VolumeStepGroupWork? groupWork))
+            && _host.VolumeStepPreflight.GroupWork.TryGetValue(task, out VolumeStepPreflightHandler.VolumeStepGroupWork? groupWork))
         {
             /*
              * 第二大步新组的源片清单在 VolumeStepGroupWork.Pieces 里；
@@ -129,7 +129,7 @@ internal sealed class ExtractionSourcePurge
              * 在 CleanupVolumeStepGroupEntry 摘掉这份账之前先保住整组清单。
              */
             groupSourcePaths = groupWork.Pieces;
-            _host.CleanupVolumeStepGroupEntry(task);
+            _host.VolumeStepPreflight.CleanupVolumeStepGroupEntry(task);
         }
 
         /*
@@ -213,7 +213,7 @@ internal sealed class ExtractionSourcePurge
          * 为什么不是"没事，反正传进来的清单里没有它"：这是**不可逆**操作，
          * 多一道"值不值得信"的检查比事后解释便宜得多（AGENTS.md §9.5）。
          */
-        if (!reclaimRootSource && !ExtractionCoordinator.IsInsideRecursionWorkspace(task.CurrentPath))
+        if (!reclaimRootSource && !WorkspacePathRules.IsInsideRecursionWorkspace(task.CurrentPath))
         {
             logEntries.Add((
                 "WARN",
@@ -276,7 +276,7 @@ internal sealed class ExtractionSourcePurge
             return null;
         }
 
-        _host.RestoreGatheredUserSourcePieces(logEntries);
+        _host.VolumeHandoff.RestoreGatheredUserSourcePieces(logEntries);
 
         /*
          * 删源证据必须是“本链自己”的完整性结论：
@@ -307,7 +307,7 @@ internal sealed class ExtractionSourcePurge
             Reason = $"{triggerLabel}：删除源包"
         };
 
-        SourceCleanupResult cleanup = _host.SourcePackageCleanup.Cleanup(
+        SourceCleanupResult cleanup = _host.Source.SourcePackageCleanup.Cleanup(
             task,
             new SourceCleanupDecision
             {
@@ -559,7 +559,7 @@ internal sealed class ExtractionSourcePurge
             return null;   // 没有可删的路径（分卷清单不完整）⇒ 上游那条"清单是空的"会如实说
         }
 
-        IReadOnlyList<string> artifactRoots = _host.EnumerateSplitGateArtifactRoots(task, candidates);
+        IReadOnlyList<string> artifactRoots = _host.Source.EnumerateSplitGateArtifactRoots(task, candidates);
 
         /*
          * ⛔ 2026-10-03 第二轮复核：**一棵能扫的树都取不到 = 判不出 ⇒ 拦下**

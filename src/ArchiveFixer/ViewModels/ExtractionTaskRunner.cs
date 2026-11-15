@@ -43,7 +43,7 @@ internal sealed class ExtractionTaskRunner
     {
         try
         {
-            _host.RecordSpaceTrend("任务开工");
+            _host.Schedule.RecordSpaceTrend("任务开工");
 
             await ProcessExtractTaskAsync(task, oneClickRun);
 
@@ -64,7 +64,7 @@ internal sealed class ExtractionTaskRunner
         }
         finally
         {
-            runtime.AvailableAfterFinish = _host.ProbeAvailableSpace(_host.ResolveSpaceProbePathOrBatch(task))
+            runtime.AvailableAfterFinish = _host.Schedule.ProbeAvailableSpace(_host.Schedule.ResolveSpaceProbePathOrBatch(task))
                                            ?? SpaceReservationLedger.UnknownAvailable;
 
             SpaceReservationLedger? ledger = _host.SpaceLedger;
@@ -76,7 +76,7 @@ internal sealed class ExtractionTaskRunner
                 runtime.ReservedBytes = 0;
             }
 
-            _host.RecordSpaceTrend("任务收尾");
+            _host.Schedule.RecordSpaceTrend("任务收尾");
 
             _host.UpdateSummary();
         }
@@ -87,7 +87,7 @@ internal sealed class ExtractionTaskRunner
         var taskCts = new CancellationTokenSource();
         _host.TrackRunningTask(taskCts, task);
 
-        _host.BeginTaskLogCapture(task);
+        _host.LogCapture.BeginTaskLogCapture(task);
 
         using IDisposable taskSpan = ArchiveFixer.Services.DiagnosticSpan.BeginTask(task.TaskId, task.LogName);
 
@@ -125,10 +125,10 @@ internal sealed class ExtractionTaskRunner
              * 一律在这里跳过并登记交接事实；⛔ 不再放行、不再点名、不再搬片。
              *
              * 唯一例外（交界处重建 B 段，2026-10-24）：**已经被第二大步点名的入口任务**
-             * （`_volumeStepTasks` 里有它）放行，只解这一层。⛔ 放行不放宽任何判据：
+             * （`_volumeLedgerState.VolumeStepTasks` 里有它）放行，只解这一层。⛔ 放行不放宽任何判据：
              * 它仍然是"内容卡证明的入口卷 + 第二大步点名"两个事实同时成立。
              */
-            bool isSecondStepEntry = _host.IsSecondStepTask(task);
+            bool isSecondStepEntry = new ExtractionVolumeStepFacts(_host).IsSecondStepTask(task);
 
             string entryName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
             /*
@@ -156,7 +156,7 @@ internal sealed class ExtractionTaskRunner
                 (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.Unknown
                  && entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.Unknown
                  || entryCard.Format == ArchiveFixer.Detection.VolumeContentFormat.SevenZip)
-                && _host.HasContentProvenVolumeFirstSibling(task, entryName);
+                && _host.VolumeHandoff.ProducedVolumeGate.HasContentProvenVolumeFirstSibling(task, entryName);
 
             /*
              * RAR 加密头卷号读不出（Membership=Unknown），但标准名仍是唯一的第二大步门票；
@@ -198,8 +198,8 @@ internal sealed class ExtractionTaskRunner
             if (!isSecondStepEntry
                 && (contentVolumeCandidate || nameSlotVolumeCandidate || rarNameSlotCandidate))
             {
-                _host.RegisterFirstStepLedgerEntry(task, entryCard);
-                ArchiveFixer.Detection.VolumeHandoffEntry handoff = _host.RegisterVolumeHandoff(task, entryCard);
+                _host.VolumeHandoff.ProducedVolumeGate.RegisterFirstStepLedgerEntry(task, entryCard);
+                ArchiveFixer.Detection.VolumeHandoffEntry handoff = _host.VolumeHandoff.Ledger.RegisterVolumeHandoff(task, entryCard);
 
                 task.Status = StatusText.Skipped;
                 task.Outcome = TaskOutcome.Skipped;
@@ -245,7 +245,7 @@ internal sealed class ExtractionTaskRunner
                 entryCard = ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath ?? string.Empty);
             }
 
-            _host.RegisterFirstStepLedgerEntry(task, entryCard);
+            _host.VolumeHandoff.ProducedVolumeGate.RegisterFirstStepLedgerEntry(task, entryCard);
 
             /*
              * 放行的这一档也把内容卡事实写一行（用户 2026-10-24「文件的信息有没有记录」）：
@@ -262,7 +262,7 @@ internal sealed class ExtractionTaskRunner
                 + $"自述整包={(entryCard.DeclaredTotalBytes > 0 ? entryCard.DeclaredTotalBytes + " 字节" : "判不出")}，"
                 + $"自述片数={(entryCard.DeclaredVolumeCount > 0 ? entryCard.DeclaredVolumeCount + " 片" : "判不出")}。");
 
-            await _host.ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
+            await new ExtractTaskMainHandler(_host).RunAsync(task, taskCts.Token, oneClickRun);
 
             /*
              * 第一大步产出的内层文件也必须进入唯一账本：
@@ -270,7 +270,7 @@ internal sealed class ExtractionTaskRunner
              * 不在这里登记，SevenZipBoundaryResolver 就永远只看到一小部分片。
              */
             UiActivity.Mark("收尾", task.LogName, "登记第一大步产物");
-            await _host.RegisterProducedOutputsToLedgerAsync(task);
+            await _host.VolumeHandoff.ProducedVolumeGate.RegisterProducedOutputsToLedgerAsync(task);
             UiActivity.ClearBackground();
 
             /*
@@ -280,7 +280,7 @@ internal sealed class ExtractionTaskRunner
              */
             if (!_host.TrySettleVolumeGroup(task))
             {
-                _host.TryPurgeSolvedVolumeStepPieces(task);
+                _host.VolumeStepPreflight.TryPurgeSolvedVolumeStepPieces(task);
             }
         }
         catch (OperationCanceledException)
@@ -319,7 +319,7 @@ internal sealed class ExtractionTaskRunner
         }
         finally
         {
-            _host.CleanupVolumeStepGroupEntry(task);
+            _host.VolumeStepPreflight.CleanupVolumeStepGroupEntry(task);
             _host.UntrackRunningTask(taskCts);
 
             try
@@ -332,7 +332,7 @@ internal sealed class ExtractionTaskRunner
 
             // 释放"最终目录占位"：这一刻目录要么已经带着产物存在（后来的任务走既有的冲突档），
             // 要么根本没建起来（后来的任务就该用它）。
-            _host.ReleaseOutputDirectoryClaim(task.OutputPath);
+            _host.Auxiliary.ReleaseOutputDirectoryClaim(task.OutputPath);
 
             /*
              * 没成功的工作区：失败 / 取消 / 部分完成时，默认把**这一单自己的**工作区整份删掉
@@ -403,7 +403,7 @@ internal sealed class ExtractionTaskRunner
             // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
             UiActivity.Mark("收尾", task.LogName, "任务日志收尾");
             var logWatch = System.Diagnostics.Stopwatch.StartNew();
-            _host.EndTaskLogCapture(task);
+            _host.LogCapture.EndTaskLogCapture(task);
             logWatch.Stop();
 
             if (logWatch.ElapsedMilliseconds >= 1000)

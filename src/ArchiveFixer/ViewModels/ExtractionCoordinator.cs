@@ -122,8 +122,11 @@ internal sealed partial class ExtractionCoordinator
     }
 
 
-    /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
-    private const int MaxPreflightPasswordAttempts = 3;
+    /// <summary>
+    /// 解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。
+    /// <c>internal</c>（M5）：步骤 Handler 直接读这一份常量，⛔ 不各留访问器、不复制数值。
+    /// </summary>
+    internal const int MaxPreflightPasswordAttempts = 3;
 
     // ================================================================
     // 不变量 11：源文件变化（AGENTS.md §6 第 11 条）
@@ -158,8 +161,10 @@ internal sealed partial class ExtractionCoordinator
     /// <summary>
     /// 这一批用户导入的源文件路径（含分卷各卷）。供别名清理判“这是用户的东西，绝不许删”。
     /// 批首建立；任务表在清理时可能已被移动 / 改写，不能只靠当时的 CurrentPath 再猜。
+    /// <c>internal</c>（M5）：协作类 <see cref="PieceAdoptionHandler"/> 直接读写这一份账，
+    /// ⛔ 不再单留一个 <c>…ForHandler</c> 访问器。
     /// </summary>
-    private readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
+    internal readonly HashSet<string> _userSourcePaths = new(StringComparer.OrdinalIgnoreCase);
 
     internal void TrackRunningTask(CancellationTokenSource cts, ArchiveTask task)
     {
@@ -280,7 +285,7 @@ internal sealed partial class ExtractionCoordinator
      * 这条运行期事实只给定稿分类用：这一层引擎刚写出来的所有东西都是内容物，
      * ⛔ 不许再按"像不像归档"把它们扫进其余物。一键处理始终 false。
      */
-    private bool _manualSingleLayerThisRun;
+    internal bool _manualSingleLayerThisRun;
 
     /*
      * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
@@ -358,6 +363,20 @@ internal sealed partial class ExtractionCoordinator
         _partialPublishStep = new PartialPublishStep(this);
         _restHandlingStep = new RestHandlingStep(this);
         _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
+
+        /*
+         * 源包处理子系统**构造时建一次**（⛔ 不懒建）：它持有本批清理账本与链内输入名单
+         * （CleanupLedger / ChainInnerLayerInputs），并发收尾的任务线程会同时读它 ——
+         * 无锁懒建一旦造出第二个实例，账本就会分成两半（与 LogCaptureHandler 同一个理由）。
+         */
+        _source = new SourceHandler(this);
+
+        /*
+         * 第二大步开工前检查 + 组收片账**构造时建一次**（⛔ 不懒建）：它持有两本无锁字典
+         * （组收片账 / 每组结论），批内任务线程会同时读写（登记在第二大步点名、收片在任务收尾）——
+         * 无锁懒建一旦造出第二个实例，账就会分成两半（与 SourceHandler 同一个理由）。
+         */
+        _volumeStepPreflight = new VolumeStepPreflightHandler(this);
     }
 
     /// <summary>源包搬运用的文件系统（真实实现或测试注入的假实现）。</summary>
@@ -378,6 +397,134 @@ internal sealed partial class ExtractionCoordinator
 
     internal bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
 
+    // ================================================================
+    // 任务级日志捕获 / 摘要行 / 批清账（M5：原 LogCaptureStep 分片已删）
+    //
+    // 实现（捕获缓冲、摘要行、批记账、诊断收尾）整块在 <see cref="LogCaptureHandler"/>；
+    // 本类只保留三类成员：
+    //   ① 唯一实例 <see cref="LogCapture"/>（宿主必须有它，Handler 不能每处 new —— 它有实例状态）；
+    //   ② 宿主级入口（<c>AppendLog</c> ×2 / <c>AppendLogPair</c> / <c>AppendLogWithCode</c> /
+    //      <c>CriterionLog</c> / <c>UpdateSummary</c>）：全仓 300+ 个调用点直接走它们；
+    //   ③ 测试与别的 Handler 直接读写的两个状态（<see cref="KeepTaskDetailInLog"/> / <see cref="PostProcessStartedForTests"/>）。
+    // 批清账的四个字段（<c>_batchPurged*</c> / <c>_stopNoticeLogged</c>）已随实现移入 Handler，
+    // 批首清零的唯一出口仍是 <see cref="ResetBatchPurgeCounters"/>（ExtractEntryStep 分片）。
+    // ================================================================
+
+    private LogCaptureHandler? _logCaptureHandler;
+
+    private readonly object _logCaptureHandlerGate = new();
+
+    /// <summary>
+    /// 任务级日志的**唯一实例**（懒建一次；宿主就是本类，全类共用同一个实例）。
+    ///
+    /// <para>⚠ 用锁而不是 <c>??=</c>：Handler 里有<b>实例状态</b>（任务级 <c>AsyncLocal</c> 捕获缓冲 + 批记账的锁），
+    /// 任务线程本来就会并发调 <see cref="LogCaptureHandler.BeginTaskLogCapture"/> / <see cref="LogCaptureHandler.AppendLog(string, string, string, string, string, int, string)"/>；
+    /// 无锁懒建一旦造出第二个实例，"开始捕获"与"写日志"就落到两个不同的缓冲上
+    /// （后果：普通档下成功任务的 INFO 细节会漏到屏幕上，而那是既有红线）。
+    /// 锁只护第一次创建，之后就是一次空判。</para>
+    /// </summary>
+    internal LogCaptureHandler LogCapture
+    {
+        get
+        {
+            LogCaptureHandler? handler = _logCaptureHandler;
+
+            if (handler != null)
+            {
+                return handler;
+            }
+
+            lock (_logCaptureHandlerGate)
+            {
+                return _logCaptureHandler ??= new LogCaptureHandler(this);
+            }
+        }
+    }
+
+    /// <summary>
+    /// **测试用**的显式口子：true = 成功时也把全部细节写进日志
+    /// （默认 <c>false</c> = 产品行为：成功的任务在日志里只留一行摘要）。
+    ///
+    /// <para>为什么留这个口子：一大批既有用例把"日志里那一行"当作**行为证据**（跨盘搬运走了复制、
+    /// 工作区被清理、空间依据写了"同卷只算一份"……），而第 44 条的瘦身改的是**默认呈现**、
+    /// 不是行为本身。让那些用例显式声明"我这个用例要看细节"，比把它们一条条改成断言摘要更诚实
+    /// —— 也让"默认现在是简洁的"这件事只由 <c>LogVolumePolicyTests</c> 一处钉住。</para>
+    ///
+    /// <para>⚠ 用户侧的入口是 ⑥设置 →「详细日志（排查用）」（<see cref="AppSettings.VerboseLog"/>，
+    /// 默认关），二者在 <see cref="LogCaptureHandler"/> 的详细档判据里合成同一个行为；
+    /// ⛔ 这里这个口子只给测试用，界面不绑它。</para>
+    /// </summary>
+    internal bool KeepTaskDetailInLog { get; set; }
+
+    /// <summary>
+    /// **测试缝**：收尾（定稿/归集/搬源）**已经开始、第一道取消闸门之后**回调一次。
+    ///
+    /// <para>为什么需要它（用户「残余缺口：收尾内部按取消无用例钉住」）：收尾内部有三处
+    /// <c>ThrowIfCancellationRequested()</c>，而**没有任何用例能看见它们** —— 现有那两个钩子
+    /// （<c>Engine.OnList/OnExtract</c>）都发生在收尾之前，更早的闸门就先看见了取消。
+    /// ⇒ 只有在这里回调，测试才能把"取消"按在**收尾已经开始之后**。</para>
+    ///
+    /// <para>⛔ 默认 <c>null</c> = 一个字都不做（生产路径行为与改动前逐字相同）。</para>
+    /// </summary>
+    internal Action? PostProcessStartedForTests { get; set; }
+
+    /// <summary>
+    /// 写一处**判据**（人读一行 + 机器读一条，字段固定；唯一收口 <see cref="MainViewModel.CriterionLog"/>）。
+    ///
+    /// <para>⚠ 刻意**不走任务级捕获缓冲**（那条缓冲会把成功任务的 INFO 丢掉）：判据是大测试"只看日志排查"的
+    /// 唯一线索 ⇒ 它每一处都必须落进日志文件。⛔ 只是记录：判据与行为一个字都不改。</para>
+    /// </summary>
+    internal void CriterionLog(
+        string criterion,
+        string inputs,
+        string verdict,
+        string action = "",
+        string file = "",
+        string identity = "",
+        string level = "INFO",
+        string errorCode = "",
+        string component = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => _vm.CriterionLog(
+            criterion, inputs, verdict, action, file, identity, level, errorCode, component,
+            sourceFile, sourceLine, caller);
+
+    internal void UpdateSummary() => _vm.UpdateSummary();
+
+    /// <summary>
+    /// 适配既有 <see cref="Action{T1,T2}"/> 注入点的两参数入口（引擎原话/失败清单写入器）。
+    /// 它只是转到带 caller 的唯一入口；⛔ 不另建一套日志逻辑（实现见 <see cref="LogCaptureHandler.AppendLogPair"/>）。
+    /// </summary>
+    internal void AppendLogPair(string level, string message) => LogCapture.AppendLogPair(level, message);
+
+    /// <summary>适配 <see cref="Action{T1,T2,T3,T4}"/> 注入点（失败清单写入器）。</summary>
+    internal void AppendLogWithCode(string level, string message, string errorCode, string component) =>
+        LogCapture.AppendLogWithCode(level, message, errorCode, component);
+
+    /*
+     * ⚠ 下面两个 AppendLog 重载**必须**保留 CallerFilePath / CallerLineNumber / CallerMemberName：
+     * 取值点在调用点，转发时把取到的值原样传下去 ⇒ 别的 partial / Handler 报进诊断日志的
+     * 文件、行号、成员名与搬家前完全一致（实现见 LogCaptureHandler 的同签名重载）。
+     */
+    internal void AppendLog(
+        string level,
+        string message,
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => LogCapture.AppendLog(level, message, sourceFile, sourceLine, caller);
+
+    internal void AppendLog(
+        string level,
+        string message,
+        string errorCode,
+        string component,
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLine = 0,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+        => LogCapture.AppendLog(level, message, errorCode, component, sourceFile, sourceLine, caller);
 
     public void StopAfterCurrent()
     {
@@ -396,7 +543,7 @@ internal sealed partial class ExtractionCoordinator
              */
             _operationCts?.Cancel();
 
-            LogStopRequestOnce();
+            LogCapture.LogStopRequestOnce();
         }
         catch (Exception ex)
         {
@@ -484,5 +631,154 @@ internal sealed partial class ExtractionCoordinator
 
     /// <summary>一个任务从开工到收工的执行器（生命周期与协调器同寿命）。</summary>
     internal ExtractionTaskRunner TaskRunner => _taskRunner ??= new ExtractionTaskRunner(this, _vm);
+
+    // ================================================================
+    // 分卷交接登记与第一大步账本（M5：原 <c>ExtractionCoordinator.VolumeHandoffStep.cs</c> 已整份删除）
+    // ================================================================
+
+    private VolumeHandoffHandler? _volumeHandoffHandler;
+
+    /// <summary>
+    /// 分卷交接登记与"这一份是不是本批某组的一片"的唯一落点（懒建一次；实现见
+    /// <see cref="VolumeHandoffHandler"/>，⛔ 协调器不再留同名薄转发）。
+    ///
+    /// <para>⚠ 交接账、第一大步文件账本、内容组图、边界解析管线、收拢源片账与「这一组同一套片
+    /// 试过一遍」签名都归它持有（详见 <see cref="VolumeHandoffHandler"/> 的说明）；它是**有状态**的
+    /// 协作类 ⇒ 全批只能有这一个实例，⛔ 不许在别处 <c>new VolumeHandoffHandler(this)</c>。</para>
+    ///
+    /// <para>交接账本记录器 <see cref="VolumeHandoffHandler.Ledger"/> 与产出物内容卡闸门
+    /// <see cref="VolumeHandoffHandler.ProducedVolumeGate"/> 也挂在它下面
+    /// （它们读写同一份账/共用一份缓存，⛔ 各自 new 会分成两半）。</para>
+    /// </summary>
+    internal VolumeHandoffHandler VolumeHandoff => _volumeHandoffHandler ??= new VolumeHandoffHandler(this);
+
+    // ================================================================
+    // 本批分卷账本（M5：原 <c>ExtractionCoordinator.VolumeLedgerStep.cs</c> 已整份删除）
+    // ================================================================
+
+    /// <summary>
+    /// 本批账本的**唯一实例**：事实与说明整块在 <see cref="VolumeLedgerState"/>
+    /// （<c>ViewModels/VolumeLedgerState.cs</c>），本类只持有这一个实例 —— ⛔ 不再给每一本账留
+    /// 同名薄转发，读写点一律直接走 <c>_volumeLedgerState.Xxx</c>
+    /// （协作类走 <c>_host._volumeLedgerState.Xxx</c>，字段名/类型/初始化与搬家前逐字相同）。
+    ///
+    /// <para>⚠ 立刻建、不懒建：状态对象没有构造依赖，而任务线程本来就会并发读写其中几本账
+    /// （见 <see cref="VolumeLedgerState.GroupPieceProducersGate"/> 的说明）；懒建一旦造出第二个实例，
+    /// 账就会分成两半。</para>
+    /// </summary>
+    internal readonly VolumeLedgerState _volumeLedgerState = new();
+
+    private VolumeLedgerHandler? _volumeLedgerHandler;
+
+    /// <summary>
+    /// 分卷账本记账入口（懒建一次；实现见 <see cref="VolumeLedgerHandler"/>，⛔ 协调器不再留同名转发）。
+    /// 过路层其余物/组片消费/缺卷延期/测试钩子全部走它。
+    /// </summary>
+    internal VolumeLedgerHandler VolumeLedger => _volumeLedgerHandler ??= new VolumeLedgerHandler(this);
+
+    private SourceProtectionHandler? _sourceProtectionHandler;
+
+    /// <summary>
+    /// 用户源包就地保护/真名还原的唯一落点（懒建一次；实现见 <see cref="SourceProtectionHandler"/>，
+    /// 全批共用同一个实例）。⚠ 这里只持有访问器，读写的那两份账仍在
+    /// <see cref="VolumeLedgerState.KeepSourceSnapshots"/> / <see cref="VolumeLedgerState.KeepSourceSnapshotDirectory"/>。
+    /// </summary>
+    internal SourceProtectionHandler SourceProtection =>
+        _sourceProtectionHandler ??= new SourceProtectionHandler(this);
+
+    private readonly SourceHandler _source;
+
+    /// <summary>
+    /// 源包处理子系统（收尾重活 / 源包清理与逐层回收 / 半套分卷闸门 / 链尾补搬 / 源文件快照）
+    /// 的唯一持有物（构造时建一次、全实例共用；账本与链内输入名单都在它里面，
+    /// ⛔ 不许懒建成两份）。M5：原 <c>ExtractionCoordinator.Source.cs</c> 的成员已整份并入
+    /// <see cref="SourceHandler"/>，协调器只留这一个访问器（⛔ 不复制判据、⛔ 不另开路径）。
+    /// </summary>
+    internal SourceHandler Source => _source;
+
+    // ================================================================
+    // 整组候选收集与收拢 / 分卷候选路径收集（M5：原 <c>ExtractionCoordinator.VolumeGatherCollectStep.cs</c> 已整份删除）
+    // ================================================================
+
+    private VolumeGatherCollectHandler? _volumeGatherCollectHandler;
+
+    /// <summary>
+    /// 整组候选收集与收拢（组目录/参考名/成员判定/槽位键/规范名准备）的唯一落点
+    /// （懒建一次；实现见 <see cref="VolumeGatherCollectHandler"/>，⛔ 协调器不再留同名薄转发）。
+    /// </summary>
+    internal VolumeGatherCollectHandler VolumeGatherCollect =>
+        _volumeGatherCollectHandler ??= new VolumeGatherCollectHandler(this);
+
+    private ExtractionVolumeCandidateCollector? _volumeCandidateCollector;
+
+    /// <summary>
+    /// 分卷候选路径收集（懒建一次；实现见 <see cref="ExtractionVolumeCandidateCollector"/>，⛔ 协调器不再留同名薄转发）。
+    /// </summary>
+    internal ExtractionVolumeCandidateCollector VolumeCandidateCollector =>
+        _volumeCandidateCollector ??= new ExtractionVolumeCandidateCollector(this);
+
+    // ================================================================
+    // 第二大步开工前检查 + 组收片账（M5：原 <c>ExtractionCoordinator.VolumeStepPreflightStep.cs</c> 已整份删除）
+    //
+    // 实现（缺卷不开工 / 组收片账 / 入口层清理 / 缺卷补救子系统）整块在
+    // <see cref="VolumeStepPreflightHandler"/>；本类只保留三样东西，⛔ 不留任何同名薄转发：
+    //   ① 唯一实例 <see cref="VolumeStepPreflight"/>（构造时建一次，两本账在它里面）；
+    //   ② 搬出去的实现要用的最小 internal 访问器（私有成员在别的分片里）；
+    //   ③ 缺卷补救那一侧要的访问器（底层是 <see cref="VolumeLedgerState"/> 与 BatchReminder 分片）。
+    // ================================================================
+
+    private readonly VolumeStepPreflightHandler _volumeStepPreflight;
+
+    /// <summary>
+    /// 第二大步开工前检查 + 组收片账的唯一落点（构造时建一次；实现见
+    /// <see cref="VolumeStepPreflightHandler"/>，⛔ 协调器不再留同名薄转发）。
+    ///
+    /// <para>⚠ 它持有组收片账与缺卷补救子系统（都有状态）⇒ 全批只能有这一个实例，
+    /// ⛔ 不许在别处 <c>new VolumeStepPreflightHandler(this)</c>。</para>
+    /// </summary>
+    internal VolumeStepPreflightHandler VolumeStepPreflight => _volumeStepPreflight;
+
+    // ================================================================
+    // ===== 搬出去的实现要用的 private 成员：定义在别的 partial 里（不改那些文件），
+    // 这里只加最小 internal 访问器，⛔ 不复制判据、⛔ 不用反射（唯一实现仍在原处）=====
+
+    /// <summary>
+    /// 访问器：「这一批已经问过这一单的缺卷补救」的登记（字段 = 协调器的
+    /// <c>_volumeLedgerState.VolumeRepairAsked</c>）：锁与登记都留在宿主这一侧，
+    /// <see cref="VolumeRepairHandler"/> 只取"这次是不是第一次问"。
+    /// </summary>
+    internal bool TryMarkVolumeRepairAskedForHandler(ArchiveTask task)
+    {
+        lock (_volumeLedgerState.VolumeRepairAsked)
+        {
+            return _volumeLedgerState.VolumeRepairAsked.Add(task);
+        }
+    }
+
+    /// <summary>访问器：确认框的唯一出口（实现 = BatchReminder 分片的 private 转发）；<see cref="VolumeRepairHandler"/> 用。</summary>
+    internal Task<bool> DispatcherSafeConfirmForHandlerAsync(string message) =>
+        DispatcherSafeConfirmAsync(message);
+
+    /// <summary>访问器：UI 线程目录选择框的唯一出口（实现 = BatchReminder 分片的 private 转发）；<see cref="VolumeRepairHandler"/> 用。</summary>
+    internal Task<string> ShowFolderBrowserOnUiThreadForHandlerAsync() =>
+        ShowFolderBrowserOnUiThreadAsync();
+
+    /// <summary>访问器：解前分卷判定（实现 = Recursion 分片的 private 转发）。</summary>
+    internal Task<VolumeGroupResolution> ResolveVolumeGroupForVolumeStepPreflightAsync(
+        ArchiveTask task,
+        CancellationToken cancellationToken) =>
+        ResolveVolumeGroupAsync(task, cancellationToken);
+
+    /// <summary>访问器：缺卷诊断文案（实现 = Recursion 分片的 private static）。</summary>
+    internal static string BuildVolumeVerdictMessageForVolumeStepPreflight(
+        ArchiveTask task,
+        VolumeGroupResolution resolution) =>
+        BuildVolumeVerdictMessage(task, resolution);
+
+    /// <summary>访问器：分卷证据行（实现 = Recursion 分片的 private 转发）。</summary>
+    internal void LogVolumeGroupEvidenceForVolumeStepPreflight(
+        ArchiveTask task,
+        VolumeGroupResolution resolution) =>
+        LogVolumeGroupEvidence(task, resolution);
 }
 

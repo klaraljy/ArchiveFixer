@@ -33,7 +33,7 @@ public partial class MainViewModel
     /// <summary>
     /// "按当前可用空间，最多能并行几个"那句话（用户 2026-09-22 需求第 2 条：界面上算出并显示）。
     ///
-    /// <para>数字来自 <see cref="ExtractionCoordinator.BuildSpaceAdvice"/> —— 与真正开跑时的调度
+    /// <para>数字来自 <see cref="ExtractionScheduleHandler.BuildSpaceAdvice"/> —— 与真正开跑时的调度
     /// 同一段实现，所以界面上显示的建议与日志里那一刻的实际口径永远不会分叉。</para>
     /// </summary>
     public string ParallelAdviceText

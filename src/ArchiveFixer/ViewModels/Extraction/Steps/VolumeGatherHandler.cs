@@ -51,7 +51,7 @@ internal sealed class VolumeGatherHandler
     /// 调用方给的那个"owner"未必是产出它的那一单（批量收片那条路给的是**被重判的那一单**，它的落点树里
     /// 没有这一片）⇒ 若按"某一单"去查这份账，真机上就会出现"账上有、可就是没人来收"⇒ 200 MiB 原样留着。
     /// 所以这一档只问两件事：**这一组**有没有"已经落地的片"（写入点
-    /// <see cref="RememberAdoptedLandedPiece"/> 已经按盘上事实认过产出方），以及**接手这一组的那一单**
+    /// <see cref="PieceAdoptionHandler.RememberAdoptedLandedPiece"/> 已经按盘上事实认过产出方），以及**接手这一组的那一单**
     /// 是不是真的成功且可证完整。</para>
     ///
     /// <para><b>判据全是事实，判不出 ⇒ 什么都不做</b>（与其余物那一档同一套口径）：</para>
@@ -119,13 +119,13 @@ internal sealed class VolumeGatherHandler
         /*
          * ===== 包装壳那一档：产出被这一组接手、组可证完整 ⇒ 也按交接收场（2026-10-18 用户 `&&` 口径）=====
          *
-         * `_groupPieceProducers` 只收「自己吐过片」的单；包装壳（用户导入的外层包，解开后只有一片分卷）
-         * 走的是「落点副本被接手」那条路，只进 `_adoptedLandedPieces`。两本账各补各的，
+         * `_volumeLedgerState.GroupPieceProducers` 只收「自己吐过片」的单；包装壳（用户导入的外层包，解开后只有一片分卷）
+         * 走的是「落点副本被接手」那条路，只进 `_volumeLedgerState.AdoptedLandedPieces`。两本账各补各的，
          * 判据仍是同一条 `&&`：第一大步成功 + 第二大步（组）可证完整且内容校验通过。
          * ⛔ 不碰消费方自己；⛔ 已在 producers 里的不重复；⛔ 片路径从账上取（名字脏也能用内容卡判族）。
          */
         foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) adopted
-                 in _host._adoptedLandedPieces.ToList())
+                 in _host._volumeLedgerState.AdoptedLandedPieces.ToList())
         {
             if (adopted.Producer == null
                 || ReferenceEquals(adopted.Producer, consumer)
@@ -209,7 +209,7 @@ internal sealed class VolumeGatherHandler
     /// <summary>
     /// 这一单**刚发布出来的成品**里，有没有"某一组还缺的那一片" —— 有就按规范卷名接到那一组的目录里。
     ///
-    /// <para>挂点 = <see cref="PostProcessSuccessAsync"/> 的收尾（校验通过之后、清理工作区之前）⇒
+    /// <para>挂点 = <see cref="PostProcessSuccessHandler.PostProcessSuccessAsync"/> 的收尾（校验通过之后、清理工作区之前）⇒
     /// **单层路与轮次续解那条路自动都在内**（它们每一轮都走这一个收尾）。⛔ 判据与执行体与递归路
     /// 是同一份 <see cref="TryAdoptUnresolvedVolumePiece"/> —— 这里只负责"挑出像分卷片的文件"。</para>
     ///
@@ -396,7 +396,7 @@ internal sealed class VolumeGatherHandler
                  * 第 ③ 条断言「盘上收口：只剩成品本身」钉的就是它）。这一帧里有**产出这一片的这一单**（`owner`）
                  * 与**这一片自己**（`piece`）⇒ 交给那把唯一尺子（⛔ 不看谁先到）。
                  */
-                string groupDirectory = _host.ResolveBatchGroupDirectory(baseName, owner, piece);
+                string groupDirectory = _host.VolumeGatherCollect.ResolveBatchGroupDirectory(baseName, owner, piece);
 
                 if (groupDirectory.Length > 0 && File.Exists(Path.Combine(groupDirectory, name)))
                 {
@@ -459,13 +459,13 @@ internal sealed class VolumeGatherHandler
 
         try
         {
-            string tailName = ExtractionCoordinator.ResolveGroupReferenceName(
+            string tailName = VolumeGatherCollectHandler.ResolveGroupReferenceName(
                 task,
                 FileNameHelper.GetArchiveBaseName(ExtractionCoordinator.ResolveObservedPiecePathForHandler(task, memberPath)),
                 memberPath);
             var candidates = new List<VolumeCandidate>();
 
-            foreach (string path in ExtractionCoordinator.CollectVolumeFilesInDirectory(entryLayer))
+            foreach (string path in VolumeRepairHandler.CollectVolumeFilesInDirectory(entryLayer))
             {
                 if (LegacyVolumeNames.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                 {
@@ -526,18 +526,18 @@ internal sealed class VolumeGatherHandler
     /// 没记过 ⇒ <c>task.CurrentPath</c>（与改动前逐字相同）。</para>
     /// </summary>
     internal string ResolveDeferredGroupMemberPath(ArchiveTask task) =>
-        _host._deferredVolumeGroupMember.TryGetValue(task, out string? recorded) && !string.IsNullOrWhiteSpace(recorded)
+        _host._volumeLedgerState.DeferredVolumeGroupMember.TryGetValue(task, out string? recorded) && !string.IsNullOrWhiteSpace(recorded)
             ? recorded!
             : task.CurrentPath ?? string.Empty;
 
     /// <summary>
     /// **这一片在产出方落点里那一份「落地副本」**（唯一出口；⛔ 只回答"盘上有没有这么一个名字"，
     /// 一个字节都不搬、不删）：与 <paramref name="piecePath"/> **同名、不是同一个路径**、
-    /// 且就在**产出方落点根**（<see cref="ResolveOwnerChainDirectory"/>）底下。
+    /// 且就在**产出方落点根**（<see cref="PieceAdoptionHandler.ResolveOwnerChainDirectory"/>）底下。
     ///
     /// <para>为什么要问它：接片走"移动"那一档，动的是**工作区里那一份**；而定稿发布补出来的
     /// "落地那一份"还在产出方落点里 —— 那同样是"产出方那一份已经落地的片"，收场时得有人认领它
-    /// （见 <see cref="RememberAdoptedLandedPiece"/>）。判不出 ⇒ 空串（调用方什么都不记）。</para>
+    /// （见 <see cref="PieceAdoptionHandler.RememberAdoptedLandedPiece"/>）。判不出 ⇒ 空串（调用方什么都不记）。</para>
     /// </summary>
     internal string FindLandedCopyBesideProducer(string piecePath, ArchiveTask? owner)
     {
@@ -568,7 +568,7 @@ internal sealed class VolumeGatherHandler
     /// 它们也算**源包**，跟着这一组一起进其余物、一起按删除档处理
     /// （用户 2026-10-05 拍板原话：「那肯定啊，这个算原包，最后放到其余物里面一同删除」）。
     ///
-    /// <para>判据只有两件事：① 这一片在 <see cref="_consumedVolumeSources"/> 里、且消费方正是
+    /// <para>判据只有两件事：① 这一片在 <see cref="VolumeLedgerState.ConsumedVolumeSources"/> 里、且消费方正是
     /// <paramref name="consumer"/> 这一单；② 这一片自己的任务**确实是**按"内容已由别单解出"收场的
     /// 跟班卷（<see cref="ArchiveTask.IsVolumeGroupFollower"/>、终态 <see cref="TaskOutcome.Skipped"/>）。
     /// 搬运与删除全部交给既有出口（<see cref="ExecuteSourcePackageMove"/> → `SourcePackageMover`，
@@ -586,7 +586,7 @@ internal sealed class VolumeGatherHandler
 
         SettleGroupPieceProducers(consumer, moveSources: true, logEntries);
 
-        if (_host._consumedVolumeSources.Count == 0)
+        if (_host._volumeLedgerState.ConsumedVolumeSources.Count == 0)
         {
             foreach ((string level, string message) in logEntries)
             {
@@ -596,7 +596,7 @@ internal sealed class VolumeGatherHandler
             return;
         }
 
-        foreach ((string piecePath, string ownerName) in _host._consumedVolumeSources.ToList())
+        foreach ((string piecePath, string ownerName) in _host._volumeLedgerState.ConsumedVolumeSources.ToList())
         {
             if (!string.Equals(ownerName, consumer.FileName, StringComparison.Ordinal))
             {
@@ -632,7 +632,7 @@ internal sealed class VolumeGatherHandler
 
             if (pieceHandling == SourceHandlingMode.DeleteInPlace)
             {
-                _host.PurgeLayerSourcePackage(
+                _host.Source.PurgeLayerSourcePackage(
                     pieceTask,
                     verification: null,
                     commit: null,
@@ -646,7 +646,7 @@ internal sealed class VolumeGatherHandler
                     $"{pieceTask.LogName}：按「源包留下」这一档，这一片一个字节都不动（留在原处，随时可手工处理）。"));
             }
 
-            _host._consumedVolumeSources.Remove(piecePath);
+            _host._volumeLedgerState.ConsumedVolumeSources.Remove(piecePath);
         }
 
         foreach ((string level, string message) in logEntries)

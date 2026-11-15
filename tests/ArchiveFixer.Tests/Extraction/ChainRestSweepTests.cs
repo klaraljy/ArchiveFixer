@@ -22,7 +22,7 @@ namespace ArchiveFixer.Tests;
 /// <b>外层这一单成功 + 输出校验通过</b> 时，成品目录里那些"外层解出来、这一轮没跑成"的内层包
 /// 跟源包一样收进其余物（删除档下跟着一起清掉）；外层没成功时**一个字节都不搬**。</para>
 ///
-/// <para>走的是真入口 <c>ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync</c>
+/// <para>走的是真入口 <c>ExtractionCoordinator.Source.CompleteRootSourcePackagesAfterChainAsync</c>
 /// —— 它就是链尾收内层包（<c>CollectChainInnerPackagesIntoRestAsync</c>）的唯一调用点，
 /// 所以这里连"链尾会不会真的调它"一起钉住，比反射直调私有方法更贴近真管线。</para>
 ///
@@ -97,7 +97,7 @@ public class ChainRestSweepTests : IDisposable
         // 搬之前：整组都在成品目录里（前提，免得后面断言的是一个空夹具）。
         Assert.All(chain.VolumePaths, volume => Assert.True(File.Exists(volume)));
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { chain.Root }, new[] { chain.Root, chain.UnrunContinuation });
 
         // ① 每一卷都进了其余物，原位置不再有。
@@ -138,7 +138,7 @@ public class ChainRestSweepTests : IDisposable
         Harness harness = CreateHarness();
         ChainFixture chain = await BuildChainFixtureAsync(harness, state);
 
-        await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+        await harness.Coordinator.Source.CompleteRootSourcePackagesAfterChainAsync(
             new[] { chain.Root }, new[] { chain.Root, chain.UnrunContinuation });
 
         // ① 新口径：未解开的内层过程物整组进其余物；**用户源包一个字节不动**。

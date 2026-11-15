@@ -45,7 +45,7 @@ internal sealed class DeferredVolumeDeficitHandler
          * 补判跑完之后把已经离开名单的那些单的"待判"事实位清掉（它们要么被补判判出了真结论、
          * 要么已经被放行去跑）。仍在名单里的（例如"消费方还没跑完"那一支）保持"待判"。
          */
-        ArchiveTask[] pending = _host._volumeDeficitDeferred.ToArray();
+        ArchiveTask[] pending = _host._volumeLedgerState.VolumeDeficitDeferred.ToArray();
 
         /*
          * ⚠ 2026-10-09 **试做后已撤回**（如实记账）：本想在这里加一趟"最后一轮分卷操作"——
@@ -94,7 +94,7 @@ internal sealed class DeferredVolumeDeficitHandler
 
         foreach (ArchiveTask task in pending)
         {
-            if (!_host._volumeDeficitDeferred.Contains(task))
+            if (!_host._volumeLedgerState.VolumeDeficitDeferred.Contains(task))
             {
                 task.IsVolumeDeficitDeferred = false;
             }
@@ -121,7 +121,7 @@ internal sealed class DeferredVolumeDeficitHandler
     /// （<c>RecordDeferredVolumeDeficit</c>）。</para>
     /// </summary>
     internal bool IsDeferredVolumeDeficit(ArchiveTask? task) =>
-        task != null && _host._volumeDeficitDeferred.Contains(task);
+        task != null && _host._volumeLedgerState.VolumeDeficitDeferred.Contains(task);
 
 
     /// <summary>
@@ -176,7 +176,7 @@ internal sealed class DeferredVolumeDeficitHandler
             }
         }
 
-        foreach (string path in ExtractionCoordinator.CollectVolumeFilesInDirectory(
+        foreach (string path in VolumeRepairHandler.CollectVolumeFilesInDirectory(
                      Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
         {
             leftoverCandidates.Add(new VolumeCandidate { Path = path });
@@ -204,8 +204,8 @@ internal sealed class DeferredVolumeDeficitHandler
          */
         task.IsVolumeDeficitDeferred = false;
 
-        _host._volumeDeficitDeferred.Remove(task);
-        _host._volumeDeficitFinalPass.Add(task);
+        _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
+        _host._volumeLedgerState.VolumeDeficitFinalPass.Add(task);
     }
 
     /// <summary>
@@ -247,15 +247,15 @@ internal sealed class DeferredVolumeDeficitHandler
         // ⚠ 2026-10-08：离开名单 ⇒ 事实位一起清（理由见下面那一处）。
         task.IsVolumeDeficitDeferred = false;
 
-        _host._volumeDeficitDeferred.Remove(task);
-        _host._volumeDeficitFinalPass.Add(task);
+        _host._volumeLedgerState.VolumeDeficitDeferred.Remove(task);
+        _host._volumeLedgerState.VolumeDeficitFinalPass.Add(task);
 
         return true;
     }
 
     /// <summary>
     /// 族规则判不出"该拼到哪一层"时的两级兜底：① 底层识别卡自证首卷 ⇒ 它所在层就是入口层；
-    /// ② 还判不出 ⇒ 读接片那一档真的落地时记下的层（唯一出口 `_groupLayerByBaseName`）。
+    /// ② 还判不出 ⇒ 读接片那一档真的落地时记下的层（唯一出口 `_volumeLedgerState.GroupLayerByBaseName`）。
     /// ⛔ 已经判出层的一个字都不改；两级都判不出 ⇒ 原样返回空串（照旧什么都不做）。
     /// </summary>
     internal string ResolveEntryLayerFallbacks(ArchiveTask task, string entryLayer)
@@ -300,14 +300,14 @@ internal sealed class DeferredVolumeDeficitHandler
         }
 
         /*
-         * ===== 层判不出 ⇒ 读**接片那一档算过的层**（唯一出口 `_groupLayerByBaseName`）=====
+         * ===== 层判不出 ⇒ 读**接片那一档算过的层**（唯一出口 `_volumeLedgerState.GroupLayerByBaseName`）=====
          *
          * <para>2026-10-18 困难批 `30303030` 现场：三片都已按内容规范名 `.001/.002/.003`
          * 接到 `333(2)` 那一层，可批末重判时这一单手上那一份在**已删掉的工作区**里 ⇒
          * 族规则与卡都判不出入口层 ⇒ 逐字 `该拼到哪一层=「」｜这一层不在盘上 ⇒ 判不出完整的一组`
          * ⇒ 整组明明齐了却不开始解压。</para>
          *
-         * <para>判据不另造：`_groupLayerByBaseName` 就是接片真的落地那一刻记下的层
+         * <para>判据不另造：`_volumeLedgerState.GroupLayerByBaseName` 就是接片真的落地那一刻记下的层
          * （`ExtractionCoordinator` 里"层只有一个出口"那条注释指的就是它）。⛔ 只在这一单判不出时用；
          * 目录不存在 ⇒ 照旧空（什么都不做）。</para>
          */
@@ -317,7 +317,7 @@ internal sealed class DeferredVolumeDeficitHandler
                 _host.ResolveDeferredGroupMemberPath(task));
 
             if (ledgerBaseName.Length > 0
-                && _host._groupLayerByBaseName.TryGetValue(ledgerBaseName, out string? assembledLayer)
+                && _host._volumeLedgerState.GroupLayerByBaseName.TryGetValue(ledgerBaseName, out string? assembledLayer)
                 && !string.IsNullOrWhiteSpace(assembledLayer)
                 && Directory.Exists(assembledLayer))
             {

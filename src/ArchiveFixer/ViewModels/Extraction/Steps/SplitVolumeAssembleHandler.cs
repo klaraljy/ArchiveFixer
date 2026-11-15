@@ -27,10 +27,12 @@ namespace ArchiveFixer.ViewModels;
 /// 分卷组装（第 42 条：容器里装的是分卷第 1 卷、后续卷在容器外面时，在工作区里接出一套
 /// 名字成套的卷；第 12 块，从 <c>ExtractionCoordinator.SplitVolumeAssembleStep</c> 按职责搬出的实现）。
 ///
-/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、日志顺序、返回口径与原来逐字一致；
-/// 宿主那一侧只留同签名薄转发（partial 分片），调用点一处未改。跨类只走宿主的 internal 出口
-/// （<c>_pathService</c> / <c>_archiveEngine</c> / <c>AppendLog</c> / <c>CollectVolumeFilesInDirectory</c>，
-/// 加本批新增的最小访问器 <c>MaxPreflightPasswordAttemptsForSplitVolumeAssemble</c>），
+/// <para>只持有宿主 <see cref="ExtractionCoordinator"/>：判据、日志顺序、返回口径与原来逐字一致。
+/// 本类就是分卷组装入口的**唯一落点**（M5：协调器那一分片已删除，不再留薄转发/访问器）——
+/// 调用点直接 <c>new SplitVolumeAssembleHandler(coordinator)</c>；跨类只走宿主的 internal 出口
+/// （<c>_pathService</c> / <c>_archiveEngine</c> / <c>AppendLog</c> / 常量 <c>MaxPreflightPasswordAttempts</c>），
+/// 分卷枚举直接走 <see cref="VolumeRepairHandler.CollectVolumeFilesInDirectory"/>（原 VolumeRepairStep
+/// 分片已删除），
 /// ⛔ 不新增判据、不复制私有状态。</para>
 ///
 /// <para>另含工作区子目录白名单 <see cref="IsOurWorkspaceSubdirectory"/>（它原属本分片）：
@@ -93,7 +95,7 @@ internal sealed class SplitVolumeAssembleHandler
                 family,
                 sourceDirectory,
                 assemblyDirectory,
-                ExtractionCoordinator.CollectVolumeFilesInDirectory(sourceDirectory).Select(Path.GetFileName));
+                VolumeRepairHandler.CollectVolumeFilesInDirectory(sourceDirectory).Select(Path.GetFileName));
 
             if (!plan.CanAssemble)
             {
@@ -152,7 +154,7 @@ internal sealed class SplitVolumeAssembleHandler
             // 拼完**必须让引擎自己验一次**：它认了才算数（与上面那次 list 用的是同一套候选顺序）。
             ArchiveListResult? assembledList = null;
 
-            foreach (PasswordItem candidate in candidates.Take(_host.MaxPreflightPasswordAttemptsForSplitVolumeAssemble))
+            foreach (PasswordItem candidate in candidates.Take(ExtractionCoordinator.MaxPreflightPasswordAttempts))
             {
                 ArchiveListResult attempt = await _host._archiveEngine.ListAsync(
                     ArchiveRequest.For(assembled.FirstVolumePath, candidate.Value),

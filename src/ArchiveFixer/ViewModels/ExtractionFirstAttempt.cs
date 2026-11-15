@@ -201,10 +201,10 @@ internal sealed class ExtractionFirstAttempt
                      * ⚠ 2026-10-14（走查 + 日志实测，`10101010` 那一组）：这一支原来**只写状态**、
                      * 不登记进"缺卷留到最后再判"那份名单 ⇒ 批末重判**一次都不跑**
                      * （日志里"批末补判 / 这一组现在齐了"整段是空的）⇒ 三片都在盘上也没人把它们收到一层
-                     * ⇒ 判据 ① 红。⇒ 结论是缺卷就必须进名单（唯一出口 <see cref="RememberDeferredVolumeDeficit"/>，
+                     * ⇒ 判据 ① 红。⇒ 结论是缺卷就必须进名单（唯一出口 <see cref="VolumeLedgerHandler.RememberDeferredVolumeDeficit"/>，
                      * 它只管"进名单 + 点亮事实位"，⛔ 不碰 Status / ErrorMessage，⛔ 幂等）。
                      */
-                    host.RememberDeferredVolumeDeficit(task, task.CurrentPath);
+                    host.VolumeLedger.RememberDeferredVolumeDeficit(task, task.CurrentPath);
 
                     host.AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
                 }
@@ -297,7 +297,7 @@ internal sealed class ExtractionFirstAttempt
                  * 但仍然走一次收尾：半截产物落在用户看得见的地方，0 字节产物什么都不会搬，
                  * 源包一个字节都不动（收尾里的校验闸门负责把结论落成失败）。
                  */
-                var stage = await host.VerifyStageProductsAsync(
+                var stage = await new EngineFallbackHandler(host).VerifyStageProductsAsync(
                     task,
                     engineArchivePath,
                     selectedPassword,
@@ -323,7 +323,7 @@ internal sealed class ExtractionFirstAttempt
                 }
 
                 // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败 / 校验未通过）：只有结论仍然成立时才敢这么写日志。
-                bool conclusionStands = await host.PostProcessSuccessAsync(
+                bool conclusionStands = await new PostProcessSuccessHandler(host).PostProcessSuccessAsync(
                     task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken, stage.List);
 
                 if (conclusionStands)

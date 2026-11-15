@@ -134,8 +134,8 @@ internal sealed class ExtractionProducedVolumeGate
             return;
         }
 
-        string originRootId = _host._extractionContentGraph.ResolveRootId(task);
-        string placementKey = _host._extractionContentGraph.ResolvePlacementKey(task);
+        string originRootId = _host.VolumeHandoff.ContentGraph.ResolveRootId(task);
+        string placementKey = _host.VolumeHandoff.ContentGraph.ResolvePlacementKey(task);
         string currentPath = task.CurrentPath ?? string.Empty;
 
         /*
@@ -212,14 +212,14 @@ internal sealed class ExtractionProducedVolumeGate
              * 已经由候选登记点挂上租约的片：保留那份角色/租约/来源根，
              * ⛔ 不用这次“普通产出物”登记把它降级成可回收。
              */
-            if (_host._firstStepFileLedger.TryGetByPath(fact.File, out FirstStepFileLedgerEntry existing)
+            if (_host.VolumeHandoff.FirstStepLedger.TryGetByPath(fact.File, out FirstStepFileLedgerEntry existing)
                 && existing.HasCandidateLease)
             {
                 continue;
             }
 
             string leaseId = fact.Candidate
-                ? _host._extractionContentGraph.LeaseCandidate(
+                ? _host.VolumeHandoff.ContentGraph.LeaseCandidate(
                     fact.File,
                     originRootId,
                     task.TaskId,
@@ -234,7 +234,7 @@ internal sealed class ExtractionProducedVolumeGate
                     + "（组收片前不再按普通过程物回收）");
             }
 
-            _host._firstStepFileLedger.AddOrReplace(
+            _host.VolumeHandoff.FirstStepLedger.AddOrReplace(
                 FirstStepFileLedgerEntry.FromCard(
                     fact.Card,
                     FileNameHelper.GetFileName(fact.File),
@@ -276,10 +276,10 @@ internal sealed class ExtractionProducedVolumeGate
         int? nameSlot = LegacyVolumeNames.TryGetIndex(
             FileNameHelper.GetFileName(path));
 
-        ZipVariant zipVariant = ExtractionCoordinator.ResolveZipVariant(card);
+        ZipVariant zipVariant = VolumeHandoffHandler.ResolveZipVariant(card);
 
-        string originRootId = _host._extractionContentGraph.ResolveRootId(task);
-        string placementKey = _host._extractionContentGraph.ResolvePlacementKey(task);
+        string originRootId = _host.VolumeHandoff.ContentGraph.ResolveRootId(task);
+        string placementKey = _host.VolumeHandoff.ContentGraph.ResolvePlacementKey(task);
         ArtifactRole role = insideWork
             ? ArtifactRole.Unknown
             : task.IsContinuationTask
@@ -303,7 +303,7 @@ internal sealed class ExtractionProducedVolumeGate
 
         FirstStepFileLedgerEntry registered = insideWork
             ? entry
-            : _host._firstStepFileLedger.AddOrReplace(entry);
+            : _host.VolumeHandoff.FirstStepLedger.AddOrReplace(entry);
 
         /*
          * 账本不能只收"任务表里那一份"：同目录的 `.002` 可能只是上一轮解出来的兄弟片，
@@ -368,10 +368,10 @@ internal sealed class ExtractionProducedVolumeGate
                 ArchiveFixer.Detection.FileNatureCard card =
                     ArchiveFixer.Detection.FileNature.Inspect(sibling);
 
-                string siblingRootId = _host._extractionContentGraph.ResolveRootId(task);
-                string siblingPlacementKey = _host._extractionContentGraph.ResolvePlacementKey(task);
+                string siblingRootId = _host.VolumeHandoff.ContentGraph.ResolveRootId(task);
+                string siblingPlacementKey = _host.VolumeHandoff.ContentGraph.ResolvePlacementKey(task);
 
-                _host._firstStepFileLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
+                _host.VolumeHandoff.FirstStepLedger.AddOrReplace(FirstStepFileLedgerEntry.FromCard(
                     card,
                     task.LogName,
                     task.IsContinuationTask
@@ -379,7 +379,7 @@ internal sealed class ExtractionProducedVolumeGate
                         : VolumeHandoffSource.UserImported,
                     gatePassed: true,
                     rarVariant: card.RarVariant,
-                    zipVariant: ExtractionCoordinator.ResolveZipVariant(card),
+                    zipVariant: VolumeHandoffHandler.ResolveZipVariant(card),
                     originRootId: siblingRootId,
                     producedByTaskId: task.TaskId,
                     role: task.IsContinuationTask
@@ -416,7 +416,7 @@ internal sealed class ExtractionProducedVolumeGate
          * 正是 RegisterSiblingLedgerEntries 刚补进来的。
          */
         foreach (ArchiveFixer.Detection.FirstStepFileLedgerEntry entry
-                 in _host._firstStepFileLedger.SameBase(baseName))
+                 in _host.VolumeHandoff.FirstStepLedger.SameBase(baseName))
         {
             if (SafePathHelper.PathEquals(entry.Path, currentPath)
                 || !string.Equals(
@@ -437,7 +437,7 @@ internal sealed class ExtractionProducedVolumeGate
             }
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null
                 || ReferenceEquals(candidate, task)

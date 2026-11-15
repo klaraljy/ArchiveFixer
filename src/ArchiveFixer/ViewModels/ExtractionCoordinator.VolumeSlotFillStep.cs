@@ -91,12 +91,12 @@ internal sealed partial class ExtractionCoordinator
      * 协作类要用、但定义在**别的 partial** 里的两个 private 成员（不改那两个文件）：
      * 这里只加**最小 internal 访问器**，⛔ 不复制判据、⛔ 不用反射（唯一实现仍在原处）。
      */
-    /// <summary>访问器：给 <see cref="VolumeSlotFillHandler"/> 取"这一单的观察片路径"（唯一实现 = 本类）。</summary>
+    /// <summary>访问器：给 <see cref="VolumeSlotFillHandler"/> 取"这一单的观察片路径"（唯一实现 = <see cref="VolumeGatherCollectHandler"/>）。</summary>
     internal static string ResolveObservedPiecePathForSlotFill(ArchiveTask? task, string? memberPath) =>
-        ResolveObservedPiecePath(task, memberPath);
+        VolumeGatherCollectHandler.ResolveObservedPiecePath(task, memberPath);
 
-    /// <summary>访问器：给 <see cref="VolumeSlotFillHandler"/> 记"谁吐过这一组的片"（唯一实现 = 本类）。</summary>
+    /// <summary>访问器：给 <see cref="VolumeSlotFillHandler"/> 记"谁吐过这一组的片"（唯一实现 = <see cref="PieceAdoptionHandler"/>）。</summary>
     internal void RememberPieceSupplyingTaskForSlotFill(string baseName, string piecePath) =>
-        RememberPieceSupplyingTask(baseName, piecePath);
+        PieceAdoption.RememberPieceSupplyingTask(baseName, piecePath);
 
 }

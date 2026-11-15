@@ -39,7 +39,7 @@ internal sealed class ExtractionMultiLayerSpaceRiskReporter
     /// <summary>批首那一条 WARN（用户要求"开工前就要看得见"；不成立时一个字都不写）。</summary>
     internal void LogMultiLayerSpaceRisk(ExtractionSchedulePlan plan)
     {
-        MultiLayerSpaceRisk risk = _host.EvaluateMultiLayerSpaceRisk(plan);
+        MultiLayerSpaceRisk risk = _host.Schedule.EvaluateMultiLayerSpaceRisk(plan);
 
         if (!risk.Applies)
         {

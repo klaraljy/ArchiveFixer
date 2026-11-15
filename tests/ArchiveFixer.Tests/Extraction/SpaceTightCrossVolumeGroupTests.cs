@@ -118,8 +118,8 @@ public sealed class SpaceTightCrossVolumeGroupTests : IDisposable
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
         oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.NotShown();
 
-        extraction.SpaceProbeOverride = _ => 20L * 1024 * 1024;
-        extraction.SpaceReserveOverride = 64 * 1024;
+        extraction.Schedule.SpaceProbeOverride = _ => 20L * 1024 * 1024;
+        extraction.Schedule.SpaceReserveOverride = 64 * 1024;
         vm.SpaceTightMode = true;
         vm.SpaceTightKeepSource = false;
 

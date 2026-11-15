@@ -57,17 +57,17 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     private readonly ConflictStep _conflictStep;
 
     /// <summary>同名冲突处理档（唯一来源；空 / 非法回落 AutoRename）。</summary>
-    private string ConflictActionValue => _conflictStep.ConflictActionValue;
+    internal string ConflictActionValue => _conflictStep.ConflictActionValue;
 
     internal void ResetBatchConflictState() => _conflictStep.ResetBatchConflictState();
 
     internal void ResetTaskConflictState() => _conflictStep.ResetTaskConflictState();
 
-    private ConflictDecision? GetEffectiveConflictDecision() => _conflictStep.GetEffectiveConflictDecision();
+    internal ConflictDecision? GetEffectiveConflictDecision() => _conflictStep.GetEffectiveConflictDecision();
 
-    private bool IsConflictPromptUnavailable => _conflictStep.IsConflictPromptUnavailable;
+    internal bool IsConflictPromptUnavailable => _conflictStep.IsConflictPromptUnavailable;
 
-    private Task<ConflictDecision?> AskConflictAsync(
+    internal Task<ConflictDecision?> AskConflictAsync(
         ArchiveTask task,
         string message,
         string detail,
@@ -83,7 +83,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
         CancellationToken cancellationToken) =>
         _conflictStep.ResolveConflictAsync(task, kind, targetPath, message, detail, cancellationToken);
 
-    private static string BuildConflictDetail(ConflictPrecheck precheck) =>
+    internal static string BuildConflictDetail(ConflictPrecheck precheck) =>
         ConflictStep.BuildConflictDetail(precheck);
 
     /// <summary>续解落点里是不是已经有"以本层包名命名的那一层"（唯一判据；用例直接钉住它）。</summary>
@@ -118,7 +118,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     /// <summary>链尾：把这一趟用过的每一个工作区根都收一遍空壳（判据仍是"根下无文件才删"）。</summary>
     internal void CleanupRunWorkspaceShells() => _workspaceStep.CleanupRunWorkspaceShells();
 
-    private void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory) =>
+    internal void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory) =>
         _workspaceStep.CleanupTaskWorkspaceDirectory(task, stageDirectory);
 
     internal void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false) =>
@@ -152,12 +152,12 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     OneClickRunOptions? IWorkspaceStepHost.RunOptions => RunOptions;
 
     ExtractOptions IWorkspaceStepHost.BuildExtractOptions(bool tryExtractUnknownFormat) =>
-        BuildExtractOptions(tryExtractUnknownFormat);
+        BatchReminders.BuildExtractOptions(tryExtractUnknownFormat);
 
     bool IWorkspaceStepHost.IsUnresolvedVolumeGroupMember(ArchiveTask task) =>
-        IsUnresolvedVolumeGroupMember(task);
+        new ExtractionVolumeStepFacts(this).IsUnresolvedVolumeGroupMember(task);
 
-    Func<string, bool> IWorkspaceStepHost.IsOurWorkspaceSubdirectory => IsOurWorkspaceSubdirectory;
+    Func<string, bool> IWorkspaceStepHost.IsOurWorkspaceSubdirectory => SplitVolumeAssembleHandler.IsOurWorkspaceSubdirectory;
 
     void IWorkspaceStepHost.AppendLog(string level, string message) => AppendLog(level, message);
 
@@ -226,7 +226,8 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
 
     string IPartialPublishStepHost.RestHandlingThisBatch => RestHandlingThisBatch;
 
-    bool IPartialPublishStepHost.IsInsideRecursionWorkspace(string? path) => IsInsideRecursionWorkspace(path);
+    bool IPartialPublishStepHost.IsInsideRecursionWorkspace(string? path) =>
+        WorkspacePathRules.IsInsideRecursionWorkspace(path);
 
     void IPartialPublishStepHost.PurgeRestItemsExceptChainRootSource(ArchiveTask task) =>
         PurgeRestItemsExceptChainRootSource(task);
@@ -284,10 +285,10 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     private string ResolveContentLayerDirectory(string destinationDirectory, string processArtifactDirectory) =>
         _placementStep.ResolveContentLayerDirectory(destinationDirectory, processArtifactDirectory);
 
-    private static string ResolveContentDirectoryAfterCollect(StageCommitResult commit, CollectResult? collected) =>
+    internal static string ResolveContentDirectoryAfterCollect(StageCommitResult commit, CollectResult? collected) =>
         PlacementStep.ResolveContentDirectoryAfterCollect(commit, collected);
 
-    private ConflictPrecheck PrecheckFinalLayoutConflicts(
+    internal ConflictPrecheck PrecheckFinalLayoutConflicts(
         ArchiveTask task,
         string stageDirectory,
         string destinationDirectory,
@@ -304,7 +305,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
             recursion,
             stageFilesAreProducedContent);
 
-    private StageCommitResult ExecuteFinalLayout(
+    internal StageCommitResult ExecuteFinalLayout(
         ArchiveTask task,
         string stageDirectory,
         string destinationDirectory,
@@ -341,7 +342,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
 
     bool IPlacementStepHost.TryResolveGroupLayer(string baseName, out string layer)
     {
-        if (_groupLayerByBaseName.TryGetValue(baseName, out string? remembered))
+        if (_volumeLedgerState.GroupLayerByBaseName.TryGetValue(baseName, out string? remembered))
         {
             layer = remembered;
             return true;
@@ -352,7 +353,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     }
 
     IReadOnlyList<string> IPlacementStepHost.SnapshotGroupPieceProducerBaseNames() =>
-        SnapshotGroupPieceProducerBaseNames();
+        PieceAdoption.SnapshotGroupPieceProducerBaseNames();
 
     bool IPlacementStepHost.IsOwnLayerOccupiedByPackageFile(string directory, string? ownLayerName, string? innerPackagePath) =>
         OneClickCoordinator.IsOwnLayerOccupiedByPackageFile(directory, ownLayerName, innerPackagePath);
@@ -461,7 +462,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
         CancellationToken cancellationToken) =>
         _restHandlingStep.ApplyRestHandlingAfterChainAsync(task, chainTasks, cancellationToken);
 
-    private void AppendCompletenessEvidence(
+    internal void AppendCompletenessEvidence(
         ArchiveTask task,
         OutputVerificationResult verification,
         SourceHandlingMode sourceHandling) =>
@@ -539,18 +540,18 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
 
     CancellationTokenSource? IRestHandlingStepHost.OperationCts => _operationCts;
 
-    List<string> IRestHandlingStepHost.ChainInnerLayerInputs => _chainInnerLayerInputs;
+    List<string> IRestHandlingStepHost.ChainInnerLayerInputs => Source.ChainInnerLayerInputs;
 
-    HashSet<ArchiveTask> IRestHandlingStepHost.PassThroughRestHandled => _passThroughRestHandled;
+    HashSet<ArchiveTask> IRestHandlingStepHost.PassThroughRestHandled => _volumeLedgerState.PassThroughRestHandled;
 
-    Dictionary<string, List<(ArchiveTask Task, string PieceName)>> IRestHandlingStepHost.GroupPieceProducers => _groupPieceProducers;
+    Dictionary<string, List<(ArchiveTask Task, string PieceName)>> IRestHandlingStepHost.GroupPieceProducers => _volumeLedgerState.GroupPieceProducers;
 
-    Dictionary<string, string> IRestHandlingStepHost.GroupConsumerByName => _groupConsumerByName;
+    Dictionary<string, string> IRestHandlingStepHost.GroupConsumerByName => _volumeLedgerState.GroupConsumerByName;
 
-    Dictionary<string, string> IRestHandlingStepHost.ConsumedVolumeSources => _consumedVolumeSources;
+    Dictionary<string, string> IRestHandlingStepHost.ConsumedVolumeSources => _volumeLedgerState.ConsumedVolumeSources;
 
     List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> IRestHandlingStepHost.ByteBudgetLinkedSources =>
-        _byteBudgetLinkedSources;
+        _volumeLedgerState.ByteBudgetLinkedSources;
 
     AppSettings IRestHandlingStepHost.Settings => Settings;
 
@@ -560,22 +561,23 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
 
     bool IRestHandlingStepHost.IsStopping => IsStopping;
 
-    SourceHandlingMode IRestHandlingStepHost.EffectiveSourceHandling => EffectiveSourceHandling;
+    SourceHandlingMode IRestHandlingStepHost.EffectiveSourceHandling => Source.EffectiveSourceHandling;
 
-    IDeleteExecutor? IRestHandlingStepHost.RestDeleteExecutor => RestDeleteExecutor;
+    IDeleteExecutor? IRestHandlingStepHost.RestDeleteExecutor => Source.RestDeleteExecutor;
 
     void IRestHandlingStepHost.AppendLog(string level, string message) => AppendLog(level, message);
 
-    List<string> IRestHandlingStepHost.SnapshotGroupPieceProducerBaseNames() => SnapshotGroupPieceProducerBaseNames();
+    List<string> IRestHandlingStepHost.SnapshotGroupPieceProducerBaseNames() =>
+        PieceAdoption.SnapshotGroupPieceProducerBaseNames();
 
     bool IRestHandlingStepHost.TrySnapshotGroupPieceProducers(
         string baseName,
         out List<(ArchiveTask Task, string PieceName)> producers) =>
-        TrySnapshotGroupPieceProducers(baseName, out producers);
+        PieceAdoption.TrySnapshotGroupPieceProducers(baseName, out producers);
     void IRestHandlingStepHost.CollectConsumedSourcePiecesIntoRest(ArchiveTask consumer) =>
         CollectConsumedSourcePiecesIntoRest(consumer);
 
-    ScheduledTaskRuntime IRestHandlingStepHost.GetOrCreateRuntime(ArchiveTask task) => GetOrCreateRuntime(task);
+    ScheduledTaskRuntime IRestHandlingStepHost.GetOrCreateRuntime(ArchiveTask task) => Schedule.GetOrCreateRuntime(task);
 
     string? IRestHandlingStepHost.PurgeLayerSourcePackage(
         ArchiveTask task,
@@ -585,7 +587,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
         LayerPurgeTrigger trigger,
         ResultCompletenessVerdict? reclaimVerdict,
         bool reclaimRootSource) =>
-        PurgeLayerSourcePackage(task, verification, commit, logEntries, trigger, reclaimVerdict, reclaimRootSource);
+        Source.PurgeLayerSourcePackage(task, verification, commit, logEntries, trigger, reclaimVerdict, reclaimRootSource);
 
     string IRestHandlingStepHost.ResolveContinuationOutputDirectory(ArchiveTask task) =>
         ResolveContinuationOutputDirectory(task);
@@ -594,7 +596,7 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
         ArchiveTask? task,
         string groupBaseName,
         IEnumerable<string>? fileNames) =>
-        AllRestFilesBelongToGroup(task, groupBaseName, fileNames);
+        StalledGroupHandler.AllRestFilesBelongToGroup(task, groupBaseName, fileNames);
 
     int IRestHandlingStepHost.CountRestEntries(string? directory) => LogLineText.CountRestEntries(directory);
 
@@ -611,9 +613,11 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
         string why) =>
         LogPassThroughRestCriterionInputs(producer, consumer, groupBaseName, restDirectory, why);
 
-    void IRestHandlingStepHost.NoteBatchPurge(long freedBytes, bool permanent) => NoteBatchPurge(freedBytes, permanent);
+    void IRestHandlingStepHost.NoteBatchPurge(long freedBytes, bool permanent) =>
+        LogCapture.NoteBatchPurge(freedBytes, permanent);
 
-    ArchiveTask[] IRestHandlingStepHost.SnapshotTaskTable(ObservableCollection<ArchiveTask> tasks) => SnapshotTaskTable(tasks);
+    ArchiveTask[] IRestHandlingStepHost.SnapshotTaskTable(ObservableCollection<ArchiveTask> tasks) =>
+        VolumeNameNormalizeHandler.SnapshotTaskTable(tasks);
 
     string? IRestHandlingStepHost.DescribeChainVerificationGap(
         string destinationDirectory,
@@ -721,7 +725,14 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
             progressSink,
             cancellationToken);
 
-    private List<ArchiveTask> FindTasksWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks) =>
+    /// <summary>
+    /// 需要密码但当前一个可用候选都没有的任务（唯一实现在 <see cref="PasswordCandidatesStep"/>）。
+    ///
+    /// <para>⚠ M5：原来 <c>ExtractionCoordinator.BatchReminderStep</c> 里有同义薄转发
+    /// （<c>FindReminderTasksWithoutUsablePassword</c>），那一分片删除后由本方法直接对外开放，
+    /// 提醒处理器（<c>BatchReminderHandler.ScanBatchRemindersAsync</c>）调它。⛔ 不另算一套判据。</para>
+    /// </summary>
+    internal List<ArchiveTask> FindTasksWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks) =>
         _passwordCandidatesStep.FindTasksWithoutUsablePassword(tasks);
 
     private List<ArchiveTask> FindSuspectsWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks) =>
@@ -759,12 +770,12 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
     internal ExtractionTaskAuxiliary Auxiliary => _auxiliary ??= new ExtractionTaskAuxiliary(this);
 
     /// <summary>本次任务执行器要读的账本（与空间门同一个对象，⛔ 不复制）。</summary>
-    internal SpaceReservationLedger? SpaceLedger => _spaceLedger;
+    internal SpaceReservationLedger? SpaceLedger => Schedule.SpaceLedger;
 
     /// <summary>准备/入仓段要读的路径服务与试开暂存账（与协调器同一个对象，⛔ 不复制）。</summary>
     internal PathService PathService => _pathService;
 
-    internal Dictionary<ArchiveTask, string> StagedGroupOutputPaths => _stagedGroupOutputPaths;
+    internal Dictionary<ArchiveTask, string> StagedGroupOutputPaths => _volumeLedgerState.StagedGroupOutputPaths;
 
     internal PasswordService PasswordService => _passwordService;
 

@@ -57,7 +57,7 @@ internal sealed class ExtractionSourceSnapshot
     /// <summary>
     /// **真正调引擎之前**比一次：变了就当场停下（不变量 11）。
     ///
-    /// <para><b>为什么落在这里</b>：<see cref="ExtractSingleTaskAsync"/> 是**所有**解压入口的
+    /// <para><b>为什么落在这里</b>：<see cref="ExtractTaskMainHandler.RunAsync"/> 是**所有**解压入口的
     /// 唯一收口 —— 一键处理、手动「只解压」、单包重试、危险模式自测走的都是它；
     /// 而"引擎"这条路只有它下游会走。放在这里，等于任何一个入口都不可能绕过去。</para>
     ///

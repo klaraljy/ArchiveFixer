@@ -180,6 +180,9 @@ internal sealed class TaskActionCoordinator
         int failed = 0;
         var repaired = new List<ArchiveTask>();
 
+        // 改名同步的唯一实现只在本协作类里；它无实例状态，按调用点就地建一次即可。
+        var volumeNameNormalize = new VolumeNameNormalizeHandler(_vm.ExtractionCoordinator);
+
         foreach ((ArchiveTask task, VolumeNameRepairPlan plan) in candidates)
         {
             VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
@@ -201,13 +204,13 @@ internal sealed class TaskActionCoordinator
              * 任务要跟着搬到新路径上：文件在磁盘上已经叫新名字了，任务还指着旧名字的话，
              * 紧接着的"重新识别"第一步就会撞上"源文件不在了"。
              *
-             * ⚠ 同步走的是**唯一出口** <see cref="ExtractionCoordinator.SyncTasksAfterVolumeRename"/>：
+             * ⚠ 同步走的是**唯一出口** <see cref="VolumeNameNormalizeHandler.SyncTasksAfterVolumeRename"/>：
              * 这次改名动的是**整组**（组里别的卷很可能是同一批里另一个任务的文件，用户 2026-09-30 真机），
              * 所以它把所有指着被改过名的文件的任务一起搬到新名字上、并重拍它们的源文件快照
              * （不变量 11 的基准跟着名字走）。以前这里只改自己这一行 → 别的任务被不变量 11
              * 报成"源文件已变化（文件不见了）"。
              */
-            _vm.ExtractionCoordinator.SyncTasksAfterVolumeRename(plan.Items, task);
+            volumeNameNormalize.SyncTasksAfterVolumeRename(plan.Items, task);
 
             /*
              * 重新识别 + **重拍源文件快照**（不变量 11）：路径换了，旧快照对新名字毫无意义，

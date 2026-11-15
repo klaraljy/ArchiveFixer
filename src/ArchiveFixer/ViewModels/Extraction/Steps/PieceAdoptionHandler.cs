@@ -30,10 +30,15 @@ namespace ArchiveFixer.ViewModels;
 ///
 /// <para>⛔ **逐字搬入**：接片判据、日志顺序、删除/搬家路径与账本写入点一个字不改；与宿主的唯一差别
 /// 是成员引用写成 <c>_host.</c> / <c>ExtractionCoordinator.</c>，以及成员可见性 private → internal
-/// （另一类型要能调到）。协调器那一侧只留同名同签名的薄转发，所有调用点
-/// （<c>ExtractionBatchEntry</c> / <c>OneClickBatchFinalizer</c> / <c>PlacementLayoutPlanner</c> /
+/// （另一类型要能调到）。M5 已把协调器那一分片（<c>ExtractionCoordinator.PieceAdoptionStep.cs</c>）
+/// 整份删除：入口只剩 <see cref="ExtractionCoordinator.PieceAdoption"/>，调用点
+/// （<c>ExtractionBatchEntry</c> / <c>OneClickBatchFinalizer</c> / <c>BatchSummaryHandler</c> /
 /// <c>ExtractionConsumedPieceSettler</c> / <c>ExtractionVolumeHarvest</c> / <c>ExtractionOrderTrial</c> /
-/// <c>ExtractionPieceHandoverRules</c> …）一个字都没改。</para>
+/// <c>ExtractionSlotScoredAssignment</c> / 各步骤 Handler / 测试）一律直接走本类或静态尺子。</para>
+
+/// <para>⚠ 接片判据实例（<see cref="ExtractionPieceHandoverRules"/>）也由本类懒建持有：
+/// 它只有宿主、没有第二份状态，生命周期与搬出前完全相同（每个
+/// <see cref="ExtractionCoordinator"/> 只有一个本类实例）。</para>
 ///
 /// <para>⚠ 状态全在宿主上（任务表、两本账、一次性暂存目录、接片判据实例）：本类**不持有自己的状态**，
 /// 生命周期与搬出前完全一致（每个 <see cref="ExtractionCoordinator"/> 只有一个本类实例）。</para>
@@ -46,6 +51,16 @@ internal sealed class PieceAdoptionHandler
     {
         _host = host;
     }
+
+    private ExtractionPieceHandoverRules? _pieceHandoverRules;
+
+    /// <summary>
+    /// 接片判据的唯一实例（懒建一次；缓存与生命周期与搬出前一致）：
+    /// 能否搬进组 / 本单暂存目录 / 链目录解析的唯一出口仍只有
+    /// <see cref="ExtractionPieceHandoverRules"/> 那一份实现。
+    /// </summary>
+    internal ExtractionPieceHandoverRules PieceHandoverRules =>
+        _pieceHandoverRules ??= new ExtractionPieceHandoverRules(_host);
 
     /// <summary>
     /// 用户源文件路径集合：任务原始路径、当前路径、组的每一卷、链根路径。
@@ -96,16 +111,16 @@ internal sealed class PieceAdoptionHandler
     {
         // 只增不减：续解轮次、后续补跑都可能再次经过别名清理，
         // 不能因为新一轮只带来部分任务就把前一轮的用户源路径忘掉。
-        _host.UserSourcePathsForHandler.UnionWith(BuildUserSourcePathSet(tasks));
+        _host._userSourcePaths.UnionWith(BuildUserSourcePathSet(tasks));
     }
 
     internal int PurgeRedundantPieceAliases()
     {
         int removed = 0;
-        var userSourcePaths = new HashSet<string>(_host.UserSourcePathsForHandler, StringComparer.OrdinalIgnoreCase);
-        userSourcePaths.UnionWith(BuildUserSourcePathSet(ExtractionCoordinator.SnapshotTaskTable(_host.Tasks)));
+        var userSourcePaths = new HashSet<string>(_host._userSourcePaths, StringComparer.OrdinalIgnoreCase);
+        userSourcePaths.UnionWith(BuildUserSourcePathSet(VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks)));
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task == null)
             {
@@ -133,7 +148,7 @@ internal sealed class PieceAdoptionHandler
                 {
                     foreach (string file in Directory.EnumerateFiles(root))
                     {
-                        bool completeGroupPiece = _host._volumeGroupUnits.Values.Any(unit =>
+                        bool completeGroupPiece = _host._volumeLedgerState.VolumeGroupUnits.Values.Any(unit =>
                             !string.IsNullOrWhiteSpace(unit.BaseName)
                             && string.Equals(
                                 FileNameHelper.GetArchiveBaseName(unit.BaseName),
@@ -151,7 +166,7 @@ internal sealed class PieceAdoptionHandler
                             continue;
                         }
 
-                        bool isTaskEntry = ExtractionCoordinator.SnapshotTaskTable(_host.Tasks).Any(candidate => candidate != null
+                        bool isTaskEntry = VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks).Any(candidate => candidate != null
                             && (string.Equals(
                                     SafePathHelper.GetFullPathSafe(candidate.OriginalPath ?? string.Empty),
                                     SafePathHelper.GetFullPathSafe(file),
@@ -218,7 +233,7 @@ internal sealed class PieceAdoptionHandler
 
     internal void CleanupConfirmedOrderStagingDirectories()
     {
-        foreach (string directory in _host._confirmedOrderStagingDirectories.ToList())
+        foreach (string directory in _host._volumeLedgerState.ConfirmedOrderStagingDirectories.ToList())
         {
             try
             {
@@ -242,7 +257,7 @@ internal sealed class PieceAdoptionHandler
             }
         }
 
-        _host._confirmedOrderStagingDirectories.Clear();
+        _host._volumeLedgerState.ConfirmedOrderStagingDirectories.Clear();
     }
 
     /// <summary>
@@ -270,7 +285,7 @@ internal sealed class PieceAdoptionHandler
             return;
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (candidate == null)
             {
@@ -293,12 +308,12 @@ internal sealed class PieceAdoptionHandler
         }
     }
 
-    /// <summary>「谁吐出过哪一组的片」这本账的**键快照**（并发安全；见 <c>_groupPieceProducersGate</c>）。</summary>
+    /// <summary>「谁吐出过哪一组的片」这本账的**键快照**（并发安全；见 <c>_volumeLedgerState.GroupPieceProducersGate</c>）。</summary>
     internal List<string> SnapshotGroupPieceProducerBaseNames()
     {
-        lock (_host._groupPieceProducersGate)
+        lock (_host._volumeLedgerState.GroupPieceProducersGate)
         {
-            return _host._groupPieceProducers.Keys.ToList();
+            return _host._volumeLedgerState.GroupPieceProducers.Keys.ToList();
         }
     }
 
@@ -310,9 +325,9 @@ internal sealed class PieceAdoptionHandler
         string baseName,
         out List<(ArchiveTask Task, string PieceName)> producers)
     {
-        lock (_host._groupPieceProducersGate)
+        lock (_host._volumeLedgerState.GroupPieceProducersGate)
         {
-            if (_host._groupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? live)
+            if (_host._volumeLedgerState.GroupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? live)
                 && live != null)
             {
                 producers = live.ToList();
@@ -327,18 +342,18 @@ internal sealed class PieceAdoptionHandler
     /// <summary>整本账的**逐组快照**（收场那一档遍历用；并发安全）。</summary>
     internal List<List<(ArchiveTask Task, string PieceName)>> SnapshotGroupPieceProducerLists()
     {
-        lock (_host._groupPieceProducersGate)
+        lock (_host._volumeLedgerState.GroupPieceProducersGate)
         {
-            return _host._groupPieceProducers.Values.Select(list => list.ToList()).ToList();
+            return _host._volumeLedgerState.GroupPieceProducers.Values.Select(list => list.ToList()).ToList();
         }
     }
 
     /// <summary>批首/批末清账（并发安全）。</summary>
     internal void ClearGroupPieceProducers()
     {
-        lock (_host._groupPieceProducersGate)
+        lock (_host._volumeLedgerState.GroupPieceProducersGate)
         {
-            _host._groupPieceProducers.Clear();
+            _host._volumeLedgerState.GroupPieceProducers.Clear();
         }
     }
 
@@ -440,7 +455,7 @@ internal sealed class PieceAdoptionHandler
         }
 
         foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
-                 in _host._adoptedLandedPieces)
+                 in _host._volumeLedgerState.AdoptedLandedPieces)
         {
             if (string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.PiecePath, piecePath, StringComparison.OrdinalIgnoreCase))
@@ -449,7 +464,7 @@ internal sealed class PieceAdoptionHandler
             }
         }
 
-        _host._adoptedLandedPieces.Add((producer, groupBaseName, piecePath, outputRoot));
+        _host._volumeLedgerState.AdoptedLandedPieces.Add((producer, groupBaseName, piecePath, outputRoot));
     }
 
     /// <summary>
@@ -466,7 +481,7 @@ internal sealed class PieceAdoptionHandler
             return false;
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             foreach (string sourcePath in ExtractionCoordinator.EnumerateTaskPaths(task))
             {
@@ -492,7 +507,7 @@ internal sealed class PieceAdoptionHandler
             return false;
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task != null
                 && !string.IsNullOrWhiteSpace(task.OriginalPath)
@@ -517,7 +532,7 @@ internal sealed class PieceAdoptionHandler
             return false;
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task != null
                 && !string.IsNullOrWhiteSpace(task.OriginalPath)
@@ -558,7 +573,7 @@ internal sealed class PieceAdoptionHandler
             return false;
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (task == null || task.IsContinuationTask)
             {
@@ -590,7 +605,7 @@ internal sealed class PieceAdoptionHandler
             return owner;
         }
 
-        foreach (ArchiveTask candidate in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask candidate in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             if (!ReferenceEquals(candidate, owner) && IsInsideOwnLandingTree(candidate, piecePath))
             {
@@ -639,7 +654,7 @@ internal sealed class PieceAdoptionHandler
             return;
         }
 
-        foreach (ArchiveTask task in ExtractionCoordinator.SnapshotTaskTable(_host.Tasks))
+        foreach (ArchiveTask task in VolumeNameNormalizeHandler.SnapshotTaskTable(_host.Tasks))
         {
             TaskPathSync.ApplySingleMove(task, from, to);
 
@@ -660,28 +675,28 @@ internal sealed class PieceAdoptionHandler
 
         /*
          * ⚠ **账上的键也要跟着搬**（2026-10-06 实测：这是"第三处读旧名"的候选之一）：
-         * `_consumedVolumeSources` 的**键就是那一份源片的路径**（`RememberOneConsumedVolumeSource`
+         * `_volumeLedgerState.ConsumedVolumeSources` 的**键就是那一份源片的路径**（`RememberOneConsumedVolumeSource`
          * 与 `RememberGroupPiecesConsumedBy` 两处写入）。源片就地改名之后键还指着旧名字 ⇒
          * 批末重判再问"这一单那一片在不在借片账里"必然问不出来 ⇒ 整组凑不齐、产物出不来
          * （真机形状 E2E 的 `Assert.NotNull()` 就是这样红的）。
          * ⇒ 这里把键一起重映射（值 = 消费方名字，不动）。
          */
-        if (_host._consumedVolumeSources.Count > 0)
+        if (_host._volumeLedgerState.ConsumedVolumeSources.Count > 0)
         {
             string? consumer = null;
 
-            foreach ((string path, string owner) in _host._consumedVolumeSources.ToList())
+            foreach ((string path, string owner) in _host._volumeLedgerState.ConsumedVolumeSources.ToList())
             {
                 if (SafePathHelper.PathEquals(path, from))
                 {
                     consumer = owner;
-                    _host._consumedVolumeSources.Remove(path);
+                    _host._volumeLedgerState.ConsumedVolumeSources.Remove(path);
                 }
             }
 
             if (consumer != null)
             {
-                _host._consumedVolumeSources[to] = consumer;
+                _host._volumeLedgerState.ConsumedVolumeSources[to] = consumer;
             }
         }
     }
@@ -700,6 +715,6 @@ internal sealed class PieceAdoptionHandler
         ExtractionPieceHandoverRules.IsTargetSlotAlreadyThisPiece(piecePath, target);
 
     internal string ResolveOwnerChainDirectory(ArchiveTask? owner) =>
-        _host.PieceHandoverRulesForHandler.ResolveOwnerChainDirectory(owner);
+        PieceHandoverRules.ResolveOwnerChainDirectory(owner);
 
 }

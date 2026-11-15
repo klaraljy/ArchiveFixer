@@ -21,7 +21,7 @@ namespace ArchiveFixer.Extraction;
 ///
 /// <para>
 /// ✅ <b>它在管线上有、且只有两个调用点</b>，两处都是同一件事"**这一层跑完就删它自己那一层的源**"，
-/// 由 <c>ExtractionCoordinator.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
+/// 由 <c>SourceHandler.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
 /// ① ①页「空间不足」模式（<c>LayerPurgeTrigger.SpaceTight</c>）—— 那个模式的**全部机制**
 /// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包；
 /// ② 普通档的**逐层回收**（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板）——
@@ -261,7 +261,7 @@ public sealed class SourceCleanupService
     /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
     /// </summary>
     /// <param name="additionalPaths">
-    /// 额外来源清单：第二大步新组的源片账在 <c>VolumeStepGroupWork.Pieces</c>，不一定写进
+    /// 额外来源清单：第二大步新组的源片账在 <c>VolumeStepPreflightHandler.VolumeStepGroupWork.Pieces</c>，不一定写进
     /// <see cref="ArchiveTask.VolumePaths"/>；调用方只在组可证完整且已通过删除闸门后传入。
     /// </param>
     internal static List<string> BuildTargetList(

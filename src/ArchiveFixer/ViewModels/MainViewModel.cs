@@ -570,7 +570,7 @@ public partial class MainViewModel : ViewModelBase
     /// </para>
     /// <para>
     /// 失败 / 取消 / 部分完成一律不走这里（打开一个空目录只会误导用户）——
-    /// 那条判断在调用点，见 <see cref="ExtractionCoordinator.PostProcessSuccessAsync"/>。
+    /// 那条判断在调用点，见 <see cref="PostProcessSuccessHandler.PostProcessSuccessAsync"/>。
     /// </para>
     /// <para>
     /// <c>virtual</c> 只为单元测试：真实现会 <c>Process.Start("explorer.exe", 目录)</c>，

@@ -116,7 +116,7 @@ internal sealed class OneClickRoundRunner
          * 链尾解压/组终态已经全部落定，回填一次内容组最终事实。
          * 只读组/任务已有事实，不扫 Pending、不按文件存在性猜。
          */
-        _extractionCoordinator.FinalizeContentGroups(state.Processed);
+        new ContentGroupFinalizerHandler(_extractionCoordinator).FinalizeContentGroups(state.Processed);
 
         /*
          * ===== 交界处批末对账（D 段，2026-10-24）=====
@@ -124,7 +124,7 @@ internal sealed class OneClickRoundRunner
          * 只打事实行：`[第二大步·交接] 本批交接 N 份（在盘 / 已不在）｜已消费 M｜待处理 K`
          * 与每组一行 `[第二大步·结论] 基名：…`；⛔ 不搬、不删、不改名。
          */
-        _extractionCoordinator.AppendVolumeHandoffBatchSummary();
+        _extractionCoordinator.VolumeHandoff.Ledger.AppendVolumeHandoffBatchSummary();
 
         _batchFinalizer.FinalizeBatch();
 
@@ -147,7 +147,7 @@ internal sealed class OneClickRoundRunner
          * 所以**其余物处理完之后**再补一针真实可用空间：走本批侦察器自己的探测函数、
          * 文案由 `SpaceTrendMonitor` 产出、没有侦察器时什么都不写（绝不编一个数字）。
          */
-        _extractionCoordinator.RecordSpaceTrendPostscript("其余物处理之后");
+        _extractionCoordinator.Schedule.RecordSpaceTrendPostscript("其余物处理之后");
 
         /*
          * 批末的**一份**结论（用户 2026-09-30 第 3 条："严重度管颜色、诊断管文字，
@@ -251,7 +251,7 @@ internal sealed class OneClickRoundRunner
          * 组级最终内容判决：owner 已经落终态才回填；空输出/未逐条核对一律不判 Verified。
          * 这一行只读任务上的既有事实，不重算解压结果。
          */
-        _extractionCoordinator.FinalizeContentGroups(Tasks);
+        new ContentGroupFinalizerHandler(_extractionCoordinator).FinalizeContentGroups(Tasks);
 
         host.UpdateSummary();
 

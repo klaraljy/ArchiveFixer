@@ -13,7 +13,10 @@ namespace ArchiveFixer.ViewModels;
 /// 实现已整块搬到协作类 <see cref="RecursionHandler"/>，这一分片只留同签名薄转发 + 最小 internal 访问器。
 ///
 /// <para>⛔ 判据、日志顺序、调用顺序一个字都没改；调用点（<c>ExtractionRecursiveStep</c> /
-/// <c>ExtractionCoordinator.VolumeStepPreflightStep</c>）一处未动。</para>
+/// <see cref="VolumeStepPreflightHandler"/>）一处未动。</para>
+///
+/// <para>递归结论落地实现的宿主属性 <see cref="RecursionOutcome"/> 与它要的最小访问器也住在这里
+/// （原 <c>ExtractionCoordinator.RecursionOutcomeStep.cs</c> 已删除；那一分片放不下别处的原因见属性注释）。</para>
 /// </summary>
 internal sealed partial class ExtractionCoordinator
 {
@@ -21,6 +24,16 @@ internal sealed partial class ExtractionCoordinator
     private RecursionHandler? _recursionHandler;
 
     private RecursionHandler Recursion => _recursionHandler ??= new RecursionHandler(this);
+
+    /// <summary>
+    /// 搬出去的那一份递归结论落地实现（懒建一次；宿主就是本类，全类共用同一个实例）。
+    ///
+    /// <para>⚠ 属性只能住在本类自己的 partial 里：若挪进 <c>Steps/RecursionOutcomeHandler.cs</c>，
+    /// 那个文件就会出现第 2 个顶层类型，结构守卫（一类型一文件）当场变红。</para>
+    /// </summary>
+    private RecursionOutcomeHandler? _recursionOutcomeHandler;
+
+    internal RecursionOutcomeHandler RecursionOutcome => _recursionOutcomeHandler ??= new RecursionOutcomeHandler(this);
 
     /// <summary>薄转发：实现见 <see cref="RecursionHandler.ResolveVolumeGroupAsync"/>。</summary>
     private Task<VolumeGroupResolution> ResolveVolumeGroupAsync(
@@ -65,7 +78,7 @@ internal sealed partial class ExtractionCoordinator
 
     /// <summary>访问器：给 <see cref="RecursionHandler"/> 判“这一片是不是还没凑齐的分卷组的一员”。</summary>
     internal bool ShouldStopAtCandidateVolumePieceForRecursion(string path, ArchiveTask owner) =>
-        ShouldStopAtCandidateVolumePiece(path, owner);
+        VolumeHandoff.ShouldStopAtCandidateVolumePiece(path, owner);
 
     /// <summary>访问器：给 <see cref="RecursionHandler"/> 记下“这一单用的是哪个递归核心”（收尾要按结论处理它的工作区）。</summary>
     internal void RememberTaskRecursiveExtractor(ArchiveTask task, RecursiveExtractor extractor) =>
@@ -74,10 +87,6 @@ internal sealed partial class ExtractionCoordinator
     /// <summary>访问器：给 <see cref="RecursionHandler"/> 在 UI 线程上弹“要不要展开内层归档”的确认框。</summary>
     internal Task<bool> ShowConfirmOnUiThreadForRecursion(string message) =>
         ShowConfirmOnUiThreadAsync(message);
-
-    /// <summary>访问器：给 <see cref="RecursionHandler"/> 把递归结论落到任务上（唯一实现 = 本类）。</summary>
-    internal void ApplyRecursionResultForRecursion(ArchiveTask task, RecursionResult result) =>
-        ApplyRecursionResult(task, result);
 
     /// <summary>访问器：给 <see cref="RecursionHandler"/> 问“任务表里已有别单代表这一组了吗”。</summary>
     internal bool AnyTaskRepresentsGroupForRecursion(string piecePath) =>
@@ -91,10 +100,7 @@ internal sealed partial class ExtractionCoordinator
     internal void PreserveStoppedLayerProcessArtifactForRecursion(ArchiveTask task, RecursionResult? result) =>
         PreserveStoppedLayerProcessArtifact(task, result);
 
-    /// <summary>访问器：给 <see cref="RecursionHandler"/> 搬“用户只保留这一层”的产物（唯一实现 = 本类）。</summary>
-    internal static int MoveDirectoryContentForRecursion(string sourceDirectory, string targetDirectory) =>
-        MoveDirectoryContent(sourceDirectory, targetDirectory);
-
-    /// <summary>访问器：给 <see cref="RecursionHandler"/> 判“这份工作区能不能安全清掉”（唯一实现 = 本类）。</summary>
-    internal static bool HasNoFilesForRecursion(string? directory) => HasNoFiles(directory);
+    /// <summary>访问器：给 <see cref="RecursionOutcomeHandler"/> 写「产物越界」注记（唯一实现 = 终态收口分片）。</summary>
+    internal void ApplyLandingViolationNoteForRecursionOutcome(ArchiveTask task, RecursionResult result) =>
+        ApplyLandingViolationNote(task, result);
 }

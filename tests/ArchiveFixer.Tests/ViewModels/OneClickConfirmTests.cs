@@ -136,7 +136,7 @@ public class OneClickConfirmTests : IDisposable
 
         harness.OneClick.OptionsPromptOverride = _ =>
         {
-            facts = harness.Extraction
+            facts = harness.Extraction.BatchReminders
                 .BuildConfirmFactsAsync(new[] { task }, OneClickRunOptions.FromSettings(harness.Vm.Settings, customRoot), null)
                 .GetAwaiter()
                 .GetResult();
@@ -200,7 +200,7 @@ public class OneClickConfirmTests : IDisposable
 
         harness.OneClick.OptionsPromptOverride = _ =>
         {
-            facts = harness.Extraction
+            facts = harness.Extraction.BatchReminders
                 .BuildConfirmFactsAsync(new[] { task }, OneClickRunOptions.FromSettings(harness.Vm.Settings, customRoot), null)
                 .GetAwaiter()
                 .GetResult();
@@ -241,7 +241,7 @@ public class OneClickConfirmTests : IDisposable
         ArchiveTask task = AddTask(harness, CreateSourceFile("222.7z"));
 
         // 设置里是默认档（不动其余物）：正文照它说。
-        OneClickConfirmFacts bySettings = await harness.Extraction.BuildConfirmFactsAsync(
+        OneClickConfirmFacts bySettings = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             OneClickRunOptions.FromSettings(harness.Vm.Settings),
             null);
@@ -255,7 +255,7 @@ public class OneClickConfirmTests : IDisposable
             RestHandling = RestHandlingModes.Delete
         };
 
-        OneClickConfirmFacts byChoice = await harness.Extraction.BuildConfirmFactsAsync(
+        OneClickConfirmFacts byChoice = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             chosen,
             null);
@@ -278,7 +278,7 @@ public class OneClickConfirmTests : IDisposable
         Harness harness = CreateHarness();
         ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
 
-        var facts = await harness.Extraction.BuildConfirmFactsAsync(
+        var facts = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             new OneClickRunOptions
             {
@@ -310,7 +310,7 @@ public class OneClickConfirmTests : IDisposable
 
         ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
 
-        var facts = await harness.Extraction.BuildConfirmFactsAsync(
+        var facts = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             OneClickRunOptions.FromSettings(harness.Vm.Settings),
             null);
@@ -435,7 +435,7 @@ public class OneClickConfirmTests : IDisposable
 
     /// <summary>
     /// 一键处理这条路**只允许一个弹窗**：无用物 / 没有可用密码的提醒并进确认框的正文，
-    /// 解压前那个提醒框（<see cref="ExtractionCoordinator.ReminderAnswerOverride"/> 那条路）
+    /// 解压前那个提醒框（<see cref="BatchReminderHandler.ReminderAnswerOverride"/> 那条路）
     /// **一次都不许被问到**。判定与日志一条都没少（这里同时钉住日志那两行）。
     /// </summary>
     [Fact]
@@ -450,11 +450,11 @@ public class OneClickConfirmTests : IDisposable
 
         int reminderCalls = 0;
 
-        harness.Extraction.ReminderAnswerOverride = _ =>
+        harness.Extraction.BatchReminders.ReminderAnswerOverride = _ =>
         {
             reminderCalls++;
 
-            return new ExtractionCoordinator.ReminderAnswer { Confirmed = true };
+            return new BatchReminderHandler.ReminderAnswer { Confirmed = true };
         };
 
         OneClickConfirmFacts? facts = null;
@@ -462,12 +462,12 @@ public class OneClickConfirmTests : IDisposable
         harness.OneClick.OptionsPromptOverride = _ =>
         {
             // 真实路径就是这样：先扫两段事实（无用物 / 没有可用密码），再把它写进正文。
-            ExtractionCoordinator.BatchReminderFacts reminders = harness.Extraction
+            BatchReminderHandler.BatchReminderFacts reminders = harness.Extraction.BatchReminders
                 .ScanBatchRemindersAsync(new[] { task })
                 .GetAwaiter()
                 .GetResult();
 
-            facts = harness.Extraction
+            facts = harness.Extraction.BatchReminders
                 .BuildConfirmFactsAsync(new[] { task }, OneClickRunOptions.FromSettings(harness.Vm.Settings), reminders)
                 .GetAwaiter()
                 .GetResult();
@@ -513,10 +513,10 @@ public class OneClickConfirmTests : IDisposable
         task.IsEncrypted = true;
 
         // 走真实顺序：先扫（无用物 + 无可用密码），再把结论写进正文。
-        ExtractionCoordinator.BatchReminderFacts reminders = await harness.Extraction
+        BatchReminderHandler.BatchReminderFacts reminders = await harness.Extraction.BatchReminders
             .ScanBatchRemindersAsync(new[] { task });
 
-        var facts = await harness.Extraction.BuildConfirmFactsAsync(
+        var facts = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             OneClickRunOptions.FromSettings(harness.Vm.Settings),
             reminders);
@@ -530,10 +530,10 @@ public class OneClickConfirmTests : IDisposable
         // 反例：不加密的包不该出现在这一段里（否则每批都要多一行噪声）
         task.IsEncrypted = false;
 
-        ExtractionCoordinator.BatchReminderFacts quietReminders = await harness.Extraction
+        BatchReminderHandler.BatchReminderFacts quietReminders = await harness.Extraction.BatchReminders
             .ScanBatchRemindersAsync(new[] { task });
 
-        var quiet = await harness.Extraction.BuildConfirmFactsAsync(
+        var quiet = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
             new[] { task },
             OneClickRunOptions.FromSettings(harness.Vm.Settings),
             quietReminders);

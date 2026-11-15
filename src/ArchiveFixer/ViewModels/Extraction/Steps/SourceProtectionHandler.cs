@@ -30,6 +30,13 @@ namespace ArchiveFixer.ViewModels;
 ///
 /// <para>⛔ 判据、日志文案与顺序、硬链接方向、删除范围一个字都没改；本类只持有宿主
 /// <see cref="ExtractionCoordinator"/>，状态仍全部落在宿主那几个字段上（实现只此一份）。</para>
+///
+/// <para>M5 类型总行数治理：宿主那一分片 <c>ExtractionCoordinator.SourceProtectionStep.cs</c> 已删除，
+/// 不再留薄转发/访问器 —— 入口是 <c>ExtractionCoordinator.SourceProtection</c>（懒建属性，住在
+/// <c>ViewModels/ExtractionCoordinator.cs</c>），调用点直接调本类同名方法；读写的那两份账直接走宿主
+/// <c>_volumeLedgerState.KeepSourceSnapshots</c> / <c>_volumeLedgerState.KeepSourceSnapshotDirectory</c>。
+/// 那个属性只能住在协调器自己的 partial 里：把属性挪进本文件会让本文件出现第 2 个顶层类型，
+/// 结构守卫（一类型一文件）当场变红。</para>
 /// </summary>
 internal sealed class SourceProtectionHandler
 {
@@ -62,8 +69,8 @@ internal sealed class SourceProtectionHandler
     /// </summary>
     internal void BeginKeepInPlaceSourceProtection(IReadOnlyList<ArchiveTask> tasks)
     {
-        _host.KeepSourceSnapshotsForSourceProtection.Clear();
-        _host.KeepSourceSnapshotDirectoryForSourceProtection = string.Empty;
+        _host._volumeLedgerState.KeepSourceSnapshots.Clear();
+        _host._volumeLedgerState.KeepSourceSnapshotDirectory = string.Empty;
 
         if (AppSettings.ParseSourceHandling(_host.Settings.SourceHandling) != SourceHandlingMode.KeepInPlace)
         {
@@ -140,20 +147,20 @@ internal sealed class SourceProtectionHandler
 
                 if (HardLinkHelper.TryCreateHardLink(backup, source))
                 {
-                    _host.KeepSourceSnapshotsForSourceProtection.Add((source, backup));
+                    _host._volumeLedgerState.KeepSourceSnapshots.Add((source, backup));
                 }
             }
 
-            _host.KeepSourceSnapshotDirectoryForSourceProtection = backupDirectory;
+            _host._volumeLedgerState.KeepSourceSnapshotDirectory = backupDirectory;
 
             _host.AppendLog(
                 "INFO",
-                $"KeepInPlace 源文件保护：已给 {_host.KeepSourceSnapshotsForSourceProtection.Count} 份源文件建同卷硬链接快照");
+                $"KeepInPlace 源文件保护：已给 {_host._volumeLedgerState.KeepSourceSnapshots.Count} 份源文件建同卷硬链接快照");
         }
         catch
         {
-            _host.KeepSourceSnapshotsForSourceProtection.Clear();
-            _host.KeepSourceSnapshotDirectoryForSourceProtection = string.Empty;
+            _host._volumeLedgerState.KeepSourceSnapshots.Clear();
+            _host._volumeLedgerState.KeepSourceSnapshotDirectory = string.Empty;
         }
     }
     private static bool IsSingleCompleteArchive(ArchiveTask task)
@@ -197,7 +204,7 @@ internal sealed class SourceProtectionHandler
 
         ReconcileSuffixRenamedSources();
 
-        foreach ((string original, string backup) in _host.KeepSourceSnapshotsForSourceProtection.ToList())
+        foreach ((string original, string backup) in _host._volumeLedgerState.KeepSourceSnapshots.ToList())
         {
             try
             {
@@ -231,15 +238,15 @@ internal sealed class SourceProtectionHandler
 
         try
         {
-            DeleteSourceSnapshotDirectory(_host.KeepSourceSnapshotDirectoryForSourceProtection);
+            DeleteSourceSnapshotDirectory(_host._volumeLedgerState.KeepSourceSnapshotDirectory);
         }
         catch
         {
             // 零字节链接清不掉不影响结论。
         }
 
-        _host.KeepSourceSnapshotsForSourceProtection.Clear();
-        _host.KeepSourceSnapshotDirectoryForSourceProtection = string.Empty;
+        _host._volumeLedgerState.KeepSourceSnapshots.Clear();
+        _host._volumeLedgerState.KeepSourceSnapshotDirectory = string.Empty;
     }
 
     /// <summary>
@@ -290,14 +297,14 @@ internal sealed class SourceProtectionHandler
     /// </summary>
     private void ReconcileSuffixRenamedSources()
     {
-        if (_host.SuffixRenamedSourcesForVolumeLedger.Count == 0)
+        if (_host._volumeLedgerState.SuffixRenamedSources.Count == 0)
         {
             return;
         }
 
         IReadOnlyList<(string Original, string Renamed)> changed = SuffixAliasReconciler.Reconcile(
-            _host.SuffixRenamedSourcesForVolumeLedger,
-            original => _host.KeepSourceSnapshotsForSourceProtection
+            _host._volumeLedgerState.SuffixRenamedSources,
+            original => _host._volumeLedgerState.KeepSourceSnapshots
                 .Where(item => SafePathHelper.PathEquals(item.Original, original))
                 .Select(item => item.Backup)
                 .FirstOrDefault(),
@@ -308,7 +315,7 @@ internal sealed class SourceProtectionHandler
             UpdateRenamedPathReferences(renamed, original);
         }
 
-        _host.SuffixRenamedSourcesForVolumeLedger.Clear();
+        _host._volumeLedgerState.SuffixRenamedSources.Clear();
     }
 
     private void UpdateRenamedPathReferences(string oldPath, string newPath)
@@ -329,7 +336,7 @@ internal sealed class SourceProtectionHandler
             }
         }
 
-        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host._volumeHandoffEntries)
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host.VolumeHandoff.Entries)
         {
             if (SafePathHelper.PathEquals(entry.Path, oldPath))
             {
@@ -359,7 +366,7 @@ internal sealed class SourceProtectionHandler
             Directory.CreateDirectory(backupDirectory);
             int index = 0;
 
-            foreach (string source in ExtractionCoordinator.CollectOriginalSourceFilesForSourceProtection(_host.Tasks))
+            foreach (string source in VolumeRepairHandler.CollectOriginalSourceFiles(_host.Tasks))
             {
                 if (items.Count >= 120 || !File.Exists(source))
                 {

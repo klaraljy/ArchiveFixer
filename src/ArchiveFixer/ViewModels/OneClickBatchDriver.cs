@@ -132,7 +132,7 @@ internal sealed class OneClickBatchDriver
         finally
         {
             // 「这一次由调用方负责弹框」只管这一次一键处理：跑完（含取消）就收回默认口径。
-            _extractionCoordinator.EndCallerHandledReminderBatch();
+            _extractionCoordinator.BatchReminders.EndCallerHandledReminderBatch();
         }
     }
 }

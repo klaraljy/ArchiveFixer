@@ -49,7 +49,7 @@ public sealed class PieceAliasSourceGuardTests : IDisposable
         task.VolumePaths.Add(first);
         task.VolumePaths.Add(second);
 
-        HashSet<string> sources = ExtractionCoordinator.BuildUserSourcePathSet(new[] { task });
+        HashSet<string> sources = PieceAdoptionHandler.BuildUserSourcePathSet(new[] { task });
 
         Assert.Contains(Path.GetFullPath(first), sources);
         Assert.Contains(Path.GetFullPath(second), sources);

@@ -1065,12 +1065,11 @@ public class BatchSummaryDiagnosticsTests : IDisposable
             new ClipboardService(),
             dialog);
 
-        var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, dialog)
-        {
-            // 假盘：这一组要的是"有失败"，空间足够宽，一个都别被空间门拦下。
-            SpaceProbeOverride = _ => 100L * 1024 * 1024 * 1024,
-            SpaceReserveOverride = 0
-        };
+        var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, dialog);
+
+        // 假盘：这一组要的是"有失败"，空间足够宽，一个都别被空间门拦下。
+        coordinator.Schedule.SpaceProbeOverride = _ => 100L * 1024 * 1024 * 1024;
+        coordinator.Schedule.SpaceReserveOverride = 0;
 
         var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), dialog);
         var rename = new RenameCoordinator(vm, scan, new RenameService(), dialog);

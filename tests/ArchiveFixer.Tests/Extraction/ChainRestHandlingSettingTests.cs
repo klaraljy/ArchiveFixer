@@ -43,7 +43,7 @@ namespace ArchiveFixer.Tests;
 /// 还会多出"链尾的其余物不处理"那行日志的对照断言）。</para>
 ///
 /// <para><b>⛔ 自我约束</b>：绝不往用户的系统回收站里塞东西 —— 回收站那一档全部走注入的假执行器
-/// （<c>ExtractionCoordinator.RestDeleteExecutor</c> 这个测试缝）；只在临时目录里动真实文件系统。</para>
+/// （<c>ExtractionCoordinator.Source.RestDeleteExecutor</c> 这个测试缝）；只在临时目录里动真实文件系统。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
 [Trait("Category", "Extended")]
@@ -462,8 +462,8 @@ public class ChainRestHandlingSettingTests : IDisposable
         var recycle = new FakeDeleteExecutor();
         var sourceDeletes = new RecordingDeleteFileSystem();
 
-        extraction.RestDeleteExecutor = recycle;
-        extraction.SourcePackageDeleteFileSystem = sourceDeletes;
+        extraction.Source.RestDeleteExecutor = recycle;
+        extraction.Source.SourcePackageDeleteFileSystem = sourceDeletes;
         extraction.KeepTaskDetailInLog = true;
 
         var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());

@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.ViewModels;
 
 /// <summary>
-/// 批前提醒的文案与结论落日志（从 `ExtractionCoordinator.BatchReminderStep.cs` 搬出）：
+/// 批前提醒的文案与结论落日志（原 `ExtractionCoordinator.BatchReminderStep.cs` 的实现，M5 后归 `BatchReminderHandler`）：
 /// 两段结论的 WARN、确认框正文；⛔ 文案与判据沿用原实现。
 /// </summary>
 internal sealed class ExtractionBatchReminderMessages
@@ -45,7 +45,7 @@ internal sealed class ExtractionBatchReminderMessages
                 noPassword.Count,
                 string.Join(
                     "、",
-                    noPassword.Take(ExtractionCoordinator.MaxPasswordFailureNamesInDialog).Select(ExtractionCoordinator.DisplayNameOf)))
+                    noPassword.Take(ExtractionCoordinator.MaxPasswordFailureNamesInDialog).Select(BatchReminderHandler.DisplayNameOf)))
             : StatusText.JunkReminderLogNoneText;
 
         _host.AppendLog("WARN", string.Format(StatusText.JunkReminderLogFormat, junkPart, passwordPart));
@@ -100,7 +100,7 @@ internal sealed class ExtractionBatchReminderMessages
 
             foreach (ArchiveTask task in noPassword.Take(ExtractionCoordinator.MaxPasswordFailureNamesInDialog))
             {
-                builder.AppendLine("    " + ExtractionCoordinator.DisplayNameOf(task));
+                builder.AppendLine("    " + BatchReminderHandler.DisplayNameOf(task));
             }
 
             if (noPassword.Count > ExtractionCoordinator.MaxPasswordFailureNamesInDialog)

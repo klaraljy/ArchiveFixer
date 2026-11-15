@@ -318,7 +318,7 @@ public class SettingsTruthfulnessTests : IDisposable
             /*
              * 2026-09-24 第 15 条补的「解压前提醒」开关。
              * 它和上面那些一样：界面上有这一格，代码里就**必须**真的读它
-             * （ExtractionCoordinator.ConfirmBatchRemindersAsync 的第一道判断）。
+             * （BatchReminderHandler.ConfirmBatchRemindersAsync 的第一道判断）。
              */
             "RemindBeforeExtract",
 

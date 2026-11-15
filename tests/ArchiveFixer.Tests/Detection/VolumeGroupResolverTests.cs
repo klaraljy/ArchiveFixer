@@ -455,7 +455,7 @@ public sealed class VolumeGroupResolverTests : IDisposable
     // ================================================================ 删除闸门本身（commit 9a54d99 那道）
 
     /// <summary>
-    /// **删除闸门**（`ExtractionCoordinator.TryConfirmVolumeGroupComplete`）现在由判定器回答：
+    /// **删除闸门**（`VolumeRepairHandler.TryConfirmVolumeGroupComplete`）现在由判定器回答：
     /// 被改名的末卷那一组**确认不了完整** ⇒ 一卷都不许放行（老判据在这里也是 false，
     /// 但它给的原因是"缺末卷"，而现在给的是"疑缺卷 + 那个文件体积位置都对得上"）。
     /// </summary>
@@ -465,7 +465,7 @@ public sealed class VolumeGroupResolverTests : IDisposable
         string directory = NewDirectory("gate-renamed");
         BuildRenamedTailGroup(directory);
 
-        bool complete = ExtractionCoordinator.TryConfirmVolumeGroupComplete(
+        bool complete = VolumeRepairHandler.TryConfirmVolumeGroupComplete(
             Path.Combine(directory, "一只顶美.z01"),
             out string note);
 
@@ -483,7 +483,7 @@ public sealed class VolumeGroupResolverTests : IDisposable
         WriteFile(directory, "x.7z.002", 4096);
         WriteFile(directory, "x.7z.003", 512);
 
-        Assert.True(ExtractionCoordinator.TryConfirmVolumeGroupComplete(
+        Assert.True(VolumeRepairHandler.TryConfirmVolumeGroupComplete(
             Path.Combine(directory, "x.7z.001"),
             out string note));
         Assert.Equal(string.Empty, note);
@@ -496,7 +496,7 @@ public sealed class VolumeGroupResolverTests : IDisposable
         string directory = NewDirectory("gate-undetermined");
         string lonely = WriteFile(directory, "随手.mp4", 512);
 
-        Assert.False(ExtractionCoordinator.TryConfirmVolumeGroupComplete(lonely, out string note));
+        Assert.False(VolumeRepairHandler.TryConfirmVolumeGroupComplete(lonely, out string note));
         Assert.Contains("判不出", note, StringComparison.Ordinal);
     }
 

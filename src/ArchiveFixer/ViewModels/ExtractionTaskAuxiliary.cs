@@ -16,13 +16,29 @@ namespace ArchiveFixer.ViewModels;
 /// <summary>
 /// 单任务解压的辅助阶段（从 `ExtractionCoordinator.ExtractTaskMainStep.cs` 搬出的真实现，2026-11-13）：
 /// 开工前准备（快照/复用重置/APK/跟班卷/源变更闸门）、非压缩内容跳过、引擎入口路径、入仓、
-/// 最终目录占位、失败事实登记与加密头结论恢复。
+/// 最终目录认领/释放、失败事实登记与加密头结论恢复。
 ///
 /// <para>⛔ 判据/文案/终态不在本类新增：全部沿用搬出前的同一份实现与协调器既有出口（<c>_host.</c>）。</para>
+///
+/// <para>⚠ 诊断日志里认领冲突那条 <c>AppendLog</c> 的来源文件现在是 <c>…ExtractionTaskAuxiliary.cs</c>
+/// （级别与文案不变；原 `ExtractionCoordinator.OutputClaimStep.cs` 已删除，M5 随实现一起搬到本类）。</para>
 /// </summary>
 internal sealed class ExtractionTaskAuxiliary
 {
     private readonly ExtractionCoordinator _host;
+
+    /*
+     * ===== 输出目录认领的状态（原 ExtractionCoordinator.OutputClaimStep.cs 已删除，随实现一起搬到本类）=====
+     *
+     * 同一目录只许一个任务写：认领表必须**全进程一份**，所以它跟"占位/释放"两个实现放在同一个协作类里，
+     * 不拆到调用方（占位与释放隔着异步的整个解压过程，拆开就会出现两份表、互相看不见）。
+     */
+    private readonly HashSet<string> _claimedOutputDirectories = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly object _outputClaimLock = new();
+
+    /// <summary>占位失败时的兜底尝试上限（与 <c>SafePathHelper.AutoRenameDirectoryPath</c> 同一个量级）。</summary>
+    private const int MaxOutputClaimAttempts = 10000;
 
     internal ExtractionTaskAuxiliary(ExtractionCoordinator host)
     {
@@ -58,9 +74,9 @@ internal sealed class ExtractionTaskAuxiliary
             return false;
         }
 
-        _host.EnsureSourceSnapshot(task);
+        _host.Source.EnsureSourceSnapshot(task);
 
-        if (_host.StopIfSourceChanged(task))
+        if (_host.Source.StopIfSourceChanged(task))
         {
             return false;
         }
@@ -257,7 +273,7 @@ internal sealed class ExtractionTaskAuxiliary
         // **不能事后重算**（taskId 含源路径哈希，而成功路径会回写 CurrentPath，见字段说明）。
         _host.TaskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
 
-        string? stageFailure = await _host.PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
+        string? stageFailure = await new EngineFallbackHandler(_host).PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(stageFailure))
         {
@@ -297,7 +313,103 @@ internal sealed class ExtractionTaskAuxiliary
             return (outputPath, outputRedirectNote);
         }
 
-        return (_host.ClaimOutputDirectory(outputPath, task, ref outputRedirectNote), outputRedirectNote);
+        return (ClaimOutputDirectory(outputPath, task, ref outputRedirectNote), outputRedirectNote);
+    }
+
+    /// <summary>
+    /// 把一个"还不存在的最终目录"在进程内占下来；被别的正在跑的任务占了就换 <c>名字(1)</c>。
+    ///
+    /// <para><c>(i)</c> 的命名规则与 <see cref="SafePathHelper.AutoRenameDirectoryPath"/> 一致
+    /// （同一个用户可见约定），区别只有一个：那里判"磁盘上有没有"，这里还要判"有没有被并发任务占下"——
+    /// 被占下的目录此刻在磁盘上还不存在，所以那个方法看不见它。</para>
+    /// </summary>
+    internal string ClaimOutputDirectory(string requestedPath, ArchiveTask task, ref string outputRedirectNote)
+    {
+        lock (_outputClaimLock)
+        {
+            string candidate = requestedPath;
+
+            for (int attempt = 1; attempt <= MaxOutputClaimAttempts; attempt++)
+            {
+                string full = SafePathHelper.GetFullPathSafe(candidate);
+
+                if (string.IsNullOrWhiteSpace(full))
+                {
+                    return candidate;
+                }
+
+                bool claimedByAnotherTask = _claimedOutputDirectories.Contains(full);
+
+                // 磁盘上真出现了也算"占不到"（TOCTOU 的温和版本：两次系统调用之间别人建了）。
+                bool existsOnDisk = Directory.Exists(candidate);
+
+                if (!claimedByAnotherTask && !existsOnDisk)
+                {
+                    _claimedOutputDirectories.Add(full);
+
+                    if (!string.Equals(candidate, requestedPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        /*
+                         * 与"目录已存在"那条路同一口径：实际落点与打算的落点不一致**不许静默**。
+                         * 日志 + outputRedirectNote（会进任务详情的校验结论）+ task.OutputPath 回写，三处都要有。
+                         */
+                        string note =
+                            $"原定输出目录 {requestedPath} 正被另一个正在解压的任务使用，本次实际输出到 {candidate}";
+
+                        outputRedirectNote = string.IsNullOrWhiteSpace(outputRedirectNote)
+                            ? note
+                            : outputRedirectNote + "；" + note;
+
+                        _host.AppendLog(
+                            "WARN",
+                            $"{task.LogName}：同一个名字的包正在并行解压，为避免两个任务写进同一个目录，" +
+                            $"本次落成 {candidate}（绝不合并、绝不覆盖）。");
+                    }
+
+                    return candidate;
+                }
+
+                try
+                {
+                    string? parent = Path.GetDirectoryName(requestedPath);
+                    string name = Path.GetFileName(requestedPath);
+
+                    if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(name))
+                    {
+                        return candidate;
+                    }
+
+                    candidate = Path.Combine(parent, $"{name}({attempt})");
+                }
+                catch
+                {
+                    return candidate;
+                }
+            }
+
+            return candidate;
+        }
+    }
+
+    /// <summary>释放最终目录占位（任务收尾时调；没占过就是一次空操作）。</summary>
+    internal void ReleaseOutputDirectoryClaim(string? outputPath)
+    {
+        if (string.IsNullOrWhiteSpace(outputPath))
+        {
+            return;
+        }
+
+        string full = SafePathHelper.GetFullPathSafe(outputPath);
+
+        if (string.IsNullOrWhiteSpace(full))
+        {
+            return;
+        }
+
+        lock (_outputClaimLock)
+        {
+            _claimedOutputDirectories.Remove(full);
+        }
     }
 
     /// <summary>
