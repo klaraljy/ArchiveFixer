@@ -1,5 +1,6 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;

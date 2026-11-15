@@ -2,6 +2,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Engines;
+namespace ArchiveFixer.Models;
 
 /// <summary>列目录结果。资源预算（M5）与"解压前预检路径"都要靠它。</summary>
 public sealed class ArchiveListResult

@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Engines.WinRar;
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;

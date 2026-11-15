@@ -1,4 +1,5 @@
 using ArchiveFixer.Engines;
+using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction;
 

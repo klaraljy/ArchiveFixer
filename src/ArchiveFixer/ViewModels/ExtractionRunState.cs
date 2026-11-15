@@ -72,7 +72,7 @@ internal sealed class ExtractionRunState
 
     internal List<PasswordItem> Candidates { get; set; } = new();
 
-    internal ArchiveFixer.Engines.ArchiveListResult? PreflightList { get; set; }
+    internal ArchiveListResult? PreflightList { get; set; }
 
     internal bool AnyCandidateWroteBytes { get; set; }
 

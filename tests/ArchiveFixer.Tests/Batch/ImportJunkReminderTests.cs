@@ -433,10 +433,10 @@ public class ImportJunkReminderTests : IDisposable
             System.Threading.CancellationToken cancellationToken = default) =>
             Task.FromResult(new Engines.ArchiveProbeResult { IsArchive = false });
 
-        public Task<Engines.ArchiveListResult> ListAsync(
+        public Task<ArchiveListResult> ListAsync(
             Engines.ArchiveRequest request,
             System.Threading.CancellationToken cancellationToken = default) =>
-            Task.FromResult(new Engines.ArchiveListResult());
+            Task.FromResult(new ArchiveListResult());
 
         public Task<Engines.ArchiveOperationResult> TestAsync(
             Engines.ArchiveRequest request,

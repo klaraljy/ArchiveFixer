@@ -1,5 +1,6 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using System;
 using System.Collections.Generic;

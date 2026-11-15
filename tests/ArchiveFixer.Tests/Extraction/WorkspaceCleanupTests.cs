@@ -415,10 +415,10 @@ public class WorkspaceCleanupTests : IDisposable
             System.Threading.CancellationToken cancellationToken = default) =>
             Task.FromResult(new ArchiveFixer.Engines.ArchiveProbeResult { IsArchive = false });
 
-        public Task<ArchiveFixer.Engines.ArchiveListResult> ListAsync(
+        public Task<ArchiveListResult> ListAsync(
             ArchiveFixer.Engines.ArchiveRequest request,
             System.Threading.CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ArchiveFixer.Engines.ArchiveListResult());
+            Task.FromResult(new ArchiveListResult());
 
         public Task<ArchiveFixer.Engines.ArchiveOperationResult> TestAsync(
             ArchiveFixer.Engines.ArchiveRequest request,

@@ -1,4 +1,4 @@
-namespace ArchiveFixer.Engines;
+namespace ArchiveFixer.Models;
 
 /// <summary>归档里的一个条目。</summary>
 public sealed class ArchiveEntry

@@ -705,7 +705,7 @@ public sealed class VolumeGroupAssemblyGuardTests : IDisposable
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new ArchiveFixer.Engines.ArchiveProbeResult { IsArchive = false });
 
-        public Task<ArchiveFixer.Engines.ArchiveListResult> ListAsync(
+        public Task<ArchiveListResult> ListAsync(
             ArchiveFixer.Engines.ArchiveRequest request,
             CancellationToken cancellationToken = default)
         {
@@ -714,11 +714,11 @@ public sealed class VolumeGroupAssemblyGuardTests : IDisposable
                 ListCalls.Add(request.ArchivePath);
             }
 
-            return Task.FromResult(new ArchiveFixer.Engines.ArchiveListResult
+            return Task.FromResult(new ArchiveListResult
             {
                 Success = true,
                 FileCount = 1,
-                Entries = new List<ArchiveFixer.Engines.ArchiveEntry> { new() { Path = "x", Size = 1 } }
+                Entries = new List<ArchiveEntry> { new() { Path = "x", Size = 1 } }
             });
         }
 
