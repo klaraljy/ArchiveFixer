@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Storage;
+namespace ArchiveFixer.Models;
 
 /// <summary>
 /// 源文件快照（<b>不变量 11</b>：源文件变化后不得继续使用旧识别结果）。
