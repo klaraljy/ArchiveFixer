@@ -81,7 +81,8 @@ public class ChainProducedVolumeGroupTests
         bool collect,
         string? rar = null)
     {
-        string sampleDir = Path.Combine(Batch120Operation.BackupBatchRoot, sampleId);
+        string fixtureBackupRoot = Path.Combine(Batch120Operation.RunRoot, "fixture-backup");
+        string sampleDir = Path.Combine(fixtureBackupRoot, sampleId);
         string sourceDir = Path.Combine(sampleDir, "原包");
         if (Directory.Exists(sampleDir))
         {
@@ -125,7 +126,12 @@ public class ChainProducedVolumeGroupTests
             recipe.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
 
-        Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId);
+        Batch120RunRecord record = await Batch120Operation.RunOneAsync(
+            sampleId,
+            fixtureBackupRoot,
+            Batch120Operation.TestBatchRoot,
+            Batch120Operation.SpecifiedBatchRoot,
+            Batch120Operation.RecordRoot);
 
         // ① 最终内容必须落地（整组没被跳过）
         string? content = record.After

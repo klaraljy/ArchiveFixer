@@ -37,7 +37,9 @@ public sealed class SecondStepFastPathEndToEndTests
         }
 
         const string sampleId = "999000006";
-        string sampleDir = Path.Combine(Batch120Operation.BackupBatchRoot, sampleId);
+        // 917/927 备份母本只读：这一份夹具写进本次运行目录，不再写进 BackupBatchRoot。
+        string fixtureBackupRoot = Path.Combine(Batch120Operation.RunRoot, "fixture-backup");
+        string sampleDir = Path.Combine(fixtureBackupRoot, sampleId);
         string sourceDir = Path.Combine(sampleDir, "原包");
 
         if (Directory.Exists(sampleDir))
@@ -72,7 +74,13 @@ public sealed class SecondStepFastPathEndToEndTests
 
         try
         {
-            Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId, keepLogs: true);
+            Batch120RunRecord record = await Batch120Operation.RunOneAsync(
+                sampleId,
+                fixtureBackupRoot,
+                Batch120Operation.TestBatchRoot,
+                Batch120Operation.SpecifiedBatchRoot,
+                Batch120Operation.RecordRoot,
+                keepLogs: true);
 
             Assert.True(string.IsNullOrEmpty(record.Error), "一键处理报错：" + record.Error);
 

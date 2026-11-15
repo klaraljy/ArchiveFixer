@@ -35,7 +35,8 @@ public sealed class SecondStepMediaContentEndToEndTests
         }
 
         const string sampleId = "999000007";
-        string sampleDir = Path.Combine(Batch120Operation.BackupBatchRoot, sampleId);
+        string fixtureBackupRoot = Path.Combine(Batch120Operation.RunRoot, "fixture-backup");
+        string sampleDir = Path.Combine(fixtureBackupRoot, sampleId);
         string sourceDir = Path.Combine(sampleDir, "原包");
 
         if (Directory.Exists(sampleDir))
@@ -68,7 +69,12 @@ public sealed class SecondStepMediaContentEndToEndTests
 
         try
         {
-            Batch120RunRecord record = await Batch120Operation.RunOneAsync(sampleId);
+            Batch120RunRecord record = await Batch120Operation.RunOneAsync(
+                sampleId,
+                fixtureBackupRoot,
+                Batch120Operation.TestBatchRoot,
+                Batch120Operation.SpecifiedBatchRoot,
+                Batch120Operation.RecordRoot);
 
             Assert.True(string.IsNullOrEmpty(record.Error), "一键处理报错：" + record.Error);
 
