@@ -27,6 +27,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>用**真 7z 造的多层链**测（AGENTS.md §11：合成假引擎证明不了真引擎一层层套出来的形状）。</para>
 /// </summary>
+[Trait("Category", "Extended")]
 public class SpaceNetIncrementTests : IDisposable
 {
     private readonly string _root;

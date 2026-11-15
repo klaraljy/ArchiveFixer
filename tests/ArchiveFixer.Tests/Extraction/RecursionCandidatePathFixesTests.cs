@@ -27,6 +27,7 @@ namespace ArchiveFixer.Tests;
 /// 只有"批末汇总"那一条用真 7z 造样本 —— 它要验的正是整条管线的接线。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class RecursionCandidatePathFixesTests : IDisposable
 {
     /// <summary>测试专用合成密码；只出现在测试数据里，不是任何真实凭据。</summary>

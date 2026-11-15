@@ -15,6 +15,7 @@ namespace ArchiveFixer.Tests.Batch120;
 /// 真盘空间足够，所以 expected.blocked 那一档暂时跑不出来。
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public sealed class Batch120OperationTests
 {
     public static IEnumerable<object[]> NormalIds()

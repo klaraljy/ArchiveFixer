@@ -10,6 +10,7 @@ namespace ArchiveFixer.Tests;
 /// Bounded archive-header fuzz: random single-byte mutations of a valid ZIP must
 /// never throw out of the read-only nature detector.
 /// </summary>
+[Trait("Category", "Extended")]
 public sealed class ArchiveMutationFuzzTests : IDisposable
 {
     private readonly string _root;

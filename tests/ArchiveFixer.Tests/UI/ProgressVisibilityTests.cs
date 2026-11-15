@@ -38,6 +38,7 @@ namespace ArchiveFixer.Tests;
 /// </para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class ProgressVisibilityTests : IDisposable
 {
     private readonly ITestOutputHelper _output;

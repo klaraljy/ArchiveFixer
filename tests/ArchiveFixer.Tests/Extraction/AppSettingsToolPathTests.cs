@@ -3,6 +3,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
+[Trait("Category", "Extended")]
 public class AppSettingsToolPathTests
 {
     [Fact]

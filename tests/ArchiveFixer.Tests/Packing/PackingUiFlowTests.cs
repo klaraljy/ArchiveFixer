@@ -20,6 +20,7 @@ namespace ArchiveFixer.Tests;
 /// ②**取消 = 什么都没发生**（服务一次都没调、盘上一个字节都没动）；
 /// ③确认之后**照着弹窗里的选择做**，并把打包那一套写回设置（与解压侧各存各的）。</para>
 /// </summary>
+[Trait("Category", "Extended")]
 public class PackingUiFlowTests : IDisposable
 {
     private const string SamplePassword = "Packing-Flow-2026";

@@ -21,6 +21,7 @@ namespace ArchiveFixer.Tests;
 /// 必须能从 zip 里直接读出来，而不是只能靠猜。
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public sealed class DiagnosticFailureCasesTests
 {
     [Fact]

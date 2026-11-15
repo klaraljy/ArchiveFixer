@@ -39,6 +39,7 @@ namespace ArchiveFixer.Tests;
 /// </para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class PipelineWiringTests : IDisposable
 {
     private readonly string _root;

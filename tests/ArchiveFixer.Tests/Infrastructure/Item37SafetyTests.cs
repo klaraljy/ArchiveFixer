@@ -27,6 +27,7 @@ namespace ArchiveFixer.Tests;
 /// </list>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class Item37SafetyTests : IDisposable
 {
     private readonly string _root;

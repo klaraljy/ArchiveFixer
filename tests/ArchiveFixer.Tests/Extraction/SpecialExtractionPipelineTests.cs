@@ -34,6 +34,7 @@ namespace ArchiveFixer.Tests;
 /// <para>样本全部自己造（临时目录 + 项目内置 7z.exe），不读用户目录里的任何文件（AGENTS.md §8）。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class SpecialExtractionPipelineTests : IDisposable
 {
     private const string PayloadText = "最里面那一层的内容物\n";

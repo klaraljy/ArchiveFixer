@@ -36,6 +36,7 @@ namespace ArchiveFixer.Tests;
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
 [Trait("Category", "RealSample")]
+[Trait("Category", "Extended")]
 public class SiblingFolderVolumeGatherTests : IDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);

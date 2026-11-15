@@ -30,6 +30,7 @@ namespace ArchiveFixer.Tests;
 /// </list>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class Item45LogAndPasswordTests : IDisposable
 {
     private const string CorrectPassword = "Item45-Right-2026";

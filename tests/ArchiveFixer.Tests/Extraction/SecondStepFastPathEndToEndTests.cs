@@ -21,6 +21,7 @@ namespace ArchiveFixer.Tests;
 /// <para>红检撤销点：把 <c>VolumeBoundaryPipeline.IsCoveredByFastPath</c> 改成永远 false，
 /// 或把 <c>SevenZipBoundaryResolver.TryResolveNonUniformAsync</c> 改回"必须试开" ⇒ 本用例必红。</para>
 /// </summary>
+[Trait("Category", "Extended")]
 public sealed class SecondStepFastPathEndToEndTests
 {
     [Fact]

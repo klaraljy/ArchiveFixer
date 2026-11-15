@@ -40,6 +40,7 @@ namespace ArchiveFixer.Tests;
 /// 不激活），全程不碰鼠标键盘、不置前；命令部分是无界面的纯 ViewModel 断言。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class TaskSelectionTests
 {
     private readonly ITestOutputHelper _output;

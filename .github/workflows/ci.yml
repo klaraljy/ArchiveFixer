@@ -38,7 +38,7 @@ jobs:
         run: >
           dotnet test tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
           --no-build --nologo
-          --filter "FullyQualifiedName~CodeStructureGuardTests|Category!=RealSample&Category!=Stress&Category!=Forensics"
+          --filter "FullyQualifiedName~CodeStructureGuardTests|Category!=RealSample&Category!=Stress&Category!=Forensics&Category!=Extended"
           --logger "trx;LogFileName=fast.trx"
           --results-directory TestResults
 

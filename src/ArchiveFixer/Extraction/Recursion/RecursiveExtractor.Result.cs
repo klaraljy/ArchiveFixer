@@ -1,33 +1,26 @@
-using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
-using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Password;
-using ArchiveFixer.Security;
-using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace ArchiveFixer.Extraction;
 
+/// <summary>
+/// 递归解压的「结论落地」（组装最终结论 / 收尾 / 保留最后一层过程物）——
+/// 实现已整块搬到协作类 <see cref="RecursiveResultHandler"/>，这一分片只留同签名薄转发 + 最小 internal 访问器。
+///
+/// <para>⛔ 判据、日志顺序、调用顺序一个字都没改：调用点（<c>ExtractAsync</c> 的三处结论出口、
+/// <c>InnerDiscovery</c> 的那一处保留点）一处未动。</para>
+/// </summary>
 public sealed partial class RecursiveExtractor
-{        /// <summary>
-         /// 组装最终结论。
-         ///
-         /// 这里集中处理三件容易搞混的事（规则 6/7/8）：
-         /// ① <see cref="RecursionResult.Completed"/> 只在真正走完时为 true；
-         /// ② 部分完成时产物**留在工作区**、Summary 里必须写清工作区在哪；
-         /// ③ 全完成时才发布，且发布失败要如实说出来，不能因为"层都解完了"就假装成功。
-         ///
-         /// ⚠ 工作区清理**不在这里**：本方法只负责给出结论（删东西要看结论 + 取消令牌，
-         /// 见 <see cref="FinalizeRun"/>）。发布失败时它会把 Completed 降成 false，
-         /// 那个 false 正是"产物还压在工作区里、绝不能删"的判据。
-         /// </summary>
+{
+    /// <summary>搬出去的那一份实现（懒建一次；宿主就是本类，全类共用同一个实例）。</summary>
+    private RecursiveResultHandler? _resultHandler;
+
+    private RecursiveResultHandler ResultHandler => _resultHandler ??= new RecursiveResultHandler(this);
+
+    /// <summary>薄转发：实现见 <see cref="RecursiveResultHandler.BuildResult"/>（签名、默认值、可见性一字不改）。</summary>
     private RecursionResult BuildResult(
         RecursionStopReason stopReason,
         List<RecursionLayerReport> layers,
@@ -38,263 +31,109 @@ public sealed partial class RecursiveExtractor
         bool published,
         IReadOnlyList<string>? unexpandedNames = null,
         string passwordFallbackNote = "",
-        Exception? failureException = null)
-    {
-        bool completed = stopReason == RecursionStopReason.Completed;
-        bool partiallyCompleted = !completed && layers.Any(layer => layer.Success);
+        Exception? failureException = null) =>
+        ResultHandler.BuildResult(
+            stopReason,
+            layers,
+            decision,
+            workspace,
+            finalOutputDirectory,
+            extraMessage,
+            published,
+            unexpandedNames,
+            passwordFallbackNote,
+            failureException);
 
-        /*
-         * 一层都没解出来时指向工作区目录本身：那些情形（取消、第一次就失败）下产物还没有，
-         * 但"工作区在哪"正是排查与重试最需要的信息，而这个目录在工作区建出来时就一定存在。
-         */
-        string finalOutputPath = workspace.Layers.Count > 0
-            ? workspace.Layers[^1].OutputPath
-            : workspace.TaskDirectory;
+    /// <summary>薄转发：实现见 <see cref="RecursiveResultHandler.RetainProcessArtifactBeforeConsumption"/>。</summary>
+    private void RetainProcessArtifactBeforeConsumption(string archivePath) =>
+        ResultHandler.RetainProcessArtifactBeforeConsumption(archivePath);
 
-        string publishMessage = string.Empty;
-
-        if (published)
-        {
-            /*
-             * ⛔ 展开了内层包 ⇒ 走「**就地替换**」那一档（用户 2026-09-30 中午）：
-             * 每个被解开的内层包在**它原来的位置**留下一个以它命名的文件夹
-             * （<c>AAA\DDDD\内容物</c>、<c>AAA\BBBB\CCCCC\内容物</c>），真文件原地不动 ——
-             * ⛔ 不再"把所有叶子层产物摊到发布目标根上"（那等于把它们都搬到顶层）。
-             * 「中间层省不省」读同一个出口；**首层与末层不受它影响**。
-             *
-             * 判据读**唯一**那个出口（PackageLayerRules），本方法自己数层数会与定稿侧漂移。
-             * 只解了一层（没有内层包）时照旧摊外壳：那一份口径有很多既有用例钉着，一个字都不改。
-             */
-            bool inPlace = PackageLayerRules.ExpandedInnerPackage(layers);
-
-            WorkspacePublishResult publishResult = workspace.Publish(
-                finalOutputDirectory,
-                inPlaceInnerPackages: inPlace,
-                alreadyReclaimedPaths: ReclaimedProcessArtifacts,
-                intakeStaging: IsInsideWorkspaceRoot(finalOutputDirectory));
-
-            publishMessage = publishResult.Message;
-
-            /*
-             * ⛔ 发布侧"判不出就没动"的那几件事**必须一条一条说出来**（2026-10-03 就地替换那一档）：
-             * 典型是"这一组卷本该被替换掉，但同组有一片不在我们这一步搬进来的名单里（可能在别的目录 /
-             * 名字认不出）⇒ 一个字节都不删"。不写出来，用户只会看到"产物里怎么还留着几个包"，
-             * 而原因（我们不敢动）一个字都没有 —— 这正是 §9.5 那条"要删的动作判不出就什么都不做，
-             * 而且要留证据"。⛔ 只是日志，不改任务结论（发布成功仍然是成功）。
-             */
-            foreach (string warning in publishResult.Warnings)
-            {
-                /*
-                 * 前缀用**本次递归那个归档的文件名**（`BuildResult` 这一层拿不到任务的显示名，
-                 * 调用方会在汇总那一行自己加任务名）—— 没有它，一批里几十个包的 WARN 会混在一起，
-                 * 谁也认不出是哪一单。
-                 */
-                string label = Path.GetFileName(_lastRunArchivePath);
-
-                Log("WARN", label.Length == 0 ? warning : $"{label}：{warning}");
-            }
-
-            if (publishResult.Success)
-            {
-                // 只有真的发出去了才改指向：发布失败时 FinalOutputPath 仍指向工作区里的产物，
-                // 用户按这个路径还能找到东西。
-                finalOutputPath = publishResult.DestinationPath;
-            }
-            else
-            {
-                completed = false;
-                partiallyCompleted = true;
-            }
-        }
-
-        WriteRecoveryReport(stopReason, layers, workspace, finalOutputPath, completed, partiallyCompleted);
-
-        /*
-         * 临时链接的最后一道兜底：正常路径上每一层跑完就删了（主循环里那一处），
-         * 这里再兜一次（异常 / 提前 return 的那些路）—— ⛔ 绝不把我们的临时名字留在盘上。
-         */
-        RemoveCrossBoundaryLinks();
-
-        /*
-         * ⛔ 「这一趟有没有解出过东西」的**盘上那一半**必须在收尾这一刻数一次（见 ProducedAnyLayerOutput）：
-         * 失败层的报告里文件数按定义是 0，可它的产物目录里可能真有东西；而工作区随后就要被清掉/发布，
-         * 晚一步这份事实就没了。
-         *
-         * ⚠ 判据必须走**唯一出口** `ProducedContentGate`（⛔ 不是"目录里有文件就算"）：
-         * 那一档的阈值与"每一条都失败"两条判据是**与错密码签名分开**用的 —— 实测（守门
-         * `ExtractionPipelineFixTests.只解出一个文件时_仍按老口径继续试下一个候选`）：只留下**一个**文件时
-         * 按老口径仍是「密码错误 / 失败」，而"目录里有没有文件"会把这种错密码签名读成"解出过内容物" ⇒
-         * 状态被改成「部分完成」（当场红）。
-         */
-        bool anyLayerProductsOnDisk = layers.Any(layer =>
-            ProducedContentGate.TryMeasure(
-                layer.OutputPath,
-                layer.ReportedSubItemErrors,
-                layer.FailedEntryNames.Count,
-                out int layerFiles,
-                out _)
-            && layerFiles >= ProducedContentGate.MinimumFiles);
-
-        return new RecursionResult
-        {
-            StopReason = stopReason,
-            Completed = completed,
-            PartiallyCompleted = partiallyCompleted,
-            Decision = decision,
-            Layers = layers.ToList(),
-            AnyLayerProductsOnDisk = anyLayerProductsOnDisk,
-            FinalOutputPath = finalOutputPath,
-            ConsumedVolumeSources = _consumedVolumeSources.ToList(),
-            UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),
-            UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
-            FailureException = failureException,
-            Summary = BuildSummary(
-                stopReason,
-                layers,
-                workspace,
-                finalOutputPath,
-                completed,
-                publishMessage,
-                extraMessage,
-                unexpandedNames ?? Array.Empty<string>(),
-                passwordFallbackNote)
-        };
-    }
-
-    /// <summary>
-    /// 一次运行的收尾：把结论交回调用方之前，按结论决定要不要清掉**本次运行自己建的那个**工作区。
-    ///
-    /// 只有"真的走完 + 没被取消"才清（AGENTS.md §6 第 13 条与单层路径
-    /// <c>ExtractionCoordinator.CleanupTaskWorkspaceDirectory</c> 同一口径）：
-    /// · <see cref="RecursionResult.Completed"/> 已经蕴含"产物发布成功"（发布失败时
-    ///   <see cref="BuildResult"/> 会把它降成 false），所以这一条同时覆盖"产物已出去"这个前提；
-    /// · 取消可能在最后一层解完之后才到（队列已经空了），那时结论仍是 Completed ——
-    ///   按规则**不许清**，所以要在这里再看一眼令牌；
-    /// · 失败 / 部分完成 / 等用户决定一律保留：那些目录里的中间产物是用户唯一的线索，
-    ///   "失败能定位到层、能从那一层重试"这条能力本身就依赖它们还在（见类注释）。
-    ///
-    /// 为什么这条线放在本类而不是调用方：工作区是本类建出来的，谁来建谁负责收 ——
-    /// 调用方（协调器）只拿到一个结论对象，它无从知道这次到底建了哪个目录。
-    /// </summary>
-    private void RetainProcessArtifactBeforeConsumption(string archivePath)
-    {
-        if (string.IsNullOrWhiteSpace(RetainedArtifactDirectory)
-            || string.IsNullOrWhiteSpace(archivePath)
-            || !File.Exists(archivePath))
-        {
-            return;
-        }
-
-        try
-        {
-            string restDirectory = Path.Combine(
-                RetainedArtifactDirectory,
-                ProcessArtifactLayout.ArtifactDirectoryName);
-            Directory.CreateDirectory(restDirectory);
-
-            string target = Path.Combine(restDirectory, Path.GetFileName(archivePath));
-
-            if (!File.Exists(target))
-            {
-                File.Copy(archivePath, target, overwrite: false);
-            }
-
-            RetainedProcessArtifactPath = target;
-        }
-        catch
-        {
-            // 留不下不影响解压结论；收尾那一档会按原有路径继续。
-        }
-    }
-
-    private string? ResolveRetainedArtifactRoot(string outputRoot)
-    {
-        if (!string.IsNullOrWhiteSpace(RetainedArtifactDirectory))
-        {
-            return RetainedArtifactDirectory;
-        }
-
-        string? parent = Path.GetDirectoryName(outputRoot);
-        return string.IsNullOrWhiteSpace(parent)
-            ? null
-            : Path.Combine(parent, "kept");
-    }
-
-    private static string? ResolveWorkspaceOutputRoot(string workspaceRoot)
-    {
-        string? cursor = workspaceRoot;
-
-        while (!string.IsNullOrWhiteSpace(cursor))
-        {
-            if (string.Equals(Path.GetFileName(cursor), ".ArchiveFixer.work", StringComparison.OrdinalIgnoreCase))
-            {
-                return Path.GetDirectoryName(cursor);
-            }
-
-            cursor = Path.GetDirectoryName(cursor);
-        }
-
-        return null;
-    }
-
+    /// <summary>薄转发：实现见 <see cref="RecursiveResultHandler.FinalizeRun"/>。</summary>
     private RecursionResult FinalizeRun(
         RecursionResult result,
         ExtractionWorkspace workspace,
         string taskLabel,
-        CancellationToken cancellationToken)
-    {
-        if (_limits.KeepDeepestProcessArtifact
-            && result.Completed
-            && result.Layers.Count > 0)
-        {
-            RecursionLayerReport? deepest = result.Layers.LastOrDefault(layer => layer.Success && layer.Depth > 0);
+        CancellationToken cancellationToken) =>
+        ResultHandler.FinalizeRun(result, workspace, taskLabel, cancellationToken);
 
-            string? outputRoot = ResolveWorkspaceOutputRoot(workspace.RootDirectory);
+    /// <summary>
+    /// 薄转发：实现见 <see cref="RecursiveResultHandler.ResolveRetainedArtifactRoot"/>。
+    ///
+    /// <para>⚠ 本分片之外的另一个调用方 = <c>ExtractAsync</c> 那一分片的宿主访问器
+    /// <c>ResolveRetainedRoot</c>（给 <c>RecursiveExtractHandler</c> 用）⇒ 实现搬走后必须留同签名转发，
+    /// ⛔ 不能因为"本分片没人调用"就删。</para>
+    /// </summary>
+    private string? ResolveRetainedArtifactRoot(string outputRoot) =>
+        ResultHandler.ResolveRetainedArtifactRoot(outputRoot);
 
-            if (deepest != null
-                && !string.IsNullOrWhiteSpace(outputRoot)
-                && Directory.Exists(outputRoot)
-                && File.Exists(deepest.ArchivePath))
-            {
-                string? retainedRoot = ResolveRetainedArtifactRoot(outputRoot);
+    /// <summary>薄转发：实现见 <see cref="RecursiveResultHandler.ResolveWorkspaceOutputRoot"/>（静态：不读实例状态）。</summary>
+    private static string? ResolveWorkspaceOutputRoot(string workspaceRoot) =>
+        RecursiveResultHandler.ResolveWorkspaceOutputRoot(workspaceRoot);
 
-                if (string.IsNullOrWhiteSpace(retainedRoot))
-                {
-                    return result;
-                }
+    /*
+     * ===== 结论落地（RecursiveResultHandler）的宿主出口 =====
+     *
+     * 协作类要用、但定义在**别的 partial** 里的 private 成员（不改那几个文件）：
+     * 这里只加**最小 internal 访问器**，⛔ 不复制判据、⛔ 不用反射（唯一实现仍在原处）。
+     *
+     * 本来就能直接用的不再另开访问器：Log / ReclaimedProcessArtifacts / Limits / Engine（internal）、
+     * LastRunArchivePath（ExtractAsync 那一分片已露 internal）、RetainedArtifactDirectory（public）。
+     */
 
-                string retained = Path.Combine(
-                    retainedRoot,
-                    "其余物",
-                    Path.GetFileName(deepest.ArchivePath));
+    /// <summary>访问器：转调 <c>Reporting.StopReason</c> 里的 private <c>IsInsideWorkspaceRoot</c>（唯一实现仍在原处）。</summary>
+    internal static bool IsInsideWorkspaceRootForResult(string? path) => IsInsideWorkspaceRoot(path);
 
-                Directory.CreateDirectory(Path.GetDirectoryName(retained)!);
+    /// <summary>访问器：转调 <c>Reporting.Recovery</c> 里的 private <c>WriteRecoveryReport</c>（报告内容一个字未改）。</summary>
+    internal void WriteRecoveryReportForResult(
+        RecursionStopReason stopReason,
+        List<RecursionLayerReport> layers,
+        ExtractionWorkspace workspace,
+        string finalOutputPath,
+        bool completed,
+        bool partiallyCompleted) =>
+        WriteRecoveryReport(stopReason, layers, workspace, finalOutputPath, completed, partiallyCompleted);
 
-                if (!File.Exists(retained))
-                {
-                    try
-                    {
-                        File.Copy(deepest.ArchivePath, retained, overwrite: false);
-                        Log(
-                            "INFO",
-                            $"{taskLabel}：空间不足模式 —— 最后一层过程物已留下：{Path.GetFileName(retained)}");
-                    }
-                    catch
-                    {
-                        // 留不下不影响结论。
-                    }
-                }
-            }
-        }
+    /// <summary>访问器：转调跨盘 ZIP 临时链接的**唯一清理出口**（只删我们自己刚建的那几个名字）。</summary>
+    internal void RemoveCrossBoundaryLinksForResult() => RemoveCrossBoundaryLinks();
 
-        if (result.Completed && !cancellationToken.IsCancellationRequested)
-        {
-            CleanupWorkspace(workspace, taskLabel, "递归解压已完成且产物已发布");
-            CleanupSupersededWorkspaces(taskLabel);
-        }
+    /// <summary>访问器：这一趟**借来用过的用户源片**（账本是本类字段，⛔ 不复制第二份）。</summary>
+    internal IReadOnlyList<string> ConsumedVolumeSources => _consumedVolumeSources;
 
-        return result;
-    }
+    /// <summary>访问器：这一趟停下时**打不开的那几片**（账本是本类字段，⛔ 不复制第二份）。</summary>
+    internal IReadOnlyList<string> UnresolvedVolumePieces => _unresolvedVolumePieces;
+
+    /// <summary>访问器：转调 <c>Reporting.StopReason</c> 里的 private <c>BuildSummary</c>（结论措辞唯一实现）。</summary>
+    internal static string BuildSummaryForResult(
+        RecursionStopReason stopReason,
+        List<RecursionLayerReport> layers,
+        ExtractionWorkspace workspace,
+        string finalOutputPath,
+        bool completed,
+        string publishMessage,
+        string extraMessage,
+        IReadOnlyList<string> unexpandedNames,
+        string passwordFallbackNote) =>
+        BuildSummary(
+            stopReason,
+            layers,
+            workspace,
+            finalOutputPath,
+            completed,
+            publishMessage,
+            extraMessage,
+            unexpandedNames,
+            passwordFallbackNote);
+
+    /// <summary>访问器：转调 <c>WorkspaceCleanup</c> 里的 private <c>CleanupWorkspace</c>（删除闸门仍在原处）。</summary>
+    internal bool CleanupWorkspaceForResult(ExtractionWorkspace workspace, string taskLabel, string reason) =>
+        CleanupWorkspace(workspace, taskLabel, reason);
+
+    /// <summary>访问器：转调 <c>WorkspaceCleanup</c> 里的 private <c>CleanupSupersededWorkspaces</c>。</summary>
+    internal void CleanupSupersededWorkspacesForResult(string taskLabel) =>
+        CleanupSupersededWorkspaces(taskLabel);
+
+    /// <summary>访问器：空间不足模式保留的那一份（<c>private set</c> 在别的 partial，⛔ 不改成 public）。</summary>
+    internal void SetRetainedProcessArtifactPath(string path) => RetainedProcessArtifactPath = path;
 
     /*
      * ===== 失败收尾段（RecursiveResultBuilder）的宿主出口 =====

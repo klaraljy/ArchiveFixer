@@ -45,6 +45,7 @@ namespace ArchiveFixer.Tests;
 /// （<c>ExtractionCoordinator.RestDeleteExecutor</c> 这个测试缝）；只在临时目录里动真实文件系统。</para>
 /// </summary>
 [Collection("ArchiveFixerGlobalState")]
+[Trait("Category", "Extended")]
 public class ChainRestHandlingSettingTests : IDisposable
 {
     /// <summary>拿它给内层包加密码、密码本里没有 ⇒ 那一层必然失败（用例 ①②）。</summary>
