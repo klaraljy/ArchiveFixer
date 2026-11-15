@@ -43,7 +43,7 @@ namespace ArchiveFixer.Tests;
 /// <para>与 <c>ViewStateGuardTests</c> 同属"不与其他集合并行"的集合：构造 MainViewModel
 /// 会写两个进程级静态（7z 路径、递归工作区根目录），装配后立刻还原。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class CleanupSelectionScopeTests : IDisposable
 {
     private readonly string _root;

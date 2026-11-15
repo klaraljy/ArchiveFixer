@@ -31,7 +31,7 @@ namespace ArchiveFixer.Tests;
 /// </summary>
 // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
 // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class PasswordReuseTests : IDisposable
 {
     private readonly string _root;

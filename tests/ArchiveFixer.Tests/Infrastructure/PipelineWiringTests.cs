@@ -39,7 +39,7 @@ namespace ArchiveFixer.Tests;
 /// （见 <c>InnerLayerContinuationTests</c> 顶部的 CollectionDefinition）。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 [Trait("Category", "Extended")]
 public class PipelineWiringTests : IDisposable
 {

@@ -26,7 +26,7 @@ namespace ArchiveFixer.Tests;
 /// 免得下次改代码时又把界面甩在后面。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class SettingsTruthfulnessTests : IDisposable
 {
     private readonly string _root;

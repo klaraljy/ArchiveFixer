@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests;
 /// 让那 12 GiB 的内容真的解得出来；用户自己给的源文件一个字节都不动。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 [Trait("Category", "Extended")]
 public class Item37SafetyTests : IDisposable
 {

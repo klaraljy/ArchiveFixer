@@ -83,7 +83,7 @@ public sealed class AaaReplayFactAttribute : FactAttribute
 /// `_tmp\ArchiveFixer\aaa-replay\runs\&lt;时间戳&gt;\` —— 六条不变量的判据都从这份证据里读，
 /// 免得"跑过了"变成一句无法复核的话。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "RealSample")]
 public class ReplayPipelineTests : IDisposable
 {

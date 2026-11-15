@@ -30,7 +30,7 @@ namespace ArchiveFixer.Tests;
 /// 第二个开始就应该"一次就开"。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 [Trait("Category", "Extended")]
 public class Item45LogAndPasswordTests : IDisposable
 {

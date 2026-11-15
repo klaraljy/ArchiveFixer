@@ -23,7 +23,7 @@ namespace ArchiveFixer.Tests;
 /// 构造 MainViewModel 会写两个进程级静态（7z 路径、递归工作区根目录），
 /// 所以本类与 InnerLayerContinuationTests 同属一个"不并行"的集合，并在装配后立刻还原静态。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class ViewStateGuardTests : IDisposable
 {
     private readonly string _root;

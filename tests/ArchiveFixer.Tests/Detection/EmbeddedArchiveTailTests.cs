@@ -40,7 +40,7 @@ namespace ArchiveFixer.Tests;
 /// 样本**全部自己造**（临时目录 + 框架自带 <see cref="ZipArchive"/> + 项目内置 7z.exe），
 /// 绝不引用用户机器上的任何真实文件/路径/文件名（AGENTS.md §8）。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class EmbeddedArchiveTailTests : IDisposable
 {
     /// <summary>假 MP4 头长度：与真实现场同量级，也保证 34 KB 的文件头读不到尾部的 ZIP。</summary>

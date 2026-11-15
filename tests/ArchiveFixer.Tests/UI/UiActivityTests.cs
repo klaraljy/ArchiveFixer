@@ -7,7 +7,7 @@ namespace ArchiveFixer.Tests;
 /// UI 卡顿归因：后台清理/扫描的标记不能覆盖 UI 阶段，否则监控会把停顿记到
 /// “恢复后才开始”的那个后台动作头上（2026-11-11 真机 54 秒/117 秒两条都踩过）。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public sealed class UiActivityTests
 {
     [Fact]

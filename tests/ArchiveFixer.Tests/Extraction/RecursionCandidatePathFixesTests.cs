@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests;
 /// <para>能用假引擎的地方一律用假引擎（结论完全确定、不依赖真 7z 的措辞）；
 /// 只有"批末汇总"那一条用真 7z 造样本 —— 它要验的正是整条管线的接线。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "Extended")]
 public class RecursionCandidatePathFixesTests : IDisposable
 {

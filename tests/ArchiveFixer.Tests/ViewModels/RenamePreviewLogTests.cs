@@ -31,7 +31,7 @@ namespace ArchiveFixer.Tests;
 /// <see cref="RenameCoordinator.BuildPreviewAsync"/> 写日志，只是不开预览窗口
 /// （本进程没有 WPF 宿主）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class RenamePreviewLogTests : IDisposable
 {
     private readonly string _root;

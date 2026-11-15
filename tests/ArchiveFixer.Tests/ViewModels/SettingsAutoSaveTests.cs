@@ -23,7 +23,7 @@ namespace ArchiveFixer.Tests;
 /// <para>这一组要构造真的 <see cref="MainViewModel"/>（构造会写两个进程级静态），
 /// 所以声明成"不与其他集合并行"——与其它管线测试同一套理由。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class SettingsAutoSaveTests : IDisposable
 {
     private readonly string _root = CreateIsolatedRoot();

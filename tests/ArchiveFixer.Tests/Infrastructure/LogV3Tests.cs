@@ -12,7 +12,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class LogV3Tests : IDisposable
 {
     private readonly string _root;

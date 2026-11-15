@@ -35,7 +35,7 @@ namespace ArchiveFixer.Tests;
 /// <para><b>装配纪律</b>：构造 <c>MainViewModel</c> 会写两个进程级静态（7z 路径、递归工作区根目录），
 /// 装配后立刻还原（与其它管线测试同一套），并且与它们一样不与其他集合并行。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public sealed class CheckedOnlySelectionTests : IDisposable
 {
     private readonly string _root;

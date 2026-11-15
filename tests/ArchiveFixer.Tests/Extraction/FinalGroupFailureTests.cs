@@ -16,7 +16,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class FinalGroupFailureTests
 {
     [Theory]

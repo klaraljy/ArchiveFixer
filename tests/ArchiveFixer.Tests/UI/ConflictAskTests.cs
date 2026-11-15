@@ -28,7 +28,7 @@ namespace ArchiveFixer.Tests;
 /// 这样"到底问没问、问了几次、问在动手之前还是之后"都是可断言的事实。
 /// 与 ExtractionPipelineFixTests 同一组（MainViewModel 构造会写进程级静态，必须串行）。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class ConflictAskTests : IDisposable
 {
     private readonly string _root;

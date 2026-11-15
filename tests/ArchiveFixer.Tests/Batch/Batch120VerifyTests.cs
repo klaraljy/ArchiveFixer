@@ -16,7 +16,7 @@ namespace ArchiveFixer.Tests.Batch120;
 /// 一条样本红只影响它自己；每条结果同时落到
 /// <c>测试\日志位置\&lt;seed&gt;-125批次-日志\检测\&lt;样本&gt;.json</c>，方便汇总。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 [Trait("Category", "Extended")]
 public sealed class Batch120VerifyTests
 {

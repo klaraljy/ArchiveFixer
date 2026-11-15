@@ -46,7 +46,7 @@ namespace ArchiveFixer.Tests;
 /// 构造 <c>MainViewModel</c> 会写进程级静态（递归工作区根），所以整类进
 /// <c>ArchiveFixerGlobalState</c> 集合、与其它同类用例串行，并在装配后立刻还原。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class WorkspaceRootTests : IDisposable
 {
     private readonly string _root;

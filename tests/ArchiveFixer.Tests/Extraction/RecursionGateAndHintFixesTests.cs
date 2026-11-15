@@ -24,7 +24,7 @@ namespace ArchiveFixer.Tests;
 /// 而普通 `-p` 加密包密码全不对时照旧是「密码错误」（对照组）。</item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class RecursionGateAndHintFixesTests : IDisposable
 {
     /// <summary>测试专用合成密码；只出现在测试数据里，不是任何真实凭据。</summary>

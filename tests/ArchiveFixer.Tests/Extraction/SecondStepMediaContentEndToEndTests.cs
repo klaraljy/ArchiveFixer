@@ -18,7 +18,7 @@ namespace ArchiveFixer.Tests;
 /// （`.001删` → `.001`）建链接并解出内容；③ 成功后过程物/工作区按既有收片账清理，
 /// 不留下"解出来了但按 Pending 收场"的尾巴。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class SecondStepMediaContentEndToEndTests
 {
     [Fact]

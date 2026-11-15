@@ -18,7 +18,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public sealed class SpaceTight915MatrixTests
 {
     private static readonly string Root = Path.Combine(TestPaths.BackupRoot, "915300000-空间不足-矩阵-备份");

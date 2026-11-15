@@ -49,7 +49,7 @@ namespace ArchiveFixer.Tests;
 /// 约定与 <c>RecursiveExtractorTests</c> 顶部那段说明同一条，见
 /// <c>InnerLayerContinuationTests</c> 顶部的 CollectionDefinition。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class InnerDoubleFacedCarveTests : IDisposable
 {
     /// <summary>7-Zip 容忍的"前面垫的数据"上限（实测边界见 <c>EmbeddedArchiveCarver</c> 类注释）：9 MiB 必然落在拒绝区。</summary>

@@ -25,7 +25,7 @@ namespace ArchiveFixer.Tests;
 /// 中央目录签名必须正好在算出来的位置、归档起点必须正好是局部文件头）。
 /// 命中的结论与尾部那条路**同一形状**，管线照旧"抠出 [起点, 终点) → 直读或交给引擎"。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class ZipNotAtEndTests : IDisposable
 {
     /// <summary>前缀（"封面图"）：2 MiB，超过任何"引擎自己容忍偏移"的量级。</summary>

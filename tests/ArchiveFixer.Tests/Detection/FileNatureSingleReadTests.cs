@@ -10,7 +10,7 @@ namespace ArchiveFixer.Tests;
 /// FileNature 必须复用第一次内容读数的守门：
 /// 账单/轮扫描对同一文件只应该进入 VolumeNumberFromContent.Read 一次。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public sealed class FileNatureSingleReadTests
 {
     [Fact]

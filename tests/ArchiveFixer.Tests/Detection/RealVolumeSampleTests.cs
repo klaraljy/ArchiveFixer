@@ -146,7 +146,7 @@ public sealed class RarExeFactAttribute : FactAttribute
 /// 「认得出、定得序、改得回标准名、引擎真的打开了这一组并列出条目（名字/大小/CRC 与逐字节事实一致）」，
 /// **验不到"解出来的字节与原件一致"** —— 那一步卡在密码上，如实断言成「密码错误 + 输出目录一个字节都没有」。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 [Trait("Category", "RealSample")]
 public class RealVolumeSampleTests : IDisposable
 {

@@ -39,7 +39,7 @@ namespace ArchiveFixer.Tests;
 /// 并在那一行注明「共 N 卷」（用户 2026-10-02 拍板）。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public class RealMachine20261002FixesTests : IDisposable
 {
     private const long Gib = 1024L * 1024 * 1024;

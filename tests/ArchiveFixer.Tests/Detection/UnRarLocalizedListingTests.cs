@@ -31,7 +31,7 @@ namespace ArchiveFixer.Tests;
 /// 所以用例里放的是**真机抓到的那段文本**（路径与条目名已脱敏，AGENTS.md §8）；
 /// 端到端那一条则在本机真装了 WinRAR 时用**已装的那份 UnRAR** 现场跑一遍。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class UnRarLocalizedListingTests : IDisposable
 {
     private readonly string _root;

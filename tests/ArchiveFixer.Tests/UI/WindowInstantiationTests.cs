@@ -50,7 +50,7 @@ namespace ArchiveFixer.Tests;
 /// 而整个测试进程的"无 UI 宿主"前提（<c>UiV2Tests</c> 的守卫、<c>DialogService</c> 的降级路径）
 /// 都建立在"没有 Application"上 —— 跑完必须还原成 null（见 <see cref="ApplicationStash"/>）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class WindowInstantiationTests : IDisposable
 {
     private readonly ITestOutputHelper _output;

@@ -101,7 +101,7 @@ public sealed class RealAmb909PairPasswordFactAttribute : FactAttribute
 /// <c>Cannot open encrypted archive. Wrong password?</c>，卷不齐时报 <c>Unexpected end of archive</c>
 /// —— 老代码只认"列得出清单"，于是把"缺密码"误报成「分卷缺失」（见 <c>VolumeProbeVerifier</c> 的注释）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 [Trait("Category", "RealSample")]
 public class RealAmb909VolumePairTests : IDisposable
 {

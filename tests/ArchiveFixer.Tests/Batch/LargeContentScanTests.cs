@@ -16,7 +16,7 @@ namespace ArchiveFixer.Tests;
 /// 4,000 个普通图片作为产物时，扫描只做轻量归档判定：
 /// 不允许对每个图片再走内容识别/FileNature 全量事实。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 [Trait("Category", "Stress")]
 public sealed class LargeContentScanTests
 {

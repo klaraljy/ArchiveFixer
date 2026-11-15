@@ -22,7 +22,7 @@ namespace ArchiveFixer.Tests;
 /// 只验证空间算法与逐包独立性，不固定断言处理次序。
 /// 环境变量 ARCHIVEFIXER_SPACE_TIGHT_MATRIX=1 时运行。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public sealed class SpaceTightMatrixTests
 {
     private static readonly string FixtureRoot = TestPaths.TestAreaRoot;

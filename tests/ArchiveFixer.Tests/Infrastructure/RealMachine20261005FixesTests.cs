@@ -40,7 +40,7 @@ namespace ArchiveFixer.Tests;
 /// <para>⚠ 本类跑真 7z、读 <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>（进程级静态），
 /// 必须与改写它的用例类**串行**：约定与 <c>InnerDoubleFacedCarveTests</c> 顶部那段说明同一条。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public class RealMachine20261005FixesTests : IDisposable
 {
     /// <summary>7-Zip 容忍的前置数据上限 8 MiB（实测边界）—— 9 MiB 必然落到"必须抠出来"那一档。</summary>

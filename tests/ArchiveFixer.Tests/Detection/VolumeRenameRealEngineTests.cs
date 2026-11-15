@@ -34,7 +34,7 @@ namespace ArchiveFixer.Tests;
 /// （<see cref="结论已变_只脏归档后缀段的两条入口给出同一份规范名_真7zip按新名字解得开"/>
 /// 与 <see cref="反面_孤零零一个脏名卷_计划阶段就停_没有任何标准名入口可开"/> 末段），⛔ 不是放宽断言。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public sealed class VolumeRenameRealEngineTests : IDisposable
 {
     /// <summary>载荷的文件名（造样本时只传这个名字给 7z / Rar，免得把整条路径存进包里）。</summary>

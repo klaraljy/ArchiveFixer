@@ -33,7 +33,7 @@ namespace ArchiveFixer.Tests;
 /// <para>MainViewModel 的构造会写两个进程级静态（7z 路径 / 递归工作区根目录），
 /// 所以与其它管线测试同一组串行，并在装配后立刻还原。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 public class JunkReminderTests : IDisposable
 {
     private readonly string _root;

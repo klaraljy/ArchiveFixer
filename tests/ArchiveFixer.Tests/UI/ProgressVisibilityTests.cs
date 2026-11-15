@@ -38,7 +38,7 @@ namespace ArchiveFixer.Tests;
 /// MainViewModel 的构造会写进程级静态，必须串行并在装配后还原。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 [Trait("Category", "Extended")]
 public class ProgressVisibilityTests : IDisposable
 {

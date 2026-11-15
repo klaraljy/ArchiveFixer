@@ -29,7 +29,7 @@ namespace ArchiveFixer.Tests;
 /// <para>⚠ **2026-09-26 起**：自动拼装已经做出来了（用户选的方案 A，**默认关**，②页那个开关）——
 /// 那一档的回归在 <c>SplitVolumeAssemblyTests</c>；本类继续钉**默认档**的这两件事（与从前逐字相同）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class SplitInsideContainerTests : IDisposable
 {
     private readonly string _root;

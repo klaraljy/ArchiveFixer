@@ -33,7 +33,7 @@ namespace ArchiveFixer.Tests;
 /// <para><b>红检</b>：撤掉 `ExtractSingleTaskAsync` 开头那道闸门 ⇒ 第二条用例当场红
 /// （APK 被解开、产物落盘、终态不是「跳过」）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class AndroidPackageGateTests : IDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);

@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>运行：ARCHIVEFIXER_SPACE_TIGHT_20=1 dotnet test --filter ...</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public sealed class SpaceTight20FixtureTests
 {
     private static readonly string FixtureRoot = TestPaths.TestAreaRoot;

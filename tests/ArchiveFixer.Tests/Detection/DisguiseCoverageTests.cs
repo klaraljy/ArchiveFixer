@@ -48,7 +48,7 @@ namespace ArchiveFixer.Tests;
 /// 只有"窗口被 Show 出来"这一步没法在无 UI 宿主里做（见 <c>一键处理_需要改名时会先出预览</c> 的说明）。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class DisguiseCoverageTests : IClassFixture<DisguiseSampleFixture>, IDisposable
 {
     private readonly DisguiseSampleFixture _samples;

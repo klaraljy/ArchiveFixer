@@ -36,7 +36,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>这一组用**真 7z**：假引擎不会"先建桩文件再报错"，所以假引擎测不出这个 bug。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class PasswordCandidateStageResetTests : IDisposable
 {
     /// <summary>包里的内容物文本（解出来后逐字比对）。</summary>

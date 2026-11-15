@@ -19,7 +19,7 @@ namespace ArchiveFixer.Tests;
 /// 手动 UI 线程探针：ARCHIVEFIXER_H_PATH_UI=1 才跑。
 /// 用真实 Dispatcher + UiResponsivenessMonitor 跑两份 H 原包，专门定位 UI 停顿。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public sealed class HPathUiThreadProbeTests
 {
     [Fact]

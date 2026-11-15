@@ -36,7 +36,7 @@ namespace ArchiveFixer.Tests;
 /// 所以整类进 <c>ArchiveFixerGlobalState</c> 集合、与其它同类用例串行，并在装配后立刻还原；
 /// 数据根 / 日志全在临时目录里，绝不碰用户真实数据。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class OutputLocationOnTaskTabTests : IDisposable
 {
     private readonly string _root;

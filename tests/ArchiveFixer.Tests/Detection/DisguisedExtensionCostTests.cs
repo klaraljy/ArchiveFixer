@@ -25,7 +25,7 @@ namespace ArchiveFixer.Tests;
 /// 一个字节都不碰前面的视频前缀 —— 这一步是"把内容落盘"的最低成本（抠取那条路反而要多拷一整份）。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class DisguisedExtensionCostTests : IDisposable
 {
     private const int PayloadBytes = 48 * 1024 * 1024;

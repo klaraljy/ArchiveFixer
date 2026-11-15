@@ -35,7 +35,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para><see cref="MainViewModel"/> 的构造会写进程级静态，所以本类与其它同类用例一起**串行**跑。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class OneClickOptionsPanelTests : IDisposable
 {
     private readonly string _root;

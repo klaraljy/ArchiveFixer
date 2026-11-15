@@ -29,7 +29,7 @@ namespace ArchiveFixer.Tests;
 /// 不够就一个字都不写；④真 7z 端到端：开关关 = 与今天逐字相同（如实报「分卷缺失」），
 /// 开关开 = 解开**真内容**且源目录一个字节不变。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class SplitVolumeAssemblyTests : IDisposable
 {
     private readonly string _root;

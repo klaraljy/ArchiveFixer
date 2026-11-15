@@ -36,7 +36,7 @@ namespace ArchiveFixer.Tests;
 // 本文件只读它，别的用例类会改写它 —— 全量并发跑时被抢走会让工作区落到别的用例的临时目录里、
 // 那个目录又被对方 Dispose 掉（现场：`工作区删不掉` 断言 "第 0 层的产物目录不存在"）。
 // 所以与改写它的那些类一起**串行**跑，见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "Extended")]
 public sealed partial class RecursiveExtractorTests : IDisposable
 {

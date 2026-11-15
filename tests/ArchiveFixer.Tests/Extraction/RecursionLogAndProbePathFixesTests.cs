@@ -29,7 +29,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>能用假引擎的地方一律用假引擎（探针落点这种"看了哪两个路径"的判据，假引擎才看得见参数）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class RecursionLogAndProbePathFixesTests : IDisposable
 {
     /// <summary>测试专用合成密码；只出现在测试数据里，不是任何真实凭据。</summary>

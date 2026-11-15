@@ -30,7 +30,7 @@ namespace ArchiveFixer.Tests;
 /// 所以和同类用例一起**串行**跑，每个用例结束都还原（<c>InnerLayerContinuationTests</c> 顶部的 CollectionDefinition）。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public class AuditFixVerificationTests : IDisposable
 {
     private readonly string _root;

@@ -19,7 +19,7 @@ namespace ArchiveFixer.Tests;
 /// 旧实现会拿源盘盘根拼 `<盘>\.ArchiveFixerSrcProtect`，C/E/H 根目录因此留下隐藏目录。
 /// 环境变量 ARCHIVEFIXER_SOURCE_PROTECT_TEST=1 时运行。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public sealed class SourceProtectionWorkspaceTests : IDisposable
 {
     private readonly string _sourceRoot;

@@ -36,7 +36,7 @@ namespace ArchiveFixer.Tests;
 /// <para>夹具照 <c>ImportJunkReminderTests</c> 那一套装配（假引擎 + 无界面宿主），
 /// 只多一个直接构造出来的 <c>ScanCoordinator</c>：导入路径里调的就是它这一个方法。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 public class FolderImportJunkAutoRemoveTests : IDisposable
 {
     private readonly string _root;

@@ -33,7 +33,7 @@ namespace ArchiveFixer.Tests;
 /// 所以这里整条链都当真：真 7z.exe 造包、真 <see cref="SevenZipEngine"/>、真 <see cref="MainViewModel"/>
 /// 与真的解压管线。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class ChainSpaceReclaimTests : IDisposable
 {
     /// <summary>最深一层那个包的密码（刻意**不**进密码本，用来造"这一层失败"）。</summary>

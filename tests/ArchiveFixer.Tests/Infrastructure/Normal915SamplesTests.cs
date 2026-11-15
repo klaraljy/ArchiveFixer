@@ -15,7 +15,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class Normal915SamplesTests
 {
     [Fact]

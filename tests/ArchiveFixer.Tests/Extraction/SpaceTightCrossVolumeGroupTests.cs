@@ -22,7 +22,7 @@ namespace ArchiveFixer.Tests;
 /// 标准名入口落在 E 且同盘硬链接，H 上绝不出现源包副本。
 /// 环境变量 ARCHIVEFIXER_SPACE_TIGHT_CROSS=1 时才运行。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public sealed class SpaceTightCrossVolumeGroupTests : IDisposable
 {
     private readonly string _sourceRoot;

@@ -14,7 +14,7 @@ namespace ArchiveFixer.Tests.Batch120;
 /// 空间 25 份目前是"不模拟空间"的版本：产品没有可注入剩余空间的探针，
 /// 真盘空间足够，所以 expected.blocked 那一档暂时跑不出来。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 [Trait("Category", "Extended")]
 public sealed class Batch120OperationTests
 {

@@ -23,7 +23,7 @@ namespace ArchiveFixer.Tests;
 /// 默认优先级又是 UnRAR → 7-Zip。于是"只缺 UnRAR"或"把内置件关掉了"的用户会看到
 /// 「7z不存在」—— 被引去修一个本来没问题的 7z 目录。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class EngineUnavailableStatusTests : IDisposable
 {
     private readonly string _root;

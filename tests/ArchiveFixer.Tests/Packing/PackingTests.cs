@@ -47,7 +47,7 @@ namespace ArchiveFixer.Tests;
 /// ② 这一组会真起 <c>7z.exe</c> / <c>Rar.exe</c> 进程，与别的重活并行只会互相抢 CPU。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("GlobalState")]
 public partial class PackingTests : IDisposable
 {
     /// <summary>测试用密码。**占位符**，不是任何真实密码（AGENTS.md §8）。</summary>

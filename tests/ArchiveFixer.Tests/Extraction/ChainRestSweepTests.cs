@@ -36,7 +36,7 @@ namespace ArchiveFixer.Tests;
 /// <para>引擎是假的（照 <c>SourcePackageRestMoveTests</c> 那一套装配）：这里要验的是**收尾那一步**，
 /// 解压本身不是被测对象。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class ChainRestSweepTests : IDisposable
 {
     /// <summary>假引擎写出来的那一个内容物（有它才算"这一单真的解出了东西"）。</summary>

@@ -38,7 +38,7 @@ namespace ArchiveFixer.Tests;
 /// <para><b>它不会静默通过</b>：仓库/源码目录找不到、XAML 读不了、一条绑定都没扫到，
 /// 都会直接让用例变红（见下面几个 <c>Assert</c>），而不是"扫了个寂寞然后报绿"。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class XamlBindingSafetyTests
 {
     [Fact]

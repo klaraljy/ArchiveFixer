@@ -40,7 +40,7 @@ namespace ArchiveFixer.Tests;
 /// <para><b>§13 纪律</b>：界面部分走既有的离屏探针（<see cref="UiProbe"/>：屏幕外 + 不进任务栏 +
 /// 不激活），全程不碰鼠标键盘、不置前；命令部分是无界面的纯 ViewModel 断言。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 [Trait("Category", "Extended")]
 public class TaskSelectionTests
 {
@@ -429,7 +429,7 @@ public class TaskSelectionTests
     [Fact]
     public void 单击一次即可切换勾选_且整格都能点()
     {
-        // 与其它自建 WPF 宿主的用例同一个集合（[Collection("ArchiveFixerGlobalState")]，
+        // 与其它自建 WPF 宿主的用例同一个集合（[Collection("ViewModelsState")]，
         // 该集合 DisableParallelization = true）：Application 是进程级单例，不能并行建。
         string? previousWorkspaceRoot = ArchiveFixer.Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot;
         string previousSevenZipPath = ArchiveFixer.Engines.ToolLocator.Default.CustomSevenZipExePath;

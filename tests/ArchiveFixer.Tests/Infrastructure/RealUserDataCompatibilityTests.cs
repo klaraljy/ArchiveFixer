@@ -10,7 +10,7 @@ namespace ArchiveFixer.Tests;
 /// 对当前机器上真实用户数据做**只读副本**兼容性冒烟：不打印、不修改真实密码值。
 /// 没有真实数据的机器直接视为通过（测试不能依赖某台开发机）。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class RealUserDataCompatibilityTests : IDisposable
 {
     private readonly string _root;

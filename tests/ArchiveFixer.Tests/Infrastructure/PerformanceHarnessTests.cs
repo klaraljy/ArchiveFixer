@@ -22,7 +22,7 @@ namespace ArchiveFixer.Tests;
 /// 性能测试专用无头夹具：只由 performance runner 通过环境变量驱动。
 /// 普通全量测试没有这些变量，直接返回，不产生样本、不写用户目录。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class PerformanceHarnessTests
 {
     [Fact(Timeout = 60 * 60 * 1000)]

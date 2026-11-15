@@ -32,7 +32,7 @@ namespace ArchiveFixer.Tests;
 /// 机器终态永远停在 <c>Pending</c> —— 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，同一件事两处口径。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public class RealMachineDefectFixesTests : IDisposable
 {
     private readonly string _root;

@@ -31,7 +31,7 @@ namespace ArchiveFixer.Tests;
 /// <para>这一组钉两条：①**不许再抛越界**；②候选都试完之后，结论是"密码不对"这类
 /// 说得清的东西，而不是「达到密码尝试上限」（少了那一个候选之后并没有被上限截断）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class PasswordCandidateBoundTests : IDisposable
 {
     private const string RightPassword = "Bound-Right-2026";

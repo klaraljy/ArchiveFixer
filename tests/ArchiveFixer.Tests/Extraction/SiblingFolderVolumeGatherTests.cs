@@ -35,7 +35,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>⚠ 与改写 <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>（进程级静态）的用例类**串行**跑。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "RealSample")]
 [Trait("Category", "Extended")]
 public class SiblingFolderVolumeGatherTests : IDisposable

@@ -44,7 +44,7 @@ namespace ArchiveFixer.Tests;
 /// 每个用例结束再还原一次。
 /// </para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class EngineRoutingTests : IDisposable
 {
     private readonly string _root;

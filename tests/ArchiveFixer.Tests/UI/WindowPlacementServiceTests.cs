@@ -5,7 +5,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public sealed class WindowPlacementServiceTests : IDisposable
 {
     private readonly string _root;

@@ -45,7 +45,7 @@ namespace ArchiveFixer.Tests;
 /// 判据只读机器终态 / 结构化结果（终态枚举、校验枚举、L4 三态、盘上文件），⛔ 不比中文文案 ——
 /// 需要断言"日志写了这句话"时一律引用 <see cref="StatusText"/> 里的常量，不手抄中文。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class ChainManifestCompletenessTests : IDisposable
 {
     private const string InnerPassword = "InnerPass1";

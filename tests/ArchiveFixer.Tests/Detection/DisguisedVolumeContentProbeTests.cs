@@ -25,7 +25,7 @@ namespace ArchiveFixer.Tests;
 /// <para>真 7z 造样本：<c>-v1m</c> 切 2.5 MiB → 三卷（两个满卷 + 一个不满的尾卷），
 /// 与真机那组的形状一致。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class DisguisedVolumeContentProbeTests : IDisposable
 {
     private const int PayloadBytes = 2621440; // 2.5 MiB

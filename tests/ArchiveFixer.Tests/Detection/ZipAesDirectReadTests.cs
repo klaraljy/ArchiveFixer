@@ -42,7 +42,7 @@ namespace ArchiveFixer.Tests;
 /// 并用**真 7z 反向校验**器材本身：按 ANSI 字节造的包 7z 必须能解开，按 UTF-8 造的必须解不开
 /// （后者正是本功能存在的理由；哪天 7-Zip 支持了，那一条会红，届时可以安全删掉。）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class ZipAesDirectReadTests : IDisposable
 {
     /// <summary>中文密码：本组所有用例的主角（用户现场就是中文密码）。</summary>

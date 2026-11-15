@@ -34,7 +34,7 @@ namespace ArchiveFixer.Tests;
 /// 开着关着都照样移出列表，但设置项本身读写与序列化一个字都没动。</description></item>
 /// </list>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("BatchState")]
 public class ImportJunkReminderTests : IDisposable
 {
     private readonly string _root;

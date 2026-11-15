@@ -20,7 +20,7 @@ namespace ArchiveFixer.Tests;
 /// 失败样本 → 诊断包的真实管线验收：错误包、源码位置、引擎/退出码、task.end
 /// 必须能从 zip 里直接读出来，而不是只能靠猜。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 [Trait("Category", "Extended")]
 public sealed class DiagnosticFailureCasesTests
 {

@@ -32,7 +32,7 @@ namespace ArchiveFixer.Tests;
 ///
 /// <para>管线那一组与 <c>ExtractionPipelineFixTests</c> 同一组（MainViewModel 的构造会写进程级静态）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class PartialPublishTests : IDisposable
 {
     private readonly string _root;

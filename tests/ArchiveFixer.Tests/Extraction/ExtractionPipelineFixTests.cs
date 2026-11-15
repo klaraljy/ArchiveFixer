@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests;
 /// 和 InnerLayerContinuationTests 同一组：MainViewModel 的构造会写进程级静态
 /// （7z 路径 / 递归工作区根目录），必须和其他测试集串行，并在装配后立刻还原。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "Stress")]
 public partial class ExtractionPipelineFixTests : IDisposable
 {

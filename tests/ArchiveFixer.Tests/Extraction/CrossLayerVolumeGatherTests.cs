@@ -41,7 +41,7 @@ namespace ArchiveFixer.Tests;
 /// <para>⚠ 与改写 <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>（进程级静态）的用例类**串行**跑：
 /// 约定与 <c>InnerDoubleFacedCarveTests</c> / <c>RecursiveExtractorTests</c> 顶部那段说明同一条。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class CrossLayerVolumeGatherTests : IDisposable
 {
     /// <summary>7-Zip 容忍的"前面垫的数据"上限 8 MiB（实测边界）—— 9 MiB 必然落到"必须抠出来"那一档。</summary>

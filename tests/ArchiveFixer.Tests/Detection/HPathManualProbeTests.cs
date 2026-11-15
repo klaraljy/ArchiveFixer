@@ -17,7 +17,7 @@ namespace ArchiveFixer.Tests;
 /// 手动真机探针：需要 ARCHIVEFIXER_H_PATH_TEST=1。
 /// 两份用户给定的原包目录，源包不删，指定位置输出；只用于本次验收，不进入常规全量。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public sealed class HPathManualProbeTests
 {
     [Fact]

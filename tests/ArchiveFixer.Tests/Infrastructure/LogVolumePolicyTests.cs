@@ -28,7 +28,7 @@ namespace ArchiveFixer.Tests;
 /// <para>⚠ 反过来同样要钉住：**失败 / 取消时细节一个都不许少**（他原话："如果失败的话，
 /// 你就可以多一点"）—— 排查要的就是那些数字与路径。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public class LogVolumePolicyTests : IDisposable
 {
     private readonly string _root;

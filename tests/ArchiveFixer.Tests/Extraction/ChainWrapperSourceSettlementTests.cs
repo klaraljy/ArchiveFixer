@@ -15,7 +15,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class ChainWrapperSourceSettlementTests : IDisposable
 {
     private readonly string _root;

@@ -524,7 +524,7 @@ public class WinRarLocatorTests
 /// <para>夹具是**真的 WinZip AES（压缩法 99）ZIP**（内置 7z 用 <c>-mem=AES256</c> 造的），
 /// 与真机那一份同一种形状；密码是本用例现造的占位值（⛔ 与用户的密码本无关）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 [Trait("Category", "RealSample")]
 public class WinRarFallbackSingleLayerEndToEndTests : IDisposable
 {
@@ -767,7 +767,7 @@ public class WinRarFallbackSingleLayerEndToEndTests : IDisposable
 /// **递归路**的端到端接线（用户 2026-10-05 拍板"补"的那两条路之一）：
 /// 假引擎永远报密码错，WinRAR 把这一层解开 ⇒ 整条链跑完、产物发布出去。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class WinRarFallbackRecursiveEndToEndTests : IDisposable
 {
     private const string FixturePassword = "ArchiveFixer-AES-Probe-2026";

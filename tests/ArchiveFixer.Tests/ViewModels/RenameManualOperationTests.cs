@@ -20,7 +20,7 @@ namespace ArchiveFixer.Tests;
 /// 这一组要构造真的 <see cref="MainViewModel"/>（它的构造会写两个进程级静态：7z 路径与递归工作区根），
 /// 所以声明成"不与其他集合并行"——与 <c>InnerLayerContinuationTests</c> 同一套理由。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class RenameManualOperationTests : IDisposable
 {
     private readonly string _root = Path.Combine(

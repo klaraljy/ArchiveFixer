@@ -45,7 +45,7 @@ namespace ArchiveFixer.Tests;
 /// <para><b>⛔ 自我约束</b>：绝不往用户的系统回收站里塞东西 —— 回收站那一档全部走注入的假执行器
 /// （<c>ExtractionCoordinator.Source.RestDeleteExecutor</c> 这个测试缝）；只在临时目录里动真实文件系统。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 [Trait("Category", "Extended")]
 public class ChainRestHandlingSettingTests : IDisposable
 {

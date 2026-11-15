@@ -12,7 +12,7 @@ namespace ArchiveFixer.Tests;
 /// 用户 2026-10-25：密码列表改为程序自带的英文名明文清单，顺序就是尝试顺序。
 /// 这里钉住三件事：顺序原样写回、旧 DPAPI 记忆能迁移、外部路径不再是加载来源。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class PasswordTextStoreTests : IDisposable
 {
     private readonly string _root;

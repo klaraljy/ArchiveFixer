@@ -28,7 +28,7 @@ namespace ArchiveFixer.Tests;
 /// 老判据认不出来）；②收尾时量产物形状的**最后一道闸门**认得出来；③真 7z + 真管线跑一遍 ——
 /// 不报成功、源包一个字节不动、输出目录里不留垃圾当内容物，而**正常完整包照旧成功**（别误伤）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class SplitStreamEchoTests : IDisposable
 {
     private const int PayloadBytes = 2621440; // 2.5 MiB（-v1m 切出来是两满卷 + 一个尾卷）

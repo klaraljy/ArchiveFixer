@@ -39,7 +39,7 @@ namespace ArchiveFixer.Tests;
 /// 收集器如果连它都抓不到，说明监听根本没生效，此时用例会明确报出来（环境显示不了窗口时
 /// 退回静态检查，并把"检查了几条绑定"断言成正数），绝不静默通过。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public class UiBindingReachabilityTests
 {
     /// <summary>正向对照用的假 ViewModel：故意没有 <see cref="ControlProbeBindingPath"/> 这个属性。</summary>

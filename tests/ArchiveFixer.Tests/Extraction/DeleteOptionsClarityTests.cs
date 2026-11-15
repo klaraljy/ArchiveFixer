@@ -23,7 +23,7 @@ namespace ArchiveFixer.Tests;
 /// ③删除裁决的五道门槛里最关键的两条（失败 / 取消 → 一个字节都不删）；
 /// ④界面形态（③页两组单选 + 常驻提示；②页危险模式红区整块消失）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public class DeleteOptionsClarityTests : IDisposable
 {
     private readonly string _root;

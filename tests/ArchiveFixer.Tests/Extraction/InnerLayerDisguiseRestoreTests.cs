@@ -87,7 +87,7 @@ public sealed class RarVolumeFactAttribute : FactAttribute
 /// ⇒ 用例 <see cref="递归层内_一组伪装的7z分卷_先还原再组卷能解开到内容"/> 变红
 /// （内层整组解不开、报分卷缺失）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState")]
 public sealed class InnerLayerDisguiseRestoreTests : IDisposable
 {
     /// <summary>伪装尾巴：网盘给每一卷缀的那种（与真机现场同一个形状）。</summary>

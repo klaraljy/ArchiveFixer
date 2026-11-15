@@ -18,7 +18,7 @@ namespace ArchiveFixer.Tests;
 /// （用户 13 条被顶替）。本用例让"记忆里是一条不同的旧值、txt 里是两条"同时存在，
 /// 生产入口必须读到两条。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ViewModelsState")]
 public class MainViewModelPasswordStartupTests : IDisposable
 {
     private readonly string _root;

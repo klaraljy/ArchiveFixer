@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests;
 /// ③按钮的可用性由**机器判据**决定（任务上有建议 + 文件系统上计划成立），不看中文状态；
 /// ④真 7z 端到端：改名之后**真的解得开**，而且出来的是真内容（不是那个等大的垃圾文件）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class VolumeNameRepairTests : IDisposable
 {
     private readonly string _root;

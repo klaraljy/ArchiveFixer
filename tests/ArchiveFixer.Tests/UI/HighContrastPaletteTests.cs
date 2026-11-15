@@ -5,7 +5,7 @@ using Xunit;
 
 namespace ArchiveFixer.Tests;
 
-[Collection("ArchiveFixerGlobalState")]
+[Collection("UiState")]
 public sealed class HighContrastPaletteTests
 {
     [Fact]

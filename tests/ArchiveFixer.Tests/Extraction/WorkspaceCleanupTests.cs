@@ -28,7 +28,7 @@ namespace ArchiveFixer.Tests;
 /// 2026-09-24 第 23 条之后"当前生效的工作区根"），并行跑会互相抢 ——
 /// 实测过一次全量里这条偶发翻红、单跑必过（就是少了这个特性）。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("ExtractionState2")]
 public class WorkspaceCleanupTests : IDisposable
 {
     private readonly string _root;

@@ -18,7 +18,7 @@ namespace ArchiveFixer.Tests;
 /// <summary>
 /// 自造失败样本的真实管线：产物日志目录 + 一键诊断包。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class LogBundleRealRunTests
 {
     [Fact]

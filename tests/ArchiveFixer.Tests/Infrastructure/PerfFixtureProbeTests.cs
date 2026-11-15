@@ -19,7 +19,7 @@ namespace ArchiveFixer.Tests;
 /// 手动性能夹具探针：ARCHIVEFIXER_PERF_FIXTURE 指向源包目录，
 /// ARCHIVEFIXER_PERF_OUTPUT 指定本次唯一输出根；A/B 构建共用同一测试。
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("InfrastructureState")]
 public sealed class PerfFixtureProbeTests
 {
     [Fact]

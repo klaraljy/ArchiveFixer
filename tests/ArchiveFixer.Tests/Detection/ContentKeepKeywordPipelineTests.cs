@@ -32,7 +32,7 @@ namespace ArchiveFixer.Tests;
 /// ⇒ 命中那两条用例变红（`小明内容.txt` 会被解出来）。
 /// ⛔ 反过来，把出厂默认档（空关键词列表）也做成"命中"同样会红 —— 用例 ② 的对照就是它。</para>
 /// </summary>
-[Collection("ArchiveFixerGlobalState")]
+[Collection("DetectionState")]
 public class ContentKeepKeywordPipelineTests : IDisposable
 {
     private readonly string _root;
