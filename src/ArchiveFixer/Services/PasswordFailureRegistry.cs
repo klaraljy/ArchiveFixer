@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Models;
 using System.Collections.Generic;
 using System.IO;

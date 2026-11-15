@@ -1,6 +1,6 @@
 # ADR 0005：ArchiveTask 的 INotifyPropertyChanged 保留与退出条件
 
-- 状态：接受（M6 的明确例外，非永久豁免）
+- 状态：已解决（M6i/M6j 把 ArchiveTask 与 7 个依赖它的 UI 事实类移入 `BindingModels`；Models 再无 INPC/ObservableCollection）
 - 日期：2026-11-15
 - 关联：ADR 0002 / M6
 
@@ -25,3 +25,10 @@
 - M6 的 `Models` 仍有一个 INPC 例外；本 ADR 与 ADR 0002 一起构成 M5/M6 的未结项，不计为“目标全绿”。
 - 其余五个绑定类型已经移出；`Services/Storage` 对 `ViewModels/BindingModels` 的引用是已知方向债，M7 若引入 `BindingModels` 独立层需一并收口。
 - 任何“Models 纯化完成”的汇报必须引用本 ADR，不得口头宣称全部达标。
+
+
+## 后续（M6i/M6j，2026-11-15）
+
+- `ArchiveTask` 与 `BatchOutcomeTally`/`BatchReport`/`BatchSummaryDiagnostics`/`BatchSummarySeverityRules`/`DetectResultApplier`/`RunSnapshot`/`TaskOutcomeClassifier` 已迁到 `src/ArchiveFixer/BindingModels/`，namespace `ArchiveFixer.BindingModels`。
+- `Models` 目录已无 INPC/ObservableCollection，也不再 `using ArchiveFixer.BindingModels`；目录级依赖图 cycles=0（含 BindingModels）。
+- 本 ADR 的退出条件已完成，保留作历史记录。

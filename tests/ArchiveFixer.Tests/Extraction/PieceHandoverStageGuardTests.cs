@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.ViewModels;
@@ -198,7 +199,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(own)!);
         File.WriteAllBytes(own, new byte[1024]);
 
-        var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
+        var task = new ArchiveTask(own, 1);
 
         // ① 那一层里全是这一组的成员（含坏名字的片）⇒ 放行。
         Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
@@ -218,7 +219,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         File.WriteAllBytes(numeric, new byte[1024]);
 
         Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
-            new ArchiveFixer.Models.ArchiveTask(numeric, 2),
+            new ArchiveTask(numeric, 2),
             "set.7z",
             new[] { "set.7z.002", "set.7z.003" }));
 
@@ -228,7 +229,7 @@ public class PieceHandoverStageGuardTests : IDisposable
         File.WriteAllBytes(tail, new byte[1024]);
 
         Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
-            new ArchiveFixer.Models.ArchiveTask(tail, 3),
+            new ArchiveTask(tail, 3),
             "111",
             new[] { "111.z01", "111.z02" }));
     }

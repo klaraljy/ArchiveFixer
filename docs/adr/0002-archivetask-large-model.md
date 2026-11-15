@@ -1,6 +1,6 @@
 # ADR 0002：ArchiveTask 拆分边界与 800 行门槛
 
-- 状态：已接受
+- 状态：已执行（M6i/M6j 已把 ArchiveTask 移入 BindingModels，INPC 与 UI 事实类离开 Models；文件仍 1,833 行，ADR 0008 记录方法债务）
 - 日期：2026-11-14
 - 关联：M5 / M6
 

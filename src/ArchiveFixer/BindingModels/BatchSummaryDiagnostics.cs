@@ -1,10 +1,11 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// **批末诊断清单的唯一出口**（用户 2026-09-30 第 1 条）。

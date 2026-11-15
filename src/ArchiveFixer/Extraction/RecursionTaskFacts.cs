@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction;

@@ -176,7 +176,8 @@ public sealed class CodeStructureGuardTests
         var knownLayers = new HashSet<string>(StringComparer.Ordinal)
         {
             "Detection", "Engines", "Extraction", "Helpers", "Models",
-            "Packing", "Password", "Security", "Services", "Storage", "ViewModels", "Views"
+            "Packing", "Password", "Security", "Services", "Storage", "ViewModels", "Views",
+            "BindingModels"
         };
 
         var graph = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);

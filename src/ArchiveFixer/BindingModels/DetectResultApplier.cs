@@ -1,4 +1,5 @@
-namespace ArchiveFixer.Models;
+using ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 把一次**识别结果**落到任务事实上的唯一策略（含"识别判不出"那一档）。

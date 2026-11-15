@@ -1,8 +1,9 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 一次一键处理/批量运行的不可变事实快照。

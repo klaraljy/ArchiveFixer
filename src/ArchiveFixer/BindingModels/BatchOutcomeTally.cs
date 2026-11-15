@@ -1,9 +1,10 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// **一批任务按机器终态怎么数** —— 唯一出口（AGENTS.md §9.5：同一件事的真值只允许有一个出口）。

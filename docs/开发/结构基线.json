@@ -5,9 +5,9 @@
   "large_file_limit": 800,
   "multi_type_limit": 1,
   "large_files": {
+    "BindingModels/ArchiveTask.cs": 1833,
     "Extraction/ProcessArtifactLayout.cs": 715,
     "Extraction/VolumeNameRepair.cs": 351,
-    "Models/ArchiveTask.cs": 1833,
     "Storage/PasswordListStore.cs": 744,
     "Storage/RecycleBinService.cs": 466,
     "ViewModels/MainViewModel.cs": 1494,

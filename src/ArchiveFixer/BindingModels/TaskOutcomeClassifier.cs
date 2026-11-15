@@ -1,6 +1,7 @@
+using ArchiveFixer.Models;
 using System;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// **状态 → 成败**的唯一分类出口（AGENTS.md §9.5：同一件事的真值只允许有一个出口）。

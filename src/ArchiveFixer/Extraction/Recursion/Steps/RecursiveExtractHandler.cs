@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;

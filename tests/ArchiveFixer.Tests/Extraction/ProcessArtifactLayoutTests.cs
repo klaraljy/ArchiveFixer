@@ -1,3 +1,4 @@
+using ArchiveFixer.BindingModels;
 using ArchiveFixer.Extraction;
 using System;
 using System.Collections.Generic;
@@ -485,7 +486,7 @@ public class ProcessArtifactLayoutTests : IDisposable
         // 这一单最初导入的那一份（现在盘上已经不在）。
         string own = Path.Combine(directory, "111.rar");
 
-        var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
+        var task = new ArchiveTask(own, 1);
 
         string resolved = SourcePackageMover.ResolveOwnFileOnDisk(task);
 
@@ -506,7 +507,7 @@ public class ProcessArtifactLayoutTests : IDisposable
         string renamed = Path.Combine(directory, "111.z02");
         File.WriteAllBytes(renamed, new byte[1024]);
 
-        var task = new ArchiveFixer.Models.ArchiveTask(Path.Combine(directory, "111.z0删除2"), 1);
+        var task = new ArchiveTask(Path.Combine(directory, "111.z0删除2"), 1);
 
         Assert.Equal(renamed, SourcePackageMover.ResolveOwnFileOnDisk(task));
     }

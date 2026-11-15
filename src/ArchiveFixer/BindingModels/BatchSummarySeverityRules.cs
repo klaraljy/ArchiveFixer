@@ -1,7 +1,8 @@
+using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.BindingModels;
 
 /// <summary>
 /// 批末汇总严重度的**唯一判据出口**（用户 2026-09-29："同一件事只允许一个判据出口"）。
