@@ -24,12 +24,12 @@
       升级提示 / 卸载保留 data\ / 默认装到第一个非系统盘（逐条见 CHANGELOG.md）。
       v0.2.1（用户 2026-10-28 拍板）：共用分卷骨架 + 7z/RAR/ZIP 三族串行；
       标准名快通道、RAR 内容卡规范名、7z 末卷闸门、父任务回写、内容感知汇总。
-      v0.2.2（用户 2026-11-10 拍板）：启动期读盘超时降级、任务栏缩略图空白移除、
+      v0.2.3（用户 2026-11-15 拍板）：启动期读盘超时降级、任务栏缩略图空白移除、
       句柄释放、降级失败留日志、时间戳收敛到 Clock、分析器门闩（逐条见 CHANGELOG.md）。
     -->
-    <Version>0.2.2</Version>
-    <AssemblyVersion>0.2.2.0</AssemblyVersion>
-    <FileVersion>0.2.2.0</FileVersion>
+    <Version>0.2.3</Version>
+    <AssemblyVersion>0.2.3.0</AssemblyVersion>
+    <FileVersion>0.2.3.0</FileVersion>
     <Authors>ArchiveFixer</Authors>
     <Company>ArchiveFixer</Company>
     <Product>ArchiveFixer</Product>

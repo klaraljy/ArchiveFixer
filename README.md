@@ -2,7 +2,7 @@
 
 **把一批来源不明、后缀被改坏、加密、分卷、层层嵌套的压缩包，用最少的操作变成整理好、结果可追踪的文件。**
 
-当前版本：**v0.2.2**（坏盘不再假死 + 一批稳定性收尾，见 [CHANGELOG](CHANGELOG.md)）
+当前版本：**v0.2.3**（第二大步快通道健壮性 + 稳定性收尾，见 [CHANGELOG](CHANGELOG.md)）
 
 > v0.2.1 把分卷识别与解压收成一套共用骨架：第一大步账本、边界 resolver、PreparedVolumeGroup、
 > 临时标准名硬链接、原始路径映射和 SizeAnomaly 状态；再按 7z → RAR → ZIP 三族串行。
@@ -33,13 +33,13 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 ## 30 秒上手
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
-   `ArchiveFixer-0.2.2-setup.exe`（**安装包**，双击一路下一步）、
-   `ArchiveFixer-0.2.2-独立.zip`（**独立版**，什么都不用装，解压即用；解压后根目录只有一个 `ArchiveFixer.exe`）；
+   `ArchiveFixer-0.2.3-setup.exe`（**安装包**，双击一路下一步）、
+   `ArchiveFixer-0.2.3-独立.zip`（**独立版**，什么都不用装，解压即用；解压后根目录只有一个 `ArchiveFixer.exe`）；
    自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
-   `ArchiveFixer-0.2.2-独立.zip` / `ArchiveFixer-0.2.2-setup.exe`
+   `ArchiveFixer-0.2.3-独立.zip` / `ArchiveFixer-0.2.3-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
 
-   **安装包怎么用**（`ArchiveFixer-0.2.2-setup.exe`）：
+   **安装包怎么用**（`ArchiveFixer-0.2.3-setup.exe`）：
 
    - **装到哪**：默认装到**本机第一个非系统固定盘**的 `\ArchiveFixer`（例如 `D:\ArchiveFixer`）；
      本机没有第二个固定盘时才退到 `%LOCALAPPDATA%\Programs\ArchiveFixer`，向导会**明说**这一点。
