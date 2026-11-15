@@ -90,6 +90,23 @@ public sealed class BatchOutcomeTally
         (task.Outcome == TaskOutcome.Failed ||
          (task.Outcome == TaskOutcome.Succeeded && task.OutputVerification == OutputVerificationOutcome.Failed));
 
+    /// <summary>
+    /// 这一单算不算“需要列进问题清单”的任务（失败 / 部分完成 / 取消，或成功但校验判否，
+    /// 或内容组最终内容没证）。
+    ///
+    /// <para>与 <see cref="Count"/> 同一套分档：跟班卷、内容组过程任务、缺卷待批末判的
+    /// 都不进问题清单 —— 它们由 tally 另列，不能和真正的失败混在一起。
+    /// 诊断包的 <c>failed_tasks</c> 只能读这一个出口，⛔ 不再按裸 <c>Outcome</c> 过滤。</para>
+    /// </summary>
+    public static bool IsCountedAsProblemTask(ArchiveTask task) =>
+        task != null &&
+        task.CountsTowardBatchOutcome &&
+        !task.IsContentGroupProcessTask &&
+        !task.IsVolumeDeficitDeferred &&
+        (task.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted or TaskOutcome.Cancelled
+         || (task.HasContentGroup && !task.FinalContentVerified)
+         || IsCountedAsFailure(task));
+
     /// <summary>按机器终态数一遍。</summary>
     public static BatchOutcomeTally Count(IEnumerable<ArchiveTask>? tasks)
     {
@@ -207,7 +224,19 @@ public sealed class BatchOutcomeTally
                     break;
 
                 case TaskOutcome.Failed:
-                    failed++;
+                    /*
+                     * 跟班卷即使机器终态是失败，也不占独立失败名额：它的失败不能证明这一组失败，
+                     * 组入口那一单才是可归责对象。与 Succeeded / Skipped 两支同一事实位。
+                     */
+                    if (task.CountsTowardBatchOutcome)
+                    {
+                        failed++;
+                    }
+                    else
+                    {
+                        followerSkipped++;
+                    }
+
                     break;
 
                 case TaskOutcome.PartiallyCompleted:

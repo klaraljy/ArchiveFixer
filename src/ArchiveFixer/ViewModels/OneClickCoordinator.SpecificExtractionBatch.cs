@@ -385,11 +385,6 @@ internal sealed partial class OneClickCoordinator
             }
         }
 
-        string workRoot = Path.Combine(
-            outputRoot,
-            ".ArchiveFixer.work",
-            "specific-" + Guid.NewGuid().ToString("N"));
-
         /*
          * 特定解压也要让列表看得见“正在做哪一层”：runner 每层开始时回调，
          * 属性更新投递回 UI 线程；这里不伪造百分比，只把层/入口写进状态文本。
@@ -416,16 +411,19 @@ internal sealed partial class OneClickCoordinator
         IProgress<ArchiveProgress> taskProgress = _extractionCoordinator.CreateProgressSink(task);
 
         SpecificExtractionRunResult result;
+        SpecificExtractionWorkspace? workspace = null;
         CancellationTokenSource specificCts = _extractionCoordinator.BeginSpecificTask(task);
         bool cancelled = false;
 
         try
         {
+            workspace = SpecificExtractionWorkspace.Create(outputRoot);
+
             result = await runner
                 .RunAsync(
                     source,
                     outputRoot,
-                    workRoot,
+                    workspace,
                     _extractionCoordinator.SpecificExtractionPasswords,
                     cancellationToken: specificCts.Token,
                     passwordProvider: () => _extractionCoordinator.SpecificExtractionPasswords,
@@ -469,29 +467,9 @@ internal sealed partial class OneClickCoordinator
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(workRoot))
-                {
-                    Directory.Delete(workRoot, recursive: true);
-                }
-
-                string workParent = Path.Combine(outputRoot, ".ArchiveFixer.work");
-
-                if (Directory.Exists(workParent)
-                    && !Directory.EnumerateFileSystemEntries(workParent).Any())
-                {
-                    Directory.Delete(workParent);
-                }
-            }
-            catch
-            {
-            }
-            finally
-            {
-                cancelled = cancelled || specificCts.IsCancellationRequested;
-                _extractionCoordinator.EndSpecificTask(specificCts);
-            }
+            workspace?.Cleanup();
+            cancelled = cancelled || specificCts.IsCancellationRequested;
+            _extractionCoordinator.EndSpecificTask(specificCts);
         }
 
         if (cancelled)

@@ -32,6 +32,43 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task 特定解压工作区在运行中必须隐藏()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir => File.WriteAllText(Path.Combine(dir, "01.jpg"), "x"));
+
+        string outputRoot = Path.Combine(_root, "out");
+        SpecificExtractionWorkspace workspace = CreateWorkspace(outputRoot);
+        bool hiddenDuringLayer = false;
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            outputRoot,
+            workspace,
+            new string?[] { "pwd" },
+            onLayerStarted: (depth, _) =>
+            {
+                hiddenDuringLayer =
+                    IsHidden(workspace.RootDirectory)
+                    && IsHidden(workspace.TaskDirectory)
+                    && IsHidden(Path.Combine(workspace.TaskDirectory, "layer-00"));
+            });
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(hiddenDuringLayer, "特定解压运行中，工作区父目录/任务目录/层目录必须全部隐藏");
+        workspace.Cleanup();
+    }
+
+    private static SpecificExtractionWorkspace CreateWorkspace(string outputRoot) =>
+        SpecificExtractionWorkspace.Create(outputRoot);
+
+    private static bool IsHidden(string path) =>
+        Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.Hidden) != 0;
+
+    [Fact]
     public async Task 两层_最后一层是散图片_用最后一层压缩包名()
     {
         string source = Path.Combine(_root, "outer.7z");
@@ -45,7 +82,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { "pwd" });
 
         Assert.True(result.Success, result.Message);
@@ -68,7 +105,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { "pwd" },
             onLayerStarted: (depth, archive) => starts.Add((depth, archive)));
 
@@ -93,7 +130,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { "pwd" });
 
         Assert.True(result.Success, result.Message);
@@ -115,7 +152,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { null, "", "pwd" });
 
         // 每层都要重新走候选链；无密码排在最前，成功后不再烧后面的候选。
@@ -141,7 +178,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             Array.Empty<string?>(),
             passwordProvider: () =>
             {
@@ -181,7 +218,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { "" });
 
         Assert.True(result.Success, result.Message);
@@ -212,7 +249,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             outputRoot,
-            Path.Combine(_root, "work"),
+            CreateWorkspace(outputRoot),
             new string?[] { "pwd" });
 
         Assert.True(result.Success, result.Message);

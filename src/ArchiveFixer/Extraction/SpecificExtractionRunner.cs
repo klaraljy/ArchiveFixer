@@ -2,6 +2,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -28,10 +29,10 @@ public sealed class SpecificExtractionRunner
         _log = log;
     }
 
-    public async Task<SpecificExtractionRunResult> RunAsync(
+    internal async Task<SpecificExtractionRunResult> RunAsync(
         string sourceArchive,
         string outputRoot,
-        string workRoot,
+        SpecificExtractionWorkspace workspace,
         IReadOnlyList<string?> passwordCandidates,
         CancellationToken cancellationToken = default,
         Func<IReadOnlyList<string?>>? passwordProvider = null,
@@ -45,15 +46,17 @@ public sealed class SpecificExtractionRunner
             return new SpecificExtractionRunResult { Message = "输入压缩包不存在" };
         }
 
+        if (workspace == null)
+        {
+            throw new ArgumentNullException(nameof(workspace));
+        }
+
         string currentArchive = sourceArchive;
         bool anyPasswordUsed = false;
-        Directory.CreateDirectory(outputRoot);
-        Directory.CreateDirectory(workRoot);
 
         for (int depth = 0; depth < MaxDepth; depth++)
         {
-            string layerRoot = Path.Combine(workRoot, "layer-" + depth.ToString("D2"));
-            Directory.CreateDirectory(layerRoot);
+            string layerRoot = workspace.CreateLayer(depth);
 
             onLayerStarted?.Invoke(depth, Path.GetFileName(currentArchive));
             _log?.Invoke(
@@ -126,7 +129,7 @@ public sealed class SpecificExtractionRunner
                     PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
                     DiagnosticDetail =
                         $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
-                    RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
+                    RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
                     Depth = depth
                 };
             }
@@ -186,7 +189,7 @@ public sealed class SpecificExtractionRunner
                      * 在层工作区里为整组做一套标准名硬链接，再让引擎从标准入口解压；
                      * 用户原片一个字节都不动。
                      */
-                    string? standardEntry = MaterializeStandardVolumeEntry(ordered, layerRoot);
+                    string? standardEntry = MaterializeStandardVolumeEntry(ordered, layerRoot, workspace);
                     currentArchive = standardEntry ?? firstVolume;
                     _log?.Invoke(
                         $"第 {depth + 1} 层标准分卷：入口「{Path.GetFileName(currentArchive)}」，共 {decision.VolumePaths.Count} 片，继续下一层");
@@ -202,7 +205,7 @@ public sealed class SpecificExtractionRunner
                 PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                 DiagnosticDetail =
                     $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
-                RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
+                RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
                 Depth = depth
             };
         }
@@ -212,7 +215,7 @@ public sealed class SpecificExtractionRunner
             Message = "超过 3 层仍未得到内容物",
             PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
             DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
-            RestDirectory = PreserveLastProcessArtifact(currentArchive, workRoot, outputRoot),
+            RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
             Depth = MaxDepth
         };
     }
@@ -223,15 +226,15 @@ public sealed class SpecificExtractionRunner
     /// </summary>
     private static string? MaterializeStandardVolumeEntry(
         IReadOnlyList<string> sourcePieces,
-        string layerRoot)
+        string layerRoot,
+        SpecificExtractionWorkspace workspace)
     {
         if (sourcePieces == null || sourcePieces.Count < 2)
         {
             return null;
         }
 
-        string entryRoot = Path.Combine(layerRoot, "standard-volume-entry");
-        Directory.CreateDirectory(entryRoot);
+        string entryRoot = workspace.CreateStandardVolumeEntry(layerRoot);
         string? first = null;
 
         foreach (string source in sourcePieces)
@@ -313,10 +316,7 @@ public sealed class SpecificExtractionRunner
         string? singleFolder = Directory
             .GetFileSystemEntries(layerRoot)
             .Where(Directory.Exists)
-            .Where(path => !string.Equals(
-                Path.GetFileName(path),
-                ".ArchiveFixer.work",
-                StringComparison.OrdinalIgnoreCase))
+            .Where(path => !WorkspaceTree.IsWorkspaceDirectoryName(path))
             .ToList() is { Count: 1 } folders
             && !Directory.EnumerateFiles(layerRoot, "*", SearchOption.TopDirectoryOnly).Any()
                 ? folders[0]
@@ -335,13 +335,13 @@ public sealed class SpecificExtractionRunner
     /// </summary>
     private static string PreserveLastProcessArtifact(
         string lastArchivePath,
-        string workRoot,
+        string taskDirectory,
         string outputRoot)
     {
         if (string.IsNullOrWhiteSpace(lastArchivePath)
             || !File.Exists(lastArchivePath)
             || !Path.GetFullPath(lastArchivePath).StartsWith(
-                Path.GetFullPath(workRoot),
+                Path.GetFullPath(taskDirectory),
                 StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;

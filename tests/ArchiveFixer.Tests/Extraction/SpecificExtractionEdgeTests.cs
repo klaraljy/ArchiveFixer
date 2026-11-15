@@ -29,6 +29,9 @@ public sealed class SpecificExtractionEdgeTests : IDisposable
         try { Directory.Delete(_root, true); } catch { }
     }
 
+    private static SpecificExtractionWorkspace CreateWorkspace(string outputRoot) =>
+        SpecificExtractionWorkspace.Create(outputRoot);
+
     [Fact]
     public void 层分类_单归档_分卷组_内容物_多归档()
     {
@@ -64,7 +67,7 @@ public sealed class SpecificExtractionEdgeTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             Path.Combine(_root, "missing.7z"),
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             Array.Empty<string?>());
 
         Assert.False(result.Success);
@@ -82,7 +85,7 @@ public sealed class SpecificExtractionEdgeTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { null, "wrong" });
 
         Assert.False(result.Success);
@@ -105,7 +108,7 @@ public sealed class SpecificExtractionEdgeTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             Array.Empty<string?>());
 
         Assert.False(result.Success);
@@ -124,7 +127,7 @@ public sealed class SpecificExtractionEdgeTests : IDisposable
         SpecificExtractionRunResult result = await runner.RunAsync(
             source,
             Path.Combine(_root, "out"),
-            Path.Combine(_root, "work"),
+            CreateWorkspace(Path.Combine(_root, "out")),
             Array.Empty<string?>());
 
         Assert.False(result.Success);

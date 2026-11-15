@@ -100,6 +100,22 @@ public class BatchOutcomeTallyFollowerTests
         Assert.Equal(1, tally.FollowerSkipped);
     }
 
+    /// <summary>跟班卷即使终态失败，也不能占独立的失败名额；可归责对象是组入口那一单。</summary>
+    [Fact]
+    public void 跟班卷终态失败_仍进跟班档_不占失败名额()
+    {
+        var follower = new ArchiveTask(@"C:\t\in\111\111.rar", 1)
+        {
+            Outcome = TaskOutcome.Failed,
+            IsVolumeGroupFollower = true
+        };
+
+        BatchOutcomeTally tally = BatchOutcomeTally.Count(new List<ArchiveTask> { follower });
+
+        Assert.Equal(0, tally.Failed);
+        Assert.Equal(1, tally.FollowerSkipped);
+    }
+
     /// <summary>恒等式那条不许破：各分项之和 + 未处理 = 任务数。</summary>
     [Fact]
     public void 分项之和加未处理等于任务数()

@@ -209,6 +209,9 @@ public static class DiagnosticBundleService
     {
         List<ArchiveTask> list = (tasks ?? Array.Empty<ArchiveTask>()).Where(t => t != null).ToList();
 
+        // 数法只有一份（BatchOutcomeTally）：诊断包不能再按裸 Outcome 自己数一遍。
+        BatchOutcomeTally tally = BatchOutcomeTally.Count(list);
+
         // 只汇总任务上真实落下的码；没有码就是没有，⛔ 不按 Outcome 推断。
         List<string> errorCodes = list
             .Select(t => t.Diagnostic.ErrorCode)
@@ -217,7 +220,7 @@ public static class DiagnosticBundleService
             .ToList();
 
         List<object> failedTasks = list
-            .Where(t => t.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted or TaskOutcome.Cancelled)
+            .Where(BatchOutcomeTally.IsCountedAsProblemTask)
             .Select(t => new
             {
                 task_id = t.TaskId,
@@ -246,13 +249,13 @@ public static class DiagnosticBundleService
             build_configuration = BuildInfo.Configuration,
             build_time = BuildInfo.BuildTime,
             generated_at = LogService.FormatTimestamp(Helpers.Clock.Now),
-            task_count = list.Count,
-            succeeded = list.Count(t => t.Outcome == TaskOutcome.Succeeded),
-            failed = list.Count(t => t.Outcome == TaskOutcome.Failed),
-            partially_completed = list.Count(t => t.Outcome == TaskOutcome.PartiallyCompleted),
-            cancelled = list.Count(t => t.Outcome == TaskOutcome.Cancelled),
-            skipped = list.Count(t => t.Outcome == TaskOutcome.Skipped),
-            skipped_followers = list.Count(t => t.Outcome == TaskOutcome.Succeeded && t.Status == StatusText.Skipped),
+            task_count = tally.Total,
+            succeeded = tally.Succeeded,
+            failed = tally.Failed,
+            partially_completed = tally.PartiallyCompleted,
+            cancelled = tally.Cancelled,
+            skipped = tally.Skipped,
+            skipped_followers = tally.FollowerSkipped,
             error_codes = errorCodes,
             failed_tasks = failedTasks,
             source_roots = list
@@ -310,7 +313,7 @@ public static class DiagnosticBundleService
     private static object BuildFailedTasks(IReadOnlyList<ArchiveTask> tasks)
     {
         return (tasks ?? Array.Empty<ArchiveTask>())
-            .Where(t => t != null && t.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted or TaskOutcome.Cancelled)
+            .Where(BatchOutcomeTally.IsCountedAsProblemTask)
             .Select(t => new
             {
                 task_id = t.TaskId,
