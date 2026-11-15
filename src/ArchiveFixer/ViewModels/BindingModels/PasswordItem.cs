@@ -2,7 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 密码列表项。

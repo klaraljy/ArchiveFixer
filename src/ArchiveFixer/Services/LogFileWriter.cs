@@ -1,4 +1,5 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.ViewModels;
 using System;
 using System.IO;
 using System.Text;

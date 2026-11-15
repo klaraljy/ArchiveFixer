@@ -2,6 +2,7 @@ using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services.Password;
 using ArchiveFixer.Storage;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;

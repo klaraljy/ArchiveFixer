@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -55,8 +56,8 @@ public class TaskSummaryService
     /// </summary>
     public EngineIdentity EngineIdentity
     {
-        get => _engineIdentity ??= EngineIdentityResolver.ResolveDefault();
-        set => _engineIdentity = value ?? EngineIdentityResolver.Unavailable;
+        get => _engineIdentity ??= Engines.EngineIdentityResolver.ResolveDefault();
+        set => _engineIdentity = value ?? Engines.EngineIdentityResolver.Unavailable;
     }
 
     /// <summary>

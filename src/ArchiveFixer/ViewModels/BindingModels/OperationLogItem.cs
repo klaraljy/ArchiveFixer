@@ -1,8 +1,9 @@
+using ArchiveFixer.Models;
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 屏幕日志项。

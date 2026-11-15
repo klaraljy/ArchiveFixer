@@ -3,6 +3,7 @@ using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

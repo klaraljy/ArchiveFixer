@@ -1,5 +1,6 @@
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
+using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.IO;

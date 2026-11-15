@@ -5,7 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.ViewModels;
 
 /// <summary>
 /// 支持**批量变更只通知一次**的 <see cref="ObservableCollection{T}"/>。
@@ -21,7 +21,8 @@ namespace ArchiveFixer.Models;
 /// 但调用方不能再依赖"某一项被单独通知过"。需要逐项语义的操作（上下移、单项替换）
 /// 请照旧用 <see cref="ObservableCollection{T}"/> 自己的方法。</para>
 ///
-/// <para>它不含任何 WPF 类型（只是 <c>System.Collections.ObjectModel</c>），所以放在 Models 下也合规。</para>
+/// <para>它不含任何 WPF 类型（只是 <c>System.Collections.ObjectModel</c>），放在
+/// <c>ViewModels/BindingModels</c> 只是因为它是给界面绑定用的协助类（M6：Models 不再放 UI 绑定类型）。</para>
 /// </summary>
 /// <typeparam name="T">元素类型。</typeparam>
 public class RangeObservableCollection<T> : ObservableCollection<T>

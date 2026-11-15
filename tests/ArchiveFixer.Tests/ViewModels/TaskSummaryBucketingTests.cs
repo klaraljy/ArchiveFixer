@@ -1,6 +1,7 @@
 using ArchiveFixer.Converters;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;

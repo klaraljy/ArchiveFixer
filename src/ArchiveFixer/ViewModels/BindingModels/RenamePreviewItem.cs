@@ -1,10 +1,11 @@
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 
-namespace ArchiveFixer.Models;
+namespace ArchiveFixer.ViewModels;
 
 public class RenamePreviewItem : INotifyPropertyChanged
 {

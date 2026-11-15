@@ -1,6 +1,7 @@
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
 using System.IO;
 
 namespace ArchiveFixer.Tests;
