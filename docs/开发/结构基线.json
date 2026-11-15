@@ -1,6 +1,6 @@
 {
-  "schema": "archivefixer.structure-baseline.v1",
-  "generated": "2026-11-14",
+  "schema": "archivefixer.structure-baseline.v2",
+  "generated": "2026-11-15",
   "source_root": "src/ArchiveFixer",
   "large_file_limit": 800,
   "multi_type_limit": 1,
@@ -13,5 +13,459 @@
     "ViewModels/MainViewModel.cs": 1494,
     "ViewModels/RenameCoordinator.cs": 829
   },
-  "multi_type_files": {}
+  "multi_type_files": {
+    "Detection/VolumeGroups/VolumeTrialRequest.cs": 2
+  },
+  "file_name_exceptions": {
+    "BindingModels/BatchSummaryDiagnostics.cs": {
+      "types": [
+        "BatchSummaryDiagnosticsRules"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Detection/ArchiveEncryption.cs": {
+      "types": [
+        "ArchiveEncryptionState"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Detection/VolumeGroups/VolumeTrialRequest.cs": {
+      "types": [
+        "VolumeTrialOpen"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Engines/ArchiveEngineContracts.cs": {
+      "types": [
+        "ArchiveRequest"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Engines/SevenZip/SevenZipExitCode.cs": {
+      "types": [
+        "SevenZipExitCodes"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeNaming/VolumeNameRepair.CrossLayerGather.cs": {
+      "types": [
+        "VolumeGatherPlanner"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeNaming/VolumeNameRepair.GroupEvidence.cs": {
+      "types": [
+        "VolumeGatherPlanner"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeNaming/VolumeNameRepair.SpannedGather.cs": {
+      "types": [
+        "VolumeGatherPlanner"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeStep/Zip/ZipBoundaryResolver.cs": {
+      "types": [
+        "ZipBoundaryResolverCore"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Helpers/UiConverters.cs": {
+      "types": [
+        "EnumOptionConverter"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Packing/PackingOptions.cs": {
+      "types": [
+        "PackingRunOptions"
+      ],
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    }
+  },
+  "namespace_exceptions": {
+    "Detection/VolumeGroups/": {
+      "namespace": "ArchiveFixer.Detection",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/Artifacts/": {
+      "namespace": "ArchiveFixer.Extraction",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/Recursion/": {
+      "namespace": "ArchiveFixer.Extraction",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/Recursion/Contracts/": {
+      "namespace": "ArchiveFixer.Extraction",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/Recursion/Steps/": {
+      "namespace": "ArchiveFixer.Extraction",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeNaming/": {
+      "namespace": "ArchiveFixer.Extraction",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeStep/Families/": {
+      "namespace": "ArchiveFixer.Extraction.VolumeStep",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeStep/Rar/": {
+      "namespace": "ArchiveFixer.Extraction.VolumeStep",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeStep/SevenZip/": {
+      "namespace": "ArchiveFixer.Extraction.VolumeStep",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Extraction/VolumeStep/Zip/": {
+      "namespace": "ArchiveFixer.Extraction.VolumeStep",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Models/Tasks/": {
+      "namespace": "ArchiveFixer.Models",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Packing/Options/": {
+      "namespace": "ArchiveFixer.Packing",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "Storage/RecycleBin/": {
+      "namespace": "ArchiveFixer.Storage",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ViewModels/Extraction/": {
+      "namespace": "ArchiveFixer.ViewModels",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ViewModels/Extraction/Steps/": {
+      "namespace": "ArchiveFixer.ViewModels",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ViewModels/Mvvm/": {
+      "namespace": "ArchiveFixer.ViewModels",
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    }
+  },
+  "partials": {
+    "ArchiveFixer.App": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Extraction.RecursiveExtractor": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Extraction.VolumeGatherPlanner": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Extraction.VolumeNamePlanner": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Extraction.VolumeNameRepair": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.MainWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Models.StatusText": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.ViewModels.ExtractionCoordinator": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.ViewModels.MainViewModel": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.ViewModels.OneClickCoordinator": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.AppDialogWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Controls.BoxDetail": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.HelpBodyPanel": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.HelpWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.LogWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.ManualOperationWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.OneClickOptionsWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.PackingConfirmWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.PasswordListWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.PasswordPickerWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.RenamePreviewWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.CleanupTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.EngineTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.ExtractionTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.HelpTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.PackingTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.PasswordTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.ReminderTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.SettingsTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.Tabs.TaskTab": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    },
+    "ArchiveFixer.Views.TaskDetailWindow": {
+      "owner": "lead",
+      "reason": "现行结构",
+      "exit_phase": "M8"
+    }
+  },
+  "method_length_report": {
+    "BindingModels/BatchOutcomeTally.cs::ArchiveFixer.BindingModels.BatchOutcomeTally.Count": 169,
+    "BindingModels/BatchSummaryDiagnostics.cs::ArchiveFixer.BindingModels.BatchSummaryDiagnosticsRules.Classify": 155,
+    "Detection/FileContentProbe.cs::ArchiveFixer.Detection.FileContentProbe.ProbeCore": 173,
+    "Detection/FileNature.cs::ArchiveFixer.Detection.FileNature.Inspect": 301,
+    "Detection/SiblingVolumeShapeReader.cs::ArchiveFixer.Detection.SiblingVolumeShapeReader.ReadSiblingShape": 174,
+    "Detection/VolumeGroupCandidateScanner.cs::ArchiveFixer.Detection.VolumeGroupCandidateScanner.Scan": 175,
+    "Detection/VolumeGroupDecision.cs::ArchiveFixer.Detection.VolumeGroupDecision.Decide": 269,
+    "Detection/VolumeNameEvidence.cs::ArchiveFixer.Detection.VolumeNameEvidence.Analyze": 232,
+    "Detection/VolumeNumberGroupResolver.cs::ArchiveFixer.Detection.VolumeNumberGroupResolver.ResolveZipGroup": 255,
+    "Detection/VolumePiecesFromCards.cs::ArchiveFixer.Detection.VolumePiecesFromCards.Read": 198,
+    "Engines/SevenZip/SevenZipOutputParser.cs::ArchiveFixer.Engines.SevenZip.SevenZipOutputParser.DetectSevenZipErrorType": 240,
+    "Engines/SevenZip/SevenZipProcessSession.cs::ArchiveFixer.Engines.SevenZip.SevenZipProcessSession.RunAsync": 204,
+    "Engines/WinRar/UnRarOutputParser.cs::ArchiveFixer.Engines.WinRar.UnRarOutputParser.DetectErrorType": 224,
+    "Engines/WinRar/UnRarProcessSession.cs::ArchiveFixer.Engines.WinRar.UnRarProcessSession.RunAsync": 206,
+    "Engines/WinRar/WinRarProcessRunner.cs::ArchiveFixer.Engines.WinRar.WinRarProcessRunner.ExtractAsync": 317,
+    "Extraction/Artifacts/SourcePackageMover.cs::ArchiveFixer.Extraction.SourcePackageMover.Plan": 184,
+    "Extraction/EmbeddedZipCentralDirectoryParser.cs::ArchiveFixer.Extraction.EmbeddedZipCentralDirectoryParser.BuildEntries": 288,
+    "Extraction/EmbeddedZipExtractSession.cs::ArchiveFixer.Extraction.EmbeddedZipExtractSession.WriteAll": 173,
+    "Extraction/FinalizeLayoutDecider.cs::ArchiveFixer.Extraction.FinalizeLayoutDecider.Resolve": 172,
+    "Extraction/OutputPlacement.cs::ArchiveFixer.Extraction.OutputPlacement.ResolveDestinationDirectory": 220,
+    "Extraction/OutputVerifier.cs::ArchiveFixer.Extraction.OutputVerifier.Verify": 248,
+    "Extraction/PasswordEngineFallback.cs::ArchiveFixer.Extraction.PasswordEngineFallback.TryAsync": 276,
+    "Extraction/ProcessArtifactLayout.cs::ArchiveFixer.Extraction.ProcessArtifactLayout.Plan": 174,
+    "Extraction/Recursion/CandidateFailureClassifier.cs::ArchiveFixer.Extraction.CandidateFailureClassifier.ClassifyFailureAsync": 345,
+    "Extraction/Recursion/LayerExecutor.cs::ArchiveFixer.Extraction.LayerExecutor.ExecuteAsync": 756,
+    "Extraction/Recursion/RecursiveResultBuilder.cs::ArchiveFixer.Extraction.RecursiveResultBuilder.TryFallbackAsync": 158,
+    "Extraction/Recursion/Steps/RecursiveEmbeddedProbeHandler.cs::ArchiveFixer.Extraction.RecursiveEmbeddedProbeHandler.TryTakeSingleStoredEntryAsync": 153,
+    "Extraction/Recursion/Steps/RecursiveExtractHandler.cs::ArchiveFixer.Extraction.RecursiveExtractHandler.ExtractAsync": 438,
+    "Extraction/Recursion/Steps/RecursiveInnerDiscoveryHandler.cs::ArchiveFixer.Extraction.RecursiveInnerDiscoveryHandler.ProbeInnerArchivesAsync": 212,
+    "Extraction/RestVolumeCompletenessGate.cs::ArchiveFixer.Extraction.RestVolumeCompletenessGate.DescribeBlockerForCandidates": 243,
+    "Extraction/SpecificExtractionRunner.cs::ArchiveFixer.Extraction.SpecificExtractionRunner.RunAsync": 188,
+    "Extraction/VolumeCandidateCollector.cs::ArchiveFixer.Extraction.VolumeCandidateCollector.Collect": 155,
+    "Extraction/VolumeCandidateCollector.cs::ArchiveFixer.Extraction.VolumeCandidateCollector.CollectPieces": 170,
+    "Extraction/VolumeCandidateVerdict.cs::ArchiveFixer.Extraction.VolumeCandidateVerdict.Evaluate": 226,
+    "Extraction/VolumeNameRepair.cs::ArchiveFixer.Extraction.VolumeNameRepair.TryApply": 151,
+    "Extraction/VolumeNaming/VolumeNamePlanner.Plan.Content.cs::ArchiveFixer.Extraction.VolumeNamePlanner.PlanByContentCoreAsync": 158,
+    "Extraction/VolumeNaming/VolumeNamePlanner.Plan.Content.cs::ArchiveFixer.Extraction.VolumeNamePlanner.PlanSpannedZipByIndexAsync": 169,
+    "Extraction/VolumeNaming/VolumeNamePlanner.Plan.Numbered.cs::ArchiveFixer.Extraction.VolumeNamePlanner.PlanSevenZipByContentAsync": 192,
+    "Extraction/VolumeNaming/VolumeNamePlanner.Plan.cs::ArchiveFixer.Extraction.VolumeNamePlanner.Plan": 341,
+    "Extraction/VolumeNaming/VolumeNameRepair.CrossLayerGather.cs::ArchiveFixer.Extraction.VolumeGatherPlanner.ResolveCrossLayerVolumeGather": 603,
+    "Extraction/VolumeNaming/VolumeNameRepair.SpannedGather.cs::ArchiveFixer.Extraction.VolumeGatherPlanner.ResolveSpannedZipDiskGather": 275,
+    "Extraction/VolumeNaming/VolumeNameRestorer.cs::ArchiveFixer.Extraction.VolumeNameRestorer.RestoreDisguisedInnerPackageNames": 217,
+    "Extraction/VolumeStep/Families/SevenZipFamilyAlgorithm.cs::ArchiveFixer.Extraction.VolumeStep.SevenZipFamilyAlgorithm.Evaluate": 190,
+    "Extraction/VolumeStep/Families/ZipSpannedFamilyAlgorithm.cs::ArchiveFixer.Extraction.VolumeStep.ZipSpannedFamilyAlgorithm.Evaluate": 194,
+    "Extraction/VolumeStep/SevenZip/SevenZipBoundaryResolver.cs::ArchiveFixer.Extraction.VolumeStep.SevenZipBoundaryResolver.ResolveAsync": 260,
+    "Extraction/VolumeStep/Zip/ZipBoundaryResolver.cs::ArchiveFixer.Extraction.VolumeStep.ZipBoundaryResolverCore.ResolveNumberedAsync": 162,
+    "Extraction/VolumeStep/Zip/ZipBoundaryResolver.cs::ArchiveFixer.Extraction.VolumeStep.ZipBoundaryResolverCore.ResolveSpannedAsync": 191,
+    "Extraction/WorkspaceInPlacePublisher.cs::ArchiveFixer.Extraction.WorkspaceInPlacePublisher.Publish": 152,
+    "Helpers/VolumeSegmentSplitter.cs::ArchiveFixer.Helpers.VolumeSegmentSplitter.TrySplitVolumeSegmentTolerant": 327,
+    "Packing/PackProcessRunner.cs::ArchiveFixer.Packing.PackProcessRunner.RunAsync": 288,
+    "Packing/PackingPipeline.cs::ArchiveFixer.Packing.PackingPipeline.RunAsync": 302,
+    "Packing/PackingPlan.cs::ArchiveFixer.Packing.PackingPlan.TryCreate": 157,
+    "Security/ResourceBudget.cs::ArchiveFixer.Security.ResourceBudget.CheckBeforeExtract": 202,
+    "Services/ArchiveContentIdentifier.cs::ArchiveFixer.Services.ArchiveContentIdentifier.IdentifyAsync": 236,
+    "Services/ArtifactCleanupPreviewer.cs::ArchiveFixer.Services.ArtifactCleanupPreviewer.Preview": 155,
+    "Services/ChainInnerPackageMovePlanner.cs::ArchiveFixer.Services.ChainInnerPackageMovePlanner.Plan": 162,
+    "Services/ChainRestArtifactCollector.cs::ArchiveFixer.Services.ChainRestArtifactCollector.CollectAsync": 157,
+    "Services/ChainRestSettlement.cs::ArchiveFixer.Services.ChainRestSettlement.ApplyAfterChainAsync": 158,
+    "Services/ChainRestSettlement.cs::ArchiveFixer.Services.ChainRestSettlement.RunDeferredSourceMoveWorkAsync": 201,
+    "Services/Password/PasswordCandidateBuilder.cs::ArchiveFixer.Services.Password.PasswordCandidateBuilder.GetPasswordCandidates": 183,
+    "Services/PlacementLayoutPlanner.cs::ArchiveFixer.Services.PlacementLayoutPlanner.PlanFinalLayout": 389,
+    "Services/PlacementMoveExecutor.cs::ArchiveFixer.Services.PlacementMoveExecutor.ExecuteFinalLayout": 445,
+    "Services/RenameDetectedFormatFixer.cs::ArchiveFixer.Services.RenameDetectedFormatFixer.BuildFixByDetectedFormatFileName": 206,
+    "Services/RestPurgeStep.cs::ArchiveFixer.Services.RestPurgeStep.RunAsync": 185,
+    "Services/WorkspaceStep.cs::ArchiveFixer.Services.WorkspaceStep.ApplyBatchWorkspaceRoot": 151,
+    "Services/WorkspaceStep.cs::ArchiveFixer.Services.WorkspaceStep.CleanupFailedTaskWorkspace": 157,
+    "Storage/WorkspaceLeftoverShellCleaner.cs::ArchiveFixer.Storage.WorkspaceLeftoverShellCleaner.Reclaim": 184,
+    "ViewModels/CleanupCoordinator.cs::ArchiveFixer.ViewModels.CleanupCoordinator.RunAsync": 164,
+    "ViewModels/Extraction/Steps/ExtractEntryHandler.cs::ArchiveFixer.ViewModels.ExtractEntryHandler.StartExtractCoreAsync": 625,
+    "ViewModels/Extraction/Steps/ExtractTaskMainHandler.cs::ArchiveFixer.ViewModels.ExtractTaskMainHandler.RunAsync": 694,
+    "ViewModels/Extraction/Steps/GroupOrderTrialHandler.cs::ArchiveFixer.ViewModels.GroupOrderTrialHandler.ProbeGatherGroupAsync": 447,
+    "ViewModels/Extraction/Steps/PostProcessSuccessHandler.cs::ArchiveFixer.ViewModels.PostProcessSuccessHandler.PostProcessSuccessAsync": 632,
+    "ViewModels/Extraction/Steps/RecursionHandler.cs::ArchiveFixer.ViewModels.RecursionHandler.RunRecursiveAsync": 401,
+    "ViewModels/Extraction/Steps/RecursionOutcomeHandler.cs::ArchiveFixer.ViewModels.RecursionOutcomeHandler.ApplyRecursionResult": 320,
+    "ViewModels/Extraction/Steps/RecursiveLayerReclaimHandler.cs::ArchiveFixer.ViewModels.RecursiveLayerReclaimHandler.CreateRecursiveExtractor": 181,
+    "ViewModels/Extraction/Steps/SourceHandler.cs::ArchiveFixer.ViewModels.SourceHandler.RunPostProcessWork": 439,
+    "ViewModels/Extraction/Steps/VolumeGatherCollectHandler.cs::ArchiveFixer.ViewModels.VolumeGatherCollectHandler.ResolveBatchGroupDirectory": 202,
+    "ViewModels/Extraction/Steps/VolumeSlotFillHandler.cs::ArchiveFixer.ViewModels.VolumeSlotFillHandler.TryLinkMissingPiecesByByteBudget": 367,
+    "ViewModels/Extraction/Steps/VolumeStepHandler.cs::ArchiveFixer.ViewModels.VolumeStepHandler.TrySettleVolumeGroup": 210,
+    "ViewModels/ExtractionCandidateLoop.cs::ArchiveFixer.ViewModels.ExtractionCandidateLoop.RunAsync": 619,
+    "ViewModels/ExtractionConsumedPieceSettler.cs::ArchiveFixer.ViewModels.ExtractionConsumedPieceSettler.SettleOneConsumedPieceTask": 232,
+    "ViewModels/ExtractionDeferredVolumeRechecker.cs::ArchiveFixer.ViewModels.ExtractionDeferredVolumeRechecker.RecheckDeferredVolumeDeficitsAsync": 629,
+    "ViewModels/ExtractionFirstAttempt.cs::ArchiveFixer.ViewModels.ExtractionFirstAttempt.RunAsync": 341,
+    "ViewModels/ExtractionOrderTrial.cs::ArchiveFixer.ViewModels.ExtractionOrderTrial.RunOrderTrialAsync": 204,
+    "ViewModels/ExtractionPreflight.cs::ArchiveFixer.ViewModels.ExtractionPreflight.RunAsync": 364,
+    "ViewModels/ExtractionRootSourceCompletion.cs::ArchiveFixer.ViewModels.ExtractionRootSourceCompletion.CompleteRootSourcePackagesAfterChainAsync": 163,
+    "ViewModels/ExtractionRunPreparation.cs::ArchiveFixer.ViewModels.ExtractionRunPreparation.PrepareAsync": 320,
+    "ViewModels/ExtractionSlotScoredAssignment.cs::ArchiveFixer.ViewModels.ExtractionSlotScoredAssignment.TryLinkMissingPiecesByScoredAssignment": 395,
+    "ViewModels/ExtractionSourcePurge.cs::ArchiveFixer.ViewModels.ExtractionSourcePurge.PurgeLayerSourcePackage": 312,
+    "ViewModels/ExtractionSplitGateScanner.cs::ArchiveFixer.ViewModels.ExtractionSplitGateScanner.EnumerateSplitGateArtifactRoots": 155,
+    "ViewModels/ExtractionTaskConclusionWriter.cs::ArchiveFixer.ViewModels.ExtractionTaskConclusionWriter.WriteAsync": 378,
+    "ViewModels/ExtractionTaskRunner.cs::ArchiveFixer.ViewModels.ExtractionTaskRunner.ProcessExtractTaskAsync": 342,
+    "ViewModels/ExtractionVolumeCandidateCollector.cs::ArchiveFixer.ViewModels.ExtractionVolumeCandidateCollector.CollectVolumeCandidatePaths": 626,
+    "ViewModels/InnerLayerCollector.cs::ArchiveFixer.ViewModels.InnerLayerCollector.CollectAsync": 560,
+    "ViewModels/LogExportBuilder.cs::ArchiveFixer.ViewModels.LogExportBuilder.BuildSections": 187,
+    "ViewModels/MainCommandSet.cs::ArchiveFixer.ViewModels.MainCommandSet.Initialize": 267,
+    "ViewModels/OneClickBatchFinalizer.cs::ArchiveFixer.ViewModels.OneClickBatchFinalizer.BuildSummaryLine": 158,
+    "ViewModels/OneClickCoordinator.SpecificExtractionBatch.cs::ArchiveFixer.ViewModels.OneClickCoordinator.ProcessSpecificTaskAsync": 224,
+    "ViewModels/OneClickCoordinator.SpecificExtractionBatch.cs::ArchiveFixer.ViewModels.OneClickCoordinator.RunSpecificBatchAsync": 167,
+    "ViewModels/OneClickRoundRunner.cs::ArchiveFixer.ViewModels.OneClickRoundRunner.RunFirstStepAsync": 172,
+    "ViewModels/OneClickRoundRunner.cs::ArchiveFixer.ViewModels.OneClickRoundRunner.RunRoundTailAsync": 152,
+    "ViewModels/OneClickSecondStepEntryLinker.cs::ArchiveFixer.ViewModels.OneClickSecondStepEntryLinker.RunNamingAsync": 442,
+    "ViewModels/OneClickSecondStepRunner.cs::ArchiveFixer.ViewModels.OneClickSecondStepRunner.RunAsync": 515,
+    "ViewModels/ScanCoordinator.cs::ArchiveFixer.ViewModels.ScanCoordinator.AddPathsAsync": 161,
+    "Views/RenameWindowFactory.cs::ArchiveFixer.Views.RenameWindowFactory.Show": 283
+  }
 }
