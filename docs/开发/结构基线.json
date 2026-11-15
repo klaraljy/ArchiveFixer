@@ -10,7 +10,6 @@
     "Models/ArchiveTask.cs": 1833,
     "Storage/PasswordListStore.cs": 744,
     "Storage/RecycleBinService.cs": 466,
-    "ViewModels/ExtractionCoordinator.ConsumedSettlementStep.cs": 349,
     "ViewModels/MainViewModel.cs": 1494,
     "ViewModels/RenameCoordinator.cs": 829
   },

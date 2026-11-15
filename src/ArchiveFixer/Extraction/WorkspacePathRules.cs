@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using System;
 using System.IO;
@@ -50,6 +51,34 @@ internal static class WorkspacePathRules
         }
 
         return fullCandidate.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 这个路径是不是落在**递归工作区**里（<c>&lt;目标目录&gt;\.ArchiveFixer.work\…</c> 的任一层子目录）。
+    ///
+    /// <para>递归路「逐层回收」只允许删这一棵树里的东西：那一层的过程物是我们自己刚解出来的内层包
+    /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work\recursive\&lt;id&gt;\layer-NNN\output\…</c>）；
+    /// **用户拖进来的源包永远不在它下面**（它在用户的源目录里）⇒ 这条判据就是"最外层源包留到链尾"
+    /// 那道保险的落点。判不出 / 拿不到路径 ⇒ 返回 false ⇒ 上层什么都不做（删除不可恢复）。</para>
+    ///
+    /// <para>标记的唯一出口是 <see cref="VolumeContentInference.WorkDirectoryName"/>
+    /// （AGENTS.md §9.5：⛔ 不另写一个字面量）。⛔ 与
+    /// <see cref="ProcessArtifactLayout.IsInsideDeletableProcessFolders"/> 的区别：那一档只问
+    /// "路径里有没有这几个字"（给导出起始目录用，容忍半段），本档要求它是**整整一段目录名**。</para>
+    /// </summary>
+    internal static bool IsInsideRecursionWorkspace(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string marker = Path.DirectorySeparatorChar
+            + VolumeContentInference.WorkDirectoryName
+            + Path.DirectorySeparatorChar;
+
+        return SafePathHelper.GetFullPathSafe(path)
+            .Contains(marker, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary><paramref name="childPath"/> 在 <paramref name="parentDirectory"/> 之下的相对路径。</summary>

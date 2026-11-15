@@ -26,6 +26,22 @@ internal sealed class ExtractionSplitGateScanner
         _host = host;
     }
 
+    /// <summary>
+    /// 「半套分卷」那道闸门要扫的**成品目录树根**（同组的另一片可能落在这一棵树里的任何地方）。
+    ///
+    /// <para>⛔ 判定扫描范围的原则是"**宁可多扫**"：漏扫 = 放行 = 不可逆（§44.2 就是这么丢掉 25 GB 的），
+    /// 而多扫最多只是把一次删除拦下来（兜底落在"什么都不做"，用户还能自己处理）。</para>
+    ///
+    /// <para><b>2026-10-03 第二轮复核改的那一处</b>：原来只取**第一个**候选的上一级（末尾那个 <c>break</c>），
+    /// 于是"候选比成品根深 ≥2 层、另一片在同一个成品根下的**另一条分支**"这个形状
+    /// （<c>&lt;pkg&gt;\AAA\BBB\mid.7z.001</c> vs <c>&lt;pkg&gt;\CCC\mid.z删除ip</c>）四个根一个都盖不到 ⇒ 放行。
+    /// 现在**对每一个候选**沿祖先链上溯，逐层当扫描根，遇到"任务记下来的那几处"就停住。</para>
+    ///
+    /// <para><b>2026-10-03 第三轮（用户批准「取消 3 层上限」）</b>：候选落在这一批的目标根里面时，
+    /// 上溯**不再有层数上限**，一路爬到目标根为止 —— 深 ≥3 层 + 同级另一条分支那个形状
+    /// （<c>&lt;成品根&gt;\X\AAA\BBB\mid.7z.001</c> vs <c>&lt;成品根&gt;\Y\CCC\mid.z删除ip</c>）因此盖得住。
+    /// ⛔ 目标根与盘根这两条界一个字都没动（详见方法体里那段说明）。</para>
+    /// </summary>
     internal IReadOnlyList<string> EnumerateSplitGateArtifactRoots(
         ArchiveTask task,
         IReadOnlyList<string> candidates)

@@ -28,11 +28,8 @@ internal sealed partial class ExtractionCoordinator
     /// <summary>本批清理账本；只记事实，链尾规划读取。</summary>
     internal readonly CleanupLedger _cleanupLedger = new();
     /// <summary>
-    /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 处理源包。
-    ///
-    /// <para>⚠ 实现已整体搬进 <see cref="SourceHandler"/>（从 <c>ExtractionCoordinator</c>
-    /// 的 <c>Source</c> partial 搬出的收尾协作类，本 partial 只留这一行转发）；
-    /// 顺序、判据、日志与搬出前逐字一致，线程规则 / 取消规则 / 三个例外见那边的 XML 注释。</para>
+    /// 收尾重活本体（同签名薄转发）—— 唯一实现见 <see cref="SourceHandler.RunPostProcessWork"/>：
+    /// 顺序、判据、日志与搬出前逐字一致，线程规则 / 取消规则 / 例外见那边的 XML 注释。
     /// </summary>
     private PostProcessWorkResult RunPostProcessWork(
         ArchiveTask task,
@@ -96,51 +93,14 @@ internal sealed partial class ExtractionCoordinator
             recursion,
             stageFilesAreProducedContent);
 
-
-
-
     /// <summary>
-    /// 这一份是不是落在**递归工作区**里（<c>&lt;目标目录&gt;\.ArchiveFixer.work\…</c> 的任一层子目录）。
-    ///
-    /// <para>递归路「逐层回收」只允许删这一棵树里的东西：那一层的过程物是我们自己刚解出来的内层包
-    /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work\recursive\&lt;id&gt;\layer-NNN\output\…</c>）；
-    /// **用户拖进来的源包永远不在它下面**（它在用户的源目录里）⇒ 这条判据就是"最外层源包留到链尾"
-    /// 那道保险的落点。判不出 / 拿不到路径 ⇒ 返回 false ⇒ 上层什么都不做（删除不可恢复）。</para>
-    ///
-    /// <para>标记的唯一出口是 <see cref="VolumeContentInference.WorkDirectoryName"/>
-    /// （AGENTS.md §9.5：⛔ 不另写一个字面量）。</para>
+    /// 这一份是不是落在**递归工作区**里 —— 同签名薄转发（判据唯一实现与设计说明见
+    /// <see cref="WorkspacePathRules.IsInsideRecursionWorkspace"/>）；调用方 =
+    /// <see cref="ExtractionSourcePurge"/> 与 <see cref="IPartialPublishStepHost"/> 那一档。
+    /// ⛔ 判不出 / 拿不到路径 ⇒ false ⇒ 上层什么都不做（删除不可恢复）。
     /// </summary>
-    internal static bool IsInsideRecursionWorkspace(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-
-        string marker = Path.DirectorySeparatorChar
-            + VolumeContentInference.WorkDirectoryName
-            + Path.DirectorySeparatorChar;
-
-        return SafePathHelper.GetFullPathSafe(path)
-            .Contains(marker, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// 「半套分卷」那道闸门要扫的**成品目录树根**（同组的另一片可能落在这一棵树里的任何地方）。
-    ///
-    /// <para>⛔ 判定扫描范围的原则是"**宁可多扫**"：漏扫 = 放行 = 不可逆（§44.2 就是这么丢掉 25 GB 的），
-    /// 而多扫最多只是把一次删除拦下来（兜底落在"什么都不做"，用户还能自己处理）。</para>
-    ///
-    /// <para><b>2026-10-03 第二轮复核改的那一处</b>：原来只取**第一个**候选的上一级（末尾那个 `break`），
-    /// 于是"候选比成品根深 ≥2 层、另一片在同一个成品根下的**另一条分支**"这个形状
-    /// （`&lt;pkg&gt;\AAA\BBB\mid.7z.001` vs `&lt;pkg&gt;\CCC\mid.z删除ip`）四个根一个都盖不到 ⇒ 放行。
-    /// 现在**对每一个候选**沿祖先链上溯，逐层当扫描根，遇到"任务记下来的那几处"就停住。</para>
-    ///
-    /// <para><b>2026-10-03 第三轮（用户批准「取消 3 层上限」）</b>：候选落在这一批的目标根里面时，
-    /// 上溯**不再有层数上限**，一路爬到目标根为止 —— 深 ≥3 层 + 同级另一条分支那个形状
-    /// （`&lt;成品根&gt;\X\AAA\BBB\mid.7z.001` vs `&lt;成品根&gt;\Y\CCC\mid.z删除ip`）因此盖得住。
-    /// ⛔ 目标根与盘根这两条界一个字都没动（详见方法体里那段说明）。</para>
-    /// </summary>
+    internal static bool IsInsideRecursionWorkspace(string? path) =>
+        WorkspacePathRules.IsInsideRecursionWorkspace(path);
 
     /// <summary>
     /// 删源包的执行体（<see cref="SourceCleanupService"/> 的实例持有者）。
@@ -164,20 +124,12 @@ internal sealed partial class ExtractionCoordinator
 
     internal SourceCleanupService SourcePackageCleanup => new(SourcePackageDeleteFileSystem);
 
-
-
-
-
-
-
-
-
-
     /// <summary>
     /// **链内每一层"被用掉的那几个输入文件"**（递归钩子每层报上来的 `GroupFiles`）——
     /// 只记账、不动盘（用户 2026-10-12 口径：搬不能挂在"逐层"那一刻，见
     /// <see cref="CollectChainInnerPackagesIntoRestAsync"/> 末尾那一段"链尾集中"）。
-    /// 写入点唯一 = <see cref="OnRecursiveLayerReclaim"/>；清空点 = 批首 `PrepareRestHandlingForBatch`。
+    /// 写入点唯一 = <c>OnRecursiveLayerReclaim</c>（<see cref="RecursiveLayerReclaimHandler"/>）；
+    /// 清空点 = 批首 <c>PrepareRestHandlingForBatch</c>。
     /// </summary>
     private readonly List<string> _chainInnerLayerInputs = new();
 
@@ -212,9 +164,6 @@ internal sealed partial class ExtractionCoordinator
         IReadOnlyList<string> candidates) =>
         SplitGate.EnumerateSplitGateArtifactRoots(task, candidates);
 
-    private string ResolveSplitGateScanBoundary(ArchiveTask task) =>
-        SplitGate.ResolveSplitGateScanBoundary(task);
-
     internal static string ResolveSplitGateScanBoundary(ArchiveTask task, AppSettings? settings) =>
         ExtractionSplitGateScanner.ResolveSplitGateScanBoundary(task, settings);
 
@@ -237,11 +186,7 @@ internal sealed partial class ExtractionCoordinator
 
     internal bool StopIfSourceChanged(ArchiveTask task) => SourceSnapshot.StopIfSourceChanged(task);
 
-    private bool StopIfSourceChanged(ArchiveTask task, out string reason) =>
-        SourceSnapshot.StopIfSourceChanged(task, out reason);
-
     private Task<string?> CheckRootSourceUnchangedAsync(ArchiveTask task) =>
         SourceSnapshot.CheckRootSourceUnchangedAsync(task);
 }
-
 
