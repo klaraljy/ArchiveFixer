@@ -82,3 +82,57 @@ jobs:
           name: extended-test-results
           path: TestResults
           if-no-files-found: ignore
+
+  package:
+    name: package (zip/SHA256/SBOM)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: [fast]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: build framework-dependent package
+        run: pwsh -NoProfile -File scripts/package.ps1
+
+      - name: SHA256
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist -Filter 'ArchiveFixer-*-框架依赖.zip' | Select-Object -First 1
+          $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($zip.Name)" | Set-Content -LiteralPath (Join-Path dist 'ArchiveFixer.sha256') -Encoding ascii
+
+      - name: SBOM
+        shell: pwsh
+        run: |
+          $sbom = [ordered]@{
+            bomFormat = 'CycloneDX'; specVersion = '1.5'; version = 1
+            metadata = [ordered]@{ component = [ordered]@{ type = 'application'; name = 'ArchiveFixer'; version = '0.2.2' } }
+            components = @(
+              [ordered]@{ type = 'application'; name = 'ArchiveFixer'; version = '0.2.2' },
+              [ordered]@{ type = 'library'; name = '.NET Desktop Runtime'; version = '8.0.x' },
+              [ordered]@{ type = 'application'; name = '7-Zip'; version = 'bundled' },
+              [ordered]@{ type = 'application'; name = 'UnRAR'; version = 'bundled' }
+            )
+          }
+          $sbom | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path dist 'ArchiveFixer.sbom.json') -Encoding utf8
+
+      - name: signature status (true state, never fake)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem 'dist/ArchiveFixer-*' -Recurse -Filter ArchiveFixer.exe | Select-Object -First 1
+          if ($exe) { Get-AuthenticodeSignature $exe.FullName | Select-Object Status, StatusMessage | Format-List }
+
+      - name: upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: archivefixer-package
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/*.sbom.json
+          if-no-files-found: error
