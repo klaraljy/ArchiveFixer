@@ -136,6 +136,32 @@ public sealed class VolumeBoundarySkeletonTests
     }
 
     [Fact]
+    public async Task 快通道被封锁后_边界管线必须调用正常resolver()
+    {
+        var ledger = new FirstStepFileLedger();
+
+        ledger.AddOrReplace(Entry(
+            @"C:\in\111.7z.001",
+            "111",
+            VolumeContentFormat.SevenZip,
+            body: ArchiveBodyKind.VolumeFirstPiece));
+        ledger.AddOrReplace(Entry(
+            @"C:\in\111.7z.002",
+            "111",
+            VolumeContentFormat.SevenZip));
+        ledger.BlockStandardNameFastPath("111");
+
+        var pipeline = new VolumeBoundaryPipeline();
+        pipeline.Register(new FakeResolver());
+
+        IReadOnlyList<PreparedVolumeGroup> groups = await pipeline.ResolveAllAsync(
+            ledger,
+            baseName => new VolumeBoundaryContext { BaseName = baseName });
+
+        Assert.Single(groups);
+    }
+
+    [Fact]
     public void PreparedGroup_标准名到原始路径的映射()
     {
         var group = new PreparedVolumeGroup
