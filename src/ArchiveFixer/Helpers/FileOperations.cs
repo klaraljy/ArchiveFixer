@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 
-namespace ArchiveFixer.Storage;
+namespace ArchiveFixer.Helpers;
 
 /// <summary>
 /// 文件删除/移动的统一入口。ViewModels 等业务代码不许直接调用 <see cref="File"/>；

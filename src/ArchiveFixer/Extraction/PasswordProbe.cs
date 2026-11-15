@@ -1,5 +1,6 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -338,6 +339,6 @@ public static class PasswordProbe
     /// <summary>探针条目的说明（日志用；把"只解了哪一个"说清，用户才对得上时间）。</summary>
     public static string Describe(string entryPath, long entrySize)
     {
-        return $"「{entryPath}」（{ArchiveFixer.Storage.TaskSpaceEstimate.FormatSize(entrySize)}）";
+        return $"「{entryPath}」（{TaskSpaceEstimate.FormatSize(entrySize)}）";
     }
 }

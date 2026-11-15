@@ -1,3 +1,5 @@
+using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,8 +25,14 @@ namespace ArchiveFixer.Services;
 ///
 /// <para>注意读入量（与拆分前完全一致）：只读取文件头（34 KB）和"认不出来时"的文件尾部（256 KB）；
 /// 只有尾部那条路也没命中时才会顺序扫一遍（上限 512 MiB，命中即停），**正常包一个字节都不多读**。</para>
+///
+/// <para><b>它同时是 <see cref="IArchiveDetector"/> 的实现</b>（M6 依赖环收口）：引擎门面
+/// <c>EngineRouter</c> 只认这条最小契约，生产入口由 <c>MainViewModel</c> 把这个完整识别服务注入进去。
+/// 接口放在 <c>Engines</c>、实现留在 <c>Services</c> —— 依赖方向是"实现方依赖契约"，
+/// <c>Engines</c> 不再反向引用 <c>Services</c>。⚠ 实现必须是完整识别：门面拿到的格式
+/// 要能认出"后缀被改坏 / 归档藏在尾部"的包，等价于注入前直接 <c>new</c> 本类的那份结论。</para>
 /// </summary>
-public class ArchiveDetectService
+public class ArchiveDetectService : IArchiveDetector
 {
     private readonly ArchiveContentIdentifier _identifier = new();
 
@@ -49,12 +57,16 @@ public class ArchiveDetectService
 
     /// <summary>
     /// 识别文件真实格式（判据与读入量见 <see cref="ArchiveContentIdentifier"/>）。
+    ///
+    /// <para>参数名与 <see cref="IArchiveDetector.DetectAsync"/> 一致（<c>archivePath</c>）：
+    /// 隐式实现接口时签名是一份契约，名字漂移本身就会让"按名传参"的调用方踩空
+    /// （分析器 CA1725 也是这条）。</para>
     /// </summary>
     public Task<DetectResult> DetectAsync(
-        string filePath,
+        string archivePath,
         CancellationToken cancellationToken = default)
     {
-        return _identifier.IdentifyAsync(filePath, cancellationToken);
+        return _identifier.IdentifyAsync(archivePath, cancellationToken);
     }
 
     /// <summary>

@@ -48,7 +48,7 @@ public static class DiagnosticCodes
             [VolumeIncomplete] = new(VolumeIncomplete, "VolumeBoundary", "分卷组缺片/不完整",
                 "src/ArchiveFixer/ViewModels/ExtractionCoordinator.ExtractTaskMainStep.cs", "先看组事实 pieces/missing 与入口卷判定"),
             [FileIo] = new(FileIo, "FileOperations", "文件移动、删除、改名或建链接失败",
-                "src/ArchiveFixer/Storage/FileOperations.cs", "先看 source/target、Win32 错误与目标目录状态"),
+                "src/ArchiveFixer/Helpers/FileOperations.cs", "先看 source/target、Win32 错误与目标目录状态"),
             [EngineFailed] = new(EngineFailed, "ArchiveEngine", "外部引擎调用失败或工具缺失",
                 "src/ArchiveFixer/Engines/", "先看 engine/exit_code/原话，再看工具版本"),
             [UiStall] = new(UiStall, "UiResponsivenessMonitor", "UI 线程停顿",

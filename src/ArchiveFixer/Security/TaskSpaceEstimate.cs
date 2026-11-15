@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Storage;
+namespace ArchiveFixer.Security;
 
 /// <summary>
 /// 一个解压任务的**空间需求**（用户 2026-09-22 需求："空间核算必须包含内容物 + 本次会产生的过程物

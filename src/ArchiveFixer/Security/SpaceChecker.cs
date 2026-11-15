@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 
-namespace ArchiveFixer.Storage;
+namespace ArchiveFixer.Security;
 
 /// <summary>
 /// 目标盘空间与卷格式检查（设计.md §二十一、§二十五）。

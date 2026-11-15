@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;

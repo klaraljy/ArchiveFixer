@@ -2,6 +2,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
 using ArchiveFixer.ViewModels;

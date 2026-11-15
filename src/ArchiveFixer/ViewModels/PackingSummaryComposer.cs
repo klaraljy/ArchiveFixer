@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Packing;
+using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
 using System;
 using System.IO;

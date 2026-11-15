@@ -1,3 +1,4 @@
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Extraction;

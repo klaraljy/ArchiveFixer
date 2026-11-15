@@ -281,7 +281,7 @@ public class ExtractionLimitSettingTests : IDisposable
          * （估算值 = 当前可用 + 1 GiB —— 留足余量，免得别的进程刚释放几字节就把结论翻过来）。现在要 1 GiB 的余量才会翻盘（比"可用 + 1 字节"稳得多），全量并发下基本不会再假红。
          */
         string tempPath = Path.GetTempPath();
-        long? freeSpace = ArchiveFixer.Storage.SpaceChecker.GetAvailableFreeSpace(tempPath);
+        long? freeSpace = SpaceChecker.GetAvailableFreeSpace(tempPath);
 
         if (freeSpace == null)
         {

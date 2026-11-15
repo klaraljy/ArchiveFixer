@@ -46,6 +46,9 @@ public sealed class LegacySymbolInventoryTests
 
         HashSet<string> allowed = new(StringComparer.OrdinalIgnoreCase);
 
+        // 统一入口自身：FileOperations 已从 Storage 移到 Helpers（M6 依赖环收口）。
+        allowed.Add("Helpers/FileOperations.cs");
+
         var violations = new List<string>();
 
         foreach (string file in Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories))

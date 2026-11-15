@@ -1,6 +1,6 @@
 using ArchiveFixer.Models;
 
-namespace ArchiveFixer.Services;
+namespace ArchiveFixer.Detection;
 
 /// <summary>
 /// **识别结果模型的唯一构造出口**：<see cref="DetectResult"/> 的每一种形状只在这里组装。
@@ -11,8 +11,8 @@ namespace ArchiveFixer.Services;
 /// 迟早会出现"同一档结论在两条路上置信度不一样"，而下游（空间核算 / 后缀状态 / 汇总）读的正是它们。</para>
 ///
 /// <para>⛔ 这里只组装结果，**不做任何判据**：是不是归档、加没加密、从哪个偏移抠，
-/// 全部由调用方（<see cref="ArchiveFormatProbe"/> / <see cref="ArchiveContentIdentifier"/> /
-/// <see cref="ArchiveEncryptionVerdict"/>）决定后作为参数传进来。</para>
+/// 全部由调用方（<see cref="ArchiveFormatProbe"/> / <see cref="ArchiveFixer.Services.ArchiveContentIdentifier"/> /
+/// <see cref="ArchiveFixer.Services.ArchiveEncryptionVerdict"/>）决定后作为参数传进来。</para>
 /// </summary>
 internal static class DetectResultFactory
 {
@@ -62,7 +62,7 @@ internal static class DetectResultFactory
     /// **跨盘 ZIP 的一片**（不是内嵌归档，置信度 90）。
     ///
     /// <para>偏移**恒为 0**：这一片没有可抠出来的独立区间，设了反而会让下游去抠一个不存在的区间
-    /// （分叉的理由见 <see cref="ArchiveContentIdentifier"/> 里那段"跨盘 ZIP 的最后一片"）。</para>
+    /// （分叉的理由见 <see cref="ArchiveFixer.Services.ArchiveContentIdentifier"/> 里那段"跨盘 ZIP 的最后一片"）。</para>
     /// </summary>
     internal static DetectResult CreateSpannedZipPart(string message, string headerHex) => new()
     {
@@ -83,7 +83,7 @@ internal static class DetectResultFactory
     /// <summary>
     /// 尾部推出来的**内嵌 ZIP**（"双面文件"，置信度 80）：带抠取区间与直读探查结论。
     ///
-    /// <para>加密标志由调用方给（判据在 <see cref="ArchiveEncryptionVerdict"/> 与直读探针那边），
+    /// <para>加密标志由调用方给（判据在 <see cref="ArchiveFixer.Services.ArchiveEncryptionVerdict"/> 与直读探针那边），
     /// ⛔ 这里**不**写死 false —— 写死就是"误报没加密"。</para>
     /// </summary>
     internal static DetectResult CreateEmbeddedZip(

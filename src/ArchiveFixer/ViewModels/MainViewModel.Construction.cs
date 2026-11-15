@@ -87,7 +87,14 @@ public partial class MainViewModel
          * 分派规则一条都不在这里重写：能力筛、优先级 tiebreaker、不可用跳过、回退判据
          * 全在 EngineRegistry / EngineSelector 里（AGENTS.md §3.1），这里只做转发。
          */
-        _archiveEngine = new EngineRouter(engineRegistry ?? BuildEngineRegistry(archiveEngine));
+        /*
+         * 识别器显式注入：门面默认只读文件头（够分派用，也不让 Engines 反向依赖 Services）；
+         * 生产这条入口必须交完整的识别服务（文件头 → 尾部内嵌归档 → 顺序扫 + 缓存 + 加密判读），
+         * 否则"后缀被改坏的包"在界面上会少掉识别结论 —— 行为与注入前逐条相同。
+         */
+        _archiveEngine = new EngineRouter(
+            engineRegistry ?? BuildEngineRegistry(archiveEngine),
+            new ArchiveDetectService());
 
         _passwordService = passwordService;
 

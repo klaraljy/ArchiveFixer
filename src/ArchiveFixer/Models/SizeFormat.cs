@@ -3,7 +3,7 @@ using System.Globalization;
 namespace ArchiveFixer.Models;
 
 /// <summary>
-/// 字节数格式化契约（从 Storage/TaskSpaceEstimate 抽出的纯格式化实现）：
+/// 字节数格式化契约（从 Security/TaskSpaceEstimate 抽出的纯格式化实现）：
 /// 口径必须与 <c>SpaceChecker</c> / <c>ResourceBudget</c> 一致；⛔ 不碰磁盘、不读配置。
 /// </summary>
 internal static class SizeFormat

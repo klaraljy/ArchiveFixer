@@ -1,6 +1,7 @@
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
 using System;

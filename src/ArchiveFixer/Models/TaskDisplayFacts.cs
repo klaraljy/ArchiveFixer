@@ -77,7 +77,7 @@ internal static class TaskDisplayFacts
 
     /// <summary>
     /// 人读的字节数（列表列宽有限，所以最多两位小数、单位取最合适的那一档）。
-    /// 单位与 <c>Storage/TaskSpaceEstimate.FormatSize</c> **完全一致**（KiB / MiB / GiB / 字节）——
+    /// 单位与 <c>Security/TaskSpaceEstimate.FormatSize</c> **完全一致**（KiB / MiB / GiB / 字节）——
     /// 界面上两处对同一块盘报出两种单位，用户会以为程序在算两个不同的数（历史上被投诉过）。
     /// 这里自带一份实现是为了**不让 Models 层反向依赖 Storage 层**（分层铁律）。
     /// </summary>

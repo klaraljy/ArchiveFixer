@@ -2,24 +2,29 @@ using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
 
-namespace ArchiveFixer.Services;
+namespace ArchiveFixer.Detection;
 
 /// <summary>
 /// **格式探测**：只凭文件头的字节回答"这是哪种容器"（识别服务里的格式探测那一层）。
+///
+/// <para>落点（M6 依赖环收口）：从 <c>Services/</c> 搬到 <c>Detection/</c> —— 它本来就是
+/// "只看字节"的纯判据，谁读的文件头都无所谓；搬过来之后引擎门面的默认识别器
+/// （<c>Engines.HeaderArchiveDetector</c>）可以只用 Detection，不必把 Services 拖回去。</para>
 ///
 /// <para>这里做的全部事情：</para>
 /// <list type="bullet">
 /// <item><description>魔数表（7Z / RAR4 / RAR5 / ZIP 三态 / GZIP / BZIP2 / XZ / CAB / ARJ / LZH / Z / ZSTD / LZ4 / RPM）；</description></item>
 /// <item><description>两条**结构**判据：TAR 的 <c>ustar</c> 标记在偏移 257、ISO 9660 的 <c>CD001</c> 在偏移 0x8001
-/// （所以文件头要读 34 KB —— 见 <see cref="ArchiveContentIdentifier"/> 的读入量）；</description></item>
+/// （所以文件头要读 34 KB —— 见 <see cref="ArchiveFixer.Services.ArchiveContentIdentifier"/> 的读入量）；</description></item>
 /// <item><description>媒体前缀识别 —— ⛔ **只用来限制顺序扫的窗口**，不用于判定"不是归档"；
 /// 媒体前缀 + 尾部归档仍由尾部那条路先回答；</description></item>
 /// <item><description>ZIP 家族判定（<c>ZIP</c> / <c>ZIP_EMPTY</c> / <c>ZIP_SPANNED</c>）——
 /// 加密判读与后缀状态共用这一把尺子，⛔ 别处不许再写一套。</description></item>
 /// </list>
 ///
-/// <para>⛔ 这里**不读文件**（文件头由 <see cref="ArchiveContentIdentifier"/> 读好传进来），
-/// 也不碰缓存、不判加密 —— 加密判据的唯一出口是 <see cref="ArchiveEncryptionVerdict"/>。</para>
+/// <para>⛔ 这里**不读文件**（文件头由调用方读好传进来），
+/// 也不碰缓存、不判加密 —— 加密判据的唯一出口是
+/// <see cref="ArchiveFixer.Services.ArchiveEncryptionVerdict"/>。</para>
 /// </summary>
 internal static class ArchiveFormatProbe
 {

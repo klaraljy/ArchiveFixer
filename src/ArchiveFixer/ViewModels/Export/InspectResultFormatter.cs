@@ -1,3 +1,4 @@
+using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
 using System.Text;

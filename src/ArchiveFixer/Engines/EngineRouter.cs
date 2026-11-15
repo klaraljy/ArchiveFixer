@@ -1,6 +1,5 @@
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Services;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
@@ -44,7 +43,13 @@ internal sealed class EngineRouter : IArchiveEngine
 
     private readonly EngineRegistry _registry;
     private readonly EngineSelector _selector;
-    private readonly ArchiveDetectService _detector;
+
+    /// <summary>
+    /// 「这个包是什么格式」的契约（M6：以前这里直接是 <c>Services.ArchiveDetectService</c>，
+    /// 于是 <c>Engines</c> 反向依赖 <c>Services</c> 成环）。生产入口注入完整识别，
+    /// 不注入时退到 <see cref="HeaderArchiveDetector"/>（只看文件头）。
+    /// </summary>
+    private readonly IArchiveDetector _detector;
 
     /// <summary>归档路径 → 实际执行它的引擎身份（每次调用后覆盖写，成功的那一次自然留在里面）。</summary>
     private readonly ConcurrentDictionary<string, EngineIdentity> _usedByPath =
@@ -66,11 +71,16 @@ internal sealed class EngineRouter : IArchiveEngine
     private readonly ConcurrentDictionary<string, FormatCacheEntry> _formatCache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    internal EngineRouter(EngineRegistry registry, ArchiveDetectService? detectService = null)
+    /// <summary>
+    /// <paramref name="detector"/> 不给时用 <see cref="HeaderArchiveDetector"/>（只读文件头魔数，够分派用）。
+    /// 生产入口（<c>MainViewModel</c>）必须传完整的 <c>Services.ArchiveDetectService</c> ——
+    /// 识别结论（含尾部内嵌归档）与注入前逐条相同；测试与"只要分派"的调用方可以省掉它。
+    /// </summary>
+    internal EngineRouter(EngineRegistry registry, IArchiveDetector? detector = null)
     {
         _registry = registry ?? EngineRegistry.CreateDefault();
         _selector = new EngineSelector(_registry);
-        _detector = detectService ?? new ArchiveDetectService();
+        _detector = detector ?? new HeaderArchiveDetector();
     }
 
     /// <summary>
