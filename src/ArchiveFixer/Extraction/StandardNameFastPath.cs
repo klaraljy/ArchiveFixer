@@ -13,9 +13,9 @@ namespace ArchiveFixer.Extraction;
 /// <para>用户 2026-10-27 口径：同目录、同基名、全部标准名的组，可以跳过内容卡，
 /// 直接拿入口包试密码、只解一层；非均匀/加密头都按标准情况对待。</para>
 ///
-/// <para>本类只回答“哪些组满足标准名形状、入口是谁”；**不回答完整性**。
-/// 001–004 在本目录、005 在别处时，这里仍然是标准名组；是否真的能解开由调用方
-/// 的试解结果决定，失败必须交回正常第二大步，⛔ 不写内容卡 Unknown/Missing。</para>
+/// <para>本类只回答“哪些组满足**简单完整**标准名形状、入口是谁”：同目录、同族、
+/// 卷号连续且唯一、至少两片、基名无额外点。缺号/重号/超长数字/带点中文基名一律不返回组，
+/// 由调用方交回正常第二大步；⛔ 不写内容卡 Unknown/Missing。</para>
 /// </summary>
 internal static class StandardNameFastPath
 {
@@ -78,7 +78,9 @@ internal static class StandardNameFastPath
     /// 给每个标准名组下控制结论。同目录 001–004、同基名同族的 005 在别处 ⇒ Incomplete，
     /// 不能拿本目录这一组直接快通道。
     /// </summary>
-    internal static IReadOnlyList<Decision> Decide(IEnumerable<string>? paths)
+    internal static IReadOnlyList<Decision> Decide(
+        IEnumerable<string>? paths,
+        Func<string, bool>? isBlocked = null)
     {
         List<string> all = (paths ?? Enumerable.Empty<string>())
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -103,13 +105,17 @@ internal static class StandardNameFastPath
                 && string.Equals(item.Base, group.BaseName, StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(item.Directory, group.Directory, StringComparison.OrdinalIgnoreCase));
 
+            bool blocked = isBlocked?.Invoke(group.BaseName) == true;
+
             result.Add(new Decision
             {
                 Group = group,
-                Kind = externalSibling ? DecisionKind.Incomplete : DecisionKind.Ready,
-                Reason = externalSibling
-                    ? "同基名同族的其他标准片不在本目录 ⇒ 交回正常第二大步"
-                    : "同目录标准名组，可试快通道"
+                Kind = externalSibling || blocked ? DecisionKind.Incomplete : DecisionKind.Ready,
+                Reason = blocked
+                    ? "这一基名的标准名快通道已经试过并失败 ⇒ 交回正常第二大步"
+                    : externalSibling
+                        ? "同基名同族的其他标准片不在本目录 ⇒ 交回正常第二大步"
+                        : "同目录标准名组，可试快通道"
             });
         }
 
@@ -176,7 +182,13 @@ internal static class StandardNameFastPath
                 .OrderBy(item => item.Index)
                 .ToList();
 
-            if (!TryResolveEntry(members, group.Key.Family, out string entry))
+            /*
+             * 快通道只处理“简单完整组”：卷号必须从入口开始连续、唯一、至少两片。
+             * 缺号/重号/单片不在这里猜完整性，也不标 Ready（交回正常第二大步）。
+             * 这是快通道的资格判据，不是内容完整性判据。
+             */
+            if (!IsCompleteSequence(members, group.Key.Family)
+                || !TryResolveEntry(members, group.Key.Family, out string entry))
             {
                 continue;
             }
@@ -192,6 +204,29 @@ internal static class StandardNameFastPath
         }
 
         return result;
+    }
+
+    /// <summary>快通道资格：至少两片、索引从入口开始连续且唯一。</summary>
+    private static bool IsCompleteSequence(
+        IReadOnlyList<(string Path, string Directory, string Base, Family Family, int Index)> members,
+        Family family)
+    {
+        if (members.Count < 2)
+        {
+            return false;
+        }
+
+        int expected = family == Family.ZipSpanned ? 0 : 1;
+
+        for (int index = 0; index < members.Count; index++)
+        {
+            if (members[index].Index != expected + index)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool TryResolveEntry(
@@ -234,81 +269,108 @@ internal static class StandardNameFastPath
         family = default;
         index = 0;
 
-        // 用户口径：标准名最多在后缀里夹中文字符；只清后缀，基名一个字符不动。
-        fileName = CanonicalFileName(fileName);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
 
-        Match match = RarPartPattern.Match(fileName);
+        // 用户口径：标准名最多在后缀里夹中文字符；只清后缀，基名一个字符不动。
+        string canonical = CanonicalFileName(fileName);
+
+        Match match = RarPartPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.RarPart;
-            index = int.Parse(match.Groups["num"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            return true;
+            return IsSimpleBaseName(baseName)
+                && TryParseIndex(match.Groups["num"].Value, out index);
         }
 
-        match = SevenZipPattern.Match(fileName);
+        match = SevenZipPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.SevenZip;
-            index = int.Parse(match.Groups["num"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            return true;
+            return IsSimpleBaseName(baseName)
+                && TryParseIndex(match.Groups["num"].Value, out index);
         }
 
-        match = ZipNumberedPattern.Match(fileName);
+        match = ZipNumberedPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.ZipNumbered;
-            index = int.Parse(match.Groups["num"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            return true;
+            return IsSimpleBaseName(baseName)
+                && TryParseIndex(match.Groups["num"].Value, out index);
         }
 
-        match = ZipSpannedTailPattern.Match(fileName);
+        match = ZipSpannedTailPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.ZipSpanned;
             index = 0;
-            return true;
+            return IsSimpleBaseName(baseName);
         }
 
-        match = ZipSpannedPartPattern.Match(fileName);
+        match = ZipSpannedPartPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.ZipSpanned;
-            index = int.Parse(match.Groups["num"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            return true;
+            return IsSimpleBaseName(baseName)
+                && TryParseIndex(match.Groups["num"].Value, out index);
         }
 
-        match = RarOldBodyPattern.Match(fileName);
+        match = RarOldBodyPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.RarOld;
             index = 1;
-            return true;
+            return IsSimpleBaseName(baseName);
         }
 
-        match = RarOldPartPattern.Match(fileName);
+        match = RarOldPartPattern.Match(canonical);
 
         if (match.Success)
         {
             baseName = match.Groups["base"].Value;
             family = Family.RarOld;
-            index = int.Parse(match.Groups["num"].Value, System.Globalization.CultureInfo.InvariantCulture) + 2;
+
+            if (!IsSimpleBaseName(baseName)
+                || !TryParseIndex(match.Groups["num"].Value, out int number)
+                || number > int.MaxValue - 2)
+            {
+                return false;
+            }
+
+            index = number + 2;
             return true;
         }
 
         return false;
     }
+
+    /// <summary>
+    /// 快通道只接“简单基名”：基名里再有额外的点就交给正常第二大步。
+    /// 例：`小明.part1.rar` 可以；`报告.第一季.7z.001` 不在这里猜。
+    /// </summary>
+    private static bool IsSimpleBaseName(string baseName) =>
+        !string.IsNullOrWhiteSpace(baseName) && baseName.IndexOf('.') < 0;
+
+    private static bool TryParseIndex(string value, out int index) =>
+        int.TryParse(
+            value,
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out index);
 
     /// <summary>
     /// **规范文件名**（快通道唯一口径）：只清后缀段的非 ASCII 杂质（含中文），保留基名原样。

@@ -238,6 +238,8 @@ internal sealed class VolumeLedgerHandler
         _host._volumeLedgerState.AdoptedLandedPieces.Clear();
         _host._volumeLedgerState.GroupLayerByBaseName.Clear();
         _host._volumeLedgerState.VolumeStepTasks.Clear();
+        _host._volumeLedgerState.StandardNameFastPathTasks.Clear();
+        _host._volumeLedgerState.StandardNameFastPathFallbackPending.Clear();
         _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
         _host._volumeLedgerState.SuffixRenamedSources.Clear();
     }

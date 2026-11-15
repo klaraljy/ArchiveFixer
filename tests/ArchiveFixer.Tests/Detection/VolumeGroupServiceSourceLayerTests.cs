@@ -140,6 +140,35 @@ public sealed class VolumeGroupServiceSourceLayerTests
         Assert.Same(unitB, byB);
     }
 
+    [Fact]
+    public void 快通道失败后只丢本基名的快通道Unit()
+    {
+        const string layer = @"C:\in\fast";
+        var service = new VolumeGroupService();
+
+        VolumeGroupUnit? unit = service.TryCommit(
+            "9953",
+            VolumeNamingFamily.RarPart,
+            layer,
+            Path.Combine(layer, "9953.part1.rar"),
+            ownerTaskFileName: "9953.part1.rar",
+            Pieces(layer, VolumeHandoffSource.UserImported),
+            missingNumbers: null,
+            evidence: "快通道",
+            declaredPieceCount: null,
+            declaredTotalBytes: null,
+            outputLayer: layer,
+            standardNameFastPath: true);
+
+        Assert.NotNull(unit);
+        Assert.True(unit!.StandardNameFastPath);
+        Assert.Single(service.Units);
+
+        service.ForgetStandardNameFastPath("9953");
+
+        Assert.Empty(service.Units);
+    }
+
     private static IReadOnlyList<VolumeFacts> Pieces(
         string layer,
         VolumeHandoffSource source)

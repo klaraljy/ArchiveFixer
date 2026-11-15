@@ -26,6 +26,25 @@ public sealed class FirstStepFileLedger
     {
         _entries.Clear();
         _indexByPath.Clear();
+        _standardNameFastPathBlocked.Clear();
+    }
+
+    private readonly HashSet<string> _standardNameFastPathBlocked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 这一批里某个基名的标准名快通道已经被“试过但失败”封掉，后续不许再 Ready。
+    /// 只在同一批内有效；批首 <see cref="Clear"/> 清空。
+    /// </summary>
+    public bool IsStandardNameFastPathBlocked(string? baseName) =>
+        !string.IsNullOrWhiteSpace(baseName) && _standardNameFastPathBlocked.Contains(baseName);
+
+    /// <summary>把某个基名封出标准名快通道（回退到内容卡/正常第二大步）。</summary>
+    public void BlockStandardNameFastPath(string? baseName)
+    {
+        if (!string.IsNullOrWhiteSpace(baseName))
+        {
+            _standardNameFastPathBlocked.Add(baseName);
+        }
     }
 
     /// <summary>

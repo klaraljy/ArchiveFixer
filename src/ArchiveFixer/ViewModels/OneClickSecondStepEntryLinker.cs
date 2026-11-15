@@ -69,7 +69,8 @@ internal sealed class OneClickSecondStepEntryLinker
                  in ArchiveFixer.Extraction.StandardNameFastPath.Decide(
                      _extractionCoordinator.VolumeHandoff.FirstStepLedger
                          .AllSecondStepCandidates()
-                         .Select(entry => entry.Path)))
+                         .Select(entry => entry.Path),
+                     _extractionCoordinator.VolumeHandoff.FirstStepLedger.IsStandardNameFastPathBlocked))
         {
             if (decision.Kind == ArchiveFixer.Extraction.StandardNameFastPath.DecisionKind.Ready)
             {
@@ -280,6 +281,26 @@ internal sealed class OneClickSecondStepEntryLinker
                 }
 
                 continue;
+            }
+
+            if (standardNameFastPath)
+            {
+                _extractionCoordinator._volumeLedgerState.StandardNameFastPathTasks[entryTask] = group.BaseName;
+            }
+
+            /*
+             * 快速通道失败后的唯一一次回退：入口任务上一次的 Failed 只说明快通道没成，
+             * 不能因此把它当终态锁死。清掉失败皮，下一步走已封掉快通道的正常路径。
+             */
+            if (_extractionCoordinator._volumeLedgerState.StandardNameFastPathFallbackPending.Remove(entryTask))
+            {
+                entryTask.Outcome = TaskOutcome.Pending;
+                entryTask.IsOutputVerified = false;
+                entryTask.EndTime = null;
+                entryTask.ErrorMessage = string.Empty;
+                entryTask.Status = StatusText.WaitingExtract;
+                entryTask.Operation = StatusText.OpWaiting;
+                entryTask.ProgressText = StatusText.ProgressWaiting;
             }
 
             if (entryTask.Outcome == TaskOutcome.Succeeded || entryTask.IsOutputVerified)

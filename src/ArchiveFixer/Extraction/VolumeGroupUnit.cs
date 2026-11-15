@@ -73,6 +73,11 @@ public sealed class VolumeGroupUnit
     /// <summary>组状态（唯一写者 = <see cref="VolumeGroupService"/>；⛔ 交界处不许写）。</summary>
     public VolumeGroupState State { get; set; } = VolumeGroupState.Candidate;
 
+    /// <summary>
+    /// 这一组是不是走“同目录标准名快速通道”建的。快速通道试解失败时据此只回退一次。
+    /// </summary>
+    public bool StandardNameFastPath { get; set; }
+
     /// <summary>这一组的片（原始事实；卷号可为空，由族算法决定怎么用）。</summary>
     public IReadOnlyList<VolumeFacts> Pieces { get; set; } = Array.Empty<VolumeFacts>();
 

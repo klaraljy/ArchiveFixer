@@ -61,20 +61,92 @@ public sealed class StandardNameFastPathTests
     }
 
     [Fact]
-    public void 只有001到004是本目录标准名_也返回标准组_不在这里判完整性()
+    public void 被回退封掉的基名不再Ready()
     {
         string directory = @"C:\in";
-        var groups = StandardNameFastPath.Find(new[]
+        var paths = new[]
+        {
+            Path.Combine(directory, "9953.part1.rar"),
+            Path.Combine(directory, "9953.part2.rar")
+        };
+
+        StandardNameFastPath.Decision decision = Assert.Single(
+            StandardNameFastPath.Decide(paths, _ => true));
+
+        Assert.Equal(StandardNameFastPath.DecisionKind.Incomplete, decision.Kind);
+    }
+
+    [Fact]
+    public void 缺号的标准片不返回快通道组()
+    {
+        string directory = @"C:\in";
+        var paths = new[]
         {
             Path.Combine(directory, "9953.part1.rar"),
             Path.Combine(directory, "9953.part2.b2"),
             Path.Combine(directory, "9953.part3.c3"),
             Path.Combine(directory, "9953.part4.rar")
-        });
+        };
 
-        StandardNameFastPath.Group group = Assert.Single(groups);
-        Assert.Equal(2, group.Pieces.Count);
-        Assert.Equal(Path.Combine(directory, "9953.part1.rar"), group.EntryPath);
+        Assert.Empty(StandardNameFastPath.Find(paths));
+        Assert.DoesNotContain(
+            StandardNameFastPath.Decide(paths),
+            decision => decision.Kind == StandardNameFastPath.DecisionKind.Ready);
+    }
+
+    [Fact]
+    public void 卷号有缺口或者重复_一律不Ready()
+    {
+        string directory = @"C:\in";
+
+        Assert.Empty(StandardNameFastPath.Find(new[]
+        {
+            Path.Combine(directory, "gap.7z.001"),
+            Path.Combine(directory, "gap.7z.003")
+        }));
+
+        Assert.Empty(StandardNameFastPath.Find(new[]
+        {
+            Path.Combine(directory, "dup.part1.rar"),
+            Path.Combine(directory, "dup.part01.rar")
+        }));
+    }
+
+    [Fact]
+    public void 超长卷号不抛异常_直接不Ready()
+    {
+        string directory = @"C:\in";
+        var paths = new[]
+        {
+            Path.Combine(directory, "huge.part99999999999999999999.rar"),
+            Path.Combine(directory, "huge.part2.rar")
+        };
+
+        Assert.Empty(StandardNameFastPath.Find(paths));
+    }
+
+    [Fact]
+    public void 带额外点的基名不合并_交给正常第二大步()
+    {
+        string directory = @"C:\in";
+        var paths = new[]
+        {
+            Path.Combine(directory, "报告.第一季.7z.001"),
+            Path.Combine(directory, "报告.第一季.7z.002"),
+            Path.Combine(directory, "报告.第二季.7z.001"),
+            Path.Combine(directory, "报告.第二季.7z.002")
+        };
+
+        Assert.Empty(StandardNameFastPath.Find(paths));
+    }
+
+    [Fact]
+    public void 单片标准包不进入第二大步快通道()
+    {
+        Assert.Empty(StandardNameFastPath.Find(new[]
+        {
+            Path.Combine(@"C:\in", "single.7z.001")
+        }));
     }
 
     [Fact]

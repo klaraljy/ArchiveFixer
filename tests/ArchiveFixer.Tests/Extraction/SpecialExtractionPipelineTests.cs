@@ -640,6 +640,31 @@ public class SpecialExtractionPipelineTests : IDisposable
             text => text.Contains("密码候选", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void 快通道失败回退只排队一次_且清掉入口覆盖()
+    {
+        Harness harness = CreateHarness("fast-path-fallback");
+        ArchiveTask task = new(Path.Combine(_root, "fallback.7z.001"), 1)
+        {
+            Outcome = TaskOutcome.Failed,
+            EngineEntryPathOverride = Path.Combine(_root, "fallback.7z.001")
+        };
+
+        harness.Extraction._volumeLedgerState.StandardNameFastPathTasks[task] = "fallback";
+        harness.Extraction._volumeLedgerState.VolumeStepTasks.Add(task);
+
+        harness.Extraction.TryQueueStandardNameFastPathFallback(task);
+
+        Assert.True(harness.Extraction.VolumeHandoff.FirstStepLedger.IsStandardNameFastPathBlocked("fallback"));
+        Assert.Contains(task, harness.Extraction._volumeLedgerState.StandardNameFastPathFallbackPending);
+        Assert.DoesNotContain(task, harness.Extraction._volumeLedgerState.VolumeStepTasks);
+        Assert.Equal(string.Empty, task.EngineEntryPathOverride);
+
+        harness.Extraction.TryQueueStandardNameFastPathFallback(task);
+
+        Assert.Single(harness.Extraction._volumeLedgerState.StandardNameFastPathFallbackPending);
+    }
+
     // ================================================================ 装配与工具
 
     /// <summary>打开特定解压独立模式（每个用例都写一遍太啰嗦，抽一处）。</summary>

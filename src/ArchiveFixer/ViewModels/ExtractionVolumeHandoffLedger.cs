@@ -165,6 +165,38 @@ internal sealed class ExtractionVolumeHandoffLedger
     }
 
     /// <summary>
+    /// 标准名快通道失败、要交回正常第二大步时，撤掉“已消费”占位，让同一批的
+    /// 组分析还能看见这些交接片。⛔ 不动盘上文件，也不改源包事实。
+    /// </summary>
+    internal void ReleaseVolumeHandoffConsumed(IEnumerable<string> paths)
+    {
+        if (paths == null)
+        {
+            return;
+        }
+
+        var wanted = new HashSet<string>(
+            paths.Where(path => !string.IsNullOrWhiteSpace(path)),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (wanted.Count == 0)
+        {
+            return;
+        }
+
+        foreach (ArchiveFixer.Detection.VolumeHandoffEntry entry in _host.VolumeHandoff.EntryLedger)
+        {
+            if (!wanted.Contains(entry.Path))
+            {
+                continue;
+            }
+
+            entry.ConsumedBy = string.Empty;
+            entry.ConsumedAt = null;
+        }
+    }
+
+    /// <summary>
     /// 批末一行：本批交接 N 份（在盘 / 已不在）｜已消费 M 份｜待处理 K 份。
     /// ⛔ 只在有交接事实时写；没有交接就不打这一行（普通单包批次不受影响）。
     /// </summary>

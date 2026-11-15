@@ -31,6 +31,10 @@ internal sealed partial class ExtractionCoordinator
     /// <summary>批首清账（与交接账同一处调用）。</summary>
     internal void ResetVolumeGroupService() => _volumeGroupService.Reset();
 
+    /// <summary>快速通道失败后一次性回退排队；实现见 <see cref="VolumeStepHandler"/>。</summary>
+    internal void TryQueueStandardNameFastPathFallback(ArchiveTask task) =>
+        VolumeStep.TryQueueStandardNameFastPathFallback(task);
+
     // ===== 搬出后的入口薄转发（实现见 Extraction/Steps/VolumeStepHandler.cs）=====
     private VolumeStepHandler? _volumeStepHandler;
 

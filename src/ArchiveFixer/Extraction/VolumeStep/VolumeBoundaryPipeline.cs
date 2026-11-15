@@ -68,7 +68,9 @@ public sealed class VolumeBoundaryPipeline
          *   ③ 其余一律照走 resolver（不按后缀/名字猜）。
          */
         List<StandardNameFastPath.Decision> readyFastGroups = StandardNameFastPath
-            .Decide(ledger.AllSecondStepCandidates().Select(entry => entry.Path))
+            .Decide(
+                ledger.AllSecondStepCandidates().Select(entry => entry.Path),
+                ledger.IsStandardNameFastPathBlocked)
             .Where(decision => decision.Kind == StandardNameFastPath.DecisionKind.Ready)
             .ToList();
 

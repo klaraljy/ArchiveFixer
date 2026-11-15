@@ -236,6 +236,15 @@ internal sealed class VolumeLedgerState
     internal HashSet<ArchiveTask> VolumeStepTasks { get; } = new();
 
     /// <summary>
+    /// 这一批里哪些入口任务走过“同目录标准名快速通道”，以及它的组基名。
+    /// 只用于失败后的一次性回退；没有它就无法知道哪一单该让出快通道。
+    /// </summary>
+    internal Dictionary<ArchiveTask, string> StandardNameFastPathTasks { get; } = new();
+
+    /// <summary>快速通道已经失败、等下一次轮次走正常第二大步的任务。</summary>
+    internal HashSet<ArchiveTask> StandardNameFastPathFallbackPending { get; } = new();
+
+    /// <summary>
     /// **这一批里"被判成是分卷"的那几组的入口包**（2026-10-11，轮次模型：第二大步收卷用）。
     /// 写点唯一 = `HarvestSolvedGroupVolumesForRound`（轮边界交下来的入口包）；读点唯一 = 它自己
     /// （每轮边界把记住的都再试一遍 —— 因为判出"这一组是分卷"的那一刻**改名与解压还没发生**）。

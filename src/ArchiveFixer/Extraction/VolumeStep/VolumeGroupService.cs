@@ -45,6 +45,29 @@ public sealed class VolumeGroupService
         _units.Clear();
     }
 
+    /// <summary>
+    /// 快速通道试解失败后，只丢掉该基名的快速通道 Unit；正常第二大步会重新建组。
+    /// ⛔ 不动其他基名、不动盘上文件。
+    /// </summary>
+    public void ForgetStandardNameFastPath(string? baseName)
+    {
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return;
+        }
+
+        List<string> keys = _units
+            .Where(pair => pair.Value.StandardNameFastPath
+                && string.Equals(pair.Value.BaseName, baseName, StringComparison.OrdinalIgnoreCase))
+            .Select(pair => pair.Key)
+            .ToList();
+
+        foreach (string key in keys)
+        {
+            _units.Remove(key);
+        }
+    }
+
     /// <summary>按“基名 + 族”找已经登记的组（同基名多组时返回第一个；调用方本来就不用它区分）。</summary>
     public VolumeGroupUnit? Find(string baseName, VolumeNamingFamily? family)
     {
@@ -139,6 +162,12 @@ public sealed class VolumeGroupService
             return null;
         }
 
+        if (standardNameFastPath
+            && (pieces.Count < 2 || (missingNumbers != null && missingNumbers.Count > 0)))
+        {
+            return null;
+        }
+
         /*
          * 源层红线（用户六条之二）：链产出/暂存的片不能把其余物 / 工作区当入口层。
          * 但用户**明确从其余物导入**的原件，那一层就是用户的源层；不能因为目录名带
@@ -213,6 +242,7 @@ public sealed class VolumeGroupService
          */
         if (standardNameFastPath)
         {
+            unit.StandardNameFastPath = true;
             unit.OrderedPieces = pieces.Select(piece => piece.Path).ToList();
 
             /*

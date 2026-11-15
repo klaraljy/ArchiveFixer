@@ -191,6 +191,8 @@ internal sealed class ExtractionBatchEntry
             _host._volumeLedgerState.ProducerSourcesCollected.Clear();
             _host._volumeLedgerState.AdoptedLandedPieces.Clear();
             _host._volumeLedgerState.GroupLayerByBaseName.Clear();
+            _host._volumeLedgerState.StandardNameFastPathTasks.Clear();
+            _host._volumeLedgerState.StandardNameFastPathFallbackPending.Clear();
             _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
             _host._volumeLedgerState.VolumeGroupEntriesThisBatch.Clear();
             _host._volumeLedgerState.VolumeDeficitFinalPass.Clear();

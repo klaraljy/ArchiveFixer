@@ -364,6 +364,12 @@ internal sealed class ExtractionTaskRunner
                 && registeredCandidate.ChainProducedContent;
 
             ExtractionCoordinator.FinalizeOutcomeIfPending(task, chainProducedContent);
+
+            /*
+             * 第二大步标准名快通道：失败/密码候选耗尽 ⇒ 只排一次正常第二大步回退。
+             * 这里不删源包、不搬片；正常路径由下一轮的 resolver/内容卡接手。
+             */
+            _host.TryQueueStandardNameFastPathFallback(task);
             /*
              * 部分完成发布（用户 2026-10-02 拍板的口径 A）：把已经解出来、逐条核对过的那部分
              * 放进 <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>。**必须排在清工作区之前** ——

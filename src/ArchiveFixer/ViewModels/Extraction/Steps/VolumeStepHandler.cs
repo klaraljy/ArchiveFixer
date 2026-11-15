@@ -669,4 +669,41 @@ internal sealed class VolumeStepHandler
 
         return null;
     }
+
+    /// <summary>
+    /// 快速通道失败后排队一次正常第二大步：只封快通道、清 Unit/入口覆盖/点名事实；
+    /// 不删源包、不搬片。下一次轮次由正常 resolver/内容卡重新判这一组。
+    /// </summary>
+    internal void TryQueueStandardNameFastPathFallback(ArchiveTask task)
+    {
+        if (task == null
+            || !_host._volumeLedgerState.StandardNameFastPathTasks.Remove(task, out string? baseName))
+        {
+            return;
+        }
+
+        bool failed =
+            task.Outcome is TaskOutcome.Failed or TaskOutcome.PartiallyCompleted
+            || (task.Outcome == TaskOutcome.Succeeded
+                && task.OutputVerification == OutputVerificationOutcome.Failed);
+
+        if (!failed)
+        {
+            return;
+        }
+
+        _host._volumeLedgerState.StandardNameFastPathFallbackPending.Add(task);
+        _host.VolumeHandoff.FirstStepLedger.BlockStandardNameFastPath(baseName);
+        _host.VolumeHandoff.Ledger.ReleaseVolumeHandoffConsumed(
+            _host.VolumeHandoff.FirstStepLedger
+                .SecondStepCandidates(baseName)
+                .Select(entry => entry.Path));
+        _host._volumeGroupService.ForgetStandardNameFastPath(baseName);
+        _host._volumeLedgerState.VolumeStepTasks.Remove(task);
+        task.EngineEntryPathOverride = string.Empty;
+
+        _host.AppendLog(
+            "WARN",
+            $"[第二大步·标准名快通道] {baseName}：试解失败/密码候选耗尽 ⇒ 封快通道，下一次轮次走正常第二大步（只回退一次）。");
+    }
 }
