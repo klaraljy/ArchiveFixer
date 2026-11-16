@@ -344,10 +344,8 @@ internal sealed class BatchReminderHandler
         bool spaceTight = snapshot?.SpaceTightMode ?? _host._vm.SpaceTightMode;
 
         /*
-         * 安全档（「不删原包」）：源包那一档要按"一个字节都不动"说，
-         * 而不是按上面那样被覆盖成「彻底删除」—— 那会与安全档的真实行为相反。
-         * ⚠ 2026-10-15：空间不足模式（非安全档）的真实动作 = **定稿 + 校验通过后当场就地删源包**
-         * ⇒ 那一档的措辞对应 `DeleteInPlace`（原来是 `MoveToRest`，已随用户口径删除）。
+         * 空间不足：源包那一档按「定稿 + 校验通过后当场就地删源包」说，
+         * 失败/部分完成/取消不删；最后一层过程物固定保留。
          */
         if (spaceTight)
         {

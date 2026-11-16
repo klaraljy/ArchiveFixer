@@ -31,7 +31,7 @@ internal sealed class SpaceTextCoordinator
     internal void RefreshSpaceTightOverrideText()
     {
         /*
-         * 两条提示**各说各的**（用户 2026-09-27 加了「不删原包」安全档）：
+         * 提示说清空间不足会删除源包，但失败/部分完成/取消不删。
          * 会删源包那一档说"会删"，安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
          */
         _vm.SetSpaceTightOverrideText(!_vm.SpaceTightMode
