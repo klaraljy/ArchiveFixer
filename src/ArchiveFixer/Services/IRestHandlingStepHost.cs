@@ -15,8 +15,6 @@ internal interface IRestHandlingStepHost
 
     bool SpaceTightThisBatch { get; }
 
-    bool SpaceTightKeepSourceThisBatch { get; }
-
     bool LayerReclaimThisBatch { get; set; }
 
     CancellationTokenSource? OperationCts { get; }

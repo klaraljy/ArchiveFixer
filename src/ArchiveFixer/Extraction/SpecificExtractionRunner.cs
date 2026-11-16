@@ -54,6 +54,8 @@ public sealed class SpecificExtractionRunner
 
         string currentArchive = sourceArchive;
         bool anyPasswordUsed = false;
+        string restArtifact = string.Empty;
+        string? usedPassword = null;
 
         for (int depth = 0; depth < MaxDepth; depth++)
         {
@@ -110,6 +112,7 @@ public sealed class SpecificExtractionRunner
                 {
                     extracted = true;
                     anyPasswordUsed |= !string.IsNullOrEmpty(password);
+                    usedPassword = password;
                     onPasswordSuccess?.Invoke(password);
                     _log?.Invoke($"第 {depth + 1} 层：密码候选 {passwordIndex + 1}/{normalizedPasswords.Count} 通过");
                     break;
@@ -130,7 +133,8 @@ public sealed class SpecificExtractionRunner
                     PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
                     DiagnosticDetail =
                         $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类=ExtractFailed; 原因={lastError}",
-                    RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
+                    RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot, out restArtifact),
+                    RestArtifactPath = restArtifact,
                     Depth = depth
                 };
             }
@@ -141,19 +145,47 @@ public sealed class SpecificExtractionRunner
 
             if (decision.Kind == SpecificLayerKind.Content)
             {
+                OutputVerificationResult verification = await VerifyPublishedOutputAsync(
+                        currentArchive,
+                        usedPassword,
+                        layerRoot,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                _log?.Invoke($"第 {depth + 1} 层输出校验：{verification.Message}");
+
+                if (!verification.Verified)
+                {
+                    return new SpecificExtractionRunResult
+                    {
+                        Message = "特定解压输出校验未通过：" + verification.Message,
+                        PasswordStatus = DescribePasswordStatus(lastErrorType, anyPasswordUsed),
+                        RestDirectory = PreserveLastProcessArtifact(
+                            currentArchive,
+                            workspace.TaskDirectory,
+                            outputRoot,
+                            out restArtifact),
+                        RestArtifactPath = restArtifact,
+                        OutputVerification = verification,
+                        Depth = depth
+                    };
+                }
+
                 string finalPath = _outputPublisher.Publish(currentArchive, layerRoot, outputRoot);
 
                 _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
 
                 /*
-                 * 成功链上的内层包是过程物，按固定规则随工作区删除；
-                 * ⛔ 不再复制到「其余物」。「最后一层过程物」只在失败 / 部分完成时才保留。
+                 * 成功链上的内层包是过程物，按固定规则随工作区删除；⛔ 不再复制到「其余物」。
+                 * 「最后一层过程物」只在失败 / 部分完成时才保留。
                  */
                 return new SpecificExtractionRunResult
                 {
                     Success = true,
                     OutputPath = finalPath,
                     RestDirectory = string.Empty,
+                    RestArtifactPath = string.Empty,
+                    OutputVerification = verification,
                     PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                     Message = "特定解压成功",
                     Depth = depth
@@ -205,7 +237,8 @@ public sealed class SpecificExtractionRunner
                 PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
                 DiagnosticDetail =
                     $"层={depth + 1}; 入口={Path.GetFileName(currentArchive)}; 分类={decision.Kind}; 卷数={decision.VolumePaths.Count}",
-                RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
+                RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot, out restArtifact),
+                RestArtifactPath = restArtifact,
                 Depth = depth
             };
         }
@@ -215,7 +248,8 @@ public sealed class SpecificExtractionRunner
             Message = "超过 3 层仍未得到内容物",
             PasswordStatus = anyPasswordUsed ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded,
             DiagnosticDetail = $"层={MaxDepth}; 入口={Path.GetFileName(currentArchive)}; 分类=MaxDepth",
-            RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot),
+            RestDirectory = PreserveLastProcessArtifact(currentArchive, workspace.TaskDirectory, outputRoot, out restArtifact),
+            RestArtifactPath = restArtifact,
             Depth = MaxDepth
         };
     }
@@ -318,8 +352,11 @@ public sealed class SpecificExtractionRunner
     private static string PreserveLastProcessArtifact(
         string lastArchivePath,
         string taskDirectory,
-        string outputRoot)
+        string outputRoot,
+        out string artifactPath)
     {
+        artifactPath = string.Empty;
+
         if (string.IsNullOrWhiteSpace(lastArchivePath)
             || !File.Exists(lastArchivePath)
             || !Path.GetFullPath(lastArchivePath).StartsWith(
@@ -334,12 +371,41 @@ public sealed class SpecificExtractionRunner
 
         string target = Path.Combine(rest, Path.GetFileName(lastArchivePath));
 
-        if (!File.Exists(target))
+        if (File.Exists(target) || Directory.Exists(target))
         {
-            File.Copy(lastArchivePath, target);
+            target = SafePathHelper.AutoRenameFilePath(target);
         }
 
+        if (!HardLinkHelper.TryCreateHardLink(target, lastArchivePath))
+        {
+            return string.Empty;
+        }
+
+        artifactPath = target;
         return rest;
+    }
+
+    private async Task<OutputVerificationResult> VerifyPublishedOutputAsync(
+        string archivePath,
+        string? password,
+        string outputPath,
+        CancellationToken cancellationToken)
+    {
+        ArchiveListResult? expected = null;
+
+        try
+        {
+            expected = await _engine.ListAsync(
+                    new ArchiveRequest { ArchivePath = archivePath, Password = password },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // 列表失败不是删除源包的理由；按“没有清单”走底线校验，源包不会被删。
+        }
+
+        return OutputVerifier.Verify(outputPath, expected);
     }
 
     /// <summary>把引擎进度补上“这是第几层”，UI 不需要自己猜。</summary>

@@ -121,7 +121,6 @@ public sealed class SpaceTightCrossVolumeGroupTests : IDisposable
         extraction.Schedule.SpaceProbeOverride = _ => 20L * 1024 * 1024;
         extraction.Schedule.SpaceReserveOverride = 64 * 1024;
         vm.SpaceTightMode = true;
-        vm.SpaceTightKeepSource = false;
 
         await vm.AddPathsAsync(new[] { sourceDir }, ImportMode.Replace);
         await oneClick.RunAsync().WaitAsync(TimeSpan.FromMinutes(2));

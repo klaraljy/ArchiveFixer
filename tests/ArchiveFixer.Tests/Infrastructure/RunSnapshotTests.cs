@@ -26,7 +26,6 @@ public class RunSnapshotTests
             targets,
             options,
             spaceTightMode: true,
-            spaceTightKeepSource: false,
             useSpecificExtraction: true,
             selectedOutputDirectory: @"D:\out",
             passwordCandidates: candidates);
@@ -41,7 +40,6 @@ public class RunSnapshotTests
         Assert.Equal("pw", snapshot.PasswordCandidates[1]);
         Assert.Equal(@"D:\out", snapshot.Options.CustomRoot);
         Assert.True(snapshot.SpaceTightMode);
-        Assert.False(snapshot.SpaceTightKeepSource);
         Assert.True(snapshot.UseSpecificExtraction);
 
         var stop = new RunStopToken();
@@ -49,7 +47,6 @@ public class RunSnapshotTests
             targets: Array.Empty<ArchiveTask>(),
             options: options,
             spaceTightMode: false,
-            spaceTightKeepSource: false,
             useSpecificExtraction: false,
             selectedOutputDirectory: null,
             stopToken: stop);

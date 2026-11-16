@@ -530,8 +530,6 @@ internal sealed partial class ExtractionCoordinator : IProgressHeartbeatHost, IC
 
     bool IRestHandlingStepHost.SpaceTightThisBatch => _spaceTightPolicy.Enabled;
 
-    bool IRestHandlingStepHost.SpaceTightKeepSourceThisBatch => _spaceTightPolicy.KeepSource;
-
     bool IRestHandlingStepHost.LayerReclaimThisBatch
     {
         get => _layerReclaimThisBatch;

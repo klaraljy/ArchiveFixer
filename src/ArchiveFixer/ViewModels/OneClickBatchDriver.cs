@@ -108,10 +108,6 @@ internal sealed class OneClickBatchDriver
 
                 OneClickOutcome outcome = await _runPipeline(targets, runOptions).ConfigureAwait(true);
 
-                OneClickBatchFinalizer.CleanupSuccessfulProcessArtifacts(
-                    Tasks,
-                    message => AppendLog("INFO", message));
-
                 _resultPresenter.Present(outcome);
             }
             finally

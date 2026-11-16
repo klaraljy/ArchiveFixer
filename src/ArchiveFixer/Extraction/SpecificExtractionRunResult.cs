@@ -10,6 +10,12 @@ public sealed class SpecificExtractionRunResult
 
     public string RestDirectory { get; init; } = string.Empty;
 
+    /// <summary>失败时留下的那一份最后一层过程物（硬链接目标）；空 = 没有保留。</summary>
+    public string RestArtifactPath { get; init; } = string.Empty;
+
+    /// <summary>真正发布后的输出校验结果；空 = 还没校验。</summary>
+    public OutputVerificationResult? OutputVerification { get; init; }
+
     /// <summary>本次实际密码结论（密码正确 / 不需要密码 / 需要密码 / 密码错误）；空 = 判不出。</summary>
     public string PasswordStatus { get; init; } = string.Empty;
 

@@ -99,6 +99,32 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task 特定解压_输出为空_校验失败且不发布()
+    {
+        string source = Path.Combine(_root, "empty.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("empty.7z", _ => { });
+
+        string outputRoot = Path.Combine(_root, "out-empty");
+        SpecificExtractionWorkspace workspace = CreateWorkspace(outputRoot);
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            outputRoot,
+            workspace,
+            new string?[] { "pwd" });
+
+        Assert.False(result.Success, "空输出不能算成功");
+        Assert.NotNull(result.OutputVerification);
+        Assert.False(result.OutputVerification!.Verified);
+        Assert.False(Directory.Exists(Path.Combine(outputRoot, "empty")));
+        Assert.True(File.Exists(source), "校验失败时源包不能被当作已成功处理");
+        workspace.Cleanup();
+    }
+
+    [Fact]
     public async Task 两层_最后一层是散图片_用最后一层压缩包名()
     {
         string source = Path.Combine(_root, "outer.7z");

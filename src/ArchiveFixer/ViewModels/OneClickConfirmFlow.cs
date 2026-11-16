@@ -53,7 +53,6 @@ internal sealed class OneClickConfirmFlow
             targets,
             seed,
             _vm.SpaceTightMode,
-            _vm.SpaceTightKeepSource,
             Settings.UseSpecificExtraction,
             _vm.SelectedOutputDirectory,
             _extractionCoordinator.SpecificExtractionPasswords);

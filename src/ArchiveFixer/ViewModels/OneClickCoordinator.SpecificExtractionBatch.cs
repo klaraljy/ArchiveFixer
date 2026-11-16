@@ -1,6 +1,7 @@
 using ArchiveFixer.BindingModels;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Services;
@@ -31,7 +32,7 @@ internal sealed partial class OneClickCoordinator
 
         _extractionCoordinator.BeginSpecificPasswordBatch();
         // 空间不足模式：批首策略唯一来源；特定解压不另读 UI 开关。
-        SpaceTightPolicy spacePolicy = SpaceTightPolicy.ForBatch(snapshot.SpaceTightMode, snapshot.SpaceTightKeepSource);
+        SpaceTightPolicy spacePolicy = SpaceTightPolicy.ForBatch(snapshot.SpaceTightMode);
         bool spaceTight = spacePolicy.Enabled;
         // 预计耗时从大到小：长任务先占槽位，小任务随后补空；不再按包大小分档。
         IReadOnlyList<SpecificBatchUnit> orderedUnits = SpecificBatchUnitBuilder.Build(targets)
@@ -233,28 +234,43 @@ internal sealed partial class OneClickCoordinator
         OneClickRunOptions runOptions,
         bool spaceTight)
     {
-        bool deleteSource = spaceTight || runOptions.SourceHandling == SourceHandlingMode.DeleteInPlace;
-        if (!deleteSource)
+        ArchiveTask entry = unit.Entry;
+        var verification = new OutputVerificationResult
+        {
+            Verified = entry.OutputVerification == OutputVerificationOutcome.Passed,
+            Known = true,
+            ManifestCrossChecked = entry.OutputManifestCrossChecked
+        };
+
+        if (!SingleObjectCompletionPolicy.ShouldDeleteSource(
+                runOptions.SourceHandling,
+                spaceTight,
+                entry.Outcome,
+                verification,
+                cancelled: false))
         {
             return;
         }
 
-        CleanupSpecificSource(unit.Entry, includeRestAliases: true);
+        CleanupSpecificSource(entry, SourceCleanupEvidence.ManifestCrossChecked, includeRestAliases: true);
         foreach (ArchiveTask follower in unit.Followers)
         {
-            CleanupSpecificSource(follower, includeRestAliases: false);
+            CleanupSpecificSource(follower, SourceCleanupEvidence.ManifestCrossChecked, includeRestAliases: false);
         }
     }
 
-    private void CleanupSpecificSource(ArchiveTask task, bool includeRestAliases)
+    private void CleanupSpecificSource(
+        ArchiveTask task,
+        SourceCleanupEvidence evidence,
+        bool includeRestAliases)
     {
         SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
             task,
             new SourceCleanupDecision
             {
                 Enabled = true,
-                Evidence = SourceCleanupEvidence.LayerCompleteness,
-                Note = "特定解压内容物已落地",
+                Evidence = evidence,
+                Note = "特定解压内容物已定稿并通过输出校验",
                 IncludeRestAliases = includeRestAliases
             });
 
@@ -275,38 +291,41 @@ internal sealed partial class OneClickCoordinator
         OneClickRunOptions runOptions,
         bool spaceTight)
     {
-        if (string.IsNullOrWhiteSpace(result.RestDirectory))
+        if (string.IsNullOrWhiteSpace(result.RestArtifactPath)
+            || !File.Exists(result.RestArtifactPath))
         {
             return;
         }
 
-        bool deleteRest = spaceTight
-                          || string.Equals(
-                              runOptions.RestHandling,
-                              RestHandlingModes.Delete,
-                              StringComparison.OrdinalIgnoreCase);
-        if (!deleteRest)
+        task.RestDirectoryPath = result.RestDirectory;
+        task.LastProcessArtifactPath = result.RestArtifactPath;
+
+        bool keep = SingleObjectCompletionPolicy.ShouldKeepLastProcess(runOptions.RestHandling, spaceTight);
+        if (keep)
         {
+            _extractionCoordinator.LogCapture.AppendTaskLog(
+                task,
+                spaceTight
+                    ? "空间不足模式：最后一层过程物固定保留"
+                    : "特定解压：最后一层过程物按「留下」保留");
             return;
         }
 
         try
         {
-            if (Directory.Exists(result.RestDirectory))
+            if (ArchivePathGuard.IsInsideRoot(result.RestDirectory, result.RestArtifactPath, out _))
             {
-                Directory.Delete(result.RestDirectory, recursive: true);
+                FileOperations.Delete(result.RestArtifactPath);
             }
 
+            task.LastProcessArtifactPath = string.Empty;
             task.RestDirectoryPath = string.Empty;
-            _extractionCoordinator.LogCapture.AppendTaskLog(
-                task,
-                spaceTight
-                    ? "空间不足模式，最后一层过程物在成功后彻底删除"
-                    : "特定解压其余物按删除档清理完毕");
+
+            _extractionCoordinator.LogCapture.AppendTaskLog(task, "特定解压：最后一层过程物按「彻底删除」处理");
         }
         catch (Exception ex)
         {
-            _extractionCoordinator.LogCapture.AppendTaskLog(task, "WARN", $"特定解压其余物删除失败：{ex.Message}");
+            _extractionCoordinator.LogCapture.AppendTaskLog(task, "WARN", $"特定解压最后一层过程物删除失败：{ex.Message}");
         }
     }
 
@@ -326,14 +345,8 @@ internal sealed partial class OneClickCoordinator
             ? $"跟班卷：同组入口「{entry.LogName}」已处理"
             : $"跟班卷：同组入口「{entry.LogName}」没有成功";
 
-        if (entrySuccess)
-        {
-            // 跟班卷自己没有产物校验，不能拿“同组入口成功”替代本单证据；
-            // 源包保留，由唯一删源决策在整组可证完整后再处理。
-            return;
-        }
-
-        // 空间不足也不能用“用户接受风险”替代本单成功/校验证据：源包保留。
+        // 跟班卷自己没有独立的产物校验：它的源包只由整组入口的成功 + 校验证据
+        // 在 ApplySpecificSourceHandling 里统一处理，这里不单独删。
     }
 
     private async Task<bool> ProcessSpecificTaskAsync(
@@ -491,7 +504,8 @@ internal sealed partial class OneClickCoordinator
             task.RestDirectoryPath = result.RestDirectory;
             task.Status = StatusText.ExtractSuccess;
             task.ProgressText = StatusText.ExtractSuccess;
-            task.IsOutputVerified = true;
+            task.OutputVerification = result.OutputVerification?.Outcome ?? OutputVerificationOutcome.NotAttempted;
+            task.OutputManifestCrossChecked = result.OutputVerification?.ManifestCrossChecked == true;
             task.Outcome = TaskOutcome.Succeeded;
             task.EndTime = ArchiveFixer.Helpers.Clock.Now;
             task.ApplyProgress(100, null);

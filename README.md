@@ -156,7 +156,7 @@ pwsh -File scripts/verify-release.ps1                                  # 发布�
   每用户安装、免 UAC；**默认装到第一个非系统固定盘上的 `\ArchiveFixer`**，本机没有第二个盘才退
   `%LOCALAPPDATA%\Programs\ArchiveFixer`；用户数据固定 `%LOCALAPPDATA%\ArchiveFixer`；装新版本时显示旧版本/新版本
   并问一次"覆盖 / 先卸旧版 / 取消"，卸载时问一次"保留用户数据（默认）/ 全部删除"）。
-  发行包用的是**发行档**（`-p:ArchiveFixerEdition=Release`）：①页那颗测试期专用的「不删原包」在发行包里不出现。
+  发行包用的是**发行档**（`-p:ArchiveFixerEdition=Release`）：测试期专用的「不删原包」已删除，所有构建都不再出现该开关。
 
 ## 目录结构
 

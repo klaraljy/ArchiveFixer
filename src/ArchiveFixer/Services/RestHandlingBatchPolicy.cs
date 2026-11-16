@@ -117,9 +117,7 @@ internal sealed class RestHandlingBatchPolicy
             return RestHandlingLog.DescribeRestScope(_host.EffectiveSourceHandling);
         }
 
-        return _host.SpaceTightKeepSourceThisBatch
-            ? "过程物（源包在本模式下「一个字节都不动」：不搬进其余物、也不删除）"
-            : "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）";
+        return "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）";
     }
 
     /// <summary>
@@ -142,19 +140,13 @@ internal sealed class RestHandlingBatchPolicy
             /*
              * 这一批的"为什么这么办"写在最前面（用户 2026-09-26 教训：同一份日志里两句话自相矛盾
              * 比少写一句更糟）。它必须同时说清三件事：覆盖了什么、**没写设置**、以及源包的下场。
-             *
-             * ⚠ 两档分开说（用户 2026-09-27 加了「不删原包」安全档）：会删的那一档说"立刻删除"，
-             * 安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
              */
             _host.AppendLog(
                 "WARN",
                 "「空间不足」模式（本次运行，不写设置）：本批并发由空间自己定"
                 + "（慢盘上少开几个反而更快）；"
-                + (_host.SpaceTightKeepSourceThisBatch
-                    ? "「不删原包」也开着 —— 源包一个字节都不动（不搬、不删），"
-                      + "只把过程物在任务成功后彻底删掉。⚠ 这一档不回收源包那份空间，需要的余量更大。"
-                    : "每个包定稿 + 校验通过后立刻永久删除它的源包"
-                      + "（不进回收站、不可恢复），收回的空间马上给后面的包用。")
+                + "每个包定稿 + 校验通过后立刻永久删除它的源包"
+                + "（不进回收站、不可恢复），收回的空间马上给后面的包用。"
                 + "失败 / 部分完成 / 取消的任务一个字节都不删。");
 
             _host.AppendLog(

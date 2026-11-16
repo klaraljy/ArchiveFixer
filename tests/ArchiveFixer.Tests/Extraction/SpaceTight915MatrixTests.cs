@@ -106,7 +106,6 @@ public sealed class SpaceTight915MatrixTests
         extraction.Schedule.SpaceProbeOverride = _ => freeBytes;
         extraction.Schedule.SpaceReserveOverride = reserveBytes;
         vm.SpaceTightMode = true;
-        vm.SpaceTightKeepSource = false;
 
         oneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
         {

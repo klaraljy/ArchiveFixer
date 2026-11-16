@@ -101,99 +101,17 @@ public partial class MainViewModel
                 return;
             }
 
-            /*
-             * 关掉「空间不足」= 连安全档一起关（值 + 通知都发）。
-             * 留着「不删原包」单独勾着毫无意义（它只描述"那个模式动不动源包"），
-             * 而界面上孤零零一个勾着会让用户以为"我现在受保护" —— 那是假的。
-             */
-            if (!value && _spaceTightKeepSource)
-            {
-                _spaceTightKeepSource = false;
-                OnPropertyChanged(nameof(SpaceTightKeepSource));
-            }
-
             RefreshSpaceTightOverrideText();
 
             AppendLog(
                 "WARN",
                 value
-                    ? "已开「空间不足」模式（只对本次运行有效，不写设置）：下一批会按空间自己定并发，"
-                      + (SpaceTightKeepSource
-                          ? "但源包一个字节都不动（「不删原包」勾着）。"
-                          : "并且每个包定稿 + 校验通过后立刻永久删除它的源包。")
+                    ? "已开「空间不足」模式（只对本次运行有效，不写设置）：下一批会按空间自己定并发，并且每个包定稿 + 校验通过后立刻永久删除它的源包。"
                     : "已关「空间不足」模式：恢复按设置里的源包 / 其余物 / 并发档执行。");
         }
     }
 
     private bool _spaceTightMode;
-
-    /// <summary>
-    /// 「空间不足」的**安全档**：并发与排序照旧由空间决定，但**源包一个字节都不动**
-    /// （用户 2026-09-27："所有测试的情况下弄一个设置不删除原包的功能，在空间不足旁边弄一个，
-    /// 空间不足但是不删除原包的操作"）。
-    ///
-    /// <para>他的顾虑是原话："源包讲实话，这个功能才刚刚弄我怕会出现意外，导致没成功而且原包也没有了，
-    /// 这样的话就太亏了" —— 所以这一档的意义是**先看清空间怎么变，再决定要不要开那个会删源包的档**。
-    /// 它与「空间不足」一样是运行期开关（⛔ 不写设置）。</para>
-    ///
-    /// <para><b>两档的耦合只有一条</b>：勾上安全档 → 自动把「空间不足」也勾上（它只描述"那个模式动不动源包"，
-    /// 单独存在没有意义）；反过来关掉「空间不足」→ 安全档一起关。⛔ 不做反向的"取消安全档就关模式"。</para>
-    /// </summary>
-    public bool SpaceTightKeepSource
-    {
-        get => _spaceTightKeepSource;
-        set
-        {
-            /*
-             * 发行档没有这个安全档（用户 2026-09-27："发行版要删，我们本地的不用"）：
-             * 界面上那颗勾在发行档里是**收起的**（见 IsSpaceTightKeepSourceAvailable），
-             * 这里再挡一道 —— 万一有别的入口（设置文件、脚本）把它设成 true，也只当没这回事。
-             *
-             * ⚠ 写法上必须让"挡住"这件事在**两种构建下都是同一段代码**：
-             * 写成 `if (!IsAvailable) { value = false; }` 时，发行档里 `KeepSourceOptionEnabled`
-             * 是编译期常量 false → 那个分支恒真 → 编译器把后面整段判成**无法访问的代码**（CS0162 警告），
-             * 而本项目的标准是 0 警告。所以这里让判据**参与运算**（一个与运算），
-             * 效果一样、两种构建下都干净。
-             */
-            value = value && BuildEdition.KeepSourceOptionEnabled;
-
-            if (!SetProperty(ref _spaceTightKeepSource, value))
-            {
-                return;
-            }
-
-            if (value && !SpaceTightMode)
-            {
-                SpaceTightMode = true;
-
-                AppendLog(
-                    "WARN",
-                    "「不删原包」勾上 → 顺带把「空间不足」也勾上（它只是那个模式的安全档，"
-                    + "单独勾着没有意义）。");
-            }
-
-            RefreshSpaceTightOverrideText();
-
-            AppendLog(
-                "WARN",
-                value
-                    ? "「不删原包」已开：这一批源包一个字节都不动（不搬、不删），"
-                      + "只按空间决定并发与顺序；其余物（过程物）仍在成功后彻底删除。"
-                      + "⚠ 这一档不回收源包那份空间，所以需要的余量更大。"
-                    : "「不删原包」已关：这一批回到「空间不足」的默认档（每个包校验通过后删除源包）。");
-        }
-    }
-
-    private bool _spaceTightKeepSource;
-
-    /// <summary>
-    /// 界面上要不要显示「不删原包」那颗勾（发行档不显示 —— 它是测试期专用的安全档，
-    /// 用户 2026-09-27："发行版要删，我们本地的不用"）。
-    ///
-    /// <para>唯一判据是 <see cref="BuildEdition.KeepSourceOptionEnabled"/>（编译期常量），
-    /// ⛔ 不许在别处再判断一次。</para>
-    /// </summary>
-    public bool IsSpaceTightKeepSourceAvailable => BuildEdition.KeepSourceOptionEnabled;
 
     /*
      * ===== 解压前的**空间体检**（用户 2026-09-27 第 2 条）=====

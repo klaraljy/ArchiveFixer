@@ -39,6 +39,7 @@ internal sealed class ExtractionTaskRunner
 
     private void AppendLog(string level, string message) => _vm.AppendLog(level, message);
 
+
     internal async Task RunScheduledTaskAsync(ArchiveTask task, bool oneClickRun, ScheduledTaskRuntime runtime)
     {
         try

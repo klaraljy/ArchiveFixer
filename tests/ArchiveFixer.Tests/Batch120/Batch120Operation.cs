@@ -259,7 +259,6 @@ internal static class Batch120Operation
                 extraction.Schedule.SpaceProbeOverride = _ => spaceFreeBytes;
                 extraction.Schedule.SpaceReserveOverride = spaceReserveBytes;
                 vm.SpaceTightMode = true;
-                vm.SpaceTightKeepSource = true;
             }
 
             record.Before = Snapshot(workspace, specifiedRoot);

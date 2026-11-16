@@ -521,23 +521,6 @@ internal sealed class SourceHandler
             sourceMoveFailure = PurgeLayerSourcePackage(
                 task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
         }
-        else if (_host._spaceTightPolicy.Enabled && _host._spaceTightPolicy.KeepSource)
-        {
-            /*
-             * 「空间不足 + 不删原包」= **安全档**（用户 2026-09-27："所有测试的情况下弄一个设置
-             * 不删除原包的功能……源包讲实话，这个功能才刚刚弄我怕会出现意外，导致没成功而且原包也没有了"）。
-             *
-             * 这一档**什么都不做**：源包既不搬进其余物、也不删除 —— 一个字节都不动。
-             * 为什么要单独有这一支而不是"什么都不写"：写出来才能让下一个人一眼看到
-             * "这里刻意不动源包"，而不是以为漏了一个分支。
-             * 并发、排序、其余物（过程物）删除三件事与默认档完全一致。
-             *
-             * ⚠ 2026-09-29 第 1/4 条之后，这一支排在上面那支后面：**只有"不删原包"才什么都不做**。
-             * 默认档（会删的那一档）已经被上面的第一支接走了 —— 它连内层包一起收，
-             * 两个分支合起来才是"删的那一档"，所以这里不再重复判一次 `_spaceTightPolicy.Enabled`。
-             */
-            logEntries.Add(("INFO", $"{task.LogName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
-        }
         else if (sourceHandling == SourceHandlingMode.DeleteInPlace)
         {
             /*

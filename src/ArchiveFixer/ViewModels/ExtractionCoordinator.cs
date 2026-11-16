@@ -311,15 +311,6 @@ internal sealed partial class ExtractionCoordinator
     /// </summary>
     internal bool _oneClickThisBatch;
 
-    /// <summary>
-    /// 本批是不是按「空间不足」的**安全档**跑（「不删原包」勾着时；见
-    /// <see cref="MainViewModel.SpaceTightKeepSource"/>）。
-    ///
-    /// <para>安全档与默认档的差别**只有一条**：源包一个字节都不动（不搬进其余物、也不删除）。
-    /// 并发、排序、其余物删除这三件事两档完全一致 —— 用户要的正是"先看清空间怎么变，
-    /// 再决定要不要开那个会删源包的档"（他的原话：怕"没成功而且原包也没有了"）。</para>
-    /// </summary>
-
     /// <summary>批首钉死的空间策略；所有空间分支只读这一份事实。</summary>
     internal SpaceTightPolicy _spaceTightPolicy = SpaceTightPolicy.Normal;
 

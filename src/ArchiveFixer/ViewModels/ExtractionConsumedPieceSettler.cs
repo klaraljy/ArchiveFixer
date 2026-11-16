@@ -413,15 +413,6 @@ internal sealed class ExtractionConsumedPieceSettler
             ? SourceHandlingMode.DeleteInPlace
             : _host.RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(_host.Settings?.SourceHandling);
 
-        if (_host._spaceTightPolicy.Enabled && _host._spaceTightPolicy.KeepSource)
-        {
-            logEntries.Add((
-                "INFO",
-                $"{piece.LogName}：不删原包 —— 源片一个字节都不动（空间不足的安全档）。"));
-
-            return;
-        }
-
         if (sourceHandling != SourceHandlingMode.DeleteInPlace)
         {
             logEntries.Add((

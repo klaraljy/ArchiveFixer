@@ -156,7 +156,6 @@ public sealed class SpaceTight20FixtureTests
         extraction.Schedule.SpaceProbeOverride = _ => freeBytes;
         extraction.Schedule.SpaceReserveOverride = Reserve;
         vm.SpaceTightMode = true;
-        vm.SpaceTightKeepSource = false;
 
         await vm.AddPathsAsync(sourcePaths, ImportMode.Replace);
 

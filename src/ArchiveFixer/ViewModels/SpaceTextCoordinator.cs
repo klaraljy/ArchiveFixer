@@ -36,9 +36,7 @@ internal sealed class SpaceTextCoordinator
          */
         _vm.SetSpaceTightOverrideText(!_vm.SpaceTightMode
             ? string.Empty
-            : _vm.SpaceTightKeepSource
-                ? StatusText.SpaceTightKeepSourceOverrideNotice
-                : StatusText.SpaceTightOverrideNotice);
+            : StatusText.SpaceTightOverrideNotice);
 
         _vm.NotifySpaceTightOverrideChanged();
     }

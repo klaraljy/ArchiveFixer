@@ -349,13 +349,9 @@ internal sealed class BatchReminderHandler
          * ⚠ 2026-10-15：空间不足模式（非安全档）的真实动作 = **定稿 + 校验通过后当场就地删源包**
          * ⇒ 那一档的措辞对应 `DeleteInPlace`（原来是 `MoveToRest`，已随用户口径删除）。
          */
-        bool spaceTightKeepSource = spaceTight && (snapshot?.SpaceTightKeepSource ?? _host._vm.SpaceTightKeepSource);
-
         if (spaceTight)
         {
-            sourceHandling = spaceTightKeepSource
-                ? SourceHandlingMode.KeepInPlace
-                : SourceHandlingMode.DeleteInPlace;
+            sourceHandling = SourceHandlingMode.DeleteInPlace;
 
             restHandling = RestHandlingModes.Delete;
         }
@@ -392,11 +388,7 @@ internal sealed class BatchReminderHandler
              * 不锁的话同一个框里会出现"源包：留在原地"与红字"会自动覆盖为「源包 → 放入其余物」"两句矛盾的话。
              */
             SourceEchoLocked = spaceTight,
-            SpaceTightEcho = spaceTight
-                ? spaceTightKeepSource
-                    ? StatusText.SpaceTightKeepSourceConfirmText
-                    : StatusText.SpaceTightConfirmText
-                : string.Empty,
+            SpaceTightEcho = spaceTight ? StatusText.SpaceTightConfirmText : string.Empty,
             SpecificExtractionEcho = (snapshot?.UseSpecificExtraction ?? _host.Settings.UseSpecificExtraction)
                 ? "特定解压：独立整理模式（只改内容物落点，源包/其余物按本页设置）"
                 : string.Empty,

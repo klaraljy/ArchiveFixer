@@ -312,9 +312,8 @@ internal sealed class ExtractionBatchEntry
         /*
          * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _host._spaceTightPolicy.Enabled）。
          * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
-         * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
          */
-        _host._spaceTightPolicy = SpaceTightPolicy.ForBatch(_host._vm.SpaceTightMode, _host._vm.SpaceTightKeepSource);
+        _host._spaceTightPolicy = SpaceTightPolicy.ForBatch(_host._vm.SpaceTightMode);
 
         /*
          * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：

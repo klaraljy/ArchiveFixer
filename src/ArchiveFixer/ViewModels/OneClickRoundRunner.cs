@@ -75,7 +75,6 @@ internal sealed class OneClickRoundRunner
             state.RootTargets,
             state.SnapshotOptions,
             _vm.SpaceTightMode,
-            _vm.SpaceTightKeepSource,
             Settings.UseSpecificExtraction,
             _vm.SelectedOutputDirectory,
             _extractionCoordinator.SpecificExtractionPasswords,
@@ -111,6 +110,14 @@ internal sealed class OneClickRoundRunner
             state.Stopped || state.StopRequested,
             state.HitRoundLimit,
             state.SnapshotOptions);
+
+        /*
+         * 轮尾只按**单一物组**清掉此前为失败保留的过程物；判据在
+         * CleanupSuccessfulProcessArtifacts 的组内终态里，不看整批汇总。
+         */
+        OneClickBatchFinalizer.CleanupSuccessfulProcessArtifacts(
+            state.Processed,
+            message => AppendLog("INFO", message));
 
         /*
          * 链尾解压/组终态已经全部落定，回填一次内容组最终事实。

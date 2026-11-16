@@ -25,8 +25,6 @@ public sealed class RunSnapshot
 
     public bool SpaceTightMode { get; init; }
 
-    public bool SpaceTightKeepSource { get; init; }
-
     public bool UseSpecificExtraction { get; init; }
 
     public string SelectedOutputDirectory { get; init; } = string.Empty;
@@ -41,7 +39,6 @@ public sealed class RunSnapshot
         IEnumerable<ArchiveTask>? targets,
         OneClickRunOptions options,
         bool spaceTightMode,
-        bool spaceTightKeepSource,
         bool useSpecificExtraction,
         string? selectedOutputDirectory,
         IEnumerable<string?>? passwordCandidates = null,
@@ -54,7 +51,6 @@ public sealed class RunSnapshot
                 .ToArray(),
             Options = options ?? new OneClickRunOptions(),
             SpaceTightMode = spaceTightMode,
-            SpaceTightKeepSource = spaceTightKeepSource,
             UseSpecificExtraction = useSpecificExtraction,
             SelectedOutputDirectory = selectedOutputDirectory ?? string.Empty,
             PasswordCandidates = (passwordCandidates ?? Array.Empty<string?>())

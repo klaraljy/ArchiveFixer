@@ -8,8 +8,6 @@ public sealed class SpaceTightPolicy
 {
     public bool Enabled { get; init; }
 
-    public bool KeepSource { get; init; }
-
     public bool SourceOnLayerSuccessDeletes { get; init; }
 
     public bool LastProcessOnFailureKeeps => true;
@@ -24,13 +22,12 @@ public sealed class SpaceTightPolicy
 
     public static SpaceTightPolicy Normal { get; } = new();
 
-    public static SpaceTightPolicy ForBatch(bool spaceTight, bool keepSource)
+    public static SpaceTightPolicy ForBatch(bool spaceTight)
     {
         return new SpaceTightPolicy
         {
             Enabled = spaceTight,
-            KeepSource = spaceTight && keepSource,
-            SourceOnLayerSuccessDeletes = spaceTight && !keepSource
+            SourceOnLayerSuccessDeletes = spaceTight
         };
     }
 }
