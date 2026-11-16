@@ -304,7 +304,11 @@ internal sealed class BatchReminderHandler
         RunSnapshot? snapshot = null,
         CancellationToken cancellationToken = default)
     {
-        string destination = await DescribePlannedDestinationAsync(targets, pendingOptions, cancellationToken)
+        string destination = await DescribePlannedDestinationAsync(
+                targets,
+                pendingOptions,
+                useSpecificExtraction: snapshot?.UseSpecificExtraction ?? _host.Settings.UseSpecificExtraction,
+                cancellationToken)
             .ConfigureAwait(false);
 
         /*
@@ -458,14 +462,29 @@ internal sealed class BatchReminderHandler
     /// <para>多包时补一句后缀：现在只剩"每个包各建一层（含相对子路径）"这一种形状 ——
     /// 旧的"所有包落进同一层"（场景 B / 共用根）已随落点模型 v2 退役。</para>
     /// </summary>
-    internal async Task<string> DescribePlannedDestinationAsync(
+    internal Task<string> DescribePlannedDestinationAsync(
         IReadOnlyList<ArchiveTask> targets,
         OneClickRunOptions? pendingOptions,
+        bool useSpecificExtraction = false,
         CancellationToken cancellationToken = default)
+        => Task.FromResult(DescribePlannedDestination(targets, pendingOptions, useSpecificExtraction));
+
+    private string DescribePlannedDestination(
+        IReadOnlyList<ArchiveTask> targets,
+        OneClickRunOptions? pendingOptions,
+        bool useSpecificExtraction)
     {
         if (targets == null || targets.Count == 0)
         {
             return string.Empty;
+        }
+
+        if (useSpecificExtraction)
+        {
+            OneClickRunOptions options = pendingOptions
+                ?? OneClickRunOptions.FromSettings(_host.Settings, _host._vm.SelectedOutputDirectory);
+
+            return SpecificDestinationPreview.Describe(targets, options);
         }
 
         ExtractOptions extractOptions = BuildExtractOptions(tryExtractUnknownFormat: false);

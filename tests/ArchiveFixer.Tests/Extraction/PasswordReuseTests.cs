@@ -295,7 +295,7 @@ public sealed class PasswordReuseTests : IDisposable
         string?[] first = harness.Coordinator.SpecificExtractionPasswords.ToArray();
 
         Assert.Equal(
-            new string?[] { null, string.Empty, "<示例密码2>", "<示例密码3>", "<示例密码1>" },
+            new string?[] { "<示例密码2>", "<示例密码3>", "<示例密码1>" },
             first);
 
         harness.Coordinator.BeginSpecificPasswordBatch();
@@ -303,8 +303,26 @@ public sealed class PasswordReuseTests : IDisposable
         string?[] second = harness.Coordinator.SpecificExtractionPasswords.ToArray();
 
         Assert.Equal(
-            new string?[] { null, string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" },
+            new string?[] { string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" },
             second);
+    }
+
+    [Fact]
+    public void 特定解压候选_按每层上限截断()
+    {
+        Harness harness = CreateHarness("specific-password-limit");
+
+        harness.Book.AddPassword("<示例密码1>");
+        harness.Book.AddPassword("<示例密码2>");
+        harness.Book.AddPassword("<示例密码3>");
+        harness.Vm.Settings.MaxPasswordAttemptsPerLayer = 2;
+        harness.Coordinator.BeginSpecificPasswordBatch();
+
+        IReadOnlyList<string?> candidates = harness.Coordinator.SpecificExtractionPasswords;
+
+        Assert.Equal(2, candidates.Count);
+        Assert.Equal(string.Empty, candidates[0]);
+        Assert.Equal("<示例密码1>", candidates[1]);
     }
 
     /// <summary>

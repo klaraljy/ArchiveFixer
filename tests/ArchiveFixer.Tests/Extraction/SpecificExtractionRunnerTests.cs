@@ -185,9 +185,9 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
             CreateWorkspace(Path.Combine(_root, "out")),
             new string?[] { null, "", "pwd" });
 
-        // 每层都要重新走候选链；无密码排在最前，成功后不再烧后面的候选。
+        // 每层都要重新走候选链；null/空串合并成一条空密码，成功后不再烧后面的候选。
         Assert.True(engine.Requests.Count >= 2);
-        Assert.All(engine.Requests, request => Assert.Null(request.Password));
+        Assert.All(engine.Requests, request => Assert.True(string.IsNullOrEmpty(request.Password)));
     }
 
     [Fact]
@@ -210,24 +210,24 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
             Path.Combine(_root, "out"),
             CreateWorkspace(Path.Combine(_root, "out")),
             Array.Empty<string?>(),
-            passwordProvider: () =>
+            passwordProvider: _ =>
             {
                 providerCalls++;
                 return providerCalls == 1
                     ? new string?[] { null }
-                    : new string?[] { null, "pwd" };
+                    : new string?[] { null, string.Empty, "pwd" };
             },
             onPasswordSuccess: password => successes.Add(password));
 
         Assert.True(result.Success, result.Message);
         Assert.Equal(2, providerCalls);
         Assert.Equal(
-            new string?[] { null, "pwd" },
+            new string?[] { string.Empty, "pwd" },
             engine.Requests
                 .Where(request => request.ArchivePath.EndsWith("inner.rar", StringComparison.OrdinalIgnoreCase))
                 .Select(request => request.Password)
                 .ToArray());
-        Assert.Equal(new string?[] { null, "pwd" }, successes.ToArray());
+        Assert.Equal(new string?[] { string.Empty, "pwd" }, successes.ToArray());
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
 
             string fileName = Path.GetFileName(request.ArchivePath);
 
-            if (request.Password is null && FailNullPasswords.Contains(fileName))
+            if (string.IsNullOrEmpty(request.Password) && FailNullPasswords.Contains(fileName))
             {
                 return Task.FromResult(new ArchiveOperationResult
                 {

@@ -36,7 +36,7 @@ public sealed class SpecificExtractionRunner
         SpecificExtractionWorkspace workspace,
         IReadOnlyList<string?> passwordCandidates,
         CancellationToken cancellationToken = default,
-        Func<IReadOnlyList<string?>>? passwordProvider = null,
+        Func<string, IReadOnlyList<string?>>? passwordProvider = null,
         Action<string?>? onPasswordSuccess = null,
         Action<int, string>? onLayerStarted = null,
         IProgress<ArchiveProgress>? progress = null,
@@ -70,7 +70,7 @@ public sealed class SpecificExtractionRunner
             bool extracted = false;
             string lastError = string.Empty;
             string lastErrorType = string.Empty;
-            IReadOnlyList<string?> candidates = passwordProvider?.Invoke() ?? passwordCandidates;
+            IReadOnlyList<string?> candidates = passwordProvider?.Invoke(currentArchive) ?? passwordCandidates;
             List<string?> normalizedPasswords = NormalizePasswords(candidates).ToList();
 
             for (int passwordIndex = 0; passwordIndex < normalizedPasswords.Count; passwordIndex++)
@@ -298,9 +298,16 @@ public sealed class SpecificExtractionRunner
             yield break;
         }
 
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (string? candidate in candidates)
         {
-            yield return candidate;
+            string value = candidate ?? string.Empty;
+
+            if (seen.Add(value))
+            {
+                yield return value;
+            }
         }
     }
 

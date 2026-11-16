@@ -226,6 +226,50 @@ public class OneClickConfirmTests : IDisposable
     }
 
     /// <summary>
+    /// 特定解压的确认框必须预告容器根，并与实际落点使用同一套规则；最后一层内容名在解压前未知，
+    /// 只能明确写成“按最后一层规则”，不能拿普通包目录冒充。
+    /// </summary>
+    [Fact]
+    public async Task 特定解压确认框_预告容器根而不是普通包目录()
+    {
+        Harness harness = CreateHarness();
+
+        string customRoot = Path.Combine(_root, "BBB");
+        string selectionRoot = Path.Combine(_root, "AAA");
+
+        Directory.CreateDirectory(customRoot);
+        Directory.CreateDirectory(Path.Combine(selectionRoot, "新建"));
+
+        string package = Path.Combine(selectionRoot, "新建", "222.7z");
+        File.WriteAllText(package, "not a real archive - preview only");
+
+        var task = new ArchiveTask(package, 1)
+        {
+            IsArchive = true,
+            DetectedFormat = "7Z",
+            ExtensionStatus = StatusText.ExtensionNormal,
+            Status = StatusText.Recognized,
+            IsSelected = true,
+            SourceSelectionKind = SourceSelectionKind.Folder,
+            SourceSelectionRoot = selectionRoot
+        };
+
+        harness.Vm.Tasks.Add(task);
+        harness.Vm.Settings.UseSpecificExtraction = true;
+
+        OneClickConfirmFacts facts = await harness.Extraction.BatchReminders.BuildConfirmFactsAsync(
+            new[] { task },
+            OneClickRunOptions.FromSettings(harness.Vm.Settings, customRoot),
+            null);
+
+        string expectedContainer = Path.Combine(customRoot, "AAA", "新建");
+
+        Assert.Contains(expectedContainer, facts.DestinationEcho, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("内容名按最后一层", facts.DestinationEcho, StringComparison.Ordinal);
+        Assert.DoesNotContain(Path.Combine(customRoot, "222"), facts.DestinationEcho, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 第 33 条：「其余物」那一行**跟着本次选项走**，不是照着设置念 ——
     /// 用户在确认框折叠区里把「删除操作」改成彻底删除之后，正文必须说"会自动彻底删除"；
     /// 没改（默认档）时说"不自动删除"。

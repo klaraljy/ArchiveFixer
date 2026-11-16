@@ -426,7 +426,7 @@ internal sealed partial class OneClickCoordinator
                     workspace,
                     _extractionCoordinator.SpecificExtractionPasswords,
                     cancellationToken: specificCts.Token,
-                    passwordProvider: () => _extractionCoordinator.SpecificExtractionPasswords,
+                    passwordProvider: archive => _extractionCoordinator.BuildSpecificPasswordCandidates(archive),
                     onPasswordSuccess: password =>
                     {
                         _extractionCoordinator.RecordSpecificPasswordSuccess(source, password);
@@ -585,14 +585,14 @@ internal sealed partial class OneClickCoordinator
 
     private static string ResolveSpecificOutputRoot(ArchiveTask task, OneClickRunOptions runOptions)
     {
-        string source = task.CurrentPath;
+        OutputPlacementResult placement = SpecificExtractionPlacement.ResolveContainerRoot(
+            task.CurrentPath,
+            runOptions.PlacementMode,
+            runOptions.CustomRoot,
+            task.SourceSelectionKind,
+            task.SourceSelectionRoot);
 
-        return runOptions.PlacementMode == OutputPlacementMode.CustomRootPerArchive
-            ? runOptions.CustomRoot
-            : SpecificOutputNaming.ResolveOutputRoot(
-                source,
-                task.SourceSelectionKind,
-                task.SourceSelectionRoot);
+        return placement.Success ? placement.DestinationDirectory : string.Empty;
     }
 
     private static void MarkSpecificTaskFailed(ArchiveTask task, string message)
@@ -676,4 +676,3 @@ internal sealed partial class OneClickCoordinator
     }
 
 }
-

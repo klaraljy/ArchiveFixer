@@ -669,7 +669,7 @@ public static class OutputPlacement
     /// <para>⚠ 形参刻意收 <c>string?</c>：调用点上的源包路径本来就是可空的（"还没指定文件"那一档），
     /// 它在这一层内部已经按空串处理 —— 让调用方写 <c>!</c> 只是把警告挪个地方，不是真的安全。</para>
     /// </summary>
-    private static string ResolveRelativeSubPath(string selectionRoot, string? sourceArchivePath)
+    internal static string ResolveRelativeSubPath(string selectionRoot, string? sourceArchivePath)
     {
         try
         {

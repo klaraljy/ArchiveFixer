@@ -85,40 +85,25 @@ internal sealed partial class ExtractionCoordinator
     }
 
     /// <summary>
-    /// 特定解压每层候选：无密码 → 空串 → 本批已成功的密码（按**本批**成功次数从多到少）
-    /// → 列表顺序（用户 2026-10-25：频率只限单次导入，下一次导入仍按④页原顺序）。
+    /// 特定解压每层候选：**复用普通路径的同一个候选构造器**（本批成功优先、空密码至多一条、
+    /// 密码本映射/统一密码/密码列表顺序一致），并按每层上限截断。
     /// </summary>
-    internal IReadOnlyList<string?> SpecificExtractionPasswords
+    internal IReadOnlyList<string?> SpecificExtractionPasswords =>
+        BuildSpecificPasswordCandidatesCore(string.Empty);
+
+    /// <summary>
+    /// 特定解压某一层的候选。传当前层归档路径，密码本映射项才能按这一层的名字匹配。
+    /// </summary>
+    internal IReadOnlyList<string?> BuildSpecificPasswordCandidates(string archivePath) =>
+        BuildSpecificPasswordCandidatesCore(archivePath);
+
+    private IReadOnlyList<string?> BuildSpecificPasswordCandidatesCore(string? archivePath)
     {
-        get
-        {
-            var values = new List<string?> { null, string.Empty };
-            var seen = new HashSet<string>(StringComparer.Ordinal) { string.Empty };
-
-            foreach (string password in _passwordService.BatchVerifiedPasswords
-                         .Where(value => !string.IsNullOrEmpty(value))
-                         .OrderByDescending(_passwordService.GetBatchSuccessCount))
-            {
-                if (seen.Add(password))
-                {
-                    values.Add(password);
-                }
-            }
-
-            foreach (string? password in _passwordService.Passwords
-                         .Where(item => item.IsEnabled)
-                         .Select(item => item.Value))
-            {
-                string value = password ?? string.Empty;
-
-                if (seen.Add(value))
-                {
-                    values.Add(value);
-                }
-            }
-
-            return values;
-        }
+        return _passwordCandidatesStep
+            .BuildRecursionPasswordCandidates(archivePath ?? string.Empty)
+            .Take(_passwordCandidatesStep.MaxPasswordAttemptsPerLayer)
+            .Select(value => (string?)value)
+            .ToList();
     }
 
 

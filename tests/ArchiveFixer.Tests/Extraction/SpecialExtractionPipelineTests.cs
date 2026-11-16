@@ -538,6 +538,40 @@ public class SpecialExtractionPipelineTests : IDisposable
     }
 
     [SevenZipFact]
+    public async Task 特定解压_选文件夹指定位置_保留选中文件夹名和相对子路径()
+    {
+        string selected = Path.Combine(_root, "AAA");
+        string nested = Path.Combine(selected, "111合集");
+        Directory.CreateDirectory(nested);
+
+        string build = Path.Combine(_root, "build-specific-relative");
+        Directory.CreateDirectory(build);
+        WriteText(Path.Combine(build, "payload.txt"), "payload");
+        Run7z(build, "a", "-t7z", Path.Combine(nested, "001.7z"), "payload.txt");
+
+        string target = Path.Combine(_root, "BBB");
+        Directory.CreateDirectory(target);
+
+        Harness harness = CreateHarness("specific-relative", settings =>
+        {
+            EnableSpecialExtraction(settings);
+            settings.ExtractToOriginalDirectory = false;
+            settings.CustomOutputDirectory = target;
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+        });
+
+        await harness.AddPathsAsync(selected);
+        await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+        ArchiveTask task = harness.Vm.Tasks.Single();
+        string expected = Path.Combine(target, "AAA", "111合集", "001");
+
+        Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+        Assert.Equal(expected, task.OutputPath, ignoreCase: true);
+        Assert.True(File.Exists(Path.Combine(expected, "payload.txt")));
+    }
+
+    [SevenZipFact]
     public async Task 特定解压_指定位置_产物落到指定根()
     {
         string collection = Path.Combine(_root, "specific-custom-source");
