@@ -2,7 +2,6 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
-using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -22,11 +21,13 @@ public sealed class SpecificExtractionRunner
 
     private readonly IArchiveEngine _engine;
     private readonly Action<string>? _log;
+    private readonly SpecificExtractionOutputPublisher _outputPublisher;
 
     public SpecificExtractionRunner(IArchiveEngine engine, Action<string>? log = null)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _log = log;
+        _outputPublisher = new SpecificExtractionOutputPublisher(log);
     }
 
     internal async Task<SpecificExtractionRunResult> RunAsync(
@@ -140,8 +141,7 @@ public sealed class SpecificExtractionRunner
 
             if (decision.Kind == SpecificLayerKind.Content)
             {
-                string name = SpecificOutputNaming.Resolve(currentArchive, layerRoot);
-                string finalPath = MoveContent(layerRoot, Path.Combine(outputRoot, name));
+                string finalPath = _outputPublisher.Publish(currentArchive, layerRoot, outputRoot);
 
                 _log?.Invoke($"第 {depth + 1} 层得到内容物：{Path.GetFileName(finalPath)}");
 
@@ -302,31 +302,6 @@ public sealed class SpecificExtractionRunner
         {
             yield return candidate;
         }
-    }
-
-    private static string MoveContent(string layerRoot, string finalPath)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
-
-        if (Directory.Exists(finalPath))
-        {
-            finalPath = SafePathHelper.AutoRenameDirectoryPath(finalPath);
-        }
-
-        string? singleFolder = Directory
-            .GetFileSystemEntries(layerRoot)
-            .Where(Directory.Exists)
-            .Where(path => !WorkspaceTree.IsWorkspaceDirectoryName(path))
-            .ToList() is { Count: 1 } folders
-            && !Directory.EnumerateFiles(layerRoot, "*", SearchOption.TopDirectoryOnly).Any()
-                ? folders[0]
-                : null;
-
-        string source = singleFolder ?? layerRoot;
-
-        Directory.Move(source, finalPath);
-
-        return finalPath;
     }
 
     /// <summary>

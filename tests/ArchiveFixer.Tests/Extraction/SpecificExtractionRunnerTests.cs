@@ -69,6 +69,36 @@ public sealed class SpecificExtractionRunnerTests : IDisposable
         Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.Hidden) != 0;
 
     [Fact]
+    public async Task 特定解压_根层散文件_成品目录不能继承工作区隐藏属性()
+    {
+        string source = Path.Combine(_root, "outer.7z");
+        File.WriteAllText(source, "x");
+
+        var engine = new ScriptedEngine();
+        engine.Add("outer.7z", dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "001.jpg"), "x");
+            File.WriteAllText(Path.Combine(dir, "002.jpg"), "x");
+        });
+
+        string outputRoot = Path.Combine(_root, "out");
+        SpecificExtractionWorkspace workspace = CreateWorkspace(outputRoot);
+        var runner = new SpecificExtractionRunner(engine);
+        SpecificExtractionRunResult result = await runner.RunAsync(
+            source,
+            outputRoot,
+            workspace,
+            new string?[] { "pwd" });
+
+        Assert.True(result.Success, result.Message);
+        Assert.False(
+            (File.GetAttributes(result.OutputPath) & FileAttributes.Hidden) != 0,
+            "成品根目录不能继承工作区 layer 的 Hidden：" + result.OutputPath);
+        Assert.Equal(2, Directory.GetFiles(result.OutputPath).Length);
+        workspace.Cleanup();
+    }
+
+    [Fact]
     public async Task 两层_最后一层是散图片_用最后一层压缩包名()
     {
         string source = Path.Combine(_root, "outer.7z");
